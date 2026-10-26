@@ -5,24 +5,33 @@
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 
 #include <string_view>
+#include <vector>
 
+#include "base/callback_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/scoped_observation.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/enterprise/signin/managed_profile_required_navigation_throttle.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/cross_device_signin_promo_manager.h"
 #include "chrome/browser/signin/dice_tab_helper.h"
 #include "chrome/browser/signin/logout_tab_helper.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/chrome_signout_confirmation_prompt.h"
 #include "chrome/browser/ui/signin/cross_device_signin_qr_bubble.h"
+#include "chrome/browser/ui/signin/signin_qrcode_infobar.h"
+#include "chrome/browser/ui/signin/signin_qrcode_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -32,6 +41,8 @@
 #include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation_ui.h"
 #include "chrome/browser/ui/webui/signin/signout_confirmation/test_signout_confirmation_handler_waiter.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/grit/branded_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome_signout_confirmation_prompt.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -50,14 +61,20 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/data_type_histogram.h"
 #include "components/sync/test/test_sync_service.h"
+#include "content/public/browser/context_menu_params.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "content/public/test/url_loader_interceptor.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/install_verifier.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/widget_test.h"
@@ -66,6 +83,11 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "chrome/browser/signin/web_signin_interceptor.h"
+#include "chrome/browser/ui/webui/signin/cross_device_signin_qr_bubble_ui.h"
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "base/path_service.h"
@@ -80,6 +102,9 @@
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 namespace {
+
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 constexpr char kTestEmail[] = "email@gmail.com";
 constexpr signin_metrics::AccessPoint kTestAccessPoint =
@@ -208,8 +233,7 @@ class SigninViewControllerBrowserTestBase : public SigninBrowserTestBase {
     content::TestNavigationObserver observer(url);
     observer.StartWatchingNewWebContents();
 
-    auto* signin_view_controller =
-        browser()->GetFeatures().signin_view_controller();
+    auto* signin_view_controller = SigninViewController::From(browser());
     signin_view_controller->SignoutOrReauthWithPrompt(
         kTestAccessPoint,
         signin_metrics::ProfileSignout::kUserClickedSignoutProfileMenu,
@@ -279,9 +303,7 @@ class SigninViewControllerBrowserTest
     views::NamedWidgetShownWaiter widget_waiter(
         views::test::AnyWidgetTestPasskey{},
         "ChromeSigninChoiceForExtensionsPrompt");
-    browser()
-        ->GetFeatures()
-        .signin_view_controller()
+    SigninViewController::From(browser())
         ->MaybeShowChromeSigninDialogForExtensions(kTestExtensionName,
                                                    std::move(on_complete));
 
@@ -301,7 +323,7 @@ IN_PROC_BROWSER_TEST_F(
   // Setup a primary account in error state.
   AccountInfo primary_account_info = SetPrimaryAccount();
   identity_test_env()->UpdatePersistentErrorOfRefreshTokenForAccount(
-      primary_account_info.account_id,
+      primary_account_info.GetAccountId(),
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::
               CREDENTIALS_REJECTED_BY_SERVER));
@@ -327,7 +349,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // The tab was navigated to the signin page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSigninTab(tab));
 }
@@ -338,7 +360,7 @@ IN_PROC_BROWSER_TEST_F(
   // Setup a primary account in error state.
   AccountInfo primary_account_info = SetPrimaryAccount();
   identity_test_env()->UpdatePersistentErrorOfRefreshTokenForAccount(
-      primary_account_info.account_id,
+      primary_account_info.GetAccountId(),
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::
               CREDENTIALS_REJECTED_BY_SERVER));
@@ -369,7 +391,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
@@ -398,11 +420,11 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // User is still signed in.
   EXPECT_EQ(
-      primary_account_info.account_id,
+      primary_account_info.GetAccountId(),
       identity_manager()->GetPrimaryAccountId(signin::ConsentLevel::kSignin));
   // The tab was not navigated to the signin page or signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_FALSE(IsSigninTab(tab));
   EXPECT_FALSE(IsSignoutTab(tab));
@@ -436,7 +458,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
@@ -469,7 +491,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
@@ -480,13 +502,13 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
   AccountInfo primary_account_info = SetPrimaryAccount();
 
   identity_test_env()->UpdatePersistentErrorOfRefreshTokenForAccount(
-      primary_account_info.account_id,
+      primary_account_info.GetAccountId(),
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::
               CREDENTIALS_REJECTED_BY_SERVER));
 
   // Trigger the Chrome signout action.
-  browser()->GetFeatures().signin_view_controller()->SignoutOrReauthWithPrompt(
+  SigninViewController::From(browser())->SignoutOrReauthWithPrompt(
       kTestAccessPoint,
       signin_metrics::ProfileSignout::kUserClickedSignoutProfileMenu,
       signin_metrics::SourceForRefreshTokenOperation::
@@ -498,7 +520,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
@@ -533,7 +555,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
@@ -572,7 +594,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was not navigated to the signin page or signout page.
   content::WebContents* active_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active_tab);
   EXPECT_FALSE(IsSigninTab(active_tab));
   EXPECT_FALSE(IsSignoutTab(active_tab));
@@ -603,7 +625,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
@@ -613,7 +635,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
   // Setup a primary account in error state.
   AccountInfo primary_account_info = SetPrimaryAccount();
   identity_test_env()->UpdatePersistentErrorOfRefreshTokenForAccount(
-      primary_account_info.account_id,
+      primary_account_info.GetAccountId(),
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::
               CREDENTIALS_REJECTED_BY_SERVER));
@@ -649,16 +671,16 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
   // The tab was navigated to the signout page.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(IsSignoutTab(tab));
 }
 
 IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
                        ShowChromeSigninDialogForExtensionsPromptReuseOpenTab) {
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 1);
   ASSERT_TRUE(SigninViewController::IsNTPTab(
-      browser()->tab_strip_model()->GetActiveWebContents()));
+      browser()->GetTabStripModel()->GetActiveWebContents()));
 
   identity_test_env()->MakeAccountAvailable(kTestEmail, {.set_cookie = true});
   ASSERT_FALSE(identity_manager()->GetAccountsWithRefreshTokens().empty());
@@ -671,7 +693,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
   ASSERT_TRUE(dialog_delegate);
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(SigninViewController::IsNTPTab(tab));
 
@@ -681,7 +703,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
   EXPECT_TRUE(
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   ASSERT_TRUE(future.Wait());
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 1);
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -689,11 +711,11 @@ IN_PROC_BROWSER_TEST_F(
     ShowChromeSigninDialogForExtensionsPromptReuseInactiveOpenTab) {
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("https://www.google.com"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
   ASSERT_FALSE(SigninViewController::IsNTPTab(
-      browser()->tab_strip_model()->GetActiveWebContents()));
+      browser()->GetTabStripModel()->GetActiveWebContents()));
 
   identity_test_env()->MakeAccountAvailable(kTestEmail, {.set_cookie = true});
   ASSERT_FALSE(identity_manager()->GetAccountsWithRefreshTokens().empty());
@@ -706,7 +728,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(dialog_delegate);
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(SigninViewController::IsNTPTab(tab));
 
@@ -716,16 +738,16 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   ASSERT_TRUE(future.Wait());
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
 }
 
 IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
                        ShowChromeSigninDialogForExtensionsPromptInNewTab) {
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), GURL("https://www.google.com")));
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 1);
   ASSERT_FALSE(SigninViewController::IsNTPTab(
-      browser()->tab_strip_model()->GetActiveWebContents()));
+      browser()->GetTabStripModel()->GetActiveWebContents()));
 
   identity_test_env()->MakeAccountAvailable(kTestEmail, {.set_cookie = true});
   ASSERT_FALSE(identity_manager()->GetAccountsWithRefreshTokens().empty());
@@ -736,10 +758,10 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
   views::DialogDelegate* dialog_delegate =
       TriggerChromeSigninDialogForExtensionsPrompt(future.GetCallback());
   ASSERT_TRUE(dialog_delegate);
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_TRUE(SigninViewController::IsNTPTab(tab));
 
@@ -773,6 +795,25 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(
     SigninViewControllerBrowserTest,
+    ShowChromeSigninDialogForExtensionsPromptKeyjackingProtection) {
+  // Make sure a user is signed in to web (otherwise the dialog doesn't
+  // trigger).
+  identity_test_env()->MakeAccountAvailable(kTestEmail, {.set_cookie = true});
+  ASSERT_THAT(identity_manager()->GetAccountsWithRefreshTokens(),
+              Not(IsEmpty()));
+  ASSERT_FALSE(
+      identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+
+  views::DialogDelegate* dialog_delegate =
+      TriggerChromeSigninDialogForExtensionsPrompt(
+          /*on_complete=*/base::DoNothing());
+
+  ASSERT_NE(dialog_delegate, nullptr);
+  EXPECT_FALSE(dialog_delegate->ShouldAllowKeyEventsDuringInputProtection());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    SigninViewControllerBrowserTest,
     ShowChromeSigninDialogForExtensionsPromptNotShownPrimaryAccountSet) {
   identity_test_env()->MakePrimaryAccountAvailable(
       kTestEmail, signin::ConsentLevel::kSignin);
@@ -780,9 +821,7 @@ IN_PROC_BROWSER_TEST_F(
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
 
   base::test::TestFuture<void> future;
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
+  SigninViewController::From(browser())
       ->MaybeShowChromeSigninDialogForExtensions(kTestExtensionName,
                                                  future.GetCallback());
   EXPECT_TRUE(future.IsReady());
@@ -792,9 +831,7 @@ IN_PROC_BROWSER_TEST_F(
     SigninViewControllerBrowserTest,
     ShowChromeSigninDialogForExtensionsPromptNotShownNoAccounts) {
   base::test::TestFuture<void> future;
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
+  SigninViewController::From(browser())
       ->MaybeShowChromeSigninDialogForExtensions(kTestExtensionName,
                                                  future.GetCallback());
   EXPECT_TRUE(future.IsReady());
@@ -803,22 +840,87 @@ IN_PROC_BROWSER_TEST_F(
 IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
                        UpdateAccessPointOfSignInTab) {
   // Request a sign in tab, which will open a new tab.
-  browser()->GetFeatures().signin_view_controller()->ShowDiceAddAccountTab(
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
       signin_metrics::AccessPoint::kPasswordBubble, std::string());
-  EXPECT_TRUE(IsSigninTab(browser()->tab_strip_model()->GetActiveWebContents(),
+  EXPECT_TRUE(IsSigninTab(browser()->GetTabStripModel()->GetActiveWebContents(),
                           signin_metrics::AccessPoint::kPasswordBubble));
 
   // Request a sign in tab with a different access point, which will update the
   // existing sign in tab's access point.
-  browser()->GetFeatures().signin_view_controller()->ShowDiceAddAccountTab(
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
       signin_metrics::AccessPoint::kAddressBubble, std::string());
-  EXPECT_TRUE(IsSigninTab(browser()->tab_strip_model()->GetActiveWebContents(),
+  EXPECT_TRUE(IsSigninTab(browser()->GetTabStripModel()->GetActiveWebContents(),
                           signin_metrics::AccessPoint::kAddressBubble));
 
   EXPECT_TRUE(signin_ui_util::GetSignInTabWithAccessPoint(
       browser(), signin_metrics::AccessPoint::kAddressBubble));
   EXPECT_FALSE(signin_ui_util::GetSignInTabWithAccessPoint(
       browser(), signin_metrics::AccessPoint::kPasswordBubble));
+}
+
+// When signed out, `ShowDiceAddAccountTab()` uses the `kSigninPrimaryAccount`
+// reason and marks Chrome sign-in as in progress.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowDiceAddAccountTabReasonSignedOut) {
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
+      signin_metrics::AccessPoint::kRecentTabs, std::string());
+  content::WebContents* active_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(active_contents);
+  DiceTabHelper* tab_helper = DiceTabHelper::FromWebContents(active_contents);
+  ASSERT_TRUE(tab_helper);
+  EXPECT_EQ(signin_metrics::Reason::kSigninPrimaryAccount,
+            tab_helper->signin_reason());
+  EXPECT_TRUE(tab_helper->IsChromeSigninInProgress());
+}
+
+// When signed out and `email_hint` matches an existing account, it is a reauth.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowDiceAddAccountTabReasonSignedOutReauth) {
+  identity_test_env()->MakeAccountAvailable(kTestEmail);
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
+      signin_metrics::AccessPoint::kRecentTabs, kTestEmail);
+  content::WebContents* active_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(active_contents);
+  DiceTabHelper* tab_helper = DiceTabHelper::FromWebContents(active_contents);
+  ASSERT_TRUE(tab_helper);
+  EXPECT_EQ(signin_metrics::Reason::kReauthentication,
+            tab_helper->signin_reason());
+  EXPECT_FALSE(tab_helper->IsChromeSigninInProgress());
+}
+
+// When signed in, `ShowDiceAddAccountTab()` uses the `kAddSecondaryAccount`
+// reason and does not mark Chrome sign-in as in progress.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowDiceAddAccountTabReasonSignedIn) {
+  SetPrimaryAccount();
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
+      signin_metrics::AccessPoint::kRecentTabs, std::string());
+  content::WebContents* active_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(active_contents);
+  DiceTabHelper* tab_helper = DiceTabHelper::FromWebContents(active_contents);
+  ASSERT_TRUE(tab_helper);
+  EXPECT_EQ(signin_metrics::Reason::kAddSecondaryAccount,
+            tab_helper->signin_reason());
+  EXPECT_FALSE(tab_helper->IsChromeSigninInProgress());
+}
+
+// When signed in and `email_hint` matches an existing account, it is a reauth.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowDiceAddAccountTabReasonSignedInReauth) {
+  SetPrimaryAccount();
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
+      signin_metrics::AccessPoint::kRecentTabs, kTestEmail);
+  content::WebContents* active_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(active_contents);
+  DiceTabHelper* tab_helper = DiceTabHelper::FromWebContents(active_contents);
+  ASSERT_TRUE(tab_helper);
+  EXPECT_EQ(signin_metrics::Reason::kReauthentication,
+            tab_helper->signin_reason());
+  EXPECT_FALSE(tab_helper->IsChromeSigninInProgress());
 }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -857,6 +959,11 @@ class SigninViewControllerSignInBanner
     mock_bluetooth_adapter_ = base::MakeRefCounted<AsyncMockBluetoothAdapter>();
     ON_CALL(*mock_bluetooth_adapter_, IsPresent())
         .WillByDefault(testing::Return(true));
+    ON_CALL(*mock_bluetooth_adapter_, IsPowered())
+        .WillByDefault(testing::Return(true));
+    ON_CALL(*mock_bluetooth_adapter_, GetOsPermissionStatus())
+        .WillByDefault(testing::Return(
+            device::BluetoothAdapter::PermissionStatus::kAllowed));
     device::BluetoothAdapterFactory::SetAdapterForTesting(
         mock_bluetooth_adapter_);
     // Other parts of Chrome may keep a reference to the bluetooth adapter.
@@ -865,26 +972,46 @@ class SigninViewControllerSignInBanner
     bluetooth_override_values_ =
         device::BluetoothAdapterFactory::Get()->InitGlobalOverrideValues();
     bluetooth_override_values_->SetLESupported(true);
+
+    url_loader_interceptor_ =
+        std::make_unique<content::URLLoaderInterceptor>(base::BindRepeating(
+            [](content::URLLoaderInterceptor::RequestParams* params) {
+              if (params->url_request.url.path() == "/signin/chrome/sync") {
+                content::URLLoaderInterceptor::WriteResponse(
+                    "HTTP/1.1 200 OK\nContent-Type: text/html\n\n",
+                    "<html><body>Fake Sign-in Page</body></html>",
+                    params->client.get());
+                return true;
+              }
+              return false;
+            }));
+  }
+
+  void TearDownOnMainThread() override {
+    url_loader_interceptor_.reset();
+    SigninViewControllerBrowserTestBase::TearDownOnMainThread();
   }
 
  protected:
   scoped_refptr<AsyncMockBluetoothAdapter> mock_bluetooth_adapter_;
   std::unique_ptr<device::BluetoothAdapterFactory::GlobalOverrideValues>
       bluetooth_override_values_;
+  std::unique_ptr<content::URLLoaderInterceptor> url_loader_interceptor_;
 
  private:
   base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBanner, Visibility) {
-  browser()->GetFeatures().signin_view_controller()->ShowDiceAddAccountTab(
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
       signin_metrics::AccessPoint::kSettings, std::string());
 
   mock_bluetooth_adapter_->SetInitialized(true);
 
   content::WebContents* active_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active_contents);
+  content::WaitForLoadStop(active_contents);
 
   // Check that the infobar is shown.
   infobars::ContentInfoBarManager* infobar_manager =
@@ -901,11 +1028,11 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBanner, Visibility) {
 
 IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBanner,
                        NavigateAwayBeforeBluetoothResolved) {
-  browser()->GetFeatures().signin_view_controller()->ShowDiceAddAccountTab(
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
       signin_metrics::AccessPoint::kSettings, std::string());
 
   content::WebContents* active_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active_contents);
 
   // Navigate away immediately before resolving the initialization.
@@ -919,6 +1046,29 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBanner,
       infobars::ContentInfoBarManager::FromWebContents(active_contents);
   ASSERT_TRUE(infobar_manager);
   EXPECT_EQ(0u, infobar_manager->infobars().size());
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBanner,
+                       BluetoothResolvedAfterNavigationCommitted) {
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
+      signin_metrics::AccessPoint::kSettings, std::string());
+
+  content::WebContents* active_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(active_contents);
+
+  // Wait for navigation to complete before resolving Bluetooth initialization.
+  content::WaitForLoadStop(active_contents);
+
+  infobars::ContentInfoBarManager* infobar_manager =
+      infobars::ContentInfoBarManager::FromWebContents(active_contents);
+  ASSERT_TRUE(infobar_manager);
+  EXPECT_EQ(0u, infobar_manager->infobars().size());
+
+  // Now resolve the Bluetooth check. Since the navigation already committed and
+  // we are on the signin page, the banner should be added now.
+  mock_bluetooth_adapter_->SetInitialized(true);
+  EXPECT_EQ(1u, infobar_manager->infobars().size());
 }
 
 class SigninViewControllerSignInBannerNoBluetooth
@@ -956,17 +1106,74 @@ class SigninViewControllerSignInBannerNoBluetooth
 
 IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBannerNoBluetooth,
                        BluetoothUnavailable) {
-  browser()->GetFeatures().signin_view_controller()->ShowDiceAddAccountTab(
+  SigninViewController::From(browser())->ShowDiceAddAccountTab(
       signin_metrics::AccessPoint::kSettings, std::string());
 
   content::WebContents* active_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active_contents);
 
   // Check that the infobar is NOT shown because bluetooth is unavailable.
   infobars::ContentInfoBarManager* infobar_manager =
       infobars::ContentInfoBarManager::FromWebContents(active_contents);
   ASSERT_TRUE(infobar_manager);
+  EXPECT_EQ(0u, infobar_manager->infobars().size());
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerSignInBanner, EndToEndFlow) {
+  // 1. Open the sign-in page, which triggers the tab helper and starts the
+  // flow.
+  signin_ui_util::SignInFromSingleAccountPromo(
+      browser()->GetProfile(), CoreAccountInfo(),
+      signin_metrics::AccessPoint::kPasswordBubble);
+
+  content::WebContents* sign_in_tab =
+      signin_ui_util::GetSignInTabWithAccessPoint(
+          browser(), signin_metrics::AccessPoint::kPasswordBubble);
+  ASSERT_TRUE(sign_in_tab);
+
+  mock_bluetooth_adapter_->SetInitialized(true);
+
+  // Wait for the sign-in tab to finish loading to ensure asynchronous
+  // loader and Bluetooth check callbacks have completed.
+  content::WaitForLoadStop(sign_in_tab);
+
+  // Verify that the InfoBar is created and added to the manager.
+  auto* infobar_manager =
+      infobars::ContentInfoBarManager::FromWebContents(sign_in_tab);
+  ASSERT_TRUE(infobar_manager);
+
+  // The infobar should be added instantly.
+  ASSERT_EQ(1u, infobar_manager->infobars().size());
+
+  infobars::InfoBar* infobar = infobar_manager->infobars()[0];
+  ASSERT_TRUE(infobar);
+
+  // Verify it is our QR code infobar.
+  EXPECT_EQ(infobars::InfoBarDelegate::SIGNIN_QRCODE_INFOBAR_DELEGATE,
+            infobar->delegate()->GetIdentifier());
+
+  SigninQRCodeInfoBar* qr_infobar = static_cast<SigninQRCodeInfoBar*>(infobar);
+
+  // 2. Initially, the QR code is NOT ready, so it must show the throbber.
+  EXPECT_FALSE(qr_infobar->IsShowingQrCodeForTesting());
+
+  // Get the model and set a dummy QR code payload.
+  SigninQRCodeModel* model = SigninQRCodeModel::FromWebContents(sign_in_tab);
+  ASSERT_TRUE(model);
+
+  // Setting the QR code should trigger the observer and swap to the QR view.
+  model->SetQrCode("dummy_qr_code_payload_for_testing");
+
+  // Verify that the InfoBar is now showing the QR code!
+  EXPECT_TRUE(qr_infobar->IsShowingQrCodeForTesting());
+
+  // 3. Navigate away from the sign-in page.
+  // This should trigger the DiceTabHelper to notify that it's no longer the
+  // sign-in page, and the InfoBar should be automatically dismissed.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  // The infobar should have been automatically dismissed!
   EXPECT_EQ(0u, infobar_manager->infobars().size());
 }
 
@@ -986,15 +1193,8 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
   SetPrimaryAccount();
 
   views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
-  views::Widget* bubble_widget = nullptr;
-  base::RunLoop run_loop;
-  observer.set_shown_callback(base::BindRepeating(
-      [](views::Widget** out_widget, base::RepeatingClosure quit_closure,
-          views::Widget* widget) {
-        *out_widget = widget;
-        quit_closure.Run();
-      },
-      &bubble_widget, run_loop.QuitClosure()));
+  base::test::TestFuture<views::Widget*> widget_future;
+  observer.set_shown_callback(widget_future.GetRepeatingCallback());
 
   base::MockCallback<base::OnceClosure> closing_callback;
   EXPECT_CALL(closing_callback, Run()).Times(1);
@@ -1006,12 +1206,11 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
   // Before showing, there should be no explicit state.
   EXPECT_FALSE(avatar_button->HasExplicitButtonState());
 
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowCrossDeviceSigninQrBubble(closing_callback.Get());
+  SigninViewController::From(browser())->ShowCrossDeviceSigninQrBubble(
+      GURL("https://www.google.com/chrome/go-mobile"), closing_callback.Get(),
+      CrossDeviceSigninPromoEntryPoint::kProfileMenu);
 
-  run_loop.Run();
+  views::Widget* bubble_widget = widget_future.Get();
   ASSERT_TRUE(bubble_widget);
 
   views::WidgetDelegate* delegate = bubble_widget->widget_delegate();
@@ -1049,7 +1248,13 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
 
   // Verify that the WebUI URL loaded successfully.
   EXPECT_EQ(web_contents->GetVisibleURL(),
-            GURL(chrome::kChromeUICrossDeviceSigninQrBubbleURL));
+            CrossDeviceSigninQrBubbleUI::GetURLWithEntryPoint(
+                CrossDeviceSigninPromoEntryPoint::kProfileMenu));
+
+  // Verify that right-click context menu is disabled in this bubble.
+  content::ContextMenuParams params;
+  EXPECT_TRUE(web_contents->GetDelegate()->HandleContextMenu(
+      *web_contents->GetPrimaryMainFrame(), params));
 
   views::test::WidgetDestroyedWaiter waiter(bubble_widget);
   // Simulating a click on the avatar button should close the bubble because of
@@ -1060,24 +1265,73 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
   // After closing, wait until the explicit state is cleared (reverted).
   EXPECT_FALSE(avatar_button->HasExplicitButtonState());
 }
+
+// Verifies that showing the cross-device sign-in QR bubble from the
+// SendTabToSelf entry point displays the expected title and description.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
+                       ShowCrossDeviceSigninQrBubble_SendTabToSelfEntryPoint) {
+  SetPrimaryAccount();
+
+  views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
+  base::test::TestFuture<views::Widget*> widget_future;
+  observer.set_shown_callback(widget_future.GetRepeatingCallback());
+
+  base::MockCallback<base::OnceClosure> closing_callback;
+  EXPECT_CALL(closing_callback, Run()).Times(1);
+
+  SigninViewController::From(browser())->ShowCrossDeviceSigninQrBubble(
+      GURL("https://www.google.com/chrome/go-mobile"), closing_callback.Get(),
+      CrossDeviceSigninPromoEntryPoint::kSendTabToSelf);
+
+  views::Widget* bubble_widget = widget_future.Get();
+  ASSERT_TRUE(bubble_widget);
+
+  views::WidgetDelegate* delegate = bubble_widget->widget_delegate();
+  ASSERT_TRUE(delegate);
+  EXPECT_EQ(
+      delegate->GetWindowTitle(),
+      l10n_util::GetStringUTF16(IDS_QR_CODE_BUBBLE_SIGNIN_ON_PHONE_TITLE));
+
+  views::WebView* web_view = views::AsViewClass<views::WebView>(
+      views::ElementTrackerViews::GetInstance()->GetUniqueView(
+          kCrossDeviceSigninQrBubbleWebViewElementId,
+          views::ElementTrackerViews::GetContextForWidget(bubble_widget)));
+  ASSERT_TRUE(web_view);
+
+  content::WebContents* web_contents = web_view->GetWebContents();
+  ASSERT_TRUE(web_contents);
+  if (web_contents->IsLoading()) {
+    content::WaitForLoadStop(web_contents);
+  }
+
+  EXPECT_EQ(content::EvalJs(web_contents, "document.title"),
+            l10n_util::GetStringUTF8(IDS_QR_CODE_BUBBLE_SIGNIN_ON_PHONE_TITLE));
+  EXPECT_EQ(
+      content::EvalJs(
+          web_contents,
+          "document.querySelector('cross-device-signin-qr-bubble-app')"
+          ".shadowRoot.querySelector('#subtitle').textContent.trim()"),
+      l10n_util::GetStringUTF8(IDS_SEND_TAB_TO_SELF_NO_TARGET_DEVICE_BODY_QR));
+
+  views::test::WidgetDestroyedWaiter waiter(bubble_widget);
+  SigninViewController::From(browser())->CloseBubbleSignin();
+  waiter.Wait();
+}
+
 IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
                        ClosesOnSignOut) {
   AccountInfo account_info = SetPrimaryAccount();
 
-  base::MockCallback<base::OnceClosure> closing_callback;
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowCrossDeviceSigninQrBubble(closing_callback.Get());
+  views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
+  base::test::TestFuture<views::Widget*> widget_future;
+  observer.set_shown_callback(widget_future.GetRepeatingCallback());
 
-  views::Widget* bubble_widget =
-      views::ElementTrackerViews::GetInstance()
-          ->GetFirstMatchingView(
-              kCrossDeviceSigninQrBubbleWebViewElementId,
-              views::ElementTrackerViews::GetContextForWidget(
-                  BrowserView::GetBrowserViewForBrowser(browser())
-                      ->GetWidget()))
-          ->GetWidget();
+  base::MockCallback<base::OnceClosure> closing_callback;
+  SigninViewController::From(browser())->ShowCrossDeviceSigninQrBubble(
+      GURL("https://www.google.com/chrome/go-mobile"), closing_callback.Get(),
+      CrossDeviceSigninPromoEntryPoint::kProfileMenu);
+  views::Widget* bubble_widget = widget_future.Get();
+
   ASSERT_TRUE(bubble_widget);
   EXPECT_TRUE(bubble_widget->IsVisible());
 
@@ -1090,99 +1344,372 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
                        ClosesOnRefreshTokenRemoved) {
   AccountInfo account_info = SetPrimaryAccount();
 
-  base::MockCallback<base::OnceClosure> closing_callback;
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowCrossDeviceSigninQrBubble(closing_callback.Get());
+  views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
+  base::test::TestFuture<views::Widget*> widget_future;
+  observer.set_shown_callback(widget_future.GetRepeatingCallback());
 
-  views::Widget* bubble_widget =
-      views::ElementTrackerViews::GetInstance()
-          ->GetFirstMatchingView(
-              kCrossDeviceSigninQrBubbleWebViewElementId,
-              views::ElementTrackerViews::GetContextForWidget(
-                  BrowserView::GetBrowserViewForBrowser(browser())
-                      ->GetWidget()))
-          ->GetWidget();
+  base::MockCallback<base::OnceClosure> closing_callback;
+  SigninViewController::From(browser())->ShowCrossDeviceSigninQrBubble(
+      GURL("https://www.google.com/chrome/go-mobile"), closing_callback.Get(),
+      CrossDeviceSigninPromoEntryPoint::kProfileMenu);
+  views::Widget* bubble_widget = widget_future.Get();
+
   ASSERT_TRUE(bubble_widget);
   EXPECT_TRUE(bubble_widget->IsVisible());
 
   views::test::WidgetDestroyedWaiter waiter(bubble_widget);
-  identity_test_env()->RemoveRefreshTokenForAccount(account_info.account_id);
+  identity_test_env()->RemoveRefreshTokenForAccount(
+      account_info.GetAccountId());
   waiter.Wait();
 }
 IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
                        ClosesOnRefreshTokenError) {
   AccountInfo account_info = SetPrimaryAccount();
 
-  base::MockCallback<base::OnceClosure> closing_callback;
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowCrossDeviceSigninQrBubble(closing_callback.Get());
+  views::AnyWidgetObserver observer(views::test::AnyWidgetTestPasskey{});
+  base::test::TestFuture<views::Widget*> widget_future;
+  observer.set_shown_callback(widget_future.GetRepeatingCallback());
 
-  views::Widget* bubble_widget =
-      views::ElementTrackerViews::GetInstance()
-          ->GetFirstMatchingView(
-              kCrossDeviceSigninQrBubbleWebViewElementId,
-              views::ElementTrackerViews::GetContextForWidget(
-                  BrowserView::GetBrowserViewForBrowser(browser())
-                      ->GetWidget()))
-          ->GetWidget();
+  base::MockCallback<base::OnceClosure> closing_callback;
+  SigninViewController::From(browser())->ShowCrossDeviceSigninQrBubble(
+      GURL("https://www.google.com/chrome/go-mobile"), closing_callback.Get(),
+      CrossDeviceSigninPromoEntryPoint::kProfileMenu);
+  views::Widget* bubble_widget = widget_future.Get();
+
   ASSERT_TRUE(bubble_widget);
   EXPECT_TRUE(bubble_widget->IsVisible());
 
   views::test::WidgetDestroyedWaiter waiter(bubble_widget);
   identity_test_env()->UpdatePersistentErrorOfRefreshTokenForAccount(
-      account_info.account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
+      account_info.GetAccountId(),
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   waiter.Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowSigninInterceptionBubble) {
+  AccountInfo account = identity_test_env()->MakeAccountAvailable(kTestEmail);
+  WebSigninInterceptor::Delegate::BubbleParameters bubble_parameters(
+      WebSigninInterceptor::SigninInterceptionType::kChromeSignin,
+      /*intercepted_account=*/account,
+      /*primary_account=*/AccountInfo());
+
+  views::NamedWidgetShownWaiter widget_waiter(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  base::test::TestFuture<SigninInterceptionResult> future;
+  std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> handle =
+      SigninViewController::From(browser())->ShowSigninInterceptionBubble(
+          bubble_parameters, future.GetCallback());
+  ASSERT_TRUE(handle);
+
+  views::Widget* widget = widget_waiter.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget);
+  EXPECT_TRUE(widget->IsVisible());
+  EXPECT_FALSE(future.IsReady());
+
+  views::test::WidgetDestroyedWaiter destroyed_waiter(widget);
+  handle.reset();
+  destroyed_waiter.Wait();
+  EXPECT_EQ(future.Get(), SigninInterceptionResult::kIgnored);
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowSigninInterceptionBubble_ReplacedBySecondBubble) {
+  AccountInfo account = identity_test_env()->MakeAccountAvailable(kTestEmail);
+  WebSigninInterceptor::Delegate::BubbleParameters bubble_parameters(
+      WebSigninInterceptor::SigninInterceptionType::kChromeSignin,
+      /*intercepted_account=*/account,
+      /*primary_account=*/AccountInfo());
+
+  views::NamedWidgetShownWaiter widget_waiter1(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  base::test::TestFuture<SigninInterceptionResult> future1;
+  std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> handle1 =
+      SigninViewController::From(browser())->ShowSigninInterceptionBubble(
+          bubble_parameters, future1.GetCallback());
+  ASSERT_TRUE(handle1);
+  views::Widget* widget1 = widget_waiter1.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget1);
+
+  // Showing a second bubble while the first is open should close the first
+  // bubble and invoke its callback with kIgnored.
+  views::test::WidgetDestroyedWaiter destroyed_waiter1(widget1);
+  views::NamedWidgetShownWaiter widget_waiter2(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  base::test::TestFuture<SigninInterceptionResult> future2;
+  std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> handle2 =
+      SigninViewController::From(browser())->ShowSigninInterceptionBubble(
+          bubble_parameters, future2.GetCallback());
+  ASSERT_TRUE(handle2);
+
+  destroyed_waiter1.Wait();
+  EXPECT_EQ(future1.Get(), SigninInterceptionResult::kIgnored);
+
+  views::Widget* widget2 = widget_waiter2.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget2);
+  EXPECT_TRUE(widget2->IsVisible());
+
+  // Destroying the stale first handle must not close the second bubble.
+  handle1.reset();
+  EXPECT_FALSE(widget2->IsClosed());
+  EXPECT_FALSE(future2.IsReady());
+
+  // Destroying the second handle closes the second bubble.
+  views::test::WidgetDestroyedWaiter destroyed_waiter2(widget2);
+  handle2.reset();
+  destroyed_waiter2.Wait();
+  EXPECT_EQ(future2.Get(), SigninInterceptionResult::kIgnored);
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowChromeSigninBubble_Accepted) {
+  AccountInfo account = identity_test_env()->MakeAccountAvailable(kTestEmail);
+  base::HistogramTester histogram_tester;
+
+  views::NamedWidgetShownWaiter widget_waiter(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  SigninViewController::From(browser())->ShowChromeSigninBubble(
+      account, signin_metrics::AccessPoint::kMenu);
+
+  views::Widget* widget = widget_waiter.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget);
+  EXPECT_TRUE(widget->IsVisible());
+  EXPECT_FALSE(
+      identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+
+  auto* web_view = views::AsViewClass<views::WebView>(
+      widget->widget_delegate()->GetInitiallyFocusedView());
+  ASSERT_TRUE(web_view);
+  views::test::WidgetDestroyedWaiter destroyed_waiter(widget);
+  ASSERT_TRUE(
+      content::ExecJs(web_view->GetWebContents(),
+                      "document.querySelector('chrome-signin-app').shadowRoot."
+                      "querySelector('#accept-button').click();"));
+  destroyed_waiter.Wait();
+
+  EXPECT_EQ(
+      identity_manager()->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
+      account.GetAccountId());
+  histogram_tester.ExpectUniqueSample("Signin.SignIn.Completed",
+                                      signin_metrics::AccessPoint::kMenu, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowChromeSigninBubble_Declined) {
+  AccountInfo account = identity_test_env()->MakeAccountAvailable(kTestEmail);
+  base::HistogramTester histogram_tester;
+
+  views::NamedWidgetShownWaiter widget_waiter(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  SigninViewController::From(browser())->ShowChromeSigninBubble(
+      account, signin_metrics::AccessPoint::kMenu);
+
+  views::Widget* widget = widget_waiter.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget);
+  EXPECT_TRUE(widget->IsVisible());
+
+  auto* web_view = views::AsViewClass<views::WebView>(
+      widget->widget_delegate()->GetInitiallyFocusedView());
+  ASSERT_TRUE(web_view);
+  views::test::WidgetDestroyedWaiter destroyed_waiter(widget);
+  ASSERT_TRUE(
+      content::ExecJs(web_view->GetWebContents(),
+                      "document.querySelector('chrome-signin-app').shadowRoot."
+                      "querySelector('#cancel-button').click();"));
+  destroyed_waiter.Wait();
+
+  EXPECT_FALSE(
+      identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+  histogram_tester.ExpectTotalCount("Signin.SignIn.Completed", 0);
+}
+
+IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
+                       ShowChromeSigninBubble_ConflictWithInterceptionBubble) {
+  AccountInfo account = identity_test_env()->MakeAccountAvailable(kTestEmail);
+  WebSigninInterceptor::Delegate::BubbleParameters bubble_parameters(
+      WebSigninInterceptor::SigninInterceptionType::kChromeSignin,
+      /*intercepted_account=*/account,
+      /*primary_account=*/AccountInfo());
+
+  views::NamedWidgetShownWaiter widget_waiter1(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  base::test::TestFuture<SigninInterceptionResult> future1;
+  std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> handle1 =
+      SigninViewController::From(browser())->ShowSigninInterceptionBubble(
+          bubble_parameters, future1.GetCallback());
+  ASSERT_TRUE(handle1);
+  views::Widget* widget1 = widget_waiter1.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget1);
+
+  // Showing a self-owned Chrome Signin bubble replaces the interception bubble.
+  views::test::WidgetDestroyedWaiter destroyed_waiter1(widget1);
+  views::NamedWidgetShownWaiter widget_waiter2(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  SigninViewController::From(browser())->ShowChromeSigninBubble(
+      account, signin_metrics::AccessPoint::kMenu);
+
+  destroyed_waiter1.Wait();
+  EXPECT_EQ(future1.Get(), SigninInterceptionResult::kIgnored);
+
+  views::Widget* widget2 = widget_waiter2.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget2);
+  EXPECT_TRUE(widget2->IsVisible());
+
+  // Destroying the stale interception handle must not close the Chrome Signin
+  // bubble.
+  handle1.reset();
+  EXPECT_FALSE(widget2->IsClosed());
+
+  // Showing a new interception bubble replaces the Chrome Signin bubble without
+  // signing the user in.
+  views::test::WidgetDestroyedWaiter destroyed_waiter2(widget2);
+  views::NamedWidgetShownWaiter widget_waiter3(
+      views::test::AnyWidgetTestPasskey{},
+      "DiceWebSigninInterceptionBubbleView");
+  base::test::TestFuture<SigninInterceptionResult> future3;
+  std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> handle3 =
+      SigninViewController::From(browser())->ShowSigninInterceptionBubble(
+          bubble_parameters, future3.GetCallback());
+  ASSERT_TRUE(handle3);
+
+  destroyed_waiter2.Wait();
+  EXPECT_FALSE(
+      identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+
+  views::Widget* widget3 = widget_waiter3.WaitIfNeededAndGet();
+  ASSERT_TRUE(widget3);
+  EXPECT_TRUE(widget3->IsVisible());
+
+  views::test::WidgetDestroyedWaiter destroyed_waiter3(widget3);
+  handle3.reset();
+  destroyed_waiter3.Wait();
+  EXPECT_EQ(future3.Get(), SigninInterceptionResult::kIgnored);
+}
+
+// Opening the bubble from the profile menu while it is open in another window
+// closes the existing bubble and opens it in the requesting window, without the
+// profile ever being reported as having no open bubble.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
+                       ProfileMenuReplacesBubbleOpenInAnotherWindow) {
+  SetPrimaryAccount();
+  Profile* profile = browser()->GetProfile();
+  BrowserWindowInterface* other_browser = CreateBrowser(profile);
+
+  views::NamedWidgetShownWaiter first_bubble_waiter(
+      views::test::AnyWidgetTestPasskey{}, "CrossDeviceSigninQrBubbleViews");
+  base::MockCallback<base::OnceClosure> first_closing_callback;
+  OpenSigninToPhoneQrCodeBubble(browser(),
+                                CrossDeviceSigninPromoEntryPoint::kHistoryPage,
+                                first_closing_callback.Get());
+  views::Widget* first_bubble = first_bubble_waiter.WaitIfNeededAndGet();
+  ASSERT_TRUE(first_bubble);
+  ASSERT_TRUE(IsCrossDeviceSigninPromoBubbleOpen(profile));
+
+  std::vector<bool> observed_states;
+  base::CallbackListSubscription subscription =
+      RegisterCrossDeviceSigninPromoBubbleStateCallback(
+          profile, base::BindLambdaForTesting([&](bool is_open) {
+            observed_states.push_back(is_open);
+          }));
+
+  views::NamedWidgetShownWaiter second_bubble_waiter(
+      views::test::AnyWidgetTestPasskey{}, "CrossDeviceSigninQrBubbleViews");
+  views::test::WidgetDestroyedWaiter first_bubble_destroyed(first_bubble);
+  base::MockCallback<base::OnceClosure> second_closing_callback;
+  EXPECT_CALL(first_closing_callback, Run());
+  EXPECT_CALL(second_closing_callback, Run()).Times(0);
+  OpenSigninToPhoneQrCodeBubble(other_browser,
+                                CrossDeviceSigninPromoEntryPoint::kProfileMenu,
+                                second_closing_callback.Get());
+
+  // The first bubble is destroyed asynchronously; its destruction must be
+  // ignored since it has been replaced.
+  first_bubble_destroyed.Wait();
+  testing::Mock::VerifyAndClearExpectations(&first_closing_callback);
+  views::Widget* second_bubble = second_bubble_waiter.WaitIfNeededAndGet();
+  ASSERT_TRUE(second_bubble);
+  EXPECT_NE(first_bubble, second_bubble);
+  EXPECT_TRUE(IsCrossDeviceSigninPromoBubbleOpen(profile));
+  EXPECT_TRUE(observed_states.empty());
+  testing::Mock::VerifyAndClearExpectations(&second_closing_callback);
+
+  views::test::WidgetDestroyedWaiter second_bubble_destroyed(second_bubble);
+  EXPECT_CALL(second_closing_callback, Run());
+  second_bubble->CloseWithReason(
+      views::Widget::ClosedReason::kCloseButtonClicked);
+  second_bubble_destroyed.Wait();
+
+  EXPECT_FALSE(IsCrossDeviceSigninPromoBubbleOpen(profile));
+  EXPECT_THAT(observed_states, testing::ElementsAre(false));
+}
+
+// Closing the window that hosts the bubble marks the bubble as closed.
+IN_PROC_BROWSER_TEST_F(SigninViewControllerCrossDeviceSigninBrowserTest,
+                       ClosingBrowserWindowClosesBubble) {
+  SetPrimaryAccount();
+  Profile* profile = browser()->GetProfile();
+  BrowserWindowInterface* other_browser = CreateBrowser(profile);
+
+  views::NamedWidgetShownWaiter bubble_waiter(
+      views::test::AnyWidgetTestPasskey{}, "CrossDeviceSigninQrBubbleViews");
+  base::MockCallback<base::OnceClosure> closing_callback;
+  OpenSigninToPhoneQrCodeBubble(other_browser,
+                                CrossDeviceSigninPromoEntryPoint::kHistoryPage,
+                                closing_callback.Get());
+  ASSERT_TRUE(bubble_waiter.WaitIfNeededAndGet());
+  ASSERT_TRUE(IsCrossDeviceSigninPromoBubbleOpen(profile));
+
+  EXPECT_CALL(closing_callback, Run());
+  CloseBrowserSynchronously(other_browser);
+
+  EXPECT_TRUE(base::test::RunUntil(
+      [&] { return !IsCrossDeviceSigninPromoBubbleOpen(profile); }));
 }
 
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 IN_PROC_BROWSER_TEST_F(SigninViewControllerBrowserTest,
                        ShowModalManagedUserNoticeDialog) {
-  AccountInfo account_info;
-  account_info.email = "email@example.com";
+  AccountInfo account_info =
+      AccountInfo::Builder(GaiaId("gaia_id"), "email@example.com").Build();
   base::MockCallback<signin::SigninChoiceCallback>
       mock_process_user_choice_callback;
   base::MockCallback<base::OnceClosure> mock_done_callback;
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowModalManagedUserNoticeDialog(
-          std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
-              account_info,
-              /*is_oidc_account=*/false,
-              /*user_already_signed_in=*/false,
-              /*profile_creation_required_by_policy=*/false,
-              /*show_link_data_option=*/false,
-              /*process_user_choice_callback=*/
-              mock_process_user_choice_callback.Get(),
-              mock_done_callback.Get()));
+  SigninViewController::From(browser())->ShowModalManagedUserNoticeDialog(
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          account_info,
+          /*is_oidc_account=*/false,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/false,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          mock_process_user_choice_callback.Get(), mock_done_callback.Get()));
   EXPECT_FALSE(ManagedProfileRequiredNavigationThrottle::IsBlockingNavigations(
       browser()->GetProfile()));
-  browser()->GetFeatures().signin_view_controller()->CloseModalSignin();
+  SigninViewController::From(browser())->CloseModalSignin();
   EXPECT_FALSE(ManagedProfileRequiredNavigationThrottle::IsBlockingNavigations(
       browser()->GetProfile()));
 
-  browser()
-      ->GetFeatures()
-      .signin_view_controller()
-      ->ShowModalManagedUserNoticeDialog(
-          std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
-              account_info,
-              /*is_oidc_account=*/false,
-              /*user_already_signed_in=*/false,
-              /*profile_creation_required_by_policy=*/true,
-              /*show_link_data_option=*/false,
-              /*process_user_choice_callback=*/
-              mock_process_user_choice_callback.Get(),
-              mock_done_callback.Get()));
+  SigninViewController::From(browser())->ShowModalManagedUserNoticeDialog(
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          account_info,
+          /*is_oidc_account=*/false,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/true,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          mock_process_user_choice_callback.Get(), mock_done_callback.Get()));
   EXPECT_TRUE(ManagedProfileRequiredNavigationThrottle::IsBlockingNavigations(
       browser()->GetProfile()));
-  browser()->GetFeatures().signin_view_controller()->CloseModalSignin();
+  SigninViewController::From(browser())->CloseModalSignin();
   EXPECT_FALSE(ManagedProfileRequiredNavigationThrottle::IsBlockingNavigations(
       browser()->GetProfile()));
 }
@@ -1244,23 +1771,16 @@ class SigninViewControllerInteractiveBrowserTest
   auto ShowAndInstrumentSignoutConfirmationDialog() {
     return Steps(
         Do([&] {
-          browser()
-              ->GetFeatures()
-              .signin_view_controller()
-              ->SignoutOrReauthWithPrompt(
-                  kTestAccessPoint,
-                  signin_metrics::ProfileSignout::
-                      kUserClickedSignoutProfileMenu,
-                  signin_metrics::SourceForRefreshTokenOperation::
-                      kUserMenu_SignOutAllAccounts);
+          SigninViewController::From(browser())->SignoutOrReauthWithPrompt(
+              kTestAccessPoint,
+              signin_metrics::ProfileSignout::kUserClickedSignoutProfileMenu,
+              signin_metrics::SourceForRefreshTokenOperation::
+                  kUserMenu_SignOutAllAccounts);
         }),
         WaitForShow(
             SigninViewController::kSignoutConfirmationDialogViewElementId),
         Check([&] {
-          return browser()
-              ->GetFeatures()
-              .signin_view_controller()
-              ->ShowsModalDialog();
+          return SigninViewController::From(browser())->ShowsModalDialog();
         }),
         InstrumentNonTabWebView(
             kWebContentsId,
@@ -1296,10 +1816,7 @@ class SigninViewControllerInteractiveBrowserTest
             SigninViewController::kSignoutConfirmationDialogViewElementId),
         CheckResult(
             [&] {
-              return browser()
-                  ->GetFeatures()
-                  .signin_view_controller()
-                  ->ShowsModalDialog();
+              return SigninViewController::From(browser())->ShowsModalDialog();
             },
             false),
         // Verify that the user has signed out.
@@ -1342,6 +1859,7 @@ class SigninViewControllerInteractiveBrowserTest
   }
 
  private:
+  extensions::ScopedInstallVerifierBypassForTest install_verifier_bypass_;
   // chrome/test/data/extensions/
   base::FilePath extension_data_dir_;
 };
@@ -1536,7 +2054,7 @@ IN_PROC_BROWSER_TEST_P(SigninViewControllerBrowserCookieParamTest, SignOut) {
 
   // Signout tab was opened only if cookies there were cookies for the account.
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(tab);
   EXPECT_EQ(IsSignoutTab(tab), with_cookies());
   EXPECT_FALSE(IsSigninTab(tab));

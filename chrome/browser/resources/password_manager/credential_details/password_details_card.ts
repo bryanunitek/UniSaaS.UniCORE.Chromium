@@ -7,9 +7,9 @@ import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_icons.css.js';
 import 'chrome://resources/cr_elements/cr_input/cr_input.js';
-import 'chrome://resources/cr_elements/cr_input/cr_input_style.css.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/policy/cr_tooltip_icon.js';
+import '../cr_input_style.css.js';
 import '../shared_style.css.js';
 import './credential_details_card.css.js';
 import './credential_field.js';
@@ -19,18 +19,21 @@ import '../dialogs/multi_store_delete_password_dialog.js';
 import '../sharing/share_password_flow.js';
 import '../sharing/metrics_utils.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import {PrefServiceObserverMixin} from '/shared/settings/prefs2/pref_service_observer_mixin.js';
 import {HelpBubbleMixin} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin.js';
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import type {CrIconButtonElement} from 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {OpenWindowProxyImpl} from 'chrome://resources/js/open_window_proxy.js';
 import {htmlEscape} from 'chrome://resources/js/util.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {PasswordsMovedEvent, ValueCopiedEvent} from '../password_manager_app.js';
 import {PasswordManagerImpl, PasswordViewPageInteractions} from '../password_manager_proxy.js';
+import {Page, Router} from '../router.js';
 import {MoveToAccountStoreTrigger, PasswordSharingActions, recordMoveToAccountStoreAccepted, recordPasswordSharingInteraction} from '../sharing/metrics_utils.js';
 import {ShowPasswordMixin} from '../show_password_mixin.js';
 import {UserUtilMixin} from '../user_utils_mixin.js';
@@ -69,7 +72,7 @@ export interface PasswordDetailsCardElement {
   };
 }
 
-const PasswordDetailsCardElementBase = PrefsMixin(HelpBubbleMixin(
+const PasswordDetailsCardElementBase = PrefServiceObserverMixin(HelpBubbleMixin(
     UserUtilMixin(ShowPasswordMixin(I18nMixin(PolymerElement)))));
 
 export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
@@ -103,8 +106,14 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
         value: PasswordViewPageInteractions,
       },
 
-      showEditPasswordDialog_: Boolean,
-      showDeletePasswordDialog_: Boolean,
+      showEditPasswordDialog_: {
+        type: Boolean,
+        value: false,
+      },
+      showDeletePasswordDialog_: {
+        type: Boolean,
+        value: false,
+      },
 
       showShareButton_: {
         type: Boolean,
@@ -117,9 +126,7 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
 
       passwordSharingDisabled_: {
         type: Boolean,
-        computed: 'computePasswordSharingDisabled_(' +
-            'prefs.password_manager.password_sharing_enabled.enforcement, ' +
-            'prefs.password_manager.password_sharing_enabled.value)',
+        value: false,
       },
 
       showShareFlow_: {
@@ -127,7 +134,10 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
         value: false,
       },
 
-      isUsingAccountStore: Boolean,
+      isUsingAccountStore: {
+        type: Boolean,
+        value: false,
+      },
       trigger_: {
         type: Object,
         value: () =>
@@ -160,6 +170,16 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
   declare private showShareButton_: boolean;
   declare private trigger_: MoveToAccountStoreTrigger;
 
+  override connectedCallback() {
+    super.connectedCallback();
+
+    this.addPrefObserver<boolean>(
+        'password_manager.password_sharing_enabled', pref => {
+          this.passwordSharingDisabled_ = pref.enforcement ===
+                  chrome.settingsPrivate.Enforcement.ENFORCED &&
+              !pref.value;
+        });
+  }
 
   private isFederated_(): boolean {
     return !!this.password.federationText;
@@ -284,12 +304,6 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
         (this.isSyncingPasswords || this.isAccountStoreUser);
   }
 
-  private computePasswordSharingDisabled_(): boolean {
-    const pref = this.getPref('password_manager.password_sharing_enabled');
-    return pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED &&
-        !pref.value;
-  }
-
   private getCredentialTypeString_(): string {
     return this.isFederated_() ? this.i18n(
                                      'federatedCredentialProviderAriaLabel',
@@ -375,6 +389,40 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
 
     this.registerHelpBubble(
         PASSWORD_SHARE_BUTTON_BUTTON_ELEMENT_ID, this.$.shareButtonContainer);
+  }
+
+  protected getCloudUploadIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'passwords-icon:cloud-upload' :
+        'passwords-icon:upload-old';
+  }
+
+  private showCompromiseWarning_(): boolean {
+    if (!loadTimeData.getBoolean('showCompromiseWarningInDetailsCard')) {
+      return false;
+    }
+    const info = this.password.compromisedInfo;
+    if (!info || info.isMuted) {
+      return false;
+    }
+    const types = info.compromiseTypes;
+    return types.includes(chrome.passwordsPrivate.CompromiseType.LEAKED) ||
+        types.includes(chrome.passwordsPrivate.CompromiseType.PHISHED);
+  }
+
+  private onChangePasswordClicked_() {
+    assert(this.password.changePasswordUrl);
+    OpenWindowProxyImpl.getInstance().openUrl(this.password.changePasswordUrl);
+    PasswordManagerImpl.getInstance().recordPasswordViewInteraction(
+        PasswordViewPageInteractions.CHANGE_PASSWORD_CLICKED);
+  }
+
+  private onCheckupLinkClicked_(e: Event) {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'A') {
+      e.preventDefault();
+      Router.getInstance().navigateTo(Page.CHECKUP);
+    }
   }
 }
 

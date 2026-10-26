@@ -18,16 +18,14 @@ import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.TextMessagePreference;
-import org.chromium.components.policy.test.annotations.Policies;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -41,12 +39,11 @@ public class StandardProtectionSettingsFragmentTest {
     private static final String EXTENDED_REPORTING = "extended reporting ";
     private static final String ENABLED_STATE = "enabled state ";
     private static final String CHECKED_STATE = "checked state ";
-    private static final String MANAGED_STATE = "managed state ";
     private static final String FROM_NATIVE = "from native";
 
     @Rule
-    public SettingsActivityTestRule<StandardProtectionSettingsFragment> mTestRule =
-            new SettingsActivityTestRule<>(StandardProtectionSettingsFragment.class);
+    public SettingsTestRule<StandardProtectionSettingsFragment> mTestRule =
+            new SettingsTestRule<>(StandardProtectionSettingsFragment.class);
 
     @Rule public final SigninTestRule mSigninTestRule = new SigninTestRule();
 
@@ -161,38 +158,6 @@ public class StandardProtectionSettingsFragmentTest {
                             ASSERT_MESSAGE_PREFIX + EXTENDED_REPORTING + ENABLED_STATE,
                             mExtendedReportingPreference.isEnabled());
                     Assert.assertFalse(
-                            ASSERT_MESSAGE_PREFIX + EXTENDED_REPORTING + CHECKED_STATE,
-                            mExtendedReportingPreference.isChecked());
-                });
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"SafeBrowsing"})
-    @DisableFeatures({ChromeFeatureList.SAFE_BROWSING_EXTENDED_REPORTING_REMOVE_PREF_DEPENDENCY})
-    @Policies.Add({@Policies.Item(key = "SafeBrowsingExtendedReportingEnabled", string = "true")})
-    public void testExtendedReportingPolicyManaged() {
-        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
-                    setSafeBrowsingState(SafeBrowsingState.STANDARD_PROTECTION);
-                });
-        startSettings();
-
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    Assert.assertTrue(
-                            ASSERT_MESSAGE_PREFIX
-                                    + EXTENDED_REPORTING
-                                    + MANAGED_STATE
-                                    + FROM_NATIVE,
-                            new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())
-                                    .isSafeBrowsingExtendedReportingManaged());
-                    Assert.assertFalse(
-                            ASSERT_MESSAGE_PREFIX + EXTENDED_REPORTING + ENABLED_STATE,
-                            mExtendedReportingPreference.isEnabled());
-                    Assert.assertTrue(
                             ASSERT_MESSAGE_PREFIX + EXTENDED_REPORTING + CHECKED_STATE,
                             mExtendedReportingPreference.isChecked());
                 });

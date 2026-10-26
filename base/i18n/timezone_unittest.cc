@@ -6,9 +6,13 @@
 
 #include <memory>
 
+#include "base/features.h"
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
-#include "base/i18n/tags.h"
+#include "base/i18n/test/scoped_icu_locale.h"
+#include "base/task/sequence_manager/thread_controller_power_monitor.h"
 #include "base/test/icu_test_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/icu/source/common/unicode/locid.h"
@@ -18,9 +22,29 @@
 
 namespace base::i18n {
 
+namespace {
+
+class ScopedI18nOptimizationsFeature {
+ public:
+  explicit ScopedI18nOptimizationsFeature(bool enable) {
+    features_.InitWithFeatureState(features::kI18nOptimizations, enable);
+    features::Init();
+    sequence_manager::internal::ThreadControllerPowerMonitor::ResetForTesting();
+  }
+  ~ScopedI18nOptimizationsFeature() {
+    features_.Reset();
+    features::Init();
+    sequence_manager::internal::ThreadControllerPowerMonitor::ResetForTesting();
+  }
+
+ private:
+  test::ScopedFeatureList features_;
+};
+
+}  // namespace
+
 TEST(TimeZoneTest, Default) {
-  test::ScopedRestoreICUDefaultLocale restore_locale;
-  SetICUDefaultLocale("en_US");
+  ScopedDefaultIcuLocale restore_locale(GetKnownLanguageTag("en-US"));
   test::ScopedRestoreDefaultTimezone la_time("America/Los_Angeles");
 
   TimeZone tz = TimeZone::Default();
@@ -36,13 +60,23 @@ TEST(TimeZoneTest, FromID) {
 }
 
 TEST(TimeZoneTest, GMT) {
-  TimeZone tz = TimeZone::GMT();
-  EXPECT_EQ(tz.GetID(), "GMT");
+  for (bool enable_feature : {false, true}) {
+    ScopedI18nOptimizationsFeature scoped_feature(enable_feature);
+    TimeZone tz = TimeZone::GMT();
+    EXPECT_EQ(tz.GetID(), "GMT");
+    EXPECT_EQ(tz, TimeZone::FromString("GMT"));
+    EXPECT_EQ(tz.GetRawOffset(), base::TimeDelta());
+    EXPECT_FALSE(tz.UseDaylightTime());
+  }
 }
 
 TEST(TimeZoneTest, Unknown) {
-  TimeZone tz = TimeZone::Unknown();
-  EXPECT_EQ(tz.GetID(), "Etc/Unknown");
+  for (bool enable_feature : {false, true}) {
+    ScopedI18nOptimizationsFeature scoped_feature(enable_feature);
+    TimeZone tz = TimeZone::Unknown();
+    EXPECT_EQ(tz.GetID(), "Etc/Unknown");
+    EXPECT_EQ(tz, TimeZone::FromString("Etc/Unknown"));
+  }
 }
 
 TEST(TimeZoneTest, CopyAndMove) {
@@ -55,16 +89,39 @@ TEST(TimeZoneTest, CopyAndMove) {
 }
 
 TEST(TimeZoneTest, GetDisplayName) {
-  test::ScopedRestoreICUDefaultLocale restore_locale;
-  SetICUDefaultLocale("en_US");
+  ScopedDefaultIcuLocale restore_locale(GetKnownLanguageTag("en-US"));
 
   TimeZone tz = TimeZone::FromString("America/Los_Angeles");
   // Standard time display name.
-  EXPECT_EQ(tz.GetDisplayName(TimeZone::kLong), u"Pacific Standard Time");
-  EXPECT_EQ(tz.GetDisplayName(TimeZone::kShort), u"PST");
+  EXPECT_EQ(tz.GetDisplayName({.style = TimeZone::kLong}),
+            u"Pacific Standard Time");
+  EXPECT_EQ(tz.GetDisplayName({.style = TimeZone::kShort}), u"PST");
   constexpr auto fr = GetKnownLanguageTag("fr");
   // Locale specific.
-  EXPECT_EQ(tz.GetDisplayName(fr, TimeZone::kLong),
+  EXPECT_EQ(tz.GetDisplayName(fr, {.style = TimeZone::kLong}),
+            u"heure normale du Pacifique nord-am\u00e9ricain");
+
+  base::Time winter_time;
+  ASSERT_TRUE(base::Time::FromUTCString("2026-01-15 12:00:00", &winter_time));
+  EXPECT_EQ(tz.GetDisplayName({.is_day_light = tz.InDaylightTime(winter_time),
+                               .style = TimeZone::kLong}),
+            u"Pacific Standard Time");
+
+  base::Time summer_time;
+  ASSERT_TRUE(base::Time::FromUTCString("2026-07-15 12:00:00", &summer_time));
+  EXPECT_EQ(tz.GetDisplayName({.is_day_light = tz.InDaylightTime(summer_time),
+                               .style = TimeZone::kLong}),
+            u"Pacific Daylight Time");
+
+  // Single-field designated initializer checks.
+  EXPECT_EQ(tz.GetDisplayName({.is_day_light = false}),
+            u"Pacific Standard Time");
+  EXPECT_EQ(tz.GetDisplayName({.is_day_light = true}),
+            u"Pacific Daylight Time");
+
+  // Default parameters check.
+  EXPECT_EQ(tz.GetDisplayName(), u"Pacific Standard Time");
+  EXPECT_EQ(tz.GetDisplayName(fr),
             u"heure normale du Pacifique nord-am\u00e9ricain");
 }
 
@@ -108,6 +165,28 @@ TEST(TimeZoneTest, DaylightSavingTime) {
 
   EXPECT_FALSE(phoenix.InDaylightTime(winter_time));
   EXPECT_FALSE(phoenix.InDaylightTime(summer_time));
+}
+
+TEST(TimeZoneTest, ExtremeTimes) {
+  const TimeZone time_zones[] = {
+      TimeZone::GMT(),
+      TimeZone::Unknown(),
+      TimeZone::FromString("America/Los_Angeles"),
+      TimeZone::FromString("Asia/Tokyo"),
+  };
+
+  for (const TimeZone& tz : time_zones) {
+    for (base::Time extreme_time : {base::Time::Min(), base::Time::Max()}) {
+      for (bool is_local : {false, true}) {
+        base::TimeDelta raw_offset = base::Hours(99);
+        base::TimeDelta dst_offset = base::Hours(99);
+        tz.GetOffset(extreme_time, is_local, raw_offset, dst_offset);
+        EXPECT_EQ(raw_offset, tz.GetRawOffset());
+        EXPECT_EQ(dst_offset, base::TimeDelta());
+      }
+      EXPECT_FALSE(tz.InDaylightTime(extreme_time));
+    }
+  }
 }
 
 TEST(TimeZoneTest, Equality) {

@@ -12,16 +12,27 @@
 #import "components/autofill/ios/common/javascript_feature_util.h"
 #import "components/autofill/ios/form_util/child_frame_registrar.h"
 #import "components/password_manager/core/browser/passkey_credential.h"
+#import "components/password_manager/core/browser/ui/credential_ui_entry.h"
+#import "components/webauthn/core/browser/test_passkey_model.h"
+#import "components/webauthn/ios/fake_ios_passkey_client.h"
 #import "components/webauthn/ios/ios_passkey_client.h"
 #import "components/webauthn/ios/ios_webauthn_credentials_delegate.h"
 #import "components/webauthn/ios/ios_webauthn_credentials_delegate_factory.h"
+#import "components/webauthn/ios/passkey_java_script_feature.h"
+#import "components/webauthn/ios/passkey_tab_helper.h"
+#import "components/webauthn/ios/passkey_test_util.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/ui/credential_suggestion_bottom_sheet_consumer.h"
 #import "ios/chrome/browser/shared/model/web_state_list/test/fake_web_state_list_delegate.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ios/chrome/grit/ios_strings.h"
+#import "ios/web/public/test/fakes/fake_browser_state.h"
+#import "ios/web/public/test/fakes/fake_web_client.h"
+#import "ios/web/public/test/fakes/fake_web_frame.h"
 #import "ios/web/public/test/fakes/fake_web_frames_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
+#import "ios/web/public/test/js_test_util.h"
+#import "ios/web/public/test/scoped_testing_web_client.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
@@ -53,22 +64,45 @@ PasskeyCredential CreatePasskeyCredential() {
 // Test fixture for PasskeySuggestionBottomSheetMediator.
 class PasskeySuggestionBottomSheetMediatorTest : public PlatformTest {
  protected:
-  PasskeySuggestionBottomSheetMediatorTest() {
+  PasskeySuggestionBottomSheetMediatorTest()
+      : scoped_web_client_(std::make_unique<web::FakeWebClient>()) {
     web_state_list_ = std::make_unique<WebStateList>(&web_state_list_delegate_);
   }
 
   void SetUp() override {
     PlatformTest::SetUp();
 
+    web::test::OverrideJavaScriptFeatures(
+        &fake_browser_state_,
+        {webauthn::PasskeyJavaScriptFeature::GetInstance()});
+
     auto web_state = std::make_unique<web::FakeWebState>();
     web_state_ = web_state.get();
+    web_state_->SetBrowserState(&fake_browser_state_);
 
-    web_state_->SetWebFramesManager(
-        web::ContentWorld::kPageContentWorld,
-        std::make_unique<web::FakeWebFramesManager>());
-    web_state_->SetWebFramesManager(
-        web::ContentWorld::kIsolatedWorld,
-        std::make_unique<web::FakeWebFramesManager>());
+    auto frames_manager = std::make_unique<web::FakeWebFramesManager>();
+    auto frame = web::FakeWebFrame::Create(kFrameId, /*is_main_frame=*/true,
+                                           GURL("https://example.com"));
+    frame->set_browser_state(&fake_browser_state_);
+    frames_manager->AddWebFrame(std::move(frame));
+
+    auto other_frames_manager = std::make_unique<web::FakeWebFramesManager>();
+    auto other_frame = web::FakeWebFrame::Create(
+        kFrameId, /*is_main_frame=*/true, GURL("https://example.com"));
+    other_frame->set_browser_state(&fake_browser_state_);
+    other_frames_manager->AddWebFrame(std::move(other_frame));
+
+    web::ContentWorld passkey_world =
+        webauthn::PasskeyJavaScriptFeature::GetInstance()
+            ->GetSupportedContentWorld();
+    web::ContentWorld other_world =
+        passkey_world == web::ContentWorld::kPageContentWorld
+            ? web::ContentWorld::kIsolatedWorld
+            : web::ContentWorld::kPageContentWorld;
+
+    web_state_->SetWebFramesManager(passkey_world, std::move(frames_manager));
+    web_state_->SetWebFramesManager(other_world,
+                                    std::move(other_frames_manager));
 
     web_state_list_->InsertWebState(
         std::move(web_state),
@@ -85,6 +119,13 @@ class PasskeySuggestionBottomSheetMediatorTest : public PlatformTest {
     webauthn::IOSWebAuthnCredentialsDelegateFactory* factory =
         webauthn::IOSWebAuthnCredentialsDelegateFactory::GetFactory(web_state_);
     webauthn_credentials_delegate_ = factory->GetDelegateForFrameId(kFrameId);
+
+    model_ = std::make_unique<webauthn::TestPasskeyModel>();
+    auto client = std::make_unique<webauthn::FakeIOSPasskeyClient>();
+    fake_client_ = client.get();
+    webauthn::PasskeyTabHelper::CreateForWebState(web_state_, model_.get(),
+                                                  /*password_store=*/nullptr,
+                                                  std::move(client));
 
     consumer_ =
         OCMProtocolMock(@protocol(CredentialSuggestionBottomSheetConsumer));
@@ -104,6 +145,9 @@ class PasskeySuggestionBottomSheetMediatorTest : public PlatformTest {
   }
 
   web::WebTaskEnvironment task_environment_;
+  web::ScopedTestingWebClient scoped_web_client_;
+  std::unique_ptr<webauthn::TestPasskeyModel> model_;
+  web::FakeBrowserState fake_browser_state_;
   FakeWebStateListDelegate web_state_list_delegate_;
   std::unique_ptr<WebStateList> web_state_list_;
   raw_ptr<web::FakeWebState> web_state_;
@@ -112,6 +156,7 @@ class PasskeySuggestionBottomSheetMediatorTest : public PlatformTest {
   id consumer_;
   id reauth_module_;
   PasskeySuggestionBottomSheetMediator* mediator_;
+  raw_ptr<webauthn::FakeIOSPasskeyClient> fake_client_;
 };
 
 // Tests that the consumer is notified with the available passkey suggestions.
@@ -173,6 +218,71 @@ TEST_F(PasskeySuggestionBottomSheetMediatorTest,
   // point to are destroyed to avoid dangling pointer errors.
   web_state_ = nullptr;
   webauthn_credentials_delegate_ = nullptr;
+  fake_client_ = nullptr;
 
   web_state_list_.reset();
+}
+
+// Tests that onDismissWithoutAnyCredentialAction defers the request to the
+// renderer.
+TEST_F(PasskeySuggestionBottomSheetMediatorTest, DismissDefersToRenderer) {
+  CreateMediator();
+  ASSERT_TRUE(mediator_);
+
+  webauthn::PasskeyTabHelper* helper =
+      webauthn::PasskeyTabHelper::FromWebState(web_state_);
+
+  // Create and handle an assertion request with matching ID and frame ID.
+  webauthn::AssertionRequestParams params =
+      webauthn::BuildAssertionRequestParams(
+          {}, device::UserVerificationRequirement::kPreferred, kRequestId,
+          kFrameId);
+  helper->HandleGetRequestedEvent(std::move(params));
+
+  // Dismiss the bottom sheet.
+  [mediator_ onDismissWithoutAnyCredentialAction];
+
+  // Verify that it was deferred to the renderer by checking JS execution on the
+  // frame.
+  web::WebFramesManager* frames_manager =
+      webauthn::PasskeyJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state_);
+  web::FakeWebFrame* main_frame =
+      static_cast<web::FakeWebFrame*>(frames_manager->GetMainWebFrame());
+  EXPECT_NE(main_frame->GetLastJavaScriptCall().find(u"deferToRenderer"),
+            std::u16string::npos);
+}
+
+// Tests that passkey credentials are fetched and can be retrieved for a passkey
+// suggestion.
+TEST_F(PasskeySuggestionBottomSheetMediatorTest, FetchesPasskeyCredentials) {
+  PasskeyCredential passkey = CreatePasskeyCredential();
+  webauthn_credentials_delegate_->OnCredentialsReceived({passkey}, kRequestId);
+
+  CreateMediator();
+
+  __block FormSuggestion* passkeySuggestion = nil;
+  OCMExpect([consumer_
+      setSuggestions:[OCMArg checkWithBlock:^BOOL(
+                                 NSArray<FormSuggestion*>* suggestions) {
+        EXPECT_EQ(suggestions.count, 1u);
+        passkeySuggestion = suggestions[0];
+        return YES;
+      }]
+           andDomain:[OCMArg isNotNil]]);
+  OCMExpect([consumer_
+      setPrimaryActionString:l10n_util::GetNSString(
+                                 IDS_IOS_CREDENTIAL_BOTTOM_SHEET_CONTINUE)
+       secondaryActionString:l10n_util::GetNSString(
+                                 IDS_IOS_CREDENTIAL_BOTTOM_SHEET_MORE_PASSKEYS)
+        secondaryActionImage:[OCMArg any]]);
+
+  [mediator_ setConsumer:consumer_];
+  EXPECT_OCMOCK_VERIFY(consumer_);
+  ASSERT_TRUE(passkeySuggestion);
+
+  std::optional<password_manager::CredentialUIEntry> credential =
+      [mediator_ getCredentialForFormSuggestion:passkeySuggestion];
+  ASSERT_TRUE(credential.has_value());
+  EXPECT_EQ(credential.value(), password_manager::CredentialUIEntry(passkey));
 }

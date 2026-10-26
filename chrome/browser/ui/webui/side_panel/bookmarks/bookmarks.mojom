@@ -114,11 +114,12 @@ interface BookmarksPageHandler {
   ExecuteOpenInNewWindowCommand(
       array<string> side_panel_ids, ActionSource source);
 
-  // Opens the bookmarks specified by `side_panel_ids` in a new incognito
-  // window, using the same logic as the native bookmarks context menu.
+  // Opens the bookmarks specified by `side_panel_ids` in a new off-the-record
+  // (Incognito or Isolated) window, using the same logic as the native
+  // bookmarks context menu.
   // Some of the `side_panel_ids` may be a folder or a url node, so it could
   // also map to a merged node that has an actual string representation.
-  ExecuteOpenInIncognitoWindowCommand(
+  ExecuteOpenInOffTheRecordWindowCommand(
       array<string> side_panel_ids, ActionSource source);
 
   // Opens the bookmarks specified by `side_panel_ids` in a new tab group, using
@@ -166,11 +167,6 @@ interface BookmarksPageHandler {
   // a regular non permanent node as those are the only ones that can be
   // renamed.
   RenameBookmark(int64 node_id, string new_title);
-
-  // Moves the bookmark with `node_id` into the `folder_id` folder.
-  // `folder_id` can be a merged Side Panel ID. `node_id` should map to a
-  // regular non permanent node.
-  MoveBookmark(int64 node_id, string folder_id);
 
   // Removes the bookmarks with id in `node_ids`. All bookmarks are expected to
   // map to a regular non permanent node. If some of the nodes are folders, it

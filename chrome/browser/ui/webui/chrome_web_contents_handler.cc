@@ -8,16 +8,18 @@
 
 #include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/file_select_listener.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 using content::BrowserContext;
 using content::OpenURLParams;
@@ -47,22 +49,22 @@ WebContents* ChromeWebContentsHandler::OpenURLFromTab(
       ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
   const bool browser_created = !browser;
   if (!browser) {
-    if (Browser::GetCreationStatusForProfile(profile) !=
-        Browser::CreationStatus::kOk) {
+    if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+        BrowserWindowInterface::CreationStatus::kOk) {
       return nullptr;
     }
     // TODO(erg): OpenURLParams should pass a user_gesture flag, pass it to
     // CreateParams, and pass the real value to nav_params below.
-    browser = Browser::Create(
-        Browser::CreateParams(Browser::TYPE_NORMAL, profile, true));
+    browser = CreateBrowserWindow(BrowserWindowCreateParams(
+        BrowserWindowInterface::TYPE_NORMAL, profile, true));
   }
   NavigateParams nav_params(browser, params.url, params.transition);
   nav_params.FillNavigateParamsFromOpenURLParams(params);
   if (source && source->IsCrashed() &&
-      params.disposition == WindowOpenDisposition::CURRENT_TAB &&
+      params.disposition == WindowOpenDisposition::kCurrentTab &&
       ui::PageTransitionCoreTypeIs(params.transition,
                                    ui::PAGE_TRANSITION_LINK)) {
-    nav_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    nav_params.disposition = WindowOpenDisposition::kNewForegroundTab;
   } else {
     nav_params.disposition = params.disposition;
   }
@@ -107,12 +109,12 @@ void ChromeWebContentsHandler::AddNewContents(
   if (!browser) {
     // The request can be triggered by Captive portal when browser is not ready
     // (https://crbug.com/40154317).
-    if (Browser::GetCreationStatusForProfile(profile) !=
-        Browser::CreationStatus::kOk) {
+    if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+        BrowserWindowInterface::CreationStatus::kOk) {
       return;
     }
-    browser = Browser::Create(
-        Browser::CreateParams(Browser::TYPE_NORMAL, profile, user_gesture));
+    browser = CreateBrowserWindow(BrowserWindowCreateParams(
+        BrowserWindowInterface::TYPE_NORMAL, profile, user_gesture));
   }
   NavigateParams params(browser, std::move(new_contents));
   params.source_contents = source;
@@ -132,6 +134,13 @@ void ChromeWebContentsHandler::RunFileChooser(
     content::RenderFrameHost* render_frame_host,
     scoped_refptr<content::FileSelectListener> listener,
     const blink::mojom::FileChooserParams& params) {
+  Profile* profile =
+      Profile::FromBrowserContext(render_frame_host->GetBrowserContext());
+  if (!profile || GetBrowserWindowCreationStatusForProfile(*profile) !=
+                      BrowserWindowInterface::CreationStatus::kOk) {
+    listener->FileSelectionCanceled();
+    return;
+  }
   FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),
                                    params);
 }

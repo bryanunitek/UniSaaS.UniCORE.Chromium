@@ -20,7 +20,6 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/dom_distiller/test_distillation_observers.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -36,8 +35,8 @@
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_driver_observer.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -50,7 +49,6 @@
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
@@ -81,7 +79,7 @@ std::unique_ptr<content::WebContents> NewContentsWithSameParamsAs(
 
 // FaviconUpdateWaiter waits for favicons to be changed after navigation.
 // TODO(crbug.com/40123662): Combine with FaviconUpdateWaiter in
-// chrome/browser/chrome_service_worker_browsertest.cc.
+// chrome/browser/service_worker/chrome_service_worker_browsertest.cc.
 class FaviconUpdateWaiter : public favicon::FaviconDriverObserver {
  public:
   explicit FaviconUpdateWaiter(content::WebContents* web_contents) {
@@ -339,37 +337,6 @@ IN_PROC_BROWSER_TEST_F(DomDistillerTabUtilsMPArchTest,
   // SelfDeletingRequestDelegate deletes itself when PrimaryPageChanged() is
   // called. Ensure that the TaskTracker has been removed.
   EXPECT_FALSE(HasTaskTracker());
-}
-
-class DomDistillerTabUtilsFencedFrameTest
-    : public DomDistillerTabUtilsMPArchTest {
- public:
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_helper_;
-  }
-
- protected:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
-};
-
-IN_PROC_BROWSER_TEST_F(DomDistillerTabUtilsFencedFrameTest,
-                       DISABLED_TaskTrackerNotRemovedByFencedFrame) {
-  NavigateAndDistill();
-  // Ensure the TaskTracker for distilling the source article exist.
-  EXPECT_TRUE(HasTaskTracker());
-
-  // Activate the source web contents.
-  browser()->tab_strip_model()->ActivateTabAt(0);
-
-  // Add a fenced frame into the source web contents.
-  const GURL fenced_frame_url =
-      https_server_->GetURL("/fenced_frames/title1.html");
-  ASSERT_TRUE(fenced_frame_test_helper().CreateFencedFrame(
-      source_web_contents()->GetPrimaryMainFrame(), fenced_frame_url));
-
-  // Ensure that the navigation in the fenced frame doesn't affect the
-  // SelfDeletingRequestDelegate.
-  EXPECT_TRUE(HasTaskTracker());
 }
 
 class DomDistillerTabUtilsPrerenderTest

@@ -30,6 +30,7 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "url/gurl.h"
 
@@ -136,7 +137,7 @@ void ProtocolHandlerPickerCoordinator::LaunchApp(
     std::optional<ConfirmationDialogAction> action) {
   apps::AppLaunchParams params(app_id,
                                apps::LaunchContainer::kLaunchContainerWindow,
-                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                               WindowOpenDisposition::kNewForegroundTab,
                                apps::LaunchSource::kFromProtocolHandler);
   params.protocol_handler_launch_url = protocol_url;
   params.confirmation_dialog_action = action;

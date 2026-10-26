@@ -10,7 +10,7 @@ config("gcapi_config") {
   # gcapi can be bundled with installers of other software, which might run on
   # older macOS versions than chrome itself. To not making a dependency on gcapi
   # a problem for these installers, make it target a very old version of macOS.
-  min_version = "10.13"
+  min_version = "11.0"
   cflags = [
     "-isysroot",
     rebase_path(sysroot, root_build_dir),
@@ -31,11 +31,16 @@ static_library("gcapi_lib") {
     "gcapi.mm",
   ]
 
+  deps = [ "//base:compiler_specific" ]
+
   frameworks = [ "Cocoa.framework" ]
 
   # Don't use runtime_library, to be able to pick a custom mmacos-version-min.
   configs -= [ "//build/config/compiler:runtime_library" ]
   configs += [ ":gcapi_config" ]
+
+  # Linked into partners' binaries, which lack the alloc token fallbacks.
+  configs -= [ "//build/config/sanitizers:alloc_token" ]
 
   # no_default_deps has no effect in static_libraries, so set it only below.
 }

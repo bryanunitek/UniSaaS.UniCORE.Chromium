@@ -6,22 +6,23 @@
 
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "base/types/expected.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_fetcher.h"
-#include "components/optimization_guide/core/model_execution/optimization_guide_model_execution_error.h"
-#include "components/optimization_guide/proto/model_execution.pb.h"
 #include "url/gurl.h"
 
 class OptimizationGuideLogger;
+
+namespace google::protobuf {
+class MessageLite;
+}  // namespace google::protobuf
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -38,7 +39,6 @@ class ModelExecutionFetcherImpl : public ModelExecutionFetcher {
  public:
   ModelExecutionFetcherImpl(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      const GURL& optimization_guide_service_url,
       OptimizationGuideLogger* optimization_guide_logger);
 
   ModelExecutionFetcherImpl(const ModelExecutionFetcherImpl&) = delete;

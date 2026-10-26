@@ -16,18 +16,19 @@
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/version_info/channel.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/url_util.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 std::unique_ptr<KeyedService> BuildMockContextualSearchServiceInstance(
     content::BrowserContext* /*context*/) {
-  auto mock_service =
-      std::make_unique<contextual_search::MockContextualSearchService>(
-          /*identity_manager=*/nullptr,
-          /*url_loader_factory=*/nullptr,
-          /*template_url_service=*/nullptr,
-          /*variations_client=*/nullptr, version_info::Channel::UNKNOWN,
-          "en-US");
+  auto mock_service = std::make_unique<
+      testing::NiceMock<contextual_search::MockContextualSearchService>>(
+      /*identity_manager=*/nullptr,
+      /*url_loader_factory=*/nullptr,
+      /*template_url_service=*/nullptr,
+      /*variations_client=*/nullptr, version_info::Channel::UNKNOWN, "en-US");
 
   ON_CALL(*mock_service, CreateSession)
       .WillByDefault(
@@ -38,11 +39,13 @@ std::unique_ptr<KeyedService> BuildMockContextualSearchServiceInstance(
               contextual_search::ContextualSearchSource source,
               std::optional<lens::LensOverlayInvocationSource>
                   invocation_source) {
-            auto query_controller = std::make_unique<MockQueryController>(
-                /*identity_manager=*/nullptr, /*url_loader_factory=*/nullptr,
-                version_info::Channel::UNKNOWN, "en-US",
-                /*template_url_service=*/nullptr,
-                /*variations_client=*/nullptr, std::move(params));
+            auto query_controller =
+                std::make_unique<testing::NiceMock<MockQueryController>>(
+                    /*identity_manager=*/nullptr,
+                    /*url_loader_factory=*/nullptr,
+                    version_info::Channel::UNKNOWN, "en-US",
+                    /*template_url_service=*/nullptr,
+                    /*variations_client=*/nullptr, std::move(params));
 
             auto* query_controller_ptr = query_controller.get();
 
@@ -59,8 +62,8 @@ std::unique_ptr<KeyedService> BuildMockContextualSearchServiceInstance(
                     testing::Invoke(query_controller_ptr,
                                     &MockQueryController::FakeCreateSearchUrl));
 
-            auto metrics_recorder =
-                std::make_unique<MockContextualSearchMetricsRecorder>();
+            auto metrics_recorder = std::make_unique<
+                testing::NiceMock<MockContextualSearchMetricsRecorder>>();
 
             return service_ptr->CreateSessionForTesting(
                 std::move(query_controller), std::move(metrics_recorder));
@@ -134,11 +137,15 @@ void MockQueryController::FakeCreateSearchUrl(
   std::move(callback).Run(result_url);
 }
 
+TestWebContentsDelegate::TestWebContentsDelegate() = default;
+TestWebContentsDelegate::~TestWebContentsDelegate() = default;
+
 content::WebContents* TestWebContentsDelegate::OpenURLFromTab(
     content::WebContents* source,
     const content::OpenURLParams& params,
     base::OnceCallback<void(content::NavigationHandle&)>
         navigation_handle_callback) {
+  callback_ = std::move(navigation_handle_callback);
   source->GetController().LoadURLWithParams(
       content::NavigationController::LoadURLParams(params));
   return source;
@@ -204,6 +211,9 @@ ContextualSearchboxHandlerTestHarness::GetTestingFactories() const {
                 /*template_url_service=*/nullptr,
                 /*variations_client=*/nullptr, version_info::Channel::UNKNOWN,
                 "en-US",
-                /*tab_validator=*/nullptr);
+                /*tab_validator=*/nullptr,
+                base::BindRepeating(
+                    [](std::optional<size_t>,
+                       base::OnceCallback<void(std::vector<std::string>)>) {}));
           })}};
 }

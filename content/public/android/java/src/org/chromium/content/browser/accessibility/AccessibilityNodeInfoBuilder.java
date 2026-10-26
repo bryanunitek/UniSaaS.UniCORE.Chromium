@@ -14,6 +14,7 @@ import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.Acces
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CUT;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_EXPAND;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_FOCUS;
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_HIDE_TOOLTIP;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_IME_ENTER;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_NEXT_AT_MOVEMENT_GRANULARITY;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_NEXT_HTML_ELEMENT;
@@ -34,6 +35,7 @@ import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.Acces
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SET_SELECTION;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SET_TEXT;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SHOW_ON_SCREEN;
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SHOW_TOOLTIP;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.EXTRA_DATA_TEXT_CHARACTER_LOCATION_IN_WINDOW_KEY;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.MOVEMENT_GRANULARITY_CHARACTER;
@@ -77,8 +79,6 @@ import org.chromium.ax.mojom.TextStyle;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.content_public.browser.ContentFeatureList;
-import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.ui.accessibility.AccessibilityFeatures;
 import org.chromium.ui.accessibility.AccessibilityFeaturesMap;
 
@@ -89,8 +89,8 @@ import java.util.Map;
 
 /**
  * Basic helper class to build AccessibilityNodeInfo objects for the WebContents in Chrome. This
- * class can be used by the Native-side code {@link web_contents_accessibility_android.cc} to
- * construct objects for the virtual view hierarchy to provide to the Android framework.
+ * class can be used by the Native-side code {@link web_contents_accessibility_base.cc} to construct
+ * objects for the virtual view hierarchy to provide to the Android framework.
  */
 @JNINamespace("content")
 @NullMarked
@@ -222,7 +222,8 @@ public class AccessibilityNodeInfoBuilder {
             boolean hasCharacterLocations,
             boolean isRequired,
             boolean isHeading,
-            boolean hasLayoutBasedActions) {
+            boolean hasLayoutBasedActions,
+            boolean hasNonEmptyInnerText) {
         node.setCheckable(checkable);
         node.setClickable(clickable);
         node.setEditable(editable);
@@ -236,11 +237,7 @@ public class AccessibilityNodeInfoBuilder {
         node.setFieldRequired(isRequired);
         node.setContentInvalid(contentInvalid);
         node.setHeading(isHeading);
-
-        if (ContentFeatureMap.isEnabled(
-                ContentFeatureList.ACCESSIBILITY_SET_SELECTABLE_ON_ALL_NODES_WITH_TEXT)) {
-            node.setTextSelectable(textSelectable);
-        }
+        node.setTextSelectable(textSelectable);
 
         List<String> availableExtraData = new ArrayList<>();
         if (hasImage) {
@@ -260,11 +257,13 @@ public class AccessibilityNodeInfoBuilder {
 
         node.setAvailableExtraData(availableExtraData);
 
-        node.setMovementGranularities(
-                MOVEMENT_GRANULARITY_CHARACTER
-                        | MOVEMENT_GRANULARITY_WORD
-                        | MOVEMENT_GRANULARITY_LINE
-                        | MOVEMENT_GRANULARITY_PARAGRAPH);
+        if (hasNonEmptyInnerText) {
+            node.setMovementGranularities(
+                    MOVEMENT_GRANULARITY_CHARACTER
+                            | MOVEMENT_GRANULARITY_WORD
+                            | MOVEMENT_GRANULARITY_LINE
+                            | MOVEMENT_GRANULARITY_PARAGRAPH);
+        }
 
         boolean isAF = mDelegate.currentAccessibilityFocusId() == virtualViewId;
         node.setAccessibilityFocused(isAF);
@@ -291,7 +290,9 @@ public class AccessibilityNodeInfoBuilder {
             boolean hasNonEmptyValue,
             boolean hasNonEmptyInnerText,
             boolean isSeekControl,
-            boolean unused_isForm) {
+            boolean unused_isForm,
+            boolean hasTooltip,
+            boolean isTooltipShown) {
         node.addAction(ACTION_NEXT_HTML_ELEMENT);
         node.addAction(ACTION_PREVIOUS_HTML_ELEMENT);
         node.addAction(ACTION_SHOW_ON_SCREEN);
@@ -374,6 +375,14 @@ public class AccessibilityNodeInfoBuilder {
         if (isSeekControl) {
             node.addAction(ACTION_SET_PROGRESS);
         }
+
+        if (hasTooltip) {
+            if (isTooltipShown) {
+                node.addAction(ACTION_HIDE_TOOLTIP);
+            } else {
+                node.addAction(ACTION_SHOW_TOOLTIP);
+            }
+        }
     }
 
     @CalledByNative
@@ -439,16 +448,7 @@ public class AccessibilityNodeInfoBuilder {
         node.setTooltipText(tooltipText);
         node.setExpandedState(expandedState);
 
-        // If we have deprecated TYPE_ANNOUNCEMENT or enabled the new live region behavior, we
-        // should properly mark live region root nodes.
-        // Otherwise, we choose to use AnnounceLiveRegionText() to make this announcement for us.
-        // TODO(crbug.com/507858294): Remove the following flags after a period of stability in
-        // several stable releases.
-        if (ContentFeatureMap.isEnabled(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
-                || ContentFeatureMap.isEnabled(
-                        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)) {
-            node.setLiveRegion(liveRegion);
-        }
+        node.setLiveRegion(liveRegion);
 
         // We only apply the |errorMessage| if {@link setAccessibilityNodeInfoBooleanAttributes}
         // set |contentInvalid| to true.
@@ -521,7 +521,7 @@ public class AccessibilityNodeInfoBuilder {
             // If our previously assigned contentDescription is null or empty, assign the
             // computedText as our contentDescription instead.
             if (contentDescription == null || contentDescription.isEmpty()) {
-                node.setContentDescription(computedText);
+                node.setContentDescription(computedText.toString());
             }
         } else {
             node.setText(computedText);
@@ -591,7 +591,7 @@ public class AccessibilityNodeInfoBuilder {
         // We expose the nested structure of links, which results in the roles of all nested nodes
         // being read. Use content description in the case of links to prevent verbose TalkBack
         if (annotateAsLink && (contentDescription == null || contentDescription.isEmpty())) {
-            node.setContentDescription(computedText);
+            node.setContentDescription(computedText.toString());
         } else {
             node.setText(computedText);
         }
@@ -842,16 +842,13 @@ public class AccessibilityNodeInfoBuilder {
                 spannable,
                 textStyles,
                 (textStyle) -> {
-                    if (textStyle == TextStyle.BOLD) {
-                        return new StyleSpan(Typeface.BOLD);
-                    } else if (textStyle == TextStyle.ITALIC) {
-                        return new StyleSpan(Typeface.ITALIC);
-                    } else if (textStyle == TextStyle.UNDERLINE) {
-                        return new UnderlineSpan();
-                    } else if (textStyle == TextStyle.LINE_THROUGH) {
-                        return new StrikethroughSpan();
-                    }
-                    return null;
+                    return switch (textStyle) {
+                        case TextStyle.BOLD -> new StyleSpan(Typeface.BOLD);
+                        case TextStyle.ITALIC -> new StyleSpan(Typeface.ITALIC);
+                        case TextStyle.UNDERLINE -> new UnderlineSpan();
+                        case TextStyle.LINE_THROUGH -> new StrikethroughSpan();
+                        default -> null;
+                    };
                 });
         addSpans(
                 spannable,

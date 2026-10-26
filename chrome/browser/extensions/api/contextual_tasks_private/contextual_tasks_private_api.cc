@@ -14,8 +14,10 @@
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/extensions/api/contextual_tasks_private.h"
+#include "components/contextual_search/contextual_search_session_handle.h"
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "components/contextual_tasks/public/features.h"
+#include "components/contextual_tasks/public/utils.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
@@ -24,6 +26,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
 #include "net/base/url_util.h"
+#include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
 #include "url/gurl.h"
 
 namespace extensions {
@@ -53,15 +56,24 @@ GURL AppendAimUrlParams(
     const GURL& base_url,
     const api::contextual_tasks_private::AimParams& aim_params) {
   GURL url = base_url;
+  bool enabled = contextual_tasks::GetIsContextualTasksSearchQueryEnabled();
+  std::optional<std::string> q_val = enabled ? aim_params.q : std::nullopt;
+  // LINT.IfChange(AimParamsCpp)
   const struct {
     const char* name;
     std::optional<std::string> value;
   } kParams[] = {
-      {"ntc", aim_params.ntc},     {"mstk", aim_params.mstk},
-      {"aioh", aim_params.aioh},   {"csuir", aim_params.csuir},
-      {"ved", aim_params.ved},     {"cs", aim_params.cs},
-      {"sxsrf", aim_params.sxsrf}, {"ei", aim_params.ei},
+      {"ntc", aim_params.ntc},
+      {"mstk", aim_params.mstk},
+      {"q", q_val},
+      {"aioh", aim_params.aioh},
+      {"csuir", aim_params.csuir},
+      {"ved", aim_params.ved},
+      {"cs", aim_params.cs},
+      {"sxsrf", aim_params.sxsrf},
+      {"ei", aim_params.ei},
   };
+  // LINT.ThenChange(//chrome/common/extensions/api/contextual_tasks_private.webidl:AimParams)
   for (const auto& param : kParams) {
     if (param.value && !param.value->empty()) {
       url = net::AppendQueryParameter(url, param.name, *param.value);
@@ -110,6 +122,8 @@ ContextualTasksPrivateLaunchPanelInNewTabFunction::
 
 ExtensionFunction::ResponseAction
 ContextualTasksPrivateLaunchPanelInNewTabFunction::Run() {
+  base::TimeTicks open_time_ticks = base::TimeTicks::Now();
+
   std::optional<api::contextual_tasks_private::LaunchPanelInNewTab::Params>
       params =
           api::contextual_tasks_private::LaunchPanelInNewTab::Params::Create(
@@ -121,6 +135,11 @@ ContextualTasksPrivateLaunchPanelInNewTabFunction::Run() {
   if (!IsContextualTasksEnabledForProfile(profile)) {
     return RespondNow(
         Error("ContextualTasks Private API is not eligible for this profile"));
+  }
+
+  if (!params->details.aim_params.mstk ||
+      params->details.aim_params.mstk->empty()) {
+    return RespondNow(Error("Missing required URL params"));
   }
 
   GURL target_url(params->details.target_url);
@@ -150,18 +169,21 @@ ContextualTasksPrivateLaunchPanelInNewTabFunction::Run() {
 
   // Determine the target host: use the forced embedded page host if set;
   // otherwise, default to the host/origin of the one the request came from.
-  std::string host = contextual_tasks::GetForcedEmbeddedPageHost();
-  if (host.empty()) {
-    host = rfh->GetLastCommittedURL().host();
-  }
+  std::optional<contextual_tasks::HostOverride> forced_host =
+      contextual_tasks::GetForcedEmbeddedPageHost();
+  contextual_tasks::HostOverride target_host =
+      forced_host.value_or(contextual_tasks::HostOverride{
+          std::string(rfh->GetLastCommittedURL().host())});
 
   GURL default_ai_url = ui_service->GetDefaultAiPageUrl();
   GURL::Replacements replacements;
   replacements.SetSchemeStr(url::kHttpsScheme);
-  replacements.SetHostStr(host);
-  GURL base_aim_url = default_ai_url.ReplaceComponents(replacements);
+  GURL base_aim_url =
+      target_host.ApplyToUrl(default_ai_url.ReplaceComponents(replacements));
 
   GURL aim_url = AppendAimUrlParams(base_aim_url, params->details.aim_params);
+  aim_url = contextual_tasks::AppendAimEntryPointParams(
+      aim_url, omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_COBROWSE_AIO_LINK);
 
   if (!aim_url.is_valid() || !aim_url.SchemeIs(url::kHttpsScheme)) {
     return RespondNow(Error("Generated AI URL is invalid or not HTTPS"));
@@ -224,12 +246,20 @@ ContextualTasksPrivateLaunchPanelInNewTabFunction::Run() {
   load_params.has_user_gesture = user_gesture();
   target_tab->GetContents()->GetController().LoadURLWithParams(load_params);
 
+  bool use_no_animation =
+      contextual_tasks::ShouldContextualTasksPrivateApiUseNoAnimation();
+
   ui_service->StartTaskUiInSidePanel(
       browser, target_tab, aim_url,
       /*session_handle=*/nullptr,
-      /*associate_web_contents=*/false,
-      omnibox::ChromeAimEntryPoint::UNKNOWN_AIM_ENTRY_POINT,
-      /*use_mstk_for_task_association=*/true);
+      contextual_tasks::StartTaskUiOptions{
+          .associate_web_contents = false,
+          .entry_point =
+              omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_COBROWSE_AIO_LINK,
+          .use_mstk_for_task_association = true,
+          .use_no_animation = use_no_animation,
+          .open_time_ticks = open_time_ticks,
+      });
 
   return RespondNow(NoArguments());
 }

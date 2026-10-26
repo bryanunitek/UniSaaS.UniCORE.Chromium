@@ -18,6 +18,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
@@ -34,12 +35,13 @@
 #include "chrome/browser/extensions/api/preference/network_prediction_transformer.h"
 #include "chrome/browser/extensions/api/preference/privacy_sandbox_transformer.h"
 #include "chrome/browser/extensions/api/preference/protected_content_enabled_transformer.h"
-#include "chrome/browser/extensions/api/proxy/proxy_pref_transformer.h"
 #include "chrome/browser/extensions/api/proxy_override_rules/proxy_override_rules_transformer.h"
 #include "chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.h"
 #include "chrome/browser/extensions/blocklist_factory.h"
+#include "chrome/browser/extensions/chrome_browser_context_lifetime_tracker.h"
 #include "chrome/browser/extensions/chrome_component_extension_resource_manager.h"
 #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
+#include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/chrome_extension_host_delegate.h"
 #include "chrome/browser/extensions/chrome_extension_system_factory.h"
 #include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
@@ -80,11 +82,23 @@
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/event_args.h"
+#include "ui/base/page_transition_types.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#else
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
+#include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_controller_factory.h"
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "chrome/browser/usb/usb_chooser_context_factory.h"
 #include "chrome/common/channel_info.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -98,6 +112,7 @@
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/update_client/configurator.h"
 #include "components/update_client/update_client.h"
 #include "components/version_info/version_info.h"
@@ -110,6 +125,7 @@
 #include "extensions/browser/api/content_settings/content_settings_service.h"
 #include "extensions/browser/api/core_extensions_browser_api_provider.h"
 #include "extensions/browser/api/extensions_api_client.h"
+#include "extensions/browser/api/proxy/proxy_pref_transformer.h"
 #include "extensions/browser/component_extension_resource_manager.h"
 #include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_management_client.h"
@@ -118,6 +134,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_interface_binders.h"
 #include "extensions/browser/install_prompt_data.h"
+#include "extensions/browser/permissions/active_tab_permission_granter.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/browser/process_manager_delegate.h"
@@ -201,7 +218,7 @@ bool ShouldLogExtensionAction(content::BrowserContext* browser_context,
   // We only send these IPCs if activity logging is enabled, but due to race
   // conditions (e.g. logging gets disabled but the renderer sends the message
   // before it gets updated), we still need this check here.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   return browser_context &&
          g_browser_process->profile_manager()->IsValidProfile(
              browser_context) &&
@@ -213,7 +230,7 @@ bool ShouldLogExtensionAction(content::BrowserContext* browser_context,
 // Logs an action to the extension activity log for the specified profile.
 void AddActionToExtensionActivityLog(content::BrowserContext* browser_context,
                                      scoped_refptr<Action> action) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   // If the action included a URL, check whether it is for an incognito profile.
   // The check is performed here so that it can safely be done from the UI
   // thread.
@@ -253,9 +270,6 @@ bool RegisterTransformers() {
   pref_mapping->RegisterPrefTransformer(
       prefs::kPrivacySandboxM1AdMeasurementEnabled,
       std::make_unique<PrivacySandboxTransformer>());
-  pref_mapping->RegisterPrefTransformer(
-      prefs::kPrivacySandboxRelatedWebsiteSetsEnabled,
-      std::make_unique<PrivacySandboxTransformer>());
 
   return true;
 }
@@ -291,7 +305,7 @@ bool ChromeExtensionsBrowserClient::AreExtensionsDisabled(
 }
 
 bool ChromeExtensionsBrowserClient::IsValidContext(void* context) {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M161);
   if (!g_browser_process) {
     LOG(ERROR) << "Unexpected null g_browser_process";
     NOTREACHED() << "Unexpected null g_browser_process";
@@ -321,7 +335,7 @@ content::BrowserContext* ChromeExtensionsBrowserClient::GetOffTheRecordContext(
 
 content::BrowserContext* ChromeExtensionsBrowserClient::GetOriginalContext(
     content::BrowserContext* context) {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M161);
   return static_cast<Profile*>(context)->GetOriginalProfile();
 }
 
@@ -414,6 +428,11 @@ bool ChromeExtensionsBrowserClient::CanExtensionCrossIncognito(
   return IsGuestSession(context) || util::CanCrossIncognito(extension, context);
 }
 
+BrowserContextLifetimeTracker*
+ChromeExtensionsBrowserClient::GetBrowserContextLifetimeTracker() {
+  return ChromeBrowserContextLifetimeTracker::GetInstance();
+}
+
 base::FilePath ChromeExtensionsBrowserClient::GetBundleResourcePath(
     const network::ResourceRequest& request,
     const base::FilePath& extension_resources_path,
@@ -428,10 +447,11 @@ void ChromeExtensionsBrowserClient::LoadResourceFromResourceBundle(
     const base::FilePath& resource_relative_path,
     int resource_id,
     scoped_refptr<net::HttpResponseHeaders> headers,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+    content::BrowserContext* browser_context) {
   chrome_url_request_util::LoadResourceFromResourceBundle(
       request, std::move(loader), resource_relative_path, resource_id,
-      std::move(headers), std::move(client));
+      std::move(headers), std::move(client), browser_context);
 }
 
 bool ChromeExtensionsBrowserClient::AllowCrossRendererResourceLoad(
@@ -576,7 +596,7 @@ ChromeExtensionsBrowserClient::GetComponentExtensionResourceManager() {
 void ChromeExtensionsBrowserClient::BroadcastEventToRenderers(
     events::HistogramValue histogram_value,
     const std::string& event_name,
-    base::ListValue args,
+    scoped_refptr<const EventArgs> args,
     bool dispatch_to_off_the_record_profiles) {
   event_router_forwarder_->BroadcastEventToRenderers(
       histogram_value, event_name, std::move(args),
@@ -752,7 +772,7 @@ bool ChromeExtensionsBrowserClient::IsWebUIAllowedToMakeNetworkRequests(
 
 network::mojom::NetworkContext*
 ChromeExtensionsBrowserClient::GetSystemNetworkContext() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   return g_browser_process->system_network_context_manager()->GetContext();
 }
 
@@ -776,8 +796,24 @@ bool ChromeExtensionsBrowserClient::ShouldSchemeBypassNavigationChecks(
 
 bool ChromeExtensionsBrowserClient::IsDefaultSearchEngineRedirect(
     content::BrowserContext* context,
+    const ExtensionId& extension_id,
     const GURL& request_url,
     const GURL& redirect_url) const {
+  // Exempt internal extension pages, blank pages, and browser internal URLs.
+  if (redirect_url.SchemeIs(extensions::kExtensionScheme) ||
+      redirect_url.IsAboutBlank() ||
+      redirect_url.SchemeIs(content::kChromeUIScheme)) {
+    return false;
+  }
+  // Exempt trusted extensions.
+  const Extension* extension =
+      ExtensionRegistry::Get(context)->enabled_extensions().GetByID(
+          extension_id);
+  if (extension && (Manifest::IsComponentLocation(extension->location()) ||
+                    Manifest::IsPolicyLocation(extension->location()))) {
+    return false;
+  }
+
   Profile* profile = Profile::FromBrowserContext(context);
   CHECK(profile);
 
@@ -852,7 +888,7 @@ bool ChromeExtensionsBrowserClient::IsUsbDeviceAllowedByPolicy(
   UsbChooserContext* usb_chooser_context =
       UsbChooserContextFactory::GetForProfile(static_cast<Profile*>(context));
   // This will never be null as even incognito mode has its own instance.
-  DCHECK(usb_chooser_context);
+  CHECK(usb_chooser_context, base::NotFatalUntil::M161);
 
   // Check against WebUsbAllowDevicesForUrls.
   return usb_chooser_context->usb_policy_allowed_devices().IsDeviceAllowed(
@@ -1011,12 +1047,12 @@ ChromeExtensionsBrowserClient::GetSafeBrowsingDatabaseManager() const {
 #endif
 }
 
-std::optional<safe_browsing::V4ProtocolConfig>
-ChromeExtensionsBrowserClient::GetV4ProtocolConfig() const {
+std::optional<safe_browsing::SBProtocolConfig>
+ChromeExtensionsBrowserClient::GetSBProtocolConfig() const {
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   return g_browser_process && g_browser_process->safe_browsing_service()
              ? std::optional(g_browser_process->safe_browsing_service()
-                                 ->GetV4ProtocolConfig())
+                                 ->GetSBProtocolConfig())
              : std::nullopt;
 #else
   return std::nullopt;
@@ -1059,13 +1095,82 @@ void ChromeExtensionsBrowserClient::RunBlockActionsIfNeeded(
 void ChromeExtensionsBrowserClient::ShowReloadBubbleForAllExtensions(
     const std::vector<const Extension*>& extensions,
     content::WebContents* web_contents) {
-  ExtensionActionRunner* action_runner =
-      ExtensionActionRunner::GetForWebContents(web_contents);
-  if (!action_runner) {
+  if (!web_contents) {
     return;
   }
 
-  action_runner->ShowReloadPageBubble(extensions);
+  url::Origin origin =
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+  if (origin.opaque()) {
+    return;
+  }
+
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  if (!profile) {
+    return;
+  }
+
+  const bool is_tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents) != nullptr;
+
+  // For the initiating WebContents (which may be a side panel WebContents not
+  // in any TabStripModel) and open tabs on the same origin: clear activeTab
+  // permissions and mark the WebContents as requiring a reload. When the
+  // action was triggered from a non-tab WebContents (such as a side panel),
+  // only pop up the reload bubble immediately for the initiating
+  // `web_contents` so that a visible tab on the same origin does not show a
+  // competing reload bubble and steal focus.
+  auto process_web_contents = [&](content::WebContents* contents) {
+    if (!contents) {
+      return;
+    }
+    if (!contents->GetPrimaryMainFrame()
+             ->GetLastCommittedOrigin()
+             .IsSameOriginWith(origin)) {
+      return;
+    }
+
+    if (auto* granter = ActiveTabPermissionGranter::FromWebContents(contents)) {
+      for (const auto* extension : extensions) {
+        granter->ClearActiveExtensionAndNotify(extension->id());
+      }
+    }
+    if (auto* tab_helper = TabHelper::FromWebContents(contents)) {
+      const bool show_bubble_if_visible = is_tab || contents == web_contents;
+      tab_helper->SetReloadRequired(extensions, show_bubble_if_visible);
+    }
+  };
+
+  process_web_contents(web_contents);
+
+#if !BUILDFLAG(IS_ANDROID)
+  if (auto* collection = ProfileBrowserCollection::GetForProfile(profile)) {
+    collection->ForEach([&](BrowserWindowInterface* bwi) {
+      if (auto* model = bwi->GetTabStripModel()) {
+        for (int i = 0; i < model->count(); ++i) {
+          content::WebContents* tab_contents = model->GetWebContentsAt(i);
+          if (tab_contents != web_contents) {
+            process_web_contents(tab_contents);
+          }
+        }
+      }
+      return true;
+    });
+  }
+#else
+  for (const TabModel* model : TabModelList::models()) {
+    if (model->GetProfile() != profile) {
+      continue;
+    }
+    for (int i = 0; i < model->GetTabCount(); ++i) {
+      content::WebContents* tab_contents = model->GetWebContentsAt(i);
+      if (tab_contents != web_contents) {
+        process_web_contents(tab_contents);
+      }
+    }
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
 bool ChromeExtensionsBrowserClient::HasBeenBlocked(
@@ -1243,6 +1348,47 @@ ChromeExtensionsBrowserClient::CreateInstallPrompt(
     std::unique_ptr<InstallPromptData> prompt) {
   return std::make_unique<ExtensionInstallPrompt>(web_contents,
                                                   std::move(prompt));
+}
+
+std::unique_ptr<ExtensionInstallPromptClient>
+ChromeExtensionsBrowserClient::CreateInstallPromptForNativeWindow(
+    gfx::NativeWindow native_window,
+    content::BrowserContext& browser_context,
+    std::unique_ptr<InstallPromptData> prompt) {
+  return std::make_unique<ExtensionInstallPrompt>(
+      Profile::FromBrowserContext(&browser_context), native_window,
+      std::move(prompt));
+}
+
+gfx::NativeWindow ChromeExtensionsBrowserClient::GetNativeWindowForFunction(
+    ExtensionFunction& function) {
+  return ChromeExtensionFunctionDetails(&function).GetNativeWindowForUI();
+}
+
+bool ChromeExtensionsBrowserClient::IsLazyKeyedServiceInstantiationEnabled()
+    const {
+  return base::FeatureList::IsEnabled(
+             features::kLazyKeyedServiceInstantiation) &&
+         features::kLazyKeyedServiceInstantiationExtensionsApi.Get();
+}
+
+bool ChromeExtensionsBrowserClient::
+    IsLazySocketAndUsbKeyedServiceInstantiationEnabled() const {
+  return base::FeatureList::IsEnabled(
+             features::kLazyKeyedServiceInstantiation) &&
+         features::kLazyKeyedServiceInstantiationExtensionsSocketsAndUsb.Get();
+}
+
+bool ChromeExtensionsBrowserClient::
+    IsLazyChromeOSResourceKeyedServiceInstantiationEnabled() const {
+#if BUILDFLAG(IS_CHROMEOS)
+  return base::FeatureList::IsEnabled(
+             features::kLazyKeyedServiceInstantiation) &&
+         features::kLazyKeyedServiceInstantiationExtensionsChromeOSResources
+             .Get();
+#else
+  return false;
+#endif
 }
 
 void ChromeExtensionsBrowserClient::SetAPIClientForTest(

@@ -4,9 +4,7 @@
 
 #include "extensions/common/features/feature.h"
 
-#include <map>
-#include <string_view>
-
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/lazy_instance.h"
 #include "base/strings/string_util.h"
@@ -14,6 +12,7 @@
 #include "build/chromeos_buildflags.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extensions_client.h"
 #include "extensions/common/manifest.h"
 
 namespace extensions {
@@ -42,24 +41,24 @@ Feature::Availability Feature::IsAvailableToExtension(
       extension->manifest_version(), kUnspecifiedContextId);
 }
 
-Feature::Feature() : no_parent_(false) {}
-
 Feature::~Feature() = default;
 
-void Feature::set_name(std::string_view name) {
-  name_ = std::string(name);
+Feature::DelegatedAvailabilityCheckHandler
+Feature::ResolveDelegatedAvailabilityCheckHandler(
+    DelegatedAvailabilityCheckHandler handler) const {
+  return handler ? handler : delegated_availability_check_handler();
 }
 
-void Feature::set_alias(std::string_view alias) {
-  alias_ = std::string(alias);
-}
+Feature::DelegatedAvailabilityCheckHandler
+Feature::delegated_availability_check_handler() const {
+  if (!RequiresDelegatedAvailabilityCheck()) {
+    return nullptr;
+  }
 
-void Feature::set_source(std::string_view source) {
-  source_ = std::string(source);
-}
-
-bool Feature::HasDelegatedAvailabilityCheckHandlerForTesting() const {
-  return HasDelegatedAvailabilityCheckHandler();
+  const auto& handlers =
+      ExtensionsClient::Get()->GetFeatureDelegatedAvailabilityCheckMap();
+  const auto it = handlers.find(name());
+  return it == handlers.end() ? nullptr : it->second;
 }
 
 }  // namespace extensions

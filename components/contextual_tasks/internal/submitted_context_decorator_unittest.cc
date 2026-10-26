@@ -4,6 +4,7 @@
 
 #include "components/contextual_tasks/internal/submitted_context_decorator.h"
 
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/unguessable_token.h"
@@ -20,6 +21,7 @@
 #include "components/sessions/core/session_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/lens_server_proto/aim_communication.pb.h"
 
 namespace contextual_tasks {
 
@@ -63,7 +65,7 @@ TEST_F(SubmittedContextDecoratorTest, DecorateWithContextualSearchData) {
   // Set up the Contextual Search service and a mock controller.
   contextual_search::ContextualSearchService service(
       nullptr, nullptr, nullptr, nullptr, version_info::Channel::UNKNOWN, "",
-      /*tab_validator=*/nullptr);
+      /*tab_validator=*/nullptr, base::DoNothing());
   auto mock_controller = std::make_unique<
       contextual_search::MockContextualSearchContextController>();
   auto* mock_controller_ptr = mock_controller.get();
@@ -150,7 +152,7 @@ TEST_F(SubmittedContextDecoratorTest, DecorateWithNoContextTokens) {
   // Set up a session handle with no context tokens.
   contextual_search::ContextualSearchService service(
       nullptr, nullptr, nullptr, nullptr, version_info::Channel::UNKNOWN, "",
-      /*tab_validator=*/nullptr);
+      /*tab_validator=*/nullptr, base::DoNothing());
   auto mock_controller = std::make_unique<
       contextual_search::MockContextualSearchContextController>();
   auto session_handle =
@@ -186,7 +188,7 @@ TEST_F(SubmittedContextDecoratorTest, DecorateWithIncompleteData) {
   // Set up the service and session handle.
   contextual_search::ContextualSearchService service(
       nullptr, nullptr, nullptr, nullptr, version_info::Channel::UNKNOWN, "",
-      /*tab_validator=*/nullptr);
+      /*tab_validator=*/nullptr, base::DoNothing());
   auto mock_controller = std::make_unique<
       contextual_search::MockContextualSearchContextController>();
   auto* mock_controller_ptr = mock_controller.get();
@@ -249,6 +251,146 @@ TEST_F(SubmittedContextDecoratorTest, DecorateWithIncompleteData) {
             EXPECT_EQ("https://example.com/", attachment.GetURL());
             EXPECT_EQ(u"Test Title", attachment.GetTitle());
             EXPECT_EQ(SessionID::FromSerializedValue(123),
+                      attachment.GetTabSessionId());
+            std::move(quit_closure).Run();
+          },
+          run_loop.QuitClosure()));
+  run_loop.Run();
+}
+
+TEST_F(SubmittedContextDecoratorTest,
+       DecorateWithPersistedSubmittedTabsAfterClearSubmittedTokens) {
+  contextual_search::ContextualSearchService service(
+      nullptr, nullptr, nullptr, nullptr, version_info::Channel::UNKNOWN, "",
+      /*tab_validator=*/nullptr, base::DoNothing());
+  auto mock_controller = std::make_unique<
+      contextual_search::MockContextualSearchContextController>();
+  auto* mock_controller_ptr = mock_controller.get();
+  auto session_handle =
+      service.CreateSessionForTesting(std::move(mock_controller), nullptr);
+  session_handle->CheckSearchContentSharingSettings(&pref_service_);
+
+  base::UnguessableToken token = session_handle->CreateContextToken();
+
+  contextual_search::FileInfo file_info;
+  file_info.file_token = token;
+  file_info.tab_url = GURL("https://example.com/");
+  file_info.tab_title = "Persisted Tab Title";
+  file_info.tab_session_id = SessionID::FromSerializedValue(123);
+  file_info.request_id.emplace();
+  file_info.request_id->set_context_id(456);
+  EXPECT_CALL(*mock_controller_ptr, GetFileInfo(token))
+      .WillRepeatedly(testing::Return(&file_info));
+
+  session_handle->CreateClientToAimRequest(
+      std::make_unique<contextual_search::ContextualSearchContextController::
+                           CreateClientToAimRequestInfo>());
+
+  // Simulate AIM acknowledging the turn context library and clearing
+  // `submitted_context_tokens_`, leaving the tab in `tab_context_.attached`.
+  session_handle->ClearSubmittedContextTokens();
+  ASSERT_TRUE(session_handle->GetSubmittedContextTokens().empty());
+
+  ContextDecorationParams params;
+  params.contextual_search_session_handle = session_handle->AsWeakPtr();
+
+  SubmittedContextDecorator decorator;
+  ContextualTask task(base::Uuid::GenerateRandomV4());
+  auto context = std::make_unique<ContextualTaskContext>(task);
+
+  base::RunLoop run_loop;
+  decorator.DecorateContext(
+      std::move(context), &params,
+      base::BindOnce(
+          [](base::OnceClosure quit_closure,
+             std::unique_ptr<ContextualTaskContext> context) {
+            ASSERT_EQ(1u, context->GetUrlAttachments().size());
+            auto& attachment = context->GetMutableUrlAttachmentsForTesting()[0];
+            EXPECT_EQ("https://example.com/", attachment.GetURL());
+            EXPECT_EQ(u"Persisted Tab Title", attachment.GetTitle());
+            EXPECT_EQ(SessionID::FromSerializedValue(123),
+                      attachment.GetTabSessionId());
+            std::move(quit_closure).Run();
+          },
+          run_loop.QuitClosure()));
+  run_loop.Run();
+}
+
+TEST_F(SubmittedContextDecoratorTest,
+       DecorateSkipsDeselectedAndUnsubmittedAttachedTabsAndDeduplicates) {
+  contextual_search::ContextualSearchService service(
+      nullptr, nullptr, nullptr, nullptr, version_info::Channel::UNKNOWN, "",
+      /*tab_validator=*/nullptr, base::DoNothing());
+  auto mock_controller = std::make_unique<
+      contextual_search::MockContextualSearchContextController>();
+  auto* mock_controller_ptr = mock_controller.get();
+  auto session_handle =
+      service.CreateSessionForTesting(std::move(mock_controller), nullptr);
+  session_handle->CheckSearchContentSharingSettings(&pref_service_);
+
+  // Active submitted tab present in both `submitted_context_tokens_` and
+  // `tab_context_.attached` (must be decorated once, not duplicated).
+  base::UnguessableToken active_token = session_handle->CreateContextToken();
+  contextual_search::FileInfo active_info;
+  active_info.file_token = active_token;
+  active_info.tab_url = GURL("https://example.com/active");
+  active_info.tab_title = "Active Tab";
+  active_info.tab_session_id = SessionID::FromSerializedValue(10);
+  active_info.request_id.emplace();
+  active_info.request_id->set_context_id(100);
+  EXPECT_CALL(*mock_controller_ptr, GetFileInfo(active_token))
+      .WillRepeatedly(testing::Return(&active_info));
+
+  // Deselected submitted tab present in `tab_context_.attached` (must be
+  // skipped).
+  base::UnguessableToken deselected_token =
+      session_handle->CreateContextToken();
+  contextual_search::FileInfo deselected_info;
+  deselected_info.file_token = deselected_token;
+  deselected_info.tab_url = GURL("https://example.com/deselected");
+  deselected_info.tab_title = "Deselected Tab";
+  deselected_info.tab_session_id = SessionID::FromSerializedValue(20);
+  deselected_info.request_id.emplace();
+  deselected_info.request_id->set_context_id(200);
+  EXPECT_CALL(*mock_controller_ptr, GetFileInfo(deselected_token))
+      .WillRepeatedly(testing::Return(&deselected_info));
+
+  session_handle->CreateClientToAimRequest(
+      std::make_unique<contextual_search::ContextualSearchContextController::
+                           CreateClientToAimRequestInfo>());
+
+  // Clear `submitted_context_tokens_` for `deselected_token` by keeping only
+  // `active_token` in `submitted_context_tokens_`, and mark tab 20 deselected.
+  session_handle->SetSubmittedContextTokens({active_token});
+  session_handle->set_deselected_tabs_urls(
+      {{SessionID::FromSerializedValue(20),
+        {GURL("https://example.com/deselected"), "Deselected Tab"}}});
+
+  // Add an unsubmitted delayed tab to `tab_context_.attached` (must be
+  // skipped).
+  base::UnguessableToken delayed_token = session_handle->CreateContextToken();
+  session_handle->AttachTabPendingUpload(
+      delayed_token, 30, GURL("https://example.com/delayed"), "Delayed Tab");
+  ASSERT_EQ(3u, session_handle->GetTabContextState().attached.size());
+
+  ContextDecorationParams params;
+  params.contextual_search_session_handle = session_handle->AsWeakPtr();
+
+  SubmittedContextDecorator decorator;
+  ContextualTask task(base::Uuid::GenerateRandomV4());
+  auto context = std::make_unique<ContextualTaskContext>(task);
+
+  base::RunLoop run_loop;
+  decorator.DecorateContext(
+      std::move(context), &params,
+      base::BindOnce(
+          [](base::OnceClosure quit_closure,
+             std::unique_ptr<ContextualTaskContext> context) {
+            ASSERT_EQ(1u, context->GetUrlAttachments().size());
+            auto& attachment = context->GetMutableUrlAttachmentsForTesting()[0];
+            EXPECT_EQ("https://example.com/active", attachment.GetURL());
+            EXPECT_EQ(u"Active Tab", attachment.GetTitle());
+            EXPECT_EQ(SessionID::FromSerializedValue(10),
                       attachment.GetTabSessionId());
             std::move(quit_closure).Run();
           },

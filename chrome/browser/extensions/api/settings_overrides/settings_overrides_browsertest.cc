@@ -29,7 +29,7 @@
 #include "chrome/browser/search_engines/template_url_prepopulate_data_resolver_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
@@ -205,7 +205,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest, PRE_OverridenDSEPersists) {
 // default_search_manager correctly determines extension overriden DSE
 // from profile.
 IN_PROC_BROWSER_TEST_F(ExtensionBrowserTest, OverridenDSEPersists) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   TemplateURLPrepopulateData::Resolver* prepopulate_data_resolver =
       TemplateURLPrepopulateData::ResolverFactory::GetForProfile(profile);
   DefaultSearchManager default_manager(

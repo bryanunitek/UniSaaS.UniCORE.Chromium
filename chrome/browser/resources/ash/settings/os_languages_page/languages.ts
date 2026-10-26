@@ -13,14 +13,14 @@
 // TODO(b/263828712): Upstream and downstream changes from browser settings, and
 // consider merging the two.
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
-import {CrSettingsPrefs} from '/shared/settings/prefs/prefs_types.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
+import {CrSettingsPrefs} from '../prefs/prefs_types.js';
 
 import type {LanguagesBrowserProxy} from './languages_browser_proxy.js';
 import {LanguagesBrowserProxyImpl} from './languages_browser_proxy.js';
@@ -208,8 +208,8 @@ export class SettingsLanguagesElement extends SettingsLanguagesElementBase
   // override prefs: any;  // From PrefsMixin.
 
   // Public API: Upwards data flow.
-  languages?: LanguagesModel;
-  languageHelper: LanguageHelper;
+  declare languages?: LanguagesModel;
+  declare languageHelper: LanguageHelper;
 
   // API proxies.
   private browserProxy_: LanguagesBrowserProxy =
@@ -220,16 +220,16 @@ export class SettingsLanguagesElement extends SettingsLanguagesElementBase
       this.browserProxy_.getInputMethodPrivate();
 
   // Internal state.
-  private resolver_: PromiseResolver<undefined>;
-  private supportedLanguageMap_:
+  declare private resolver_: PromiseResolver<undefined>;
+  declare private supportedLanguageMap_:
       Map<string, chrome.languageSettingsPrivate.Language>;
-  private enabledLanguageSet_: Set<string>;
-  private supportedInputMethodMap_:
+  declare private enabledLanguageSet_: Set<string>;
+  declare private supportedInputMethodMap_:
       Map<string, chrome.languageSettingsPrivate.InputMethod>;
-  private languageInputMethods_:
+  declare private languageInputMethods_:
       Map<string, chrome.languageSettingsPrivate.InputMethod[]>;
-  private enabledInputMethodSet_: Set<string>;
-  private originalProspectiveUILanguage_?: string;
+  declare private enabledInputMethodSet_: Set<string>;
+  declare private originalProspectiveUILanguage_?: string;
 
   // Bound methods.
   // Instances of SettingsLanguagesElement below should be replaced with

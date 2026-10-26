@@ -15,7 +15,6 @@ import androidx.annotation.VisibleForTesting;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.base.SuggestionLayout.LayoutParams.SuggestionViewType;
 import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
 
@@ -30,22 +29,23 @@ import java.lang.annotation.RetentionPolicy;
  */
 @NullMarked
 class SuggestionLayout extends ViewGroup {
-    @VisibleForTesting public final @Px int mDecorationIconWidthPx;
     @VisibleForTesting public final @Px int mLargeDecorationIconWidthPx;
-    @VisibleForTesting public final @Px int mContentHeightPx;
-    @VisibleForTesting public final @Px int mCompactContentHeightPx;
     @VisibleForTesting public final RoundedCornerOutlineProvider mOutlineProvider;
+    @VisibleForTesting public @Px int mDecorationIconWidthPx;
+    @VisibleForTesting public @Px int mContentHeightPx;
+    @VisibleForTesting public @Px int mCompactContentHeightPx;
     private final @Px int mActionButtonWidthPx;
-    private final @Px int mContentPaddingPx;
     private final @Px int mMinimumContentPadding;
     private final @Px int mSuggestionEndPaddingNoActionButtonPx;
+    private final @Px int mSuggestionPopoverShift;
+    private @Px int mContentVerticalPaddingPx;
     private boolean mUseLargeDecoration;
     private boolean mShowDecoration;
 
     /**
      * SuggestionLayout's LayoutParams.
      *
-     * <p>Additional parameters define the role of an element..
+     * <p>Additional parameters define the role of an element.
      */
     public static class LayoutParams extends ViewGroup.LayoutParams {
 
@@ -105,27 +105,28 @@ class SuggestionLayout extends ViewGroup {
             mIsLargeDecoration = isLargeDecoration;
         }
 
-        /** Create LayoutParams for particular SuggestionViewType. */
+        /** Creates LayoutParams for particular SuggestionViewType. */
         public static LayoutParams forViewType(@SuggestionViewType int type) {
             return new LayoutParams(WRAP_CONTENT, WRAP_CONTENT, type, false);
         }
 
-        /** Create LayoutParams for particular SuggestionViewType. */
+        /** Creates LayoutParams for large decoration icon. */
         public static LayoutParams forLargeDecorationIcon() {
             return new LayoutParams(
                     WRAP_CONTENT, WRAP_CONTENT, SuggestionViewType.DECORATION, true);
         }
 
-        /**
-         * @return The role of the view.
-         */
+        /** Returns the role of the view. */
         private @SuggestionViewType int getViewType() {
             return mSuggestionViewType;
         }
 
-        /**
-         * @return The placement of the view, relative to Suggestion area start.
-         */
+        /** Returns whether the decoration icon is large. */
+        boolean isLargeDecoration() {
+            return mIsLargeDecoration;
+        }
+
+        /** Returns the placement of the view, relative to the suggestion area start. */
         private Rect getPlacement() {
             return mPlacement;
         }
@@ -157,23 +158,18 @@ class SuggestionLayout extends ViewGroup {
         int endSpace = res.getDimensionPixelSize(R.dimen.omnibox_suggestion_end_padding);
         setPaddingRelative(0, 0, endSpace, 0);
 
-        mDecorationIconWidthPx =
-                OmniboxResourceProvider.getSuggestionDecorationIconSizeWidth(context);
         mLargeDecorationIconWidthPx =
                 context.getResources()
                         .getDimensionPixelSize(R.dimen.omnibox_suggestion_icon_area_size_large);
 
         mActionButtonWidthPx =
                 res.getDimensionPixelSize(R.dimen.omnibox_suggestion_action_button_width);
-        mCompactContentHeightPx =
-                res.getDimensionPixelSize(R.dimen.omnibox_suggestion_compact_content_height);
-        mContentHeightPx = res.getDimensionPixelSize(R.dimen.omnibox_suggestion_content_height);
-
-        mContentPaddingPx = res.getDimensionPixelSize(R.dimen.omnibox_suggestion_content_padding);
         mMinimumContentPadding = res.getDimensionPixelSize(R.dimen.omnibox_simple_card_lead_in);
 
         mSuggestionEndPaddingNoActionButtonPx =
                 res.getDimensionPixelSize(R.dimen.omnibox_suggestion_end_padding_no_action_button);
+        mSuggestionPopoverShift =
+                res.getDimensionPixelSize(R.dimen.omnibox_suggestion_popover_shift);
 
         mOutlineProvider =
                 new RoundedCornerOutlineProvider(
@@ -181,6 +177,17 @@ class SuggestionLayout extends ViewGroup {
                                 R.dimen.omnibox_suggestion_bg_round_corner_radius));
         setOutlineProvider(mOutlineProvider);
         setRoundingEdges(false, false);
+    }
+
+    void setSuggestionDimensions(
+            @Px int decorationIconWidthPx,
+            @Px int contentHeightPx,
+            @Px int compactContentHeightPx,
+            @Px int contentVerticalPaddingPx) {
+        mDecorationIconWidthPx = decorationIconWidthPx;
+        mContentHeightPx = contentHeightPx;
+        mCompactContentHeightPx = compactContentHeightPx;
+        mContentVerticalPaddingPx = contentVerticalPaddingPx;
     }
 
     public void setRoundingEdges(boolean roundTopEdge, boolean roundBottomEdge) {
@@ -195,6 +202,40 @@ class SuggestionLayout extends ViewGroup {
         // Make sure the view redraws. Otherwise, the on-screen visuals may not reflect our desired
         // rounding effect.
         invalidateOutline();
+    }
+
+    public void applySideSpacing(boolean applyOuterMargins, @Px int sideSpacing) {
+        @Px int marginSpacing = applyOuterMargins ? sideSpacing : 0;
+        int padding = applyOuterMargins ? 0 : mSuggestionPopoverShift;
+
+        ViewGroup.LayoutParams layoutParams = getLayoutParams();
+        boolean layoutParamsChanged = false;
+        if (layoutParams == null) {
+            MarginLayoutParams marginParams =
+                    new MarginLayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+            marginParams.setMargins(marginSpacing, 0, marginSpacing, 0);
+            layoutParams = marginParams;
+            layoutParamsChanged = true;
+        } else if (layoutParams instanceof MarginLayoutParams marginParams) {
+            if (marginParams.leftMargin != marginSpacing
+                    || marginParams.rightMargin != marginSpacing
+                    || marginParams.topMargin != 0
+                    || marginParams.bottomMargin != 0) {
+                marginParams.setMargins(marginSpacing, 0, marginSpacing, 0);
+                layoutParamsChanged = true;
+            }
+        }
+        if (layoutParamsChanged) {
+            setLayoutParams(layoutParams);
+        }
+
+        // If outer margins are not applied, then the content in the suggestion becomes too close to
+        // the border of the Omnibox suggestions container. To avoid this, we need to add padding to
+        // the left and right of the suggestion. This allows the suggestion hover highlight to span
+        // the whole width and the content inside to be aligned correctly.
+        if (getPaddingStart() != padding || getPaddingEnd() != padding) {
+            setPaddingRelative(padding, getPaddingTop(), padding, getPaddingBottom());
+        }
     }
 
     @Override
@@ -328,7 +369,7 @@ class SuggestionLayout extends ViewGroup {
      * <p>NOTE: this is invoked directly by the measure cycle. Do not allocate memory, and avoid any
      * calls that trigger measurement invalidation and restart.
      *
-     * @param suggestionWidthPx The width of the suggestion content area
+     * @param suggestionWidthPx The width of the suggestion content area.
      * @return The computed width of the CONTENT views.
      */
     private @Px int measureContentViewsWidthPx(@Px int suggestionWidthPx) {
@@ -395,16 +436,18 @@ class SuggestionLayout extends ViewGroup {
         // Pad suggestion around to guarantee appropriate spacing around suggestions.
         // Modernized UI present their content in distinc blocks, and the extra space
         // does not break visually the relationship between the content and footer parts.
-        contentHeightPx += mContentPaddingPx;
+        contentHeightPx += mContentVerticalPaddingPx;
 
         // Guarantee that the suggestion height meets our required minimum tap target size.
         var height =
                 Math.max(contentHeightPx, hasFooter ? mCompactContentHeightPx : mContentHeightPx);
         // Some views (e.g. TextView) won't render correctly unless measure specs are explicitly
         // supplied, failing to properly center the content.
-        contentView.measure(
-                MeasureSpec.makeMeasureSpec(contentWidthPx, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY));
+        if (contentView.getMeasuredHeight() != height) {
+            contentView.measure(
+                    MeasureSpec.makeMeasureSpec(contentWidthPx, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY));
+        }
         return height;
     }
 
@@ -414,7 +457,7 @@ class SuggestionLayout extends ViewGroup {
      * <p>NOTE: this is invoked directly by the measure cycle. Do not allocate memory, and avoid any
      * calls that trigger measurement invalidation and restart.
      *
-     * @param suggestionWidthPx The width of the suggestion content area
+     * @param suggestionWidthPx The width of the suggestion content area.
      * @return The cumulative height of the FOOTER views.
      */
     private @Px int measureFooterViewsHeightPx(@Px int suggestionWidthPx) {
@@ -486,7 +529,7 @@ class SuggestionLayout extends ViewGroup {
      *
      * <ul>
      *   <li>to the RIGHT, when the layout direction is LTR, and
-     *   <li>to the LEFT, when the layout direction ir RTL.
+     *   <li>to the LEFT, when the layout direction is RTL.
      * </ul>
      *
      * @param suggestionWidthPx The width of the Suggestion area.

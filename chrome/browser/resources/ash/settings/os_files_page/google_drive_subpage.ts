@@ -12,7 +12,6 @@ import '../settings_vars.css.js';
 import './google_drive_confirmation_dialog.js';
 import 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -21,12 +20,14 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import type {PageCallbackRouter as GoogleDrivePageCallbackRouter, PageHandlerRemote as GoogleDrivePageHandlerRemote, Status} from '../mojom-webui/google_drive_handler.mojom-webui.js';
+import {Stage} from '../mojom-webui/pinning_manager_types.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
-import type {GoogleDrivePageCallbackRouter, GoogleDrivePageHandlerRemote, Status} from './google_drive_browser_proxy.js';
-import {GoogleDriveBrowserProxy, Stage} from './google_drive_browser_proxy.js';
+import {GoogleDriveBrowserProxy} from './google_drive_browser_proxy.js';
 import {getTemplate} from './google_drive_subpage.html.js';
 
 const SettingsGoogleDriveSubpageElementBase =
@@ -68,6 +69,8 @@ export class SettingsGoogleDriveSubpageElement extends
     SettingsGoogleDriveSubpageElementBase {
   constructor() {
     super();
+    this.contentCacheSize_ = ContentCacheSizeType.CALCULATING;
+    this.showSpinner = false;
     this.proxy_ = GoogleDriveBrowserProxy.getInstance();
   }
 
@@ -105,14 +108,34 @@ export class SettingsGoogleDriveSubpageElement extends
         readonly: true,
         value: () => loadTimeData.getBoolean('enableDriveFsBulkPinning'),
       },
-
-      /**
-       * Indicates whether the `DriveFsMirroring` flag is enabled.
-       */
-      isDriveFsMirrorSyncEnabled_: {
+      driveDisabled_: {
         type: Boolean,
-        readonly: true,
-        value: () => loadTimeData.getBoolean('enableDriveFsMirrorSync'),
+        value: false,
+      },
+
+      bulkPinningVisible_: {
+        type: Boolean,
+        value: false,
+      },
+
+      bulkPinningStatus_: {
+        type: Object,
+        value: null,
+      },
+
+      bulkPinningServiceUnavailable_: {
+        type: Boolean,
+        value: false,
+      },
+
+      dialogType_: {
+        type: String,
+        value: ConfirmationDialogType.NONE,
+      },
+
+      listedFiles_: {
+        type: Object,
+        value: 0n,
       },
     };
   }
@@ -137,46 +160,45 @@ export class SettingsGoogleDriveSubpageElement extends
   /**
    * Reflects the state of `prefs.gdata.disabled` pref.
    */
-  private driveDisabled_: boolean;
+  declare private driveDisabled_: boolean;
 
   /**
    * Reflects the state of `prefs.drivefs.bulk_pinning.visible` pref.
    */
-  private bulkPinningVisible_: boolean;
+  declare private bulkPinningVisible_: boolean;
 
   /**
    * A connection with the browser process to send/receive messages.
    */
-  private proxy_: GoogleDriveBrowserProxy;
+  private proxy_ = GoogleDriveBrowserProxy.getInstance();
 
   /**
    * Keeps track of the latest response about bulk pinning from the page
    * handler.
    */
-  private bulkPinningStatus_: Status|null = null;
+  declare private bulkPinningStatus_: Status|null;
 
   /**
    * If the underlying service is unavailable, this will get set to true.
    */
-  private bulkPinningServiceUnavailable_: boolean = false;
+  declare private bulkPinningServiceUnavailable_: boolean;
 
   /**
    * Maps the dialogType_ property.
    */
-  private dialogType_: ConfirmationDialogType = ConfirmationDialogType.NONE;
+  declare private dialogType_: ConfirmationDialogType;
 
   /**
    * Keeps track of the last requested total content cache size.
    */
-  private contentCacheSize_: string|ContentCacheSizeType =
-      ContentCacheSizeType.CALCULATING;
+  declare private contentCacheSize_: string|ContentCacheSizeType;
 
   /**
    * The number of files that have currently been listed, this count is the one
    * displayed in the UI which gets updated every 5s from the source at
    * bulkPinningStatus_.listedFiles.
    */
-  private listedFiles_: bigint = 0n;
+  declare private listedFiles_: bigint;
 
   /**
    * The interval to update listedFiles_.
@@ -186,12 +208,11 @@ export class SettingsGoogleDriveSubpageElement extends
   /**
    * Whether to show the spinner in the top right of the settings page.
    */
-  private showSpinner: boolean = false;
+  declare private showSpinner: boolean;
 
-  private updateContentCacheSizeInterval_: number;
+  private updateContentCacheSizeInterval_: number = -1;
 
-  private readonly isDriveFsBulkPinningEnabled_: boolean;
-  private readonly isDriveFsMirrorSyncEnabled_: boolean;
+  declare private readonly isDriveFsBulkPinningEnabled_: boolean;
 
   /**
    * Returns the browser proxy page handler (to invoke functions).
@@ -610,11 +631,6 @@ export class SettingsGoogleDriveSubpageElement extends
    */
   private onCleanUpStorage_(): void {
     this.dialogType_ = ConfirmationDialogType.BULK_PINNING_CLEAN_UP_STORAGE;
-  }
-
-  /** Gets the mirror sync sub label. */
-  private getMirrorSyncDescription_(): string {
-    return this.i18n('googleDriveMirrorSyncDescription');
   }
 }
 

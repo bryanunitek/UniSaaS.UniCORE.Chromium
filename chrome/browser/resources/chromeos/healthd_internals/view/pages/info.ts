@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {assert} from '//resources/js/assert.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {CpuUsage} from '../../model/cpu_usage_helper.js';
@@ -39,7 +40,26 @@ export class HealthdInternalsInfoElement extends PolymerElement implements
       infoZramOrig: {type: String},
       infoZramCompr: {type: String},
       infoZramComprRatio: {type: String},
+      infoZramSpaceRedu: {type: String},
     };
+  }
+
+  constructor() {
+    super();
+    this.infoNumOfCpu = '0';
+    this.infoCpuUsage = '0.00%';
+    this.infoCpuKernel = '0.00%';
+    this.infoCpuUser = '0.00%';
+    this.infoCpuIdle = '0.00%';
+    this.infoMemoryTotal = '0';
+    this.infoMemoryUsed = '0';
+    this.infoMemorySwapTotal = '0';
+    this.infoMemorySwapUsed = '0';
+    this.infoZramTotal = '0';
+    this.infoZramOrig = '0';
+    this.infoZramCompr = '0';
+    this.infoZramComprRatio = 'N/A';
+    this.infoZramSpaceRedu = '0.00%';
   }
 
 
@@ -59,23 +79,23 @@ export class HealthdInternalsInfoElement extends PolymerElement implements
   private zramData?: SystemZramInfo = undefined;
 
   // Helper for updating UI regularly. Init in `connectedCallback`.
-  private updateHelper: UiUpdateHelper;
+  private updateHelper: UiUpdateHelper|null = null;
 
   // Displayed info.
-  private infoNumOfCpu: string = '0';
-  private infoCpuUsage: string = '0.00%';
-  private infoCpuKernel: string = '0.00%';
-  private infoCpuUser: string = '0.00%';
-  private infoCpuIdle: string = '0.00%';
-  private infoMemoryTotal: string = '0';
-  private infoMemoryUsed: string = '0';
-  private infoMemorySwapTotal: string = '0';
-  private infoMemorySwapUsed: string = '0';
-  private infoZramTotal: string = '0';
-  private infoZramOrig: string = '0';
-  private infoZramCompr: string = '0';
-  private infoZramComprRatio: string = 'N/A';
-  private infoZramSpaceRedu: string = '0.00%';
+  declare private infoNumOfCpu: string;
+  declare private infoCpuUsage: string;
+  declare private infoCpuKernel: string;
+  declare private infoCpuUser: string;
+  declare private infoCpuIdle: string;
+  declare private infoMemoryTotal: string;
+  declare private infoMemoryUsed: string;
+  declare private infoMemorySwapTotal: string;
+  declare private infoMemorySwapUsed: string;
+  declare private infoZramTotal: string;
+  declare private infoZramOrig: string;
+  declare private infoZramCompr: string;
+  declare private infoZramComprRatio: string;
+  declare private infoZramSpaceRedu: string;
 
   updateTelemetryData(data: HealthdApiTelemetryResult) {
     const isInitilized: boolean = this.healthdData !== undefined;
@@ -105,10 +125,12 @@ export class HealthdInternalsInfoElement extends PolymerElement implements
   }
 
   updateVisibility(isVisible: boolean) {
+    assert(this.updateHelper);
     this.updateHelper.updateVisibility(isVisible);
   }
 
   updateUiUpdateInterval(intervalSeconds: number) {
+    assert(this.updateHelper);
     this.updateHelper.updateUiUpdateInterval(intervalSeconds);
   }
 

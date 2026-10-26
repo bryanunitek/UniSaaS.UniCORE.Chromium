@@ -40,7 +40,8 @@
 #include "net/proxy_resolution/proxy_resolver.h"
 #include "net/proxy_resolution/resolve_host_request.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "url/gurl.h"
+
+class GURL;
 
 namespace base {
 class TimeDelta;
@@ -190,8 +191,7 @@ class NET_EXPORT ConfiguredProxyResolutionService
   void ForceReloadProxyConfig();
 
   // Returns true if the service is fully ready to handle proxy resolution
-  // requests and is not, e.g., currently fetching and resolving a new
-  // configuration.
+  // requests (both PAC resolution and dynamic proxy routes are ready).
   bool IsReady() const;
 
   // ProxyResolutionService
@@ -276,6 +276,10 @@ class NET_EXPORT ConfiguredProxyResolutionService
 
   bool quick_check_enabled_for_testing() const { return quick_check_enabled_; }
 
+  bool has_script_poller_for_testing() const {
+    return script_poller_ != nullptr;
+  }
+
   // Test-only: enable or disable PAC runtime backoff gating. This is enabled
   // by default only for system resolvers; tests may override it.
   void set_enable_pac_runtime_backoff_for_testing(bool enabled) {
@@ -294,14 +298,19 @@ class NET_EXPORT ConfiguredProxyResolutionService
   typedef std::set<raw_ptr<ConfiguredProxyResolutionRequest, SetExperimental>>
       PendingRequests;
 
-  enum State {
-    STATE_NONE,
-    STATE_WAITING_FOR_PROXY_CONFIG,
-    STATE_WAITING_FOR_INIT_PROXY_RESOLVER,
-    STATE_READY,
+  enum class PacResolverState {
+    kNone,
+    kWaitingForProxyConfig,
+    kWaitingForInitProxyResolver,
+    kReady,
   };
 
+  // Returns true if the PAC resolver is ready (i.e. not fetching PAC/WPAD).
+  bool IsPacReady() const;
 
+  // Returns true if dynamic routing rules (e.g. from enterprise Provisioning
+  // Domains) are ready and not currently updating.
+  bool IsDynamicRoutesReady() const;
 
   // We won't always be able to return a good LoadState. For example, the
   // ConfiguredProxyResolutionService can only get this information from the
@@ -313,16 +322,16 @@ class NET_EXPORT ConfiguredProxyResolutionService
   HostResolver* GetHostResolverForOverrideRules() const;
 
   // Resets all the variables associated with the current proxy configuration,
-  // and rewinds the current state to |STATE_NONE|. Returns the previous value
-  // of |current_state_|. If |reset_fetched_config| is true then
-  // |fetched_config_| will also be reset, otherwise it will be left as-is.
+  // and rewinds the current state to |PacResolverState::kNone|. Returns the
+  // previous value of |pac_resolver_state_|. If |reset_fetched_config| is true
+  // then |fetched_config_| will also be reset, otherwise it will be left as-is.
   // Resetting it means that we will have to re-fetch the configuration from
   // the ProxyConfigService later.
   // If |reset_pac_retry_state| is false, the PAC runtime backoff throttler is
   // left unchanged (used when a forced reload was already scheduled by the
   // throttler itself).
-  State ResetProxyConfig(bool reset_fetched_config,
-                         bool reset_pac_retry_state = true);
+  PacResolverState ResetProxyConfig(bool reset_fetched_config,
+                                    bool reset_pac_retry_state = true);
 
   // Retrieves the current proxy configuration from the ProxyConfigService, and
   // starts initializing for it.
@@ -332,26 +341,30 @@ class NET_EXPORT ConfiguredProxyResolutionService
   // PAC script.
   void OnInitProxyResolverComplete(int result);
 
-  // Returns ERR_IO_PENDING if the request cannot be completed synchronously.
+  // Returns ERR_IO_PENDING if the request cannot be resolved synchronously.
   // Otherwise it fills `result` with the proxy information for `url`.
   // `bypass_override_rules` dictates whether proxy override rules should also
   // be evaluated or not. Currently used by ConfiguredProxyResolutionRequest to
   // re-evaluate synchronous rules after having evaluated override rules with
   // none of them applying.
-  // Completing synchronously means we don't need to query ProxyResolver.
+  // Resolving synchronously means the service is ready and the proxy can be
+  // determined immediately (e.g. via conditionless override rules, dynamic
+  // routing rules, or static/direct proxy rules) without needing asynchronous
+  // DNS probes for override rules or querying `ProxyResolver`.
   // `net_log` will be used if an override rule was applied synchronously.
-  int TryToCompleteSynchronously(const GURL& url,
-                                 bool bypass_override_rules,
-                                 const NetLogWithSource& net_log,
-                                 ProxyInfo* result);
+  int TryResolveSynchronously(const GURL& url,
+                              bool bypass_override_rules,
+                              const NetLogWithSource& net_log,
+                              ProxyInfo* result);
 
   // Cancels all of the requests sent to the ProxyResolver. These will be
-  // restarted when calling SetReady().
+  // restarted when calling SetPacReadyAndResumePendingRequests().
   void SuspendAllPendingRequests();
 
-  // Advances the current state to |STATE_READY|, and resumes any pending
-  // requests which had been stalled waiting for initialization to complete.
-  void SetReady();
+  // Advances the current state to |PacResolverState::kReady|, and resumes any
+  // pending requests which had been stalled waiting for initialization to
+  // complete.
+  void SetPacReadyAndResumePendingRequests();
 
   // Returns true if |pending_requests_| contains |req|.
   bool ContainsPendingRequest(ConfiguredProxyResolutionRequest* req);
@@ -362,7 +375,7 @@ class NET_EXPORT ConfiguredProxyResolutionService
   // Called when proxy resolution has completed (either synchronously or
   // asynchronously). Handles logging the result, and cleaning out
   // bad entries from the results list.
-  int DidFinishResolvingProxy(
+  int ProcessResolutionResult(
       const GURL& url,
       const NetworkAnonymizationKey& network_anonymization_key,
       const std::string& method,
@@ -469,7 +482,7 @@ class NET_EXPORT ConfiguredProxyResolutionService
   // Helper to poll the PAC script for changes.
   std::unique_ptr<PacFileDeciderPoller> script_poller_;
 
-  State current_state_ = STATE_NONE;
+  PacResolverState pac_resolver_state_ = PacResolverState::kNone;
 
   // Set holding all pending DNS resolution requests started while evaluating
   // proxy override rules' DNS conditions.
@@ -582,15 +595,16 @@ class NET_EXPORT ConfiguredProxyResolutionService
 
   // Set during destruction to annotate the synchronous teardown path:
   // the destructor aborts pending requests, which synchronously invoke
-  // QueryComplete(ERR_ABORTED), followed by QueryDidComplete and
-  // DidFinishResolvingProxy.
+  // OnAsyncResolutionComplete(ERR_ABORTED), followed by FinalizeRequestResult
+  // and ProcessResolutionResult.
   // When this is true and no current config is set, ERR_ABORTED is mapped to
   // ERR_MANDATORY_PROXY_CONFIGURATION_FAILED to avoid interpreting teardown
   // as a successful DIRECT fallback.
   bool in_destruction_ = false;
 
-  // WeakPtrFactory must be the last member. Used by SetReady() to detect
-  // deletion by synchronous callbacks.
+  // WeakPtrFactory must be the last member. Used by
+  // SetPacReadyAndResumePendingRequests() to detect deletion by synchronous
+  // callbacks.
   base::WeakPtrFactory<ConfiguredProxyResolutionService> weak_ptr_factory_{
       this};
 };

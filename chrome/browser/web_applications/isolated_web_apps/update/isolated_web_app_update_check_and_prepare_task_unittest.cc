@@ -20,7 +20,6 @@
 #include "base/time/time.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_constants.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
@@ -44,7 +43,6 @@
 #include "components/webapps/isolated_web_apps/types/update_channel.h"
 #include "content/public/common/content_features.h"
 #include "net/http/http_status_code.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -145,7 +143,6 @@ class IsolatedWebAppUpdateCheckAndPrepareTaskTest : public WebAppTest {
   }
 
   base::test::ScopedFeatureList scoped_feature_list_;
-  data_decoder::test::InProcessDataDecoder data_decoder_;
 
   GURL update_manifest_url_ = GURL("https://example.com/update_manifest.json");
   UpdateChannel beta_update_channel_ = UpdateChannel::Create("beta").value();
@@ -277,7 +274,7 @@ TEST_F(IsolatedWebAppUpdateCheckAndPrepareTaskUpdateManifestTest,
 
   base::test::TestFuture<Task::CompletionStatus> future;
   task.Start(future.GetCallback());
-  EXPECT_THAT(future.Take(), ErrorIs(Task::Error::kDowngradetNotAllowed));
+  EXPECT_THAT(future.Take(), ErrorIs(Task::Error::kDowngradeNotAllowed));
 }
 
 TEST_F(IsolatedWebAppUpdateCheckAndPrepareTaskUpdateManifestTest,
@@ -422,9 +419,6 @@ class IsolatedWebAppUpdateCheckAndPrepareTaskPrepareUpdateTest
 
     return manifest;
   }
-
- private:
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 };
 
 TEST_F(IsolatedWebAppUpdateCheckAndPrepareTaskPrepareUpdateTest, Fails) {

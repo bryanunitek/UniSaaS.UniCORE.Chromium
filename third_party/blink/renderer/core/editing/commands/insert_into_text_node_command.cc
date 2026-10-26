@@ -31,12 +31,13 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
 InsertIntoTextNodeCommand::InsertIntoTextNodeCommand(
     Text* node,
-    unsigned offset,
+    wtf_size_t offset,
     const String& text,
     PasswordEchoBehavior password_echo_behavior)
     : SimpleEditCommand(node->GetDocument()),
@@ -89,8 +90,8 @@ void InsertIntoTextNodeCommand::DoUnapply() {
 }
 
 String InsertIntoTextNodeCommand::ToString() const {
-  return StrCat({"InsertIntoTextNodeCommand {offset:", String::Number(offset_),
-                 ", text:", text_.EncodeForDebugging(), "}"});
+  return Format("InsertIntoTextNodeCommand {{offset:{}, text:{}}}", offset_,
+                text_.EncodeForDebugging());
 }
 
 void InsertIntoTextNodeCommand::Trace(Visitor* visitor) const {

@@ -33,10 +33,6 @@ MockClientSessionControl::MockClientSessionControl() = default;
 
 MockClientSessionControl::~MockClientSessionControl() = default;
 
-MockClientSessionDetails::MockClientSessionDetails() = default;
-
-MockClientSessionDetails::~MockClientSessionDetails() = default;
-
 MockClientSessionEvents::MockClientSessionEvents() = default;
 
 MockClientSessionEvents::~MockClientSessionEvents() = default;
@@ -85,6 +81,10 @@ MockUrlForwarderConfigurator::MockUrlForwarderConfigurator() = default;
 
 MockUrlForwarderConfigurator::~MockUrlForwarderConfigurator() = default;
 
+MockAgentIntegrationConfigurator::MockAgentIntegrationConfigurator() = default;
+
+MockAgentIntegrationConfigurator::~MockAgentIntegrationConfigurator() = default;
+
 MockChromotingSessionServices::MockChromotingSessionServices() = default;
 
 MockChromotingSessionServices::~MockChromotingSessionServices() = default;
@@ -94,5 +94,13 @@ MockChromotingHostServicesProvider::MockChromotingHostServicesProvider() =
 
 MockChromotingHostServicesProvider::~MockChromotingHostServicesProvider() =
     default;
+
+MockPeerSession::MockPeerSession() = default;
+
+MockPeerSession::~MockPeerSession() = default;
+
+MockPeerSessionFactory::MockPeerSessionFactory() = default;
+
+MockPeerSessionFactory::~MockPeerSessionFactory() = default;
 
 }  // namespace remoting

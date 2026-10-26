@@ -16,7 +16,8 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/media/media_engagement_preloaded_list.h"
 #include "chrome/browser/media/media_engagement_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/renderer_configuration.mojom.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -25,6 +26,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/media_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
@@ -91,7 +93,8 @@ class MediaEngagementAutoplayBrowserTest
   }
 
   void LoadTestPage(const std::string& page) {
-    NavigateParams params(browser()->profile(), http_server_.GetURL("/" + page),
+    NavigateParams params(browser()->GetProfile(),
+                          http_server_.GetURL("/" + page),
                           ui::PageTransition::PAGE_TRANSITION_LINK);
     params.user_gesture = false;
     params.is_renderer_initiated = false;
@@ -99,7 +102,7 @@ class MediaEngagementAutoplayBrowserTest
   }
 
   void LoadTestPageSecondaryOrigin(const std::string& page) {
-    NavigateParams params(browser()->profile(),
+    NavigateParams params(browser()->GetProfile(),
                           http_server_origin2_.GetURL("/" + page),
                           ui::PageTransition::PAGE_TRANSITION_LINK);
     params.user_gesture = false;
@@ -201,11 +204,11 @@ class MediaEngagementAutoplayBrowserTest
   }
 
   MediaEngagementService* GetService() {
-    return MediaEngagementService::Get(browser()->profile());
+    return MediaEngagementService::Get(browser()->GetProfile());
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   net::EmbeddedTestServer http_server_;

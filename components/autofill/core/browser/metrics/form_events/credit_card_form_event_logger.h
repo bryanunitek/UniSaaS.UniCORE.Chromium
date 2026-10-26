@@ -10,6 +10,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
@@ -17,6 +18,7 @@
 #include "components/autofill/core/browser/autofill_trigger_source.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/filling/field_filling_skip_reason.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
@@ -61,7 +63,7 @@ class CreditCardFormEventLogger : public FormEventLoggerBase {
 
   // Called by BnplManager after its suggestion update barrier callback is
   // triggered and a BNPL suggestion is shown.
-  virtual void OnBnplSuggestionShown();
+  virtual void OnBnplSuggestionShown(bool pay_later_tab_shown);
 
   // Invoked when `suggestions` are successfully fetched.
   // `with_cvc` indicates whether CVC is saved in any of the suggestion in
@@ -108,19 +110,18 @@ class CreditCardFormEventLogger : public FormEventLoggerBase {
   // In case of masked cards, the caller must make sure this gets called before
   // the card is upgraded to a full card.
   //
-  // The `newly_filled_fields` are all fields of `form` that are newly
-  // filled by BrowserAutofillManager. They are still subject to the security
-  // policy for cross-frame filling.
-  //
-  // The `safe_filled_fields` are all fields of `newly_filled_fields` that
-  // adhere to the security policy for cross-frame filling, and therefore, the
-  // actually filled fields.
+  // The `safe_filled_fields` are all fields of `form` that adhere to the
+  // security policy for cross-frame filling, and therefore, the actually filled
+  // fields.
+  // `skip_reasons` tells us for each field (mapped by their IDs), whether the
+  // field was skipped for filling or not and why.
   void OnDidFillFormFillingSuggestion(
       const CreditCard& credit_card,
       const FormStructure& form,
       const AutofillField& field,
-      const base::flat_set<FieldGlobalId>& newly_filled_fields,
       const base::flat_set<FieldGlobalId>& safe_filled_fields,
+      const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&
+          skip_reasons,
       AutofillMetrics::PaymentsSigninState signin_state_for_metrics,
       const AutofillTriggerSource trigger_source);
 
@@ -167,6 +168,17 @@ class CreditCardFormEventLogger : public FormEventLoggerBase {
   // Called by AutofillExternalDelegate after the Save and Fill suggestion is
   // accepted.
   void OnDidAcceptSaveAndFillSuggestion();
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Called by OmniboxAutofillDelegate after the Omnibox Autofill chip is shown.
+  void OnOmniboxAutofillChipShown();
+  // Called by OmniboxAutofillDelegate after the Omnibox Autofill chip is
+  // clicked.
+  void OnOmniboxAutofillChipClicked();
+  // Called by OmniboxAutofillDelegate after an Omnibox Autofill suggestion is
+  // accepted.
+  void OnOmniboxAutofillSuggestionAccepted();
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   std::optional<CreditCard> GetFilledCreditCardForTesting();
 
@@ -246,8 +258,8 @@ class CreditCardFormEventLogger : public FormEventLoggerBase {
   // If true, one of the cards in the suggestions fetched card info retrieval
   // enrolled.
   bool suggestion_contains_card_info_retrieval_enrolled_card_ = false;
-  // If true, one of the suggestions will be shown in the Pay Later tab.
-  bool suggestion_contains_pay_later_tab_entry_ = false;
+  // If true, the Pay Later tab was shown in suggestions.
+  bool pay_later_tab_shown_ = false;
   // If true, the suggestions shown on BNPL eligible merchant is logged and
   // should not be logged again.
   bool has_logged_suggestions_shown_on_bnpl_eligible_merchant_ = false;
@@ -272,6 +284,20 @@ class CreditCardFormEventLogger : public FormEventLoggerBase {
   // If true, the Save and Fill suggestion has already been logged as accepted
   // and should not be logged again.
   bool has_logged_save_and_fill_suggestion_accepted_ = false;
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // If true, the Omnibox Autofill chip has already been logged as shown and
+  // should not be logged again.
+  bool has_logged_omnibox_autofill_chip_shown_ = false;
+  // If true, the Omnibox Autofill chip has already been logged as clicked and
+  // should not be logged again.
+  bool has_logged_omnibox_autofill_chip_clicked_ = false;
+  // If true, an Omnibox Autofill suggestion has already been logged as accepted
+  // and should not be logged again.
+  bool has_logged_omnibox_autofill_suggestion_accepted_ = false;
+  // If true, the metrics for a form filled from Omnibox Autofill were already
+  // logged and should not be logged again.
+  bool has_logged_form_filled_from_omnibox_autofill_ = false;
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   // If true, one of the cards in the suggestions fetched is externally-saved.
   bool suggestion_contains_externally_saved_card_ = false;
   // If true, an externally-saved card suggestion shown is logged and should not

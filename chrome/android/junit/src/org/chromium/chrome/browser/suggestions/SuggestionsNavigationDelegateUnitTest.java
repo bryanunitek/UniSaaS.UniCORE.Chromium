@@ -14,8 +14,6 @@ import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -26,7 +24,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -47,13 +45,11 @@ import java.util.List;
 
 /** Unit tests for {@link SuggestionsNavigationDelegate}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SuggestionsNavigationDelegateUnitTest {
     private static final boolean IS_INCOGNITO_SELECTED = false;
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private Activity mActivity;
     @Mock private Profile mProfile;
     @Mock private NativePageHost mHost;
     @Mock private TabModelSelector mTabModelSelector;
@@ -65,15 +61,15 @@ public class SuggestionsNavigationDelegateUnitTest {
 
     @Before
     public void setUp() {
+        Activity activity = Robolectric.buildActivity(Activity.class).get();
         mSuggestionsNavigationDelegate =
                 new SuggestionsNavigationDelegate(
-                        mActivity, mProfile, mHost, mTabModelSelector, mTab);
+                        activity, mProfile, mHost, mTabModelSelector, mTab);
 
         lenient().when(mTabModelSelector.isIncognitoSelected()).thenReturn(IS_INCOGNITO_SELECTED);
     }
 
     @Test
-    @SmallTest
     public void testNavigateToSuggestionUrl() {
         // WindowOpenDisposition.CURRENT_TAB:
         mSuggestionsNavigationDelegate.navigateToSuggestionUrl(
@@ -121,7 +117,6 @@ public class SuggestionsNavigationDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testMaybeSelectTabWithUrl_NoMatch() {
         TabModel tabModel =
                 createTabModelFromList(Arrays.asList(JUnitTestGURLs.URL_1, JUnitTestGURLs.URL_2));
@@ -144,7 +139,6 @@ public class SuggestionsNavigationDelegateUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testMaybeSelectTabWithUrl_Match() {
         TabModel tabModel =
                 createTabModelFromList(Arrays.asList(JUnitTestGURLs.URL_1, JUnitTestGURLs.URL_2));

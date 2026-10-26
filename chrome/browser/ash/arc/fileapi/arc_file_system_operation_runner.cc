@@ -10,8 +10,10 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/fileapi/arc_file_system_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
@@ -19,6 +21,7 @@
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "content/public/browser/browser_thread.h"
+#include "mojo/public/cpp/platform/platform_handle.h"
 #include "url/gurl.h"
 
 using content::BrowserThread;
@@ -66,30 +69,40 @@ BrowserContextKeyedServiceFactory* ArcFileSystemOperationRunner::GetFactory() {
 std::unique_ptr<ArcFileSystemOperationRunner>
 ArcFileSystemOperationRunner::CreateForTesting(
     content::BrowserContext* context,
-    ArcBridgeService* bridge_service) {
+    ArcBridgeService* bridge_service,
+    size_t content_url_allowlist_cache_size) {
   // We can't use std::make_unique() here because we are calling a private
   // constructor.
   return base::WrapUnique<ArcFileSystemOperationRunner>(
-      new ArcFileSystemOperationRunner(context, bridge_service, false));
+      new ArcFileSystemOperationRunner(context, bridge_service, false,
+                                       content_url_allowlist_cache_size));
 }
 
 ArcFileSystemOperationRunner::ArcFileSystemOperationRunner(
     content::BrowserContext* context,
     ArcBridgeService* bridge_service)
-    : ArcFileSystemOperationRunner(Profile::FromBrowserContext(context),
-                                   bridge_service,
-                                   true) {
-  DCHECK(context);
+    : ArcFileSystemOperationRunner(
+          Profile::FromBrowserContext(context),
+          bridge_service,
+          /*set_should_defer_by_events=*/true,
+          ArcContentUrlAllowlist::kLruCacheDefaultMaxSize) {
+  CHECK(context, base::NotFatalUntil::M160);
 }
 
 ArcFileSystemOperationRunner::ArcFileSystemOperationRunner(
     content::BrowserContext* context,
     ArcBridgeService* bridge_service,
-    bool set_should_defer_by_events)
+    bool set_should_defer_by_events,
+    size_t content_url_allowlist_cache_size)
     : context_(context),
       arc_bridge_service_(bridge_service),
-      set_should_defer_by_events_(set_should_defer_by_events) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+      set_should_defer_by_events_(set_should_defer_by_events),
+      content_url_allowlist_(
+          context ? Profile::FromBrowserContext(context)->GetPath().AppendASCII(
+                        "arc_content_urls.db")
+                  : base::FilePath(),
+          content_url_allowlist_cache_size) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   arc_bridge_service_->file_system()->AddObserver(this);
 
@@ -104,27 +117,48 @@ ArcFileSystemOperationRunner::ArcFileSystemOperationRunner(
 }
 
 ArcFileSystemOperationRunner::~ArcFileSystemOperationRunner() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   // On destruction, deferred operations are discarded.
 }
 
 void ArcFileSystemOperationRunner::AddObserver(Observer* observer) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   observer_list_.AddObserver(observer);
 }
 
 void ArcFileSystemOperationRunner::RemoveObserver(Observer* observer) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   observer_list_.RemoveObserver(observer);
+}
+
+void ArcFileSystemOperationRunner::GrantAccessToContentUrl(const GURL& url) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  content_url_allowlist_.GrantAccess(url);
 }
 
 void ArcFileSystemOperationRunner::GetFileSize(const GURL& url,
                                                GetFileSizeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(base::BindOnce(
         &ArcFileSystemOperationRunner::GetFileSize,
         weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+    return;
+  }
+  IsContentUrlAccessible(
+      url,
+      base::BindOnce(&ArcFileSystemOperationRunner::GetFileSizeAfterAccessCheck,
+                     weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+}
+
+void ArcFileSystemOperationRunner::GetFileSizeAfterAccessCheck(
+    const GURL& url,
+    GetFileSizeCallback callback,
+    bool accessible) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (!accessible) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), -1));
     return;
   }
   auto* file_system_instance = ARC_GET_INSTANCE_FOR_METHOD(
@@ -139,11 +173,27 @@ void ArcFileSystemOperationRunner::GetFileSize(const GURL& url,
 
 void ArcFileSystemOperationRunner::GetMimeType(const GURL& url,
                                                GetMimeTypeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(base::BindOnce(
         &ArcFileSystemOperationRunner::GetMimeType,
         weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+    return;
+  }
+  IsContentUrlAccessible(
+      url,
+      base::BindOnce(&ArcFileSystemOperationRunner::GetMimeTypeAfterAccessCheck,
+                     weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+}
+
+void ArcFileSystemOperationRunner::GetMimeTypeAfterAccessCheck(
+    const GURL& url,
+    GetMimeTypeCallback callback,
+    bool accessible) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (!accessible) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
     return;
   }
   auto* file_system_instance = ARC_GET_INSTANCE_FOR_METHOD(
@@ -160,18 +210,35 @@ void ArcFileSystemOperationRunner::OpenThumbnail(
     const GURL& url,
     const gfx::Size& size,
     OpenThumbnailCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(base::BindOnce(
         &ArcFileSystemOperationRunner::OpenThumbnail,
         weak_ptr_factory_.GetWeakPtr(), url, size, std::move(callback)));
     return;
   }
+  IsContentUrlAccessible(
+      url, base::BindOnce(
+               &ArcFileSystemOperationRunner::OpenThumbnailAfterAccessCheck,
+               weak_ptr_factory_.GetWeakPtr(), url, size, std::move(callback)));
+}
+
+void ArcFileSystemOperationRunner::OpenThumbnailAfterAccessCheck(
+    const GURL& url,
+    const gfx::Size& size,
+    OpenThumbnailCallback callback,
+    bool accessible) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (!accessible) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), mojo::PlatformHandle()));
+    return;
+  }
   auto* file_system_instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc_bridge_service_->file_system(), OpenThumbnail);
   if (!file_system_instance) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), mojo::ScopedHandle()));
+        FROM_HERE, base::BindOnce(std::move(callback), mojo::PlatformHandle()));
     return;
   }
   file_system_instance->OpenThumbnail(url.spec(), size, std::move(callback));
@@ -180,7 +247,7 @@ void ArcFileSystemOperationRunner::OpenThumbnail(
 void ArcFileSystemOperationRunner::CloseFileSession(
     const std::string& url_id,
     const std::string& error_message) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::CloseFileSession,
@@ -199,11 +266,29 @@ void ArcFileSystemOperationRunner::CloseFileSession(
 void ArcFileSystemOperationRunner::OpenFileSessionToWrite(
     const GURL& url,
     OpenFileSessionToWriteCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(base::BindOnce(
         &ArcFileSystemOperationRunner::OpenFileSessionToWrite,
         weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+    return;
+  }
+  IsContentUrlAccessible(
+      url,
+      base::BindOnce(
+          &ArcFileSystemOperationRunner::OpenFileSessionToWriteAfterAccessCheck,
+          weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+}
+
+void ArcFileSystemOperationRunner::OpenFileSessionToWriteAfterAccessCheck(
+    const GURL& url,
+    OpenFileSessionToWriteCallback callback,
+    bool accessible) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (!accessible) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), mojom::FileSessionPtr()));
     return;
   }
   auto* file_system_instance = ARC_GET_INSTANCE_FOR_METHOD(
@@ -220,11 +305,29 @@ void ArcFileSystemOperationRunner::OpenFileSessionToWrite(
 void ArcFileSystemOperationRunner::OpenFileSessionToRead(
     const GURL& url,
     OpenFileSessionToReadCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(base::BindOnce(
         &ArcFileSystemOperationRunner::OpenFileSessionToRead,
         weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+    return;
+  }
+  IsContentUrlAccessible(
+      url,
+      base::BindOnce(
+          &ArcFileSystemOperationRunner::OpenFileSessionToReadAfterAccessCheck,
+          weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)));
+}
+
+void ArcFileSystemOperationRunner::OpenFileSessionToReadAfterAccessCheck(
+    const GURL& url,
+    OpenFileSessionToReadCallback callback,
+    bool accessible) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  if (!accessible) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), mojom::FileSessionPtr()));
     return;
   }
   auto* file_system_instance = ARC_GET_INSTANCE_FOR_METHOD(
@@ -241,7 +344,7 @@ void ArcFileSystemOperationRunner::OpenFileSessionToRead(
 void ArcFileSystemOperationRunner::GetDocument(const std::string& authority,
                                                const std::string& document_id,
                                                GetDocumentCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::GetDocument,
@@ -264,7 +367,7 @@ void ArcFileSystemOperationRunner::GetChildDocuments(
     const std::string& authority,
     const std::string& parent_document_id,
     GetChildDocumentsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::GetChildDocuments,
@@ -287,7 +390,7 @@ void ArcFileSystemOperationRunner::GetRecentDocuments(
     const std::string& authority,
     const std::string& root_id,
     GetRecentDocumentsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::GetRecentDocuments,
@@ -307,7 +410,7 @@ void ArcFileSystemOperationRunner::GetRecentDocuments(
 }
 
 void ArcFileSystemOperationRunner::GetRoots(GetRootsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::GetRoots,
@@ -327,7 +430,7 @@ void ArcFileSystemOperationRunner::GetRoots(GetRootsCallback callback) {
 void ArcFileSystemOperationRunner::GetRootSize(const std::string& authority,
                                                const std::string& root_id,
                                                GetRootSizeCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::GetRootSize,
@@ -469,7 +572,7 @@ void ArcFileSystemOperationRunner::AddWatcher(
     const std::string& document_id,
     const WatcherCallback& watcher_callback,
     AddWatcherCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (should_defer_) {
     deferred_operations_.emplace_back(
         base::BindOnce(&ArcFileSystemOperationRunner::AddWatcher,
@@ -494,7 +597,7 @@ void ArcFileSystemOperationRunner::AddWatcher(
 void ArcFileSystemOperationRunner::RemoveWatcher(
     int64_t watcher_id,
     RemoveWatcherCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   // RemoveWatcher() is never deferred since watchers do not persist across
   // container reboots.
   if (should_defer_) {
@@ -525,7 +628,7 @@ void ArcFileSystemOperationRunner::RemoveWatcher(
 }
 
 void ArcFileSystemOperationRunner::Shutdown() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   ArcFileSystemBridge::GetForBrowserContext(context_)->RemoveObserver(this);
 
   // ArcSessionManager may not exist in unit tests.
@@ -538,7 +641,7 @@ void ArcFileSystemOperationRunner::Shutdown() {
 
 void ArcFileSystemOperationRunner::OnDocumentChanged(int64_t watcher_id,
                                                      ChangeType type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   auto iter = watcher_callbacks_.find(watcher_id);
   if (iter == watcher_callbacks_.end()) {
     // This may happen in a race condition with documents changes and
@@ -550,17 +653,17 @@ void ArcFileSystemOperationRunner::OnDocumentChanged(int64_t watcher_id,
 }
 
 void ArcFileSystemOperationRunner::OnArcPlayStoreEnabledChanged(bool enabled) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   OnStateChanged();
 }
 
 void ArcFileSystemOperationRunner::OnConnectionReady() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   OnStateChanged();
 }
 
 void ArcFileSystemOperationRunner::OnConnectionClosed() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   // ArcFileSystemService and watchers are gone.
   watcher_callbacks_.clear();
   for (auto& observer : observer_list_)
@@ -572,7 +675,7 @@ void ArcFileSystemOperationRunner::OnWatcherAdded(
     const WatcherCallback& watcher_callback,
     AddWatcherCallback callback,
     int64_t watcher_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (watcher_id < 0) {
     std::move(callback).Run(-1);
     return;
@@ -585,7 +688,7 @@ void ArcFileSystemOperationRunner::OnWatcherAdded(
 }
 
 void ArcFileSystemOperationRunner::OnStateChanged() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (set_should_defer_by_events_) {
     SetShouldDefer(IsArcPlayStoreEnabledForProfile(
                        Profile::FromBrowserContext(context_)) &&
@@ -594,7 +697,7 @@ void ArcFileSystemOperationRunner::OnStateChanged() {
 }
 
 void ArcFileSystemOperationRunner::SetShouldDefer(bool should_defer) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   should_defer_ = should_defer;
 
@@ -608,7 +711,14 @@ void ArcFileSystemOperationRunner::SetShouldDefer(bool should_defer) {
     std::move(operation).Run();
 
   // No deferred operations should be left at this point.
-  DCHECK(deferred_operations_.empty());
+  CHECK(deferred_operations_.empty(), base::NotFatalUntil::M160);
+}
+
+void ArcFileSystemOperationRunner::IsContentUrlAccessible(
+    const GURL& url,
+    base::OnceCallback<void(bool)> callback) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  content_url_allowlist_.IsAccessGranted(url, std::move(callback));
 }
 
 // static

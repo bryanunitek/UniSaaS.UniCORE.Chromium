@@ -13,7 +13,6 @@ source_set("common") {
 
   deps = [
     "//base",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/navigator",
     "//components/tabs:public",
@@ -54,16 +53,18 @@ source_set("browser_tests") {
     "//base",
     "//chrome/browser",
     "//chrome/browser/glic",
+    "//chrome/browser/glic/test_support",
     "//chrome/browser/tab_list",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/browser_window:create_browser_window",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_test_utils",
     "//components/tabs:public",
     "//content/test:test_support",
   ]
   if (!is_android) {
     deps += [
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_commands",
       "//chrome/browser/ui/tabs:tab_strip",
     ]
   }

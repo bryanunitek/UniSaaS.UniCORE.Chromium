@@ -2,16 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+#include <optional>
+
+#include "base/command_line.h"
+#include "base/strings/strcat.h"
+#include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/actor/actor_test_util.h"
+#include "chrome/browser/actor/tools/scroll_tool_request.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/test/base/test_browser_window.h"
+#include "chrome/common/actor/actor_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -37,10 +47,21 @@ class ActorScrollToolBrowserTest : public ActorToolsTest {
   }
 };
 
+class ActorScrollToolToctouBrowserTest : public ActorScrollToolBrowserTest {
+ public:
+  ActorScrollToolToctouBrowserTest() {
+    feature_list_.InitAndEnableFeature(features::kGlicActorToctouValidation);
+  }
+  ~ActorScrollToolToctouBrowserTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_FailOnInvalidNodeID) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Use a random node id that doesn't exist.
@@ -59,8 +80,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
 // Test scrolling the viewport vertically.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_ScrollPageVertical) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   int scroll_offset_y = 50;
@@ -90,8 +111,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
 // Test scrolling the viewport horizontally.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_ScrollPageHorizontal) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   int scroll_offset_x = 50;
@@ -122,8 +143,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
 
 // Test scrolling in a sub-scroller on the page.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_ScrollElement) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   int scroll_offset_x = 50;
@@ -156,10 +177,44 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_ScrollElement) {
   }
 }
 
+IN_PROC_BROWSER_TEST_F(ActorScrollToolToctouBrowserTest,
+                       ScrollTool_RequiresTargetInLastApc) {
+  // Element scrolling rejects a target added after APC was saved.
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  // Save APC before adding the scroll target.
+  GetPageApc();
+
+  // Add a live scroll target that is missing from the saved APC.
+  ASSERT_TRUE(ExecJs(web_contents(), R"JS(
+    const late_scroller = document.createElement('div');
+    late_scroller.id = 'late-scroller';
+    late_scroller.style.cssText =
+        'width: 100px; height: 100px; overflow: auto;';
+    const scroll_contents = document.createElement('div');
+    scroll_contents.style.cssText = 'height: 1000px;';
+    late_scroller.appendChild(scroll_contents);
+    document.body.appendChild(late_scroller);
+  )JS"));
+
+  int scroller_id = GetDOMNodeId(*main_frame(), "#late-scroller").value();
+  std::unique_ptr<ToolRequest> action =
+      MakeScrollRequest(*main_frame(), scroller_id,
+                        /*scroll_offset_x=*/0, /*scroll_offset_y=*/80);
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+
+  ExpectErrorResult(result, mojom::ActionResultCode::kInvalidDomNodeId);
+  EXPECT_EQ(0, EvalJs(web_contents(),
+                      "document.getElementById('late-scroller').scrollTop"));
+}
+
 // Test scrolling over a non-scrollable element returns failure.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_NonScrollable) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   int scroll_offset_y = 80;
@@ -184,8 +239,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_NonScrollable) {
 // scrolled into view then scroll applied.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_OffscreenScrollable) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Page starts unscrolled
@@ -212,8 +267,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
 // Test that a scrolling over a scroller with overflow in one axis only works
 // correctly.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_OneAxisScroller) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   int scroll_offset = 80;
@@ -257,8 +312,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_BrowserZoom) {
   double level = blink::ZoomFactorToZoomLevel(1.5);
   browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
 
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // 60 DIPs translates to 40 CSS pixels when the zoom factor is 1.5
@@ -283,8 +338,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_BrowserZoom) {
 // Ensure scroll distances are correctly scaled when applied to a CSS zoomed
 // scroller.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest, ScrollTool_CSSZoom) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // 60 DIPs translates to 120 CSS pixels since the scroller is
@@ -323,8 +378,8 @@ class ActorToolsTestDSF2 : public ActorScrollToolBrowserTest {
 // Ensure scroll distances are correctly scaled when using a non-1 device scale
 // factor
 IN_PROC_BROWSER_TEST_F(ActorToolsTestDSF2, ScrollTool_ScrollDSF) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // 40 dips translates to 40 CSS pixels
@@ -351,8 +406,8 @@ IN_PROC_BROWSER_TEST_F(ActorToolsTestDSF2, ScrollTool_BrowserZoom) {
   double level = blink::ZoomFactorToZoomLevel(1.5);
   browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
 
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // 60 DIPs translates to 40 CSS pixels when the zoom factor is 1.5
@@ -377,8 +432,8 @@ IN_PROC_BROWSER_TEST_F(ActorToolsTestDSF2, ScrollTool_BrowserZoom) {
 // Ensure scroll distances are correctly scaled when applied to a CSS zoomed
 // scroller.
 IN_PROC_BROWSER_TEST_F(ActorToolsTestDSF2, ScrollTool_CSSZoom) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // 60 DIPs translates to 120 CSS pixels since the scroller is
@@ -402,8 +457,8 @@ IN_PROC_BROWSER_TEST_F(ActorToolsTestDSF2, ScrollTool_CSSZoom) {
 
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_ZeroIdTargetsViewport) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // DOMNodeIDs start at 1 so 0 should be interpreted as viewport.
@@ -424,12 +479,34 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                   EvalJs(web_contents(), "window.scrollY").ExtractDouble());
 }
 
+IN_PROC_BROWSER_TEST_F(ActorScrollToolToctouBrowserTest,
+                       ScrollTool_ZeroIdBypassesLastApcValidation) {
+  // Viewport scrolling with node id 0 does not require an APC node.
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  float scroll_offset_y = 50;
+  std::unique_ptr<ToolRequest> action =
+      MakeScrollRequest(*main_frame(), kRootElementDomNodeId,
+                        /*scroll_offset_x=*/0, scroll_offset_y);
+
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectOkResult(result);
+
+  // Scrolling may stop on a fractional CSS pixel, so allow a one-pixel
+  // tolerance.
+  EXPECT_NEAR(scroll_offset_y,
+              EvalJs(web_contents(), "window.scrollY").ExtractDouble(), 1.0);
+}
+
 // Test that a scroll on a page with scroll-behavior:smooth returns success if
 // an animation was started, even though it may not have instantly scrolled.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_SmoothScrollSucceeds) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   float scroll_offset_y = 300;
@@ -447,8 +524,8 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
 // trying to scroll in a direction with no scrollable extent.
 IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
                        ScrollTool_SmoothScrollAtExtent) {
-  const GURL url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Scroll to the scroller's full extent.
@@ -465,6 +542,276 @@ IN_PROC_BROWSER_TEST_F(ActorScrollToolBrowserTest,
   ActResultFuture result;
   actor_task().Act(ToRequestList(action), result.GetCallback());
   ExpectErrorResult(result, mojom::ActionResultCode::kScrollOffsetDidNotChange);
+}
+
+// ScrollPageToolRequest (page/document granularity) tests.
+
+using Granularity = ScrollPageToolRequest::Granularity;
+using Direction = ScrollPageToolRequest::Direction;
+
+// JS expressions for the viewport's scroll state.
+constexpr char kViewportScrollY[] = "window.scrollY";
+constexpr char kViewportScrollX[] = "window.scrollX";
+constexpr char kViewportClientHeight[] =
+    "document.scrollingElement.clientHeight";
+constexpr char kViewportClientWidth[] = "document.scrollingElement.clientWidth";
+constexpr char kViewportMaxScrollY[] =
+    "document.scrollingElement.scrollHeight - "
+    "document.scrollingElement.clientHeight";
+
+// JS expressions for the #scroller element's scroll state.
+constexpr char kScrollerScrollTop[] =
+    "document.getElementById('scroller').scrollTop";
+constexpr char kScrollerClientHeight[] =
+    "document.getElementById('scroller').clientHeight";
+constexpr char kScrollerMaxScrollTop[] =
+    "(() => { const s = document.getElementById('scroller');"
+    "         return s.scrollHeight - s.clientHeight; })()";
+
+// Evaluates `script` and returns the result rounded to an int, since scroll
+// offsets may be fractional.
+int EvalInt(content::WebContents* web_contents, const char* script) {
+  return EvalJs(web_contents, base::StrCat({"Math.round(", script, ")"}))
+      .ExtractInt();
+}
+
+class ActorScrollPageToolBrowserTest : public ActorToolsTest {
+ public:
+  ActorScrollPageToolBrowserTest() = default;
+  ~ActorScrollPageToolBrowserTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ActorToolsTest::SetUpCommandLine(command_line);
+    // Page/document scrolls are user scrolls, which animate when smooth
+    // scrolling is enabled. Disable it so offsets can be checked as soon as
+    // the action completes.
+    command_line->AppendSwitch(switches::kDisableSmoothScrolling);
+  }
+
+  void SetUpOnMainThread() override {
+    ActorToolsTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_https_test_server().Start());
+    ASSERT_TRUE(content::NavigateToURL(
+        web_contents(), embedded_https_test_server().GetURL(
+                            "example.com", "/actor/scrollable_page.html")));
+  }
+
+  // Runs a ScrollPageToolRequest and returns its future result.
+  void Scroll(std::optional<int> content_node_id,
+              Granularity granularity,
+              Direction direction,
+              ActResultFuture& result) {
+    std::unique_ptr<ToolRequest> action = MakeScrollPageRequest(
+        *main_frame(), content_node_id, granularity, direction);
+    actor_task().Act(ToRequestList(action), result.GetCallback());
+  }
+
+  int Eval(const char* script) { return EvalInt(web_contents(), script); }
+};
+
+// A page scroll of the viewport moves by most, but not all, of the viewport,
+// and a page scroll back returns to the top.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest, PageDownAndUpViewport) {
+  const int client_height = Eval(kViewportClientHeight);
+  {
+    ActResultFuture result;
+    Scroll(/*content_node_id=*/std::nullopt, Granularity::kPage,
+           Direction::kDown, result);
+    ExpectOkResult(result);
+    const int scroll_y = Eval(kViewportScrollY);
+    EXPECT_GT(scroll_y, client_height / 2);
+    EXPECT_LE(scroll_y, client_height);
+  }
+  {
+    ActResultFuture result;
+    Scroll(/*content_node_id=*/std::nullopt, Granularity::kPage, Direction::kUp,
+           result);
+    ExpectOkResult(result);
+    EXPECT_EQ(0, Eval(kViewportScrollY));
+  }
+}
+
+// A horizontal page scroll of the viewport, and a page scroll back returns to
+// the left edge.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest,
+                       PageRightAndLeftViewport) {
+  const int client_width = Eval(kViewportClientWidth);
+  {
+    ActResultFuture result;
+    Scroll(/*content_node_id=*/std::nullopt, Granularity::kPage,
+           Direction::kRight, result);
+    ExpectOkResult(result);
+    const int scroll_x = Eval(kViewportScrollX);
+    EXPECT_GT(scroll_x, client_width / 2);
+    EXPECT_LE(scroll_x, client_width);
+  }
+  {
+    ActResultFuture result;
+    Scroll(/*content_node_id=*/std::nullopt, Granularity::kPage,
+           Direction::kLeft, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(0, Eval(kViewportScrollX));
+  }
+  EXPECT_EQ(0, Eval(kViewportScrollY));
+}
+
+// A document scroll of the viewport goes to the end, then back to the start.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest,
+                       DocumentDownAndUpViewport) {
+  {
+    ActResultFuture result;
+    Scroll(/*content_node_id=*/std::nullopt, Granularity::kDocument,
+           Direction::kDown, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(Eval(kViewportMaxScrollY), Eval(kViewportScrollY));
+  }
+  {
+    ActResultFuture result;
+    Scroll(/*content_node_id=*/std::nullopt, Granularity::kDocument,
+           Direction::kUp, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(0, Eval(kViewportScrollY));
+  }
+}
+
+// Page and document scrolls of a sub-scroller use the sub-scroller's size and
+// don't scroll the viewport.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest, ScrollElement) {
+  const int scroller = GetDOMNodeId(*main_frame(), "#scroller").value();
+  const int client_height = Eval(kScrollerClientHeight);
+  {
+    ActResultFuture result;
+    Scroll(scroller, Granularity::kPage, Direction::kDown, result);
+    ExpectOkResult(result);
+    const int scroll_top = Eval(kScrollerScrollTop);
+    EXPECT_GT(scroll_top, client_height / 2);
+    EXPECT_LE(scroll_top, client_height);
+  }
+  EXPECT_EQ(0, Eval(kViewportScrollY));
+  {
+    ActResultFuture result;
+    Scroll(scroller, Granularity::kDocument, Direction::kDown, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(Eval(kScrollerMaxScrollTop), Eval(kScrollerScrollTop));
+  }
+  EXPECT_EQ(0, Eval(kViewportScrollY));
+}
+
+// When the target can't scroll any further, the action fails and the scroll
+// does not chain to the viewport (unlike a PageDown key press would).
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest, AtEndDoesNotChain) {
+  const int scroller = GetDOMNodeId(*main_frame(), "#scroller").value();
+  ASSERT_TRUE(ExecJs(web_contents(),
+                     "const s = document.getElementById('scroller');"
+                     "s.scrollTop = s.scrollHeight;"));
+  const int max_scroll_top = Eval(kScrollerMaxScrollTop);
+  ASSERT_EQ(max_scroll_top, Eval(kScrollerScrollTop));
+
+  for (Granularity granularity : {Granularity::kPage, Granularity::kDocument}) {
+    ActResultFuture result;
+    Scroll(scroller, granularity, Direction::kDown, result);
+    ExpectErrorResult(result,
+                      mojom::ActionResultCode::kScrollOffsetDidNotChange);
+    EXPECT_EQ(max_scroll_top, Eval(kScrollerScrollTop));
+    EXPECT_EQ(0, Eval(kViewportScrollY));
+  }
+}
+
+// A page scroll up at the top of the viewport fails.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest, AtTopOfViewport) {
+  ActResultFuture result;
+  Scroll(/*content_node_id=*/std::nullopt, Granularity::kPage, Direction::kUp,
+         result);
+  ExpectErrorResult(result, mojom::ActionResultCode::kScrollOffsetDidNotChange);
+  EXPECT_EQ(0, Eval(kViewportScrollY));
+}
+
+// Scrolling a non-scrollable element fails without scrolling anything.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest, NonScrollable) {
+  const int nonscroll = GetDOMNodeId(*main_frame(), "#nonscroll").value();
+  ActResultFuture result;
+  Scroll(nonscroll, Granularity::kPage, Direction::kDown, result);
+  ExpectErrorResult(result,
+                    mojom::ActionResultCode::kScrollTargetNotUserScrollable);
+  EXPECT_EQ(0, EvalJs(web_contents(),
+                      "document.getElementById('nonscroll').scrollTop"));
+  EXPECT_EQ(0, Eval(kViewportScrollY));
+}
+
+// With smooth scrolling enabled, a page scroll animates but still ends up
+// scrolled by a page.
+class ActorScrollPageToolSmoothScrollBrowserTest : public ActorToolsTest {
+ public:
+  void SetUpOnMainThread() override {
+    ActorToolsTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_https_test_server().Start());
+    ASSERT_TRUE(content::NavigateToURL(
+        web_contents(), embedded_https_test_server().GetURL(
+                            "example.com", "/actor/scrollable_page.html")));
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolSmoothScrollBrowserTest, PageDown) {
+  const int client_height = EvalInt(web_contents(), kViewportClientHeight);
+  std::unique_ptr<ToolRequest> action =
+      MakeScrollPageRequest(*main_frame(), /*content_node_id=*/std::nullopt,
+                            Granularity::kPage, Direction::kDown);
+  ActResultFuture result;
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+  ExpectOkResult(result);
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return EvalInt(web_contents(), kViewportScrollY) > client_height / 2;
+  }));
+  EXPECT_LE(EvalInt(web_contents(), kViewportScrollY), client_height);
+}
+
+// A page scroll of a scroll-snap container lands on a snap point rather than
+// scrolling by the plain page step.
+IN_PROC_BROWSER_TEST_F(ActorScrollPageToolBrowserTest, PageScrollSnaps) {
+  // A 200px tall mandatory snap container with a snap point every 120px. A
+  // plain page step would scroll by 175px (87.5% of 200px), but page-scroll
+  // snapping only considers snap points between 40% and 100% of a page away,
+  // so the only candidate from the top is 120px.
+  ASSERT_TRUE(ExecJs(web_contents(), R"JS(
+    const snapper = document.createElement('div');
+    snapper.id = 'snapper';
+    snapper.style.cssText =
+        'height: 200px; width: 200px; margin: 0; overflow-x: hidden;' +
+        'overflow-y: scroll; scroll-snap-type: y mandatory;';
+    for (let i = 0; i < 10; ++i) {
+      const child = document.createElement('div');
+      child.style.cssText =
+          'height: 120px; margin: 0; scroll-snap-align: start;';
+      snapper.appendChild(child);
+    }
+    document.body.prepend(snapper);
+  )JS"));
+  constexpr char kSnapperScrollTop[] =
+      "document.getElementById('snapper').scrollTop";
+  ASSERT_EQ(0, Eval(kSnapperScrollTop));
+  ASSERT_EQ(200, Eval("document.getElementById('snapper').clientHeight"));
+
+  const int snapper = GetDOMNodeId(*main_frame(), "#snapper").value();
+  {
+    ActResultFuture result;
+    Scroll(snapper, Granularity::kPage, Direction::kDown, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(120, Eval(kSnapperScrollTop));
+  }
+  {
+    ActResultFuture result;
+    Scroll(snapper, Granularity::kPage, Direction::kDown, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(240, Eval(kSnapperScrollTop));
+  }
+  {
+    ActResultFuture result;
+    Scroll(snapper, Granularity::kPage, Direction::kUp, result);
+    ExpectOkResult(result);
+    EXPECT_EQ(120, Eval(kSnapperScrollTop));
+  }
+  EXPECT_EQ(0, Eval(kViewportScrollY));
 }
 
 }  // namespace

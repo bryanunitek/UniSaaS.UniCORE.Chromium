@@ -6,9 +6,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
-#include "base/logging.h"
-#include "base/rand_util.h"
+#include "base/check_op.h"
+#include "chrome/browser/dictation/features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_provider.h"
@@ -20,64 +21,228 @@ namespace dictation {
 namespace {
 
 // Sizing and layout.
-constexpr int kViewWidth = 63;
-constexpr size_t kBarCount = 11;
-constexpr size_t kCenterBarIndex = kBarCount / 2;
-constexpr size_t kAudioHistorySize = kCenterBarIndex + 1;
-constexpr float kBarSpacing = 6.0f;
-constexpr float kBarWidth = 3.0f;
-constexpr float kBarCornerRadius = 1.5f;
+constexpr int kFullSizeHorizontalPadding = 13;
+
+constexpr int kNonFullSizeViewWidth = 20;
+constexpr int kNonFullSizeViewHeight = 20;
+constexpr size_t kNonFullSizeBarCount = 3;
+
+constexpr int kFullSizeBarSpacing = 6;
+constexpr int kNonFullSizeBarSpacing = 5;
+constexpr int kBarWidth = 2;
+constexpr float kBarCornerRadius = 0.5f;
 
 // Height limits.
-constexpr float kMinBarHeight = 3.0f;
-constexpr float kMaxBarHeight = 20.0f;
+constexpr float kMinBarHeight = 4.0f;
+constexpr float kFullSizeMaxBarHeight = 20.0f;
+constexpr float kNonFullSizeMaxBarHeight = 14.0f;
 
-// Physics parameters.
-constexpr float kSpringConstant = 600.0f;
-constexpr float kDampingCoefficient = 35.0f;
+// Lerp animation parameters.
+constexpr float kBubblingSpeed = 0.40f;
+
+// Audio sensitivity & response curve parameters.
+constexpr float kSilenceThreshold = 0.005f;
+constexpr float kAudioSensitivity = 8.0f;
+constexpr float kInflectionInput = 0.75f;
+constexpr float kInflectionOutputPercent = 0.75f;
+
+// Finalizing wave animation parameters.
+constexpr base::TimeDelta kFinalizingWaveTravelDuration =
+    base::Milliseconds(700);
+constexpr base::TimeDelta kFinalizingWavePauseDuration = base::Milliseconds(50);
+constexpr float kFinalizingWaveAmplitude = 5.0f;
+constexpr float kFinalizingBaseDotSize = 2.0f;
+constexpr float kFinalizingHighlightDotSize = 3.5f;
+constexpr double kFinalizingPacketHalfWidth = 2.5;
+
+float MapRange(float value,
+               float from_min,
+               float from_max,
+               float to_min,
+               float to_max) {
+  CHECK_LT(from_min, from_max);
+  CHECK_LT(to_min, to_max);
+  const float input_range = from_max - from_min;
+  const float progress = (value - from_min) / input_range;
+  return to_min + progress * (to_max - to_min);
+}
+
+float CalculateBarHeight(float min_bar_height,
+                         float max_bar_height,
+                         float raw_level) {
+  if (raw_level <= 0.0f) {
+    return min_bar_height;
+  }
+  const float normalized_level =
+      std::sqrt(std::clamp(raw_level * kAudioSensitivity, 0.0f, 1.0f));
+  if (normalized_level <= kSilenceThreshold) {
+    return min_bar_height;
+  }
+  const float inflection_output = max_bar_height * kInflectionOutputPercent;
+  if (normalized_level < kInflectionInput) {
+    return MapRange(normalized_level, kSilenceThreshold, kInflectionInput,
+                    min_bar_height, inflection_output);
+  }
+  return MapRange(normalized_level, kInflectionInput, 1.0f, inflection_output,
+                  max_bar_height);
+}
 
 }  // namespace
 
-WaveformView::WaveformView() {
-  bars_.resize(kBarCount);
-  audio_history_.resize(kAudioHistorySize, 0.0f);
+WaveformView::WaveformView(bool full_size) : full_size_(full_size) {
+  const size_t bar_count =
+      full_size_ ? kDefaultFullSizeBarCount : kNonFullSizeBarCount;
+  bars_.resize(bar_count);
+  audio_history_.resize(GetCenterBarIndex() + 1, 0.0f);
   animation_ = std::make_unique<gfx::InfiniteAnimation>(this);
 }
 
 WaveformView::~WaveformView() = default;
 
-void WaveformView::SetState(DictationBubbleUi::State state) {
+void WaveformView::SetBarCount(size_t bar_count) {
+  if (bars_.size() == bar_count) {
+    return;
+  }
+  bars_.resize(bar_count);
+  audio_history_.assign(GetCenterBarIndex() + 1, 0.0f);
+  InvalidateLayout();
+  SchedulePaint();
+}
+
+size_t WaveformView::GetCenterBarIndex() const {
+  return bars_.size() / 2;
+}
+
+bool WaveformView::IsCollapsedInParent() const {
+  return !kSessionEndsOnStreamEnd.Get() && state_ == UiState::kInactive;
+}
+
+void WaveformView::SetState(UiState state) {
   if (state_ == state) {
     return;
   }
   state_ = state;
+  if (state_ == UiState::kFinalizing) {
+    finalizing_start_time_ = base::TimeTicks::Now();
+  } else {
+    finalizing_start_time_ = base::TimeTicks();
+  }
+  if (state_ == UiState::kInactive) {
+    std::fill(audio_history_.begin(), audio_history_.end(), 0.0f);
+    for (auto& bar : bars_) {
+      bar.height = kMinBarHeight;
+      bar.target_height = kMinBarHeight;
+    }
+    active_volume_ = std::nullopt;
+    last_volume_ = 0.0f;
+    previous_read_empty_ = false;
+  }
+  InvalidateLayout();
+  SchedulePaint();
 }
 
 void WaveformView::SetAudioLevel(float level) {
   audio_level_ = std::clamp(level, 0.0f, 1.0f);
-  is_using_simulated_audio_ = false;
+  active_volume_ = audio_level_;
+}
+
+WaveformView::AnimationState WaveformView::GetFinalizingAnimationState(
+    size_t index,
+    base::TimeTicks now) const {
+  const float baseline_y =
+      height() > 0 ? height() / 2.0f : GetPreferredSize().height() / 2.0f;
+  if (finalizing_start_time_.is_null()) {
+    return {baseline_y, kFinalizingBaseDotSize};
+  }
+
+  const base::TimeDelta elapsed = now - finalizing_start_time_;
+  const base::TimeDelta cycle_period =
+      kFinalizingWaveTravelDuration + kFinalizingWavePauseDuration;
+  const base::TimeDelta cycle_time = elapsed % cycle_period;
+
+  double wave_weight = 0.0;
+  if (cycle_time < kFinalizingWaveTravelDuration) {
+    const double progress = cycle_time / kFinalizingWaveTravelDuration;
+    const double bar_count = static_cast<double>(bars_.size());
+    const double crest_pos =
+        -kFinalizingPacketHalfWidth +
+        progress * (bar_count - 1 + 2.0 * kFinalizingPacketHalfWidth);
+    const double dist = std::abs(static_cast<double>(index) - crest_pos);
+    if (dist < kFinalizingPacketHalfWidth) {
+      wave_weight = 0.5 * (1.0 + std::cos(std::numbers::pi_v<double> * dist /
+                                          kFinalizingPacketHalfWidth));
+    }
+  }
+
+  const float weight = static_cast<float>(wave_weight);
+  return {
+      baseline_y - kFinalizingWaveAmplitude * weight,
+      std::lerp(kFinalizingBaseDotSize, kFinalizingHighlightDotSize, weight)};
 }
 
 gfx::Size WaveformView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
+  if (IsCollapsedInParent()) {
+    return gfx::Size(0, 0);
+  }
   const auto* const layout_provider = ChromeLayoutProvider::Get();
-  return gfx::Size(kViewWidth, layout_provider->GetDistanceMetric(
-                                   DISTANCE_TOAST_BUBBLE_HEIGHT_CONTENT));
+  const int width = full_size_ ? (bars_.size() - 1) * kFullSizeBarSpacing +
+                                     kBarWidth + kFullSizeHorizontalPadding
+                               : kNonFullSizeViewWidth;
+  const int height = full_size_ ? layout_provider->GetDistanceMetric(
+                                      DISTANCE_TOAST_BUBBLE_HEIGHT_CONTENT)
+                                : kNonFullSizeViewHeight;
+  return gfx::Size(width, height);
 }
 
 void WaveformView::OnPaint(gfx::Canvas* canvas) {
-  const int start_x = (width() - kViewWidth) / 2;
-  const int center_y = height() / 2;
+  // Painting is skipped in kInactive and kInitializing states as the parent
+  // view is expected to hide or collapse this view in those states.
+  if (IsCollapsedInParent()) {
+    return;
+  }
+
+  const float bar_spacing =
+      full_size_ ? kFullSizeBarSpacing : kNonFullSizeBarSpacing;
+  const float total_bars_width = (bars_.size() - 1) * bar_spacing + kBarWidth;
+  const float start_x = (width() - total_bars_width) / 2.0f;
+  const float baseline_y = height() / 2.0f;
 
   cc::PaintFlags flags;
   flags.setColor(GetColorProvider()->GetColor(ui::kColorSysOnSurface));
   flags.setAntiAlias(true);
   flags.setStyle(cc::PaintFlags::kFill_Style);
 
+  if (state_ == UiState::kInactive || state_ == UiState::kInitializing) {
+    for (size_t i = 0; i < bars_.size(); ++i) {
+      const float dot_x = start_x + i * bar_spacing + kBarWidth / 2.0f;
+      const gfx::RectF rect(dot_x - kFinalizingBaseDotSize / 2.0f,
+                            baseline_y - kFinalizingBaseDotSize / 2.0f,
+                            kFinalizingBaseDotSize, kFinalizingBaseDotSize);
+      canvas->DrawRoundRect(rect, kFinalizingBaseDotSize / 2.0f, flags);
+    }
+    return;
+  }
+
+  if (state_ == UiState::kFinalizing) {
+    const base::TimeTicks now = base::TimeTicks::Now();
+    for (size_t i = 0; i < bars_.size(); ++i) {
+      const float dot_x = start_x + i * bar_spacing + kBarWidth / 2.0f;
+      const AnimationState animation_state =
+          GetFinalizingAnimationState(i, now);
+      const gfx::RectF rect(
+          dot_x - animation_state.size / 2.0f,
+          animation_state.center_y - animation_state.size / 2.0f,
+          animation_state.size, animation_state.size);
+      canvas->DrawRoundRect(rect, animation_state.size / 2.0f, flags);
+    }
+    return;
+  }
+
   for (size_t i = 0; i < bars_.size(); ++i) {
-    const float bar_x = start_x + i * kBarSpacing;
+    const float bar_x = start_x + i * bar_spacing;
     const float bar_h = bars_[i].height;
-    const gfx::RectF rect(bar_x, center_y - bar_h / 2.0f, kBarWidth, bar_h);
+    const gfx::RectF rect(bar_x, baseline_y - bar_h / 2.0f, kBarWidth, bar_h);
     canvas->DrawRoundRect(rect, kBarCornerRadius, flags);
   }
 }
@@ -96,102 +261,68 @@ void WaveformView::AnimationProgressed(const gfx::Animation* animation) {
   base::TimeDelta delta = now - last_update_time_;
   last_update_time_ = now;
 
-  if (state_ == DictationBubbleUi::State::kTranscribing &&
-      is_using_simulated_audio_) {
-    UpdateSimulatedAudio(delta);
-  }
-
   UpdatePhysics(delta);
   SchedulePaint();
 }
 
-void WaveformView::UpdateSimulatedAudio(base::TimeDelta delta) {
-  simulated_energy_elapsed_ += delta;
-  if (simulated_energy_elapsed_ >= simulated_energy_duration_) {
-    simulated_energy_elapsed_ = base::TimeDelta();
-    if (simulated_target_energy_ > 0.0f) {
-      // Syllable finished: transition to short pause.
-      simulated_target_energy_ = 0.0f;
-      simulated_energy_duration_ =
-          base::Milliseconds(base::RandIntInclusive(150, 349));
-    } else {
-      // Pause finished: transition to active syllable.
-      simulated_target_energy_ =
-          0.3f + 0.7f * static_cast<float>(base::RandDouble());
-      simulated_energy_duration_ =
-          base::Milliseconds(base::RandIntInclusive(200, 499));
-    }
-  }
-
-  // Smoothly interpolate current energy to the target level.
-  const float interpolation_speed =
-      simulated_target_energy_ > 0.0f ? 12.0f : 6.0f;
-  simulated_speech_energy_ +=
-      (simulated_target_energy_ - simulated_speech_energy_) *
-      interpolation_speed * delta.InSecondsF();
-
-  audio_level_ = simulated_speech_energy_;
-}
-
 void WaveformView::UpdatePhysics(base::TimeDelta delta) {
-  const double dt = std::min(delta.InSecondsF(), 0.05);
+  if (state_ != UiState::kTranscribing) {
+    return;
+  }
 
-  if (state_ == DictationBubbleUi::State::kTranscribing) {
-    // Propagate the audio level from the center outwards.
-    history_timer_ += delta;
-    if (history_timer_ >= base::Milliseconds(30)) {
-      history_timer_ = base::TimeDelta();
-      for (size_t i = audio_history_.size() - 1; i > 0; --i) {
-        audio_history_[i] = audio_history_[i - 1];
+  // Propagate the audio level from the center outwards.
+  history_timer_ += delta;
+  if (history_timer_ >= base::Milliseconds(45)) {
+    history_timer_ = base::TimeDelta();
+    for (size_t i = audio_history_.size() - 1; i > 0; --i) {
+      audio_history_[i] = audio_history_[i - 1];
+    }
+    if (active_volume_.has_value()) {
+      previous_read_empty_ = false;
+      last_volume_ = active_volume_.value();
+      audio_history_[0] = active_volume_.value();
+      active_volume_ = std::nullopt;
+    } else {
+      if (!previous_read_empty_) {
+        audio_history_[0] = last_volume_;
+        previous_read_empty_ = true;
+      } else {
+        audio_history_[0] = 0.0f;
       }
-      audio_history_[0] = audio_level_;
     }
   }
 
-  const double time_sec =
-      (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF();
+  const float max_bar_height =
+      full_size_ ? kFullSizeMaxBarHeight : kNonFullSizeMaxBarHeight;
 
   for (size_t i = 0; i < bars_.size(); ++i) {
     bars_[i].target_height =
-        GetTargetHeightForBar(i, time_sec, kMinBarHeight, kMaxBarHeight);
-  }
-
-  // Run the spring-damper integration loop.
-  for (size_t i = 0; i < bars_.size(); ++i) {
-    const float diff = bars_[i].target_height - bars_[i].height;
-    const float spring_force = diff * kSpringConstant;
-    const float damping_force = -bars_[i].velocity * kDampingCoefficient;
-    const float accel = spring_force + damping_force;
-
-    bars_[i].velocity += accel * dt;
-    bars_[i].height += bars_[i].velocity * dt;
-
-    // Clamp heights and zero velocities at the boundaries.
-    if (bars_[i].height < kMinBarHeight) {
-      bars_[i].height = kMinBarHeight;
-      bars_[i].velocity = 0.0f;
-    } else if (bars_[i].height > kMaxBarHeight) {
-      bars_[i].height = kMaxBarHeight;
-      bars_[i].velocity = 0.0f;
-    }
+        GetTargetHeightForBar(i, kMinBarHeight, max_bar_height);
+    bars_[i].height +=
+        (bars_[i].target_height - bars_[i].height) * kBubblingSpeed;
+    bars_[i].height =
+        std::clamp(bars_[i].height, kMinBarHeight, max_bar_height);
   }
 }
 
 float WaveformView::GetTargetHeightForBar(size_t index,
-                                          double time_sec,
                                           float min_height,
                                           float max_height) const {
   switch (state_) {
-    case DictationBubbleUi::State::kTranscribing: {
-      const int dist =
-          std::abs(static_cast<int>(index) - static_cast<int>(kCenterBarIndex));
-      const float sensitivity = 1.0f - (dist * 0.1f);
-      return min_height +
-             audio_history_[dist] * (max_height - min_height) * sensitivity;
+    case UiState::kInitializing:
+    case UiState::kTranscribing: {
+      const size_t center_bar_index = GetCenterBarIndex();
+      const size_t dist = index > center_bar_index ? index - center_bar_index
+                                                   : center_bar_index - index;
+      const float raw_level = audio_history_[dist];
+      const float raw_height =
+          CalculateBarHeight(min_height, max_height, raw_level);
+      const float taper =
+          1.0f - (static_cast<float>(dist) / (center_bar_index + 1.0f));
+      return std::max(min_height, raw_height * taper);
     }
-    case DictationBubbleUi::State::kInitializing:
-    case DictationBubbleUi::State::kInactive:
-    case DictationBubbleUi::State::kFinalizing:
+    case UiState::kInactive:
+    case UiState::kFinalizing:
       return min_height;
   }
 }

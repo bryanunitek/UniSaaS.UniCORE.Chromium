@@ -10,19 +10,33 @@
 
 #include "base/observer_list_types.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/common/dense_set.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 namespace autofill {
 
 class EntityType;
 
-// Manages access to personal context data for autofill ai, including caching
-// and ttl management.
+// Manages access to personal context data specifically for Autofill AI.
+//
+// This is NOT a generic data access layer for the Personal Context Service.
+// Its networking, protocol buffers, and caching strategy are strictly tailored
+// to Autofill AI form-filling user flows:
+// - Requests always specify `CONTEXT_MEMORY_FEATURE_AMBIENT_AUTOFILL` personal
+//   context feature for all service requests.
+// - Uses feature-specific protobufs
+// (`ContextMemoryAmbientAutofillRequest`/`Response`).
+// - Caching and TTL policies (for both masked entities and unmasked SPII) are
+//   optimized specifically for Autofill AI interaction patterns.
+//
 // Instantiated once per profile/context.
 class AutofillAiPersonalContextAccessManager : public KeyedService {
  public:
   class Observer : public base::CheckedObserver {
    public:
+    // TODO(crbug.com/516721244): Merge `OnPrefetchContextComplete` and
+    // `OnMaskedEntityTypeEvicted` into a single callback.
+
     // Called when asynchronous prefetching of entities through
     // `PrefetchContext()` finishes. If prefetching succeeded, `entities`
     // contains the result. In case it failed or the response was empty,
@@ -57,8 +71,7 @@ class AutofillAiPersonalContextAccessManager : public KeyedService {
   ~AutofillAiPersonalContextAccessManager() override = default;
 
   // Fetches personal context from the personal context service.
-  virtual void PrefetchContext(
-      base::span<const EntityType> requested_types) = 0;
+  virtual void PrefetchContext(DenseSet<EntityType> requested_types) = 0;
 
   virtual RequestStatus GetPrefetchStatusByEntityType(
       EntityType type) const = 0;
@@ -77,8 +90,7 @@ class AutofillAiPersonalContextAccessManager : public KeyedService {
   virtual bool IsTypePrefetched(EntityType type) const = 0;
 
   // Returns true if a presence signal for `type` is currently available.
-  // TODO(crbug.com/516721244): Rename to ServerHasSpiiPresenceSignal.
-  virtual bool ServerHasDataAvailable(EntityType type) const = 0;
+  virtual bool ServerHasSpiiPresenceSignal(EntityType type) const = 0;
 };
 
 }  // namespace autofill

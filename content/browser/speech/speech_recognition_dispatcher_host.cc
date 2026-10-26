@@ -33,6 +33,8 @@
 #include "media/mojo/mojom/speech_recognizer.mojom.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -40,6 +42,34 @@
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace content {
+
+namespace {
+
+enum class SpeechRecognitionBackend {
+  kCloud = 0,
+  kSoda = 1,
+  kSmallExpertModel = 2,
+  kGeminiNano = 3,
+};
+
+int GetSpeechRecognitionBackend(
+    bool use_on_device,
+    media::mojom::SpeechRecognitionQuality quality) {
+  if (!use_on_device) {
+    return static_cast<int>(SpeechRecognitionBackend::kCloud);
+  }
+  if (base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechSmallExpertModel) &&
+      quality == media::mojom::SpeechRecognitionQuality::kDictation) {
+    return static_cast<int>(SpeechRecognitionBackend::kSmallExpertModel);
+  }
+  if (base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano) &&
+      quality == media::mojom::SpeechRecognitionQuality::kConversation) {
+    return static_cast<int>(SpeechRecognitionBackend::kGeminiNano);
+  }
+  return static_cast<int>(SpeechRecognitionBackend::kSoda);
+}
+
+}  // namespace
 
 // static
 std::string SpeechRecognitionDispatcherHost::GetAcceptedLanguages(
@@ -91,7 +121,7 @@ SpeechRecognitionDispatcherHost::AsWeakPtr() {
 
 void SpeechRecognitionDispatcherHost::Start(
     media::mojom::StartSpeechRecognitionRequestParamsPtr params) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
 
   if (params->audio_forwarder.is_valid()) {
 #if BUILDFLAG(IS_ANDROID)
@@ -125,7 +155,7 @@ void SpeechRecognitionDispatcherHost::StartRequestOnUI(
         speech_recognition_dispatcher_host,
     GlobalRenderFrameHostId global_id,
     media::mojom::StartSpeechRecognitionRequestParamsPtr params) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   GlobalRenderFrameHostId embedder_global_id;
 
   RenderFrameHostImpl* rfh = RenderFrameHostImpl::FromID(global_id);
@@ -185,8 +215,8 @@ void SpeechRecognitionDispatcherHost::StartRequestOnUI(
     }
 
     embedder_global_id = embedder_frame->GetGlobalId();
-    DCHECK(embedder_global_id.child_id);
-    DCHECK(embedder_global_id);
+    CHECK(embedder_global_id.child_id, base::NotFatalUntil::M159);
+    CHECK(embedder_global_id, base::NotFatalUntil::M159);
   }
 
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
@@ -218,6 +248,19 @@ void SpeechRecognitionDispatcherHost::StartRequestOnUI(
   bool on_device_available = false;
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+  bool use_on_device = false;
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_ANDROID)
+  use_on_device = can_render_frame_use_on_device && params->on_device &&
+                  (on_device_available || !params->allow_cloud_fallback);
+#endif
+  int backend = GetSpeechRecognitionBackend(use_on_device, params->quality);
+
+  ukm::builders::WebSpeech_Usage(rfh->GetPageUkmSourceId())
+      .SetSpeechRecognitionUsed(1)
+      .SetRequestedSpeechQuality(static_cast<int64_t>(params->quality))
+      .SetSpeechRecognitionBackend(backend)
+      .Record(ukm::UkmRecorder::Get());
+
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -237,7 +280,7 @@ void SpeechRecognitionDispatcherHost::StartSessionOnIO(
     const std::string& language,
     bool can_render_frame_use_on_device,
     bool on_device_available) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
 
   SpeechRecognitionSessionContext context;
   context.security_origin = origin;
@@ -294,7 +337,8 @@ void SpeechRecognitionDispatcherHost::StartSessionOnIO(
                   params->sample_rate)
             : std::nullopt,
         can_render_frame_use_on_device);
-    DCHECK_NE(session_id, SpeechRecognitionManager::kSessionIDInvalid);
+    CHECK_NE(session_id, SpeechRecognitionManager::kSessionIDInvalid,
+             base::NotFatalUntil::M159);
     session->SetSessionId(session_id);
     mojo::MakeSelfOwnedReceiver(std::move(session),
                                 std::move(params->session_receiver));

@@ -17,11 +17,11 @@ include_rules = [
   "+chrome/browser/ash/login/session",
   "+chrome/browser/ash/login/users",
   "+chrome/browser/ash/profiles",
-  "+chrome/browser/notifications",
   "+chrome/browser/policy",
   "+chrome/browser/profiles",
-  "+chrome/browser/ui/browser.h",
   "+chrome/test/base",
+
+  "+ui/message_center",
 ]
 
 specific_include_rules = {
@@ -29,7 +29,11 @@ specific_include_rules = {
   "kerberos_credentials_manager_factory\\.cc": [
     "+chrome/browser/browser_process.h",
   ],
+  "kerberos_credentials_manager_factory_browsertest\\.cc": [
+    "+chrome/browser/ui/browser_window/public/browser_window_interface.h",
+  ],
   "kerberos_credentials_manager_unittest\\.cc": [
+    "+chrome/browser/ash/settings/scoped_cros_settings_test_helper.h",
     "+chrome/browser/ash/settings/scoped_testing_cros_settings.h",
     "+chrome/browser/global_features.h",
   ],

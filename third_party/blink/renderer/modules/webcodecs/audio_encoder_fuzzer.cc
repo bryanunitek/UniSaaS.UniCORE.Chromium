@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/check.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "media/base/media_switches.h"
@@ -27,6 +28,7 @@
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/modules/webcodecs/encoded_audio_chunk.h"
 #include "third_party/blink/renderer/modules/webcodecs/fuzzer_inputs.pb.h"
+#include "third_party/blink/renderer/modules/webcodecs/fuzzer_inputs_fuzzable.pb.h"
 #include "third_party/blink/renderer/modules/webcodecs/fuzzer_utils.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
@@ -141,7 +143,16 @@ class TestInterfaceFactory : public media::mojom::InterfaceFactory {
 namespace blink {
 
 DEFINE_TEXT_PROTO_FUZZER(
-    const wc_fuzzer::AudioEncoderApiInvocationSequence& proto) {
+    const fuzzable::wc_fuzzer::AudioEncoderApiInvocationSequence&
+        fuzzable_proto) {
+  std::string serialized;
+  CHECK(fuzzable_proto.SerializeToString(&serialized));
+  wc_fuzzer::AudioEncoderApiInvocationSequence proto;
+  // Recursion limits can cause parsing to fail.
+  if (!proto.ParseFromString(serialized)) {
+    return;
+  }
+
   if (proto.invocations().size() > kMaxFuzzerProtoLength) {
     return;
   }
@@ -224,7 +235,7 @@ DEFINE_TEXT_PROTO_FUZZER(
         case wc_fuzzer::AudioEncoderApiInvocation::kFlush: {
           // TODO(https://crbug.com/1119253): Fuzz whether to await resolution
           // of the flush promise.
-          audio_encoder->flush(IGNORE_EXCEPTION_FOR_TESTING);
+          audio_encoder->flush(script_state, IGNORE_EXCEPTION_FOR_TESTING);
           break;
         }
         case wc_fuzzer::AudioEncoderApiInvocation::kReset:

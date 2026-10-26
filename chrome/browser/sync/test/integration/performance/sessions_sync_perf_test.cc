@@ -7,12 +7,15 @@
 #include "chrome/browser/sync/test/integration/performance/sync_timing_helper.h"
 #include "chrome/browser/sync/test/integration/sessions_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "testing/perf/perf_result_reporter.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
+#include "url/gurl.h"
 
 using content::OpenURLParams;
 using sessions_helper::GetLocalSession;
@@ -53,7 +56,11 @@ class SessionsSyncPerfTest : public SyncTest {
   }
 
   GURL GetInitialURL() const override {
-    return chrome::ChromeUINewTabURLAsGURL();
+    // Return a lightweight unsynced WebUI URL so the initial tab is not synced
+    // (unlike the default about:blank). Avoid chrome://newtab/ because loading
+    // the full New Tab Page WebUI and its subframes significantly slows down
+    // test setup and teardown.
+    return GURL(chrome::kChromeUIVersionURL);
   }
 
   // Opens |num_tabs| new tabs on |profile|.
@@ -85,19 +92,17 @@ void SessionsSyncPerfTest::AddTabs(int profile, int num_tabs) {
 }
 
 void SessionsSyncPerfTest::UpdateTabs(int profile) {
-  Browser* browser = GetBrowser(profile);
+  BrowserWindowInterface* browser = GetBrowser(profile);
   GURL url;
   std::vector<GURL> urls;
-  for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
+  for (int i = 0; i < browser->GetTabStripModel()->count(); ++i) {
     chrome::SelectNumberedTab(browser, i);
     url = NextURL();
     browser->OpenURL(
-        OpenURLParams(
-            url,
+        OpenURLParams::CreateBrowserInitiated(
+            url, WindowOpenDisposition::kCurrentTab, ui::PAGE_TRANSITION_LINK,
             content::Referrer(GURL("http://localhost"),
-                              network::mojom::ReferrerPolicy::kDefault),
-            WindowOpenDisposition::CURRENT_TAB, ui::PAGE_TRANSITION_LINK,
-            false),
+                              network::mojom::ReferrerPolicy::kDefault)),
         /*navigation_handle_callback=*/{});
     urls.push_back(url);
   }

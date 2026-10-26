@@ -63,6 +63,10 @@
 #include "media/filters/symphonia_audio_decoder.h"
 #endif
 
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+#include "media/filters/iamf_audio_decoder.h"
+#endif
+
 using ::testing::_;
 using ::testing::AnyNumber;
 using ::testing::AtLeast;
@@ -126,6 +130,8 @@ class CrossOriginFileDataSourceWrapper : public CrossOriginDataSource {
   }
   bool DidRedirect() const override { return file_data_source_.DidRedirect(); }
   GURL GetUrlAfterRedirects() const override { return url_; }
+  GURL GetUrlDataOrigin() const override { return origin_; }
+  void SetUrlOrigin(GURL uri) { origin_ = std::move(uri); }
   void StopPreloading() override { file_data_source_.StopPreloading(); }
   void OnMediaPlaybackRateChanged(double playback_rate) override {
     file_data_source_.OnMediaPlaybackRateChanged(playback_rate);
@@ -156,6 +162,7 @@ class CrossOriginFileDataSourceWrapper : public CrossOriginDataSource {
   }
 
  private:
+  GURL origin_;
   GURL url_;
   FileDataSource file_data_source_;
 };
@@ -170,13 +177,16 @@ class TestDataSourceFactory : public CrossOriginDataSource::Factory {
                   callback) override {
     auto file_data_source =
         std::make_unique<CrossOriginFileDataSourceWrapper>();
+    file_data_source->SetUrlOrigin(uri);
     base::FilePath file_path(
 #if BUILDFLAG(IS_WIN)
         // Windows file paths can't start with '/' the way unix file paths can,
-        // So we have to strip the leading one which comes from GetContent().
-        base::UTF8ToWide(uri.GetContent().erase(0, 1))
+        // So we have to strip the leading `media.com/` from GetContent().
+        base::UTF8ToWide(uri.GetContent().erase(0, 10))
 #else
-        uri.GetContent()
+        // Linux/Mac file paths can start with '/' so we have to strip only the
+        // leading `media.com`.
+        uri.GetContent().erase(0, 9)
 #endif
     );
     CHECK(file_data_source->Initialize(file_path))
@@ -229,6 +239,13 @@ std::vector<std::unique_ptr<AudioDecoder>> CreateAudioDecodersForTest(
         std::make_unique<OpusAudioDecoder>(media_task_runner));
   }
 
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+  if (base::FeatureList::IsEnabled(kIamfAudioDecoding)) {
+    audio_decoders.push_back(
+        std::make_unique<IamfAudioDecoder>(media_task_runner, media_log));
+  }
+#endif
+
 #if BUILDFLAG(ENABLE_SYMPHONIA)
   audio_decoders.push_back(
       std::make_unique<SymphoniaAudioDecoder>(media_task_runner, media_log));
@@ -263,7 +280,7 @@ PipelineIntegrationTestBase::PipelineIntegrationTestBase() {
 }
 
 PipelineIntegrationTestBase::~PipelineIntegrationTestBase() {
-  if (pipeline_->IsRunning()) {
+  if (pipeline_ && pipeline_->IsRunning()) {
     Stop();
   }
 
@@ -383,8 +400,8 @@ PipelineStatus PipelineIntegrationTestBase::StartPipelineWithHlsManifest(
   hashing_enabled_ = true;
 
   auto full_path = GetTestDataFilePath(filename);
-  std::string file_url = "file://" + full_path.MaybeAsASCII();
-  GURL manifest_root{file_url};
+  std::string file_url = full_path.MaybeAsASCII();
+  GURL manifest_root{"https://media.com/" + file_url};
 
   auto multibuffer_factory = std::make_unique<TestDataSourceFactory>();
   // HlsManifestDemuxerEngine requires a SequenceBound data source provider,

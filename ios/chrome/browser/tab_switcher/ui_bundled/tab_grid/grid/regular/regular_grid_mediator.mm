@@ -186,24 +186,24 @@ using ScopedTabGroupSyncObservation =
 }
 
 - (void)closeOtherTabsButtonTapped:(id)sender {
+  int activeIndex = self.webStateList->active_index();
+  if (activeIndex == WebStateList::kInvalidIndex) {
+    return;
+  }
   RecordTabGridCloseOtherTabs(/*incognito=*/false);
   int closedTabsCount = self.webStateList->regular_tabs_count();
   // If the active tab is pinned, it is not part of the `regular_tabs_count()`,
   // so all regular tabs will be closed. If it is regular, it is part of the
   // count, so we subtract 1 to keep it.
-  if (!self.webStateList->IsWebStatePinnedAt(
-          self.webStateList->active_index())) {
+  if (!self.webStateList->IsWebStatePinnedAt(activeIndex)) {
     closedTabsCount -= 1;
   }
   RecordTabGridCloseTabsCount(closedTabsCount);
-  int indexToKeep = self.webStateList->active_index();
-  CloseOtherWebStates(*(self.webStateList), indexToKeep,
+  CloseOtherWebStates(*(self.webStateList), activeIndex,
                       WebStateList::ClosingReason::kUserAction);
 }
 
 - (void)newTabButtonTapped:(id)sender {
-  CHECK(!IsChromeNextIaEnabled() ||
-        ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET);
   // Ignore the tap if the current page is disabled for some reason, by policy
   // for instance. This is to avoid situations where the tap action from an
   // enabled page can make it to a disabled page by releasing the
@@ -282,8 +282,11 @@ using ScopedTabGroupSyncObservation =
     [self configureButtonsInSelectionMode:toolbarsConfiguration];
   } else {
     toolbarsConfiguration.closeAllButton = [self canCloseRegularOrInactiveTabs];
-    toolbarsConfiguration.doneButton = !self.webStateList->empty();
+    toolbarsConfiguration.exitTabGridButton =
+        !self.webStateList->empty() &&
+        self.modeHolder.mode == TabGridMode::kNormal;
     toolbarsConfiguration.newTabButton = YES;
+    toolbarsConfiguration.searchButtonHidden = NO;
     toolbarsConfiguration.searchButton = YES;
     toolbarsConfiguration.selectTabsButton = [self canCloseTabs];
     toolbarsConfiguration.closeOtherTabsButton = [self canCloseOtherTabs];

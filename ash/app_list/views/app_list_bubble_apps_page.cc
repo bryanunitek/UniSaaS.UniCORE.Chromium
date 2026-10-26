@@ -30,7 +30,6 @@
 #include "ash/controls/rounded_scroll_bar.h"
 #include "ash/controls/scroll_view_gradient_helper.h"
 #include "ash/public/cpp/metrics_util.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/icon_button.h"
@@ -168,6 +167,7 @@ AppListBubbleAppsPage::AppListBubbleAppsPage(
   DCHECK(a11y_announcer);
   DCHECK(folder_controller);
 
+  search_box_->AddObserver(this);
   AppListModelProvider::Get()->AddObserver(this);
 
   SetUseDefaultFillLayout(true);
@@ -393,7 +393,7 @@ void AppListBubbleAppsPage::AnimateShowPage() {
 
   ui::Layer* scroll_view_layer = scroll_view_->layer();
   DCHECK(scroll_view_layer);
-  DCHECK_EQ(scroll_view_layer->type(), ui::LAYER_TEXTURED);
+  DCHECK(scroll_view_layer->AsTextured());
 
   ui::AnimationThroughputReporter reporter(
       scroll_view_layer->GetAnimator(),
@@ -459,7 +459,7 @@ void AppListBubbleAppsPage::AnimateHidePage() {
 
   ui::Layer* scroll_view_layer = scroll_view_->layer();
   DCHECK(scroll_view_layer);
-  DCHECK_EQ(scroll_view_layer->type(), ui::LAYER_TEXTURED);
+  DCHECK(scroll_view_layer->AsTextured());
 
   ui::AnimationThroughputReporter reporter(
       scroll_view_layer->GetAnimator(),
@@ -647,6 +647,13 @@ void AppListBubbleAppsPage::OnViewVisibilityChanged(views::View* observed_view,
                                                     bool visible) {
   if (starting_view == continue_section_ || starting_view == recent_apps_) {
     UpdateSeparatorVisibility();
+  }
+}
+
+void AppListBubbleAppsPage::OnViewIsDeleting(views::View* observed_view) {
+  if (observed_view == search_box_) {
+    search_box_->RemoveObserver(this);
+    search_box_ = nullptr;
   }
 }
 
@@ -1012,9 +1019,8 @@ void AppListBubbleAppsPage::RecordAboveTheFoldMetrics() {
       apps_below_the_fold.push_back(child_view->item()->id());
     }
   }
-  view_delegate_->RecordAppsDefaultVisibility(
-      std::move(apps_above_the_fold), std::move(apps_below_the_fold),
-      /*is_apps_collections_page=*/false);
+  view_delegate_->RecordAppsDefaultVisibility(std::move(apps_above_the_fold),
+                                              std::move(apps_below_the_fold));
 }
 
 BEGIN_METADATA(AppListBubbleAppsPage)

@@ -12,6 +12,8 @@ import './tab_search_split_item.js';
 import './title_item.js';
 
 import {ColorChangeUpdater} from '//resources/cr_components/color_change_listener/colors_css_updater.js';
+import type {SearchOptions} from '/tab_group_shared/search.js';
+import {search} from '/tab_group_shared/search.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {CrSearchFieldMixinLit} from 'chrome://resources/cr_elements/cr_search_field/cr_search_field_mixin_lit.js';
 import {assert, assertNotReachedCase} from 'chrome://resources/js/assert.js';
@@ -23,8 +25,6 @@ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {Token} from 'chrome://resources/mojo/mojo/public/mojom/base/token.mojom-webui.js';
 
-import type {SearchOptions} from './search.js';
-import {search} from './search.js';
 import type {SelectableLazyListElement} from './selectable_lazy_list.js';
 import {NO_SELECTION, selectorNavigationKeys} from './selectable_lazy_list.js';
 import {ariaLabel, getDisplayHostnameForUrl, getHostname, getTabGroupTitle, getTitle, normalizeURL, SplitViewData, TabData, TabGroupData, TabItemType, tokenEquals, tokenToString} from './tab_data.js';
@@ -50,14 +50,17 @@ export const SEARCH_QUERY_MAX_LENGTH: number = 400;
 
 const TabSearchSearchFieldBase = CrSearchFieldMixinLit(CrLitElement);
 
+// LINT.IfChange(TabSearchTabSwitchAction)
 /**
  * These values are persisted to logs and should not be renumbered or reused.
- * See tools/metrics/histograms/enums.xml.
+ * See tools/metrics/histograms/metadata/tab/enums.xml.
  */
 export enum TabSwitchAction {
   WITHOUT_SEARCH = 0,
   WITH_SEARCH = 1,
+  COUNT = WITH_SEARCH + 1,
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabSearchTabSwitchAction)
 
 // LINT.IfChange(TabSearchUserAction)
 /**
@@ -135,31 +138,32 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
   protected accessor activeDescendantEnabled_: boolean = false;
   protected accessor filteredItems_:
       Array<TitleItem|TabData|TabGroupData|SplitViewData> = [];
-  private accessor searchOptions_: SearchOptions = {
-    includeScore: true,
-    includeMatches: true,
-    ignoreLocation: false,
-    threshold: 0.0,
-    distance: 200,
-    keys:
-        [
-          {
-            name: 'tab.title',
-            getter: getTitle,
-            weight: 2,
-          },
-          {
-            name: 'hostname',
-            getter: getHostname,
-            weight: 1,
-          },
-          {
-            name: 'tabGroup.title',
-            getter: getTabGroupTitle,
-            weight: 1.5,
-          },
-        ],
-  };
+  private accessor searchOptions_:
+      SearchOptions<TabData|TabGroupData|SplitViewData> = {
+        includeScore: true,
+        includeMatches: true,
+        ignoreLocation: false,
+        threshold: 0.0,
+        distance: 200,
+        keys:
+            [
+              {
+                name: 'tab.title',
+                getter: getTitle,
+                weight: 2,
+              },
+              {
+                name: 'hostname',
+                getter: getHostname,
+                weight: 1,
+              },
+              {
+                name: 'tabGroup.title',
+                getter: getTabGroupTitle,
+                weight: 1.5,
+              },
+            ],
+      };
   private accessor recentlyClosedDefaultItemDisplayCount_: number =
       loadTimeData.getValue('recentlyClosedDefaultItemDisplayCount');
   protected accessor searchResultText_: string = '';
@@ -193,7 +197,14 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
       if (document.visibilityState === 'visible') {
         this.windowShownTimestamp_ = Date.now();
         this.activeDescendantEnabled_ = false;
-        this.updateTabs_();
+        if (loadTimeData.getBoolean('tabSearchPerformanceImprovements')) {
+          listenOnce(
+              this.$.tabsList, 'viewport-filled',
+              () => this.apiProxy_.maybeShowUi());
+          this.updateFilteredTabs_();
+        } else {
+          this.updateTabs_();
+        }
       } else {
         this.onDocumentHidden_();
       }
@@ -380,7 +391,7 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
     }
 
     // Check if we need to group any tabs into a new SplitViewData locally.
-    if (loadTimeData.getBoolean('splitViewTabRestoreEnabled') && tab.splitId) {
+    if (tab.splitId) {
       const matchingIndices: number[] = [];
       for (let i = 0; i < this.openTabs_.length; ++i) {
         const item = this.openTabs_[i]!;
@@ -519,7 +530,7 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
           'Tabs.TabSearch.WebUI.TabSwitchAction',
           withSearch ? TabSwitchAction.WITH_SEARCH :
                        TabSwitchAction.WITHOUT_SEARCH,
-          Object.keys(TabSwitchAction).length);
+          TabSwitchAction.COUNT);
     }
 
     switch (action) {
@@ -673,8 +684,7 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
       const nonSplitTabs: Tab[] = [];
 
       for (const tab of window.tabs) {
-        if (loadTimeData.getBoolean('splitViewTabRestoreEnabled') &&
-            tab.splitId) {
+        if (tab.splitId) {
           const splitIdStr = tokenToString(tab.splitId);
           if (!splitTabsMap.has(splitIdStr)) {
             splitTabsMap.set(splitIdStr, []);
@@ -707,20 +717,15 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
     }
     this.openTabs_ = openTabsList;
 
-    const splitViewTabRestoreEnabled =
-        loadTimeData.getBoolean('splitViewTabRestoreEnabled');
-
-    const recentlyClosedSplitViews = splitViewTabRestoreEnabled ?
+    const recentlyClosedSplitViews =
         (profileData.recentlyClosedSplitViews || []).map(splitView => {
           const splitViewData = new SplitViewData({splitView});
           this.updateSplitViewTabGroup_(splitViewData, this.tabGroupsMap_);
           return splitViewData;
-        }) :
-        [];
+        });
 
-    const recentlyClosedTabsFiltered = splitViewTabRestoreEnabled ?
-        profileData.recentlyClosedTabs.filter(tab => !tab.splitId) :
-        profileData.recentlyClosedTabs;
+    const recentlyClosedTabsFiltered =
+        profileData.recentlyClosedTabs.filter(tab => !tab.splitId);
 
     this.recentlyClosedTabs_ = [
       ...recentlyClosedTabsFiltered.map(
@@ -1094,9 +1099,6 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
         Math.round(Date.now() - updateStartTime));
   }
 
-  getSearchTextForTesting(): string {
-    return this.searchText_;
-  }
 
   protected onSelectedChange_(
       e: CustomEvent<
@@ -1107,28 +1109,25 @@ export class TabSearchPageElement extends TabSearchSearchFieldBase {
         undefined;
   }
 
-  protected assertIsTitleItem_(
-      item: TitleItem|TabData|TabGroupData|
-      SplitViewData): asserts item is TitleItem {
-    assert(item instanceof TitleItem);
+  protected isTitleItem_(item: TitleItem|TabData|TabGroupData|SplitViewData):
+      item is TitleItem {
+    return item instanceof TitleItem;
   }
 
-  protected assertIsTabData_(
-      item: TitleItem|TabData|TabGroupData|
-      SplitViewData): asserts item is TabData {
-    assert(item instanceof TabData);
+  protected isTabData_(item: TitleItem|TabData|TabGroupData|SplitViewData):
+      item is TabData {
+    return item instanceof TabData;
   }
 
-  protected assertIsTabGroupData_(
-      item: TitleItem|TabData|TabGroupData|
-      SplitViewData): asserts item is TabGroupData {
-    assert(item instanceof TabGroupData);
+  protected isTabGroupData_(item: TitleItem|TabData|TabGroupData|SplitViewData):
+      item is TabGroupData {
+    return item instanceof TabGroupData;
   }
 
-  protected assertIsSplitViewData_(
+  protected isSplitViewData_(
       item: TitleItem|TabData|TabGroupData|
-      SplitViewData): asserts item is SplitViewData {
-    assert(item instanceof SplitViewData);
+      SplitViewData): item is SplitViewData {
+    return item instanceof SplitViewData;
   }
 }
 

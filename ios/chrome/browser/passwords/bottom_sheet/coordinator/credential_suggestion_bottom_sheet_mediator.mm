@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/credential_suggestion_bottom_sheet_mediator.h"
 
-#import "base/base64.h"
 #import "base/feature_list.h"
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
@@ -19,6 +18,7 @@
 #import "components/feature_engagement/public/tracker.h"
 #import "components/image_fetcher/core/image_fetcher_impl.h"
 #import "components/image_fetcher/ios/ios_image_decoder_impl.h"
+#import "components/password_manager/core/browser/passkey_credential.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_manager.h"
 #import "components/password_manager/core/browser/password_manager_client.h"
@@ -84,8 +84,8 @@ FormSuggestionProviderQuery* MakeQueryFromParameters(
         formRendererID:params.form_renderer_id
        fieldIdentifier:base::SysUTF8ToNSString(params.field_identifier)
        fieldRendererID:params.field_renderer_id
-             fieldType:base::SysUTF8ToNSString(params.field_type)
-                  type:base::SysUTF8ToNSString(params.type)
+             fieldType:params.field_type
+                  type:params.type
             typedValue:base::SysUTF8ToNSString(params.value)
                frameID:base::SysUTF8ToNSString(params.frame_id)
           onlyPassword:YES];
@@ -147,25 +147,10 @@ NSMutableSet<NSString*>* GetPasskeyUsernames(
     NSArray<FormSuggestion*>* suggestions) {
   NSMutableSet<NSString*>* passkeyUsernames = [NSMutableSet set];
   for (FormSuggestion* suggestion in suggestions) {
-    if (suggestion.type == autofill::SuggestionType::kWebauthnCredential) {
-      std::string encodedId =
-          webauthn::GetPasskeySuggestionEncodedCredentialId(suggestion);
-      std::string decodedIdString;
-      if (base::Base64Decode(encodedId, &decodedIdString)) {
-        std::vector<uint8_t> decodedId(decodedIdString.begin(),
-                                       decodedIdString.end());
-        auto it = std::ranges::find_if(
-            passkeys,
-            [&decodedId](const password_manager::PasskeyCredential& passkey) {
-              return passkey.credential_id() == decodedId;
-            });
-        if (it != passkeys.end()) {
-          NSString* username = base::SysUTF8ToNSString(it->username());
-          if (username.length) {
-            [passkeyUsernames addObject:[username lowercaseString]];
-          }
-        }
-      }
+    NSString* passkeyUsername =
+        webauthn::GetPasskeyUsernameForSuggestion(suggestion, passkeys);
+    if (passkeyUsername.length) {
+      [passkeyUsernames addObject:[passkeyUsername lowercaseString]];
     }
   }
   return passkeyUsernames;
@@ -175,20 +160,12 @@ NSMutableSet<NSString*>* GetPasskeyUsernames(
 // password suggestion and a passkey suggestion for the same username.
 NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
     NSArray<FormSuggestion*>* suggestions,
-    web::WebState* webState,
-    const std::string& frameId) {
-  if (!webState) {
+    webauthn::IOSWebAuthnCredentialsDelegate* delegate) {
+  if (!delegate) {
     return suggestions;
   }
 
   if (!ContainsPasswordsAndPasskeys(suggestions)) {
-    return suggestions;
-  }
-
-  webauthn::IOSWebAuthnCredentialsDelegate* delegate =
-      webauthn::IOSWebAuthnCredentialsDelegateFactory::GetFactory(webState)
-          ->GetDelegateForFrameId(frameId);
-  if (!delegate) {
     return suggestions;
   }
 
@@ -354,18 +331,12 @@ NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
 // Default globe favicon when no favicon is available.
 @property(nonatomic, readonly) FaviconAttributes* defaultGlobeIconAttributes;
 
-// Logs the SubmissionReadiness metric when suggestions are successfully loaded.
-- (void)logSubmissionReadinessMetrics:(NSArray<FormSuggestion*>*)suggestions;
-
 @end
 
 @implementation CredentialSuggestionBottomSheetMediator {
   // The interfaces for getting and manipulating a user's saved passwords.
   scoped_refptr<password_manager::PasswordStoreInterface> _profilePasswordStore;
   scoped_refptr<password_manager::PasswordStoreInterface> _accountPasswordStore;
-
-  // Vector of credentials related to the current page.
-  std::vector<password_manager::CredentialUIEntry> _credentials;
 
   // Vector of credentials that have been received via the password sharing
   // feature and the user has not been notified about them yet.
@@ -446,56 +417,27 @@ NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
       // is called, so we need to store variables used in the completion block
       // locally.
       autofill::FormRendererId formId = params.form_renderer_id;
-      std::string frameId = params.frame_id;
+
+      webauthn::IOSWebAuthnCredentialsDelegate* delegate =
+          webauthn::IOSWebAuthnCredentialsDelegateFactory::GetFactory(
+              activeWebState)
+              ->GetDelegateForFrameId(params.frame_id);
+      self.webAuthnCredentialsDelegate =
+          delegate ? delegate->GetWeakPtr() : nullptr;
+
       __weak __typeof(self) weakSelf = self;
-      base::WeakPtr<web::WebState> weakWebState = activeWebState->GetWeakPtr();
       [_suggestionsProviderWrapper
           retrieveSuggestionsForForm:params
                             webState:activeWebState
                           completion:^(NSArray<FormSuggestion*>* suggestions) {
-                            web::WebState* webState = weakWebState.get();
-                            if (!webState) {
-                              return;
-                            }
-                            NSArray<FormSuggestion*>* filteredSuggestions =
-                                FilterDuplicateSuggestions(suggestions,
-                                                           webState, frameId);
-                            weakSelf.suggestions = filteredSuggestions;
-                            [weakSelf logSubmissionReadinessMetrics:
-                                          filteredSuggestions];
-                            [weakSelf fetchCredentialsForForm:formId
-                                                     webState:webState];
+                            [weakSelf suggestionsReceived:suggestions
+                                                   formId:formId];
                           }];
     }
 
     _engagementTracker = engagementTracker;
   }
   return self;
-}
-
-- (std::optional<password_manager::CredentialUIEntry>)
-    getCredentialForFormSuggestion:(FormSuggestion*)formSuggestion {
-  NSString* username = formSuggestion.value;
-  auto it = std::ranges::find_if(
-      _credentials,
-      [username](const password_manager::CredentialUIEntry& credential) {
-        CHECK(!credential.facets.empty());
-        for (auto facet : credential.facets) {
-          if ([base::SysUTF16ToNSString(credential.username)
-                  isEqualToString:username]) {
-            return true;
-          }
-        }
-        return false;
-      });
-  return it != _credentials.end()
-             ? std::optional<password_manager::CredentialUIEntry>(*it)
-             : std::nullopt;
-}
-
-- (void)setCredentialsForTesting:
-    (std::vector<password_manager::CredentialUIEntry>)credentials {
-  _credentials = credentials;
 }
 
 #pragma mark - CredentialSuggestionBottomSheetMediatorBase
@@ -524,31 +466,8 @@ NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
                                      self.suggestions.firstObject))
        secondaryActionString:l10n_util::GetNSString(
                                  IDS_IOS_CREDENTIAL_BOTTOM_SHEET_USE_KEYBOARD)
-        secondaryActionImage:DefaultSymbolWithPointSize(
-                                 kKeyboardSymbol, kSymbolActionPointSize)];
-}
-
-- (void)logSubmissionReadinessMetrics:(NSArray<FormSuggestion*>*)suggestions {
-  if (suggestions.count > 0) {
-    // Log submission readiness only when the bottom sheet is actually shown to
-    // the user (which is confirmed by suggestions being successfully loaded and
-    // passed to the consumer). Logging this earlier (e.g., during form
-    // analysis) would skew metrics with forms where the bottom sheet was never
-    // presented.
-    password_manager::SubmissionReadinessState readiness =
-        suggestions.firstObject.metadata.submission_readiness;
-    base::UmaHistogramEnumeration(
-        "PasswordManager.TouchToFill.SubmissionReadiness", readiness);
-
-    web::WebState* activeWebState = [self activeWebState];
-    if (activeWebState) {
-      ukm::SourceId source_id =
-          ukm::GetSourceIdForWebStateDocument(activeWebState);
-      ukm::builders::TouchToFill_SubmissionReadiness(source_id)
-          .SetSubmissionReadiness(static_cast<int64_t>(readiness))
-          .Record(ukm::UkmRecorder::Get());
-    }
-  }
+        secondaryActionImage:SymbolWithPointSize(SymbolKeyboard,
+                                                 kSymbolActionPointSize)];
 }
 
 - (void)disconnect {
@@ -648,6 +567,46 @@ NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
 
 #pragma mark - Private
 
+// Handles when suggestions are successfully retrieved.
+- (void)suggestionsReceived:(NSArray<FormSuggestion*>*)suggestions
+                     formId:(autofill::FormRendererId)formId {
+  web::WebState* webState = [self activeWebState];
+  if (!webState) {
+    return;
+  }
+  webauthn::IOSWebAuthnCredentialsDelegate* delegate =
+      self.webAuthnCredentialsDelegate.get();
+  NSArray<FormSuggestion*>* filteredSuggestions =
+      FilterDuplicateSuggestions(suggestions, delegate);
+  self.suggestions = filteredSuggestions;
+  [self logSubmissionReadinessMetrics:filteredSuggestions];
+  [self fetchCredentialsForForm:formId webState:webState];
+}
+
+// Logs the SubmissionReadiness metric when suggestions are successfully loaded.
+- (void)logSubmissionReadinessMetrics:(NSArray<FormSuggestion*>*)suggestions {
+  if (suggestions.count > 0) {
+    // Log submission readiness only when the bottom sheet is actually shown to
+    // the user (which is confirmed by suggestions being successfully loaded and
+    // passed to the consumer). Logging this earlier (e.g., during form
+    // analysis) would skew metrics with forms where the bottom sheet was never
+    // presented.
+    password_manager::SubmissionReadinessState readiness =
+        suggestions.firstObject.metadata.submission_readiness;
+    base::UmaHistogramEnumeration(
+        "PasswordManager.TouchToFill.SubmissionReadiness", readiness);
+
+    web::WebState* activeWebState = [self activeWebState];
+    if (activeWebState) {
+      ukm::SourceId source_id =
+          ukm::GetSourceIdForWebStateDocument(activeWebState);
+      ukm::builders::TouchToFill_SubmissionReadiness(source_id)
+          .SetSubmissionReadiness(static_cast<int64_t>(readiness))
+          .Record(ukm::UkmRecorder::Get());
+    }
+  }
+}
+
 // Returns the active web state, if any.
 - (web::WebState*)activeWebState {
   return self.webStateList ? self.webStateList->GetActiveWebState() : nullptr;
@@ -678,11 +637,13 @@ NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
 // Fetches all credentials for the current form.
 - (void)fetchCredentialsForForm:(autofill::FormRendererId)formId
                        webState:(web::WebState*)webState {
-  _credentials.clear();
+  [self clearCredentials];
 
   if (![self hasSuggestions]) {
     return;
   }
+
+  [self fetchPasskeyCredentials];
 
   password_manager::PasswordManager* passwordManager =
       GetPasswordManager(webState);
@@ -723,8 +684,8 @@ NSArray<FormSuggestion*>* FilterDuplicateSuggestions(
           }),
           params);
     }
-    _credentials.push_back(password_manager::CredentialUIEntry(
-        password_manager::CloneStoredCredential(cred)));
+    [self addCredential:password_manager::CredentialUIEntry(
+                            password_manager::CloneStoredCredential(cred))];
   }
 }
 

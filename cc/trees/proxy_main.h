@@ -87,6 +87,9 @@ class CC_EXPORT ProxyMain : public Proxy {
   void SetUnboundedFrameSink(
       std::unique_ptr<LayerTreeFrameSink> unbounded_frame_sink,
       const viz::LocalSurfaceId& local_surface_id) override;
+  void SetUnboundedFrameSinkId(
+      const viz::FrameSinkId& frame_sink_id,
+      const viz::LocalSurfaceId& local_surface_id) override;
   void DismissUnboundedFrameSink() override;
   void SetUnboundedLocalSurfaceId(
       const viz::LocalSurfaceId& local_surface_id) override;
@@ -103,6 +106,14 @@ class CC_EXPORT ProxyMain : public Proxy {
   bool has_sent_urgent_commit_request() const {
     return has_sent_urgent_commit_request_;
   }
+  bool has_sent_unthrottled_commit_request() const {
+    return has_sent_unthrottled_commit_request_;
+  }
+  void set_consecutive_no_damage_main_frames_for_testing(int count) {
+    consecutive_no_damage_main_frames_ = count;
+  }
+
+  ProxyImpl* proxy_impl_for_testing() const { return proxy_impl_.get(); }
 
  private:
   // Proxy implementation.
@@ -117,6 +128,7 @@ class CC_EXPORT ProxyMain : public Proxy {
   void SetNeedsRedraw(const gfx::Rect& damage_rect) override;
   void SetTargetLocalSurfaceId(
       const viz::LocalSurfaceId& target_local_surface_id) override;
+  void SetMemoryPolicy(const ManagedMemoryPolicy& policy) override;
   void DetachInputDelegateAndRenderFrameObserver() override;
   bool RequestedAnimatePending() override;
   void SetDeferMainFrameUpdate(bool defer_main_frame_update) override;
@@ -159,7 +171,7 @@ class CC_EXPORT ProxyMain : public Proxy {
 
   // Returns |true| if the request was actually sent, |false| if one was
   // already outstanding.
-  bool SendCommitRequestToImplThreadIfNeeded(BeginMainFrameReason reason,
+  bool SendCommitRequestToImplThreadIfNeeded(BeginMainFrameReasons reason,
                                              CommitPipelineStage required_stage,
                                              bool urgent);
   // Indicates whether the main thread needs a BeginMainFrame callback in order
@@ -182,10 +194,6 @@ class CC_EXPORT ProxyMain : public Proxy {
   // notifications. This is different from BeginFrameNeeded() for cases where we
   // temporarily stop drawing.
   bool ShouldSubscribeToBeginFrames() const;
-
-  void set_begin_main_frame_reason(const BeginMainFrameReason reason) {
-    begin_main_frame_reason_.set(static_cast<int>(reason));
-  }
 
   bool IsEmbeddedFrame() const;
 
@@ -212,6 +220,9 @@ class CC_EXPORT ProxyMain : public Proxy {
   // request, then get an "urgent" request later, we should inform impl that the
   // request became urgent.
   bool has_sent_urgent_commit_request_ = false;
+  // As with "urgent" requests, if we get an "unthrottled" request later, we
+  // need to inform impl.
+  bool has_sent_unthrottled_commit_request_ = false;
 
   // Set when the Proxy is started using Proxy::Start() and reset when it is
   // stopped using Proxy::Stop().
@@ -242,6 +253,7 @@ class CC_EXPORT ProxyMain : public Proxy {
   int main_frames_in_flight_ = 0;
   bool needs_begin_main_frame_ = false;
   BeginMainFrameReasons begin_main_frame_reason_;
+  int consecutive_no_damage_main_frames_ = 0;
   viz::BeginFrameArgs last_begin_main_frame_args_;
   bool begin_impl_frame_idle_ = false;
   bool request_begin_main_frame_not_expected_ = false;

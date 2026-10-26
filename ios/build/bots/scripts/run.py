@@ -11,8 +11,7 @@ Sample usage:
   -o /tmp/out \
   -p "iPhone 5s" \
   -v 9.3 \
-  -b 9b46 \
-  -i /path/to/Release-iphoneos/iossim
+  -b 9b46
 
 Installs base_unittests.app in an iPhone 5s simulator running iOS 9.3 under
 Xcode build version 9b46, runs it, and captures all test data in /tmp/out.
@@ -31,7 +30,7 @@ import traceback
 
 import constants
 import iossim_util
-import mac_util
+import mac_util  # noqa: F401
 import shard_util
 import test_runner
 import test_runner_errors
@@ -41,21 +40,24 @@ import xcode_util as xcode
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 CHROMIUM_SRC_DIR = os.path.abspath(os.path.join(THIS_DIR, '../../../..'))
-sys.path.extend([
+sys.path.extend(
+  [
     os.path.abspath(os.path.join(CHROMIUM_SRC_DIR, 'build/util/lib/proto')),
-    os.path.abspath(os.path.join(CHROMIUM_SRC_DIR, 'build/util/'))
-])
-import measures
-import exception_recorder
+    os.path.abspath(os.path.join(CHROMIUM_SRC_DIR, 'build/util/')),
+  ]
+)
+import measures  # noqa: E402
+import exception_recorder  # noqa: E402
 
-from result_sink_util import ResultSinkClient
+from result_sink_util import ResultSinkClient  # noqa: E402
 
 # if the current directory is in scripts, then we need to add plugin
 # path in order to import from that directory
 if os.path.split(os.path.dirname(__file__))[1] != 'plugin':
   sys.path.append(
-      os.path.join(os.path.abspath(os.path.dirname(__file__)), 'plugin'))
-from plugin_constants import VIDEO_RECORDER_PLUGIN_OPTIONS
+    os.path.join(os.path.abspath(os.path.dirname(__file__)), 'plugin')
+  )
+from plugin_constants import VIDEO_RECORDER_PLUGIN_OPTIONS  # noqa: E402
 
 
 def format_exception_step_text(e: Exception) -> str:
@@ -66,7 +68,55 @@ def use_xcodebuild_runner(args):
   return args.xcodebuild_sim_runner or args.xcodebuild_device_runner
 
 
-class Runner():
+def _benchmark_test_results(test_results, benchmark):
+  """Returns |test_results| with its tests nested under |benchmark|.
+
+  process_perf_results.py merges the test_results.json of every benchmark
+  folder, and fails on tests that appear in more than one. The suite's
+  results can't be attributed to individual benchmarks, so each folder
+  gets a copy namespaced by its benchmark name.
+  """
+  results = dict(test_results)
+  tests = test_results.get('tests')
+  if tests:
+    results['tests'] = {benchmark: tests}
+  return results
+
+
+def write_perf_json_results(
+  out_dir, test_results, benchmark_name, perf_output_path
+):
+  """Writes side-by-side test_results.json and copies perf output."""
+  perf_json_paths = []
+  if os.path.isdir(out_dir):
+    sub_perf_pattern = os.path.join(out_dir, '*', 'perf_results.json')
+    for entry_perf in sorted(glob.glob(sub_perf_pattern)):
+      entry_dir = os.path.dirname(entry_perf)
+      with open(os.path.join(entry_dir, 'test_results.json'), 'w') as f:
+        json.dump(
+          _benchmark_test_results(test_results, os.path.basename(entry_dir)),
+          f,
+        )
+      perf_json_paths.append(entry_perf)
+
+  src_perf_json = os.path.join(out_dir, 'perf_results.json')
+  if os.path.exists(src_perf_json):
+    perf_json_paths.insert(0, src_perf_json)
+    if benchmark_name:
+      benchmark_dir = os.path.join(out_dir, benchmark_name)
+      os.makedirs(benchmark_dir, exist_ok=True)
+      with open(os.path.join(benchmark_dir, 'test_results.json'), 'w') as f:
+        json.dump(_benchmark_test_results(test_results, benchmark_name), f)
+      shutil.copyfile(
+        src_perf_json, os.path.join(benchmark_dir, 'perf_results.json')
+      )
+
+  if perf_output_path and perf_json_paths:
+    if os.path.abspath(perf_json_paths[0]) != os.path.abspath(perf_output_path):
+      shutil.copyfile(perf_json_paths[0], perf_output_path)
+
+
+class Runner:
   """
   Object to encapsulate iOS test runner execution coordination. Parses
   arguments and invokes underlying test runners accordingly.
@@ -90,14 +140,17 @@ class Runner():
     """Returns env_var arg with GTest sharding env var."""
     gtest_total_shards = shard_util.gtest_total_shards()
     if gtest_total_shards > 1:
-      assert not any((el.startswith('GTEST_SHARD_INDEX') or
-                      el.startswith('GTEST_TOTAL_SHARDS'))
-                     for el in self.args.env_var
-                    ), 'GTest shard env vars should not be passed in --env-var'
+      assert not any(
+        (
+          el.startswith('GTEST_SHARD_INDEX')
+          or el.startswith('GTEST_TOTAL_SHARDS')
+        )
+        for el in self.args.env_var
+      ), 'GTest shard env vars should not be passed in --env-var'
       gtest_shard_index = shard_util.gtest_shard_index()
       return [
-          'GTEST_SHARD_INDEX=%d' % gtest_shard_index,
-          'GTEST_TOTAL_SHARDS=%d' % gtest_total_shards
+        'GTEST_SHARD_INDEX=%d' % gtest_shard_index,
+        'GTEST_TOTAL_SHARDS=%d' % gtest_total_shards,
       ]
     return []
 
@@ -112,22 +165,26 @@ class Runner():
     # If xcode already exists in /Applications, then use that instead of
     # trying to cache another xcode in the work directory
     if xcode.check_xcode_exists_in_apps(self.args.xcode_build_version.lower()):
-      self.args.xcode_path = ("/Applications/"
-                              f"xcode_{self.args.xcode_build_version.lower()}"
-                              ".app")
+      self.args.xcode_path = (
+        f"/Applications/xcode_{self.args.xcode_build_version.lower()}.app"
+      )
 
     try:
-      with measures.time_consumption('mac_toolchain', 'Download and Install',
-                                     'Xcode and Runtime'):
-        install_success = xcode.install_xcode(self.args.mac_toolchain_cmd,
-                                              self.args.xcode_build_version,
-                                              self.args.xcode_path,
-                                              self.args.runtime_cache_prefix,
-                                              self.args.platform,
-                                              self.args.version)
+      with measures.time_consumption(
+        'mac_toolchain', 'Download and Install', 'Xcode and Runtime'
+      ):
+        install_success = xcode.install_xcode(
+          self.args.mac_toolchain_cmd,
+          self.args.xcode_build_version,
+          self.args.xcode_path,
+          self.args.runtime_cache_prefix,
+          self.args.platform,
+          self.args.version,
+        )
       if not install_success:
         raise test_runner_errors.XcodeInstallFailedError(
-            self.args.xcode_build_version)
+          self.args.xcode_build_version
+        )
 
       # Sharding env var is required to shard GTest.
       env_vars = self.args.env_var + self.sharding_env_vars()
@@ -139,88 +196,91 @@ class Runner():
 
       if self.args.xcodebuild_sim_runner:
         tr = xcodebuild_runner.SimulatorParallelTestRunner(
-            self.args.app,
-            self.args.host_app,
-            self.args.iossim,
-            self.args.version,
-            self.args.platform,
-            out_dir=self.args.out_dir,
-            readline_timeout=self.args.readline_timeout,
-            release=self.args.release,
-            repeat_count=self.args.repeat,
-            retries=self.args.retries,
-            clones=self.args.clones,
-            test_cases=self.args.test_cases,
-            test_args=self.test_args,
-            use_clang_coverage=self.args.use_clang_coverage,
-            env_vars=env_vars,
-            record_video_option=self.args.record_video,
-            output_disabled_tests=self.args.output_disabled_tests,
-            use_simulator_cache=self.args.use_simulator_cache,
+          self.args.app,
+          self.args.host_app,
+          self.args.version,
+          self.args.platform,
+          out_dir=self.args.out_dir,
+          readline_timeout=self.args.readline_timeout,
+          release=self.args.release,
+          repeat_count=self.args.repeat,
+          retries=self.args.retries,
+          clones=self.args.clones,
+          test_cases=self.args.test_cases,
+          test_args=self.test_args,
+          use_clang_coverage=self.args.use_clang_coverage,
+          env_vars=env_vars,
+          record_video_option=self.args.record_video,
+          output_disabled_tests=self.args.output_disabled_tests,
+          use_simulator_cache=self.args.use_simulator_cache,
+          skip_enumerate_tests=self.args.skip_enumerate_tests,
+          benchmark_name=self.args.benchmark_name,
         )
       elif self.args.variations_seed_path != 'NO_PATH':
         tr = variations_runner.VariationsSimulatorParallelTestRunner(
-            self.args.app,
-            self.args.host_app,
-            self.args.iossim,
-            self.args.version,
-            self.args.platform,
-            self.args.out_dir,
-            self.args.variations_seed_path,
-            readline_timeout=self.args.readline_timeout,
-            release=self.args.release,
-            test_cases=self.args.test_cases,
-            test_args=self.test_args,
-            env_vars=env_vars,
-            use_simulator_cache=self.args.use_simulator_cache,
+          self.args.app,
+          self.args.host_app,
+          self.args.version,
+          self.args.platform,
+          self.args.out_dir,
+          self.args.variations_seed_path,
+          readline_timeout=self.args.readline_timeout,
+          release=self.args.release,
+          test_cases=self.args.test_cases,
+          test_args=self.test_args,
+          env_vars=env_vars,
+          use_simulator_cache=self.args.use_simulator_cache,
+          skip_enumerate_tests=self.args.skip_enumerate_tests,
+          benchmark_name=self.args.benchmark_name,
         )
-      elif self.args.iossim and self.args.platform and self.args.version:
+      elif self.args.platform and self.args.version:
         tr = test_runner.SimulatorTestRunner(
-            self.args.app,
-            self.args.iossim,
-            self.args.platform,
-            self.args.version,
-            self.args.out_dir,
-            env_vars=env_vars,
-            readline_timeout=self.args.readline_timeout,
-            repeat_count=self.args.repeat,
-            retries=self.args.retries,
-            clones=self.args.clones,
-            test_args=self.test_args,
-            test_cases=self.args.test_cases,
-            use_clang_coverage=self.args.use_clang_coverage,
-            xctest=self.args.xctest,
-            output_disabled_tests=self.args.output_disabled_tests,
-            use_simulator_cache=self.args.use_simulator_cache,
+          self.args.app,
+          self.args.platform,
+          self.args.version,
+          self.args.out_dir,
+          env_vars=env_vars,
+          readline_timeout=self.args.readline_timeout,
+          repeat_count=self.args.repeat,
+          retries=self.args.retries,
+          clones=self.args.clones,
+          test_args=self.test_args,
+          test_cases=self.args.test_cases,
+          use_clang_coverage=self.args.use_clang_coverage,
+          xctest=self.args.xctest,
+          output_disabled_tests=self.args.output_disabled_tests,
+          use_simulator_cache=self.args.use_simulator_cache,
         )
       elif self.args.xcodebuild_device_runner and self.args.xctest:
         tr = xcodebuild_runner.DeviceXcodeTestRunner(
-            app_path=self.args.app,
-            host_app_path=self.args.host_app,
-            out_dir=self.args.out_dir,
-            readline_timeout=self.args.readline_timeout,
-            release=self.args.release,
-            repeat_count=self.args.repeat,
-            retries=self.args.retries,
-            test_cases=self.args.test_cases,
-            test_args=self.test_args,
-            env_vars=env_vars,
-            record_video_option=self.args.record_video,
-            output_disabled_tests=self.args.output_disabled_tests,
+          app_path=self.args.app,
+          host_app_path=self.args.host_app,
+          out_dir=self.args.out_dir,
+          readline_timeout=self.args.readline_timeout,
+          release=self.args.release,
+          repeat_count=self.args.repeat,
+          retries=self.args.retries,
+          test_cases=self.args.test_cases,
+          test_args=self.test_args,
+          env_vars=env_vars,
+          record_video_option=self.args.record_video,
+          output_disabled_tests=self.args.output_disabled_tests,
+          skip_enumerate_tests=self.args.skip_enumerate_tests,
+          benchmark_name=self.args.benchmark_name,
         )
       else:
         tr = test_runner.DeviceTestRunner(
-            self.args.app,
-            self.args.out_dir,
-            env_vars=env_vars,
-            readline_timeout=self.args.readline_timeout,
-            repeat_count=self.args.repeat,
-            restart=self.args.restart,
-            retries=self.args.retries,
-            test_args=self.test_args,
-            test_cases=self.args.test_cases,
-            xctest=self.args.xctest,
-            output_disabled_tests=self.args.output_disabled_tests,
+          self.args.app,
+          self.args.out_dir,
+          env_vars=env_vars,
+          readline_timeout=self.args.readline_timeout,
+          repeat_count=self.args.repeat,
+          restart=self.args.restart,
+          retries=self.args.retries,
+          test_args=self.test_args,
+          test_cases=self.args.test_cases,
+          xctest=self.args.xctest,
+          output_disabled_tests=self.args.output_disabled_tests,
         )
 
       logging.info("Using test runner %s" % type(tr).__name__)
@@ -239,9 +299,11 @@ class Runner():
       # on exception to distinguish between a test failure, and a failure
       # to launch the test at all.
       exception_recorder.register(e)
-      if isinstance(e, test_runner_errors.XcodeInstallFailedError
-                   ) and not xcode.check_xcode_exists_in_apps(
-                       self.args.xcode_build_version.lower()):
+      if isinstance(
+        e, test_runner_errors.XcodeInstallFailedError
+      ) and not xcode.check_xcode_exists_in_apps(
+        self.args.xcode_build_version.lower()
+      ):
         self.should_delete_xcode_cache = True
       return 2
     finally:
@@ -253,8 +315,10 @@ class Runner():
 
       is_eg_test = use_xcodebuild_runner(self.args)
       test_results = (
-          tr.test_results
-          if tr else test_runner.init_test_result_defaults(is_eg_test))
+        tr.test_results
+        if tr
+        else test_runner.init_test_result_defaults(is_eg_test)
+      )
 
       with open(os.path.join(self.args.out_dir, 'full_results.json'), 'w') as f:
         json.dump(test_results, f)
@@ -268,17 +332,28 @@ class Runner():
       # but will require structural changes to support the default gtest
       # merge script (ref: //testing/merge_scripts/standard_gtest_merge.py)
       output_json_path = (
-          self.args.test_launcher_summary_output or
-          os.path.join(self.args.out_dir, 'output.json'))
+        self.args.test_launcher_summary_output
+        or self.args.isolated_script_test_output
+        or os.path.join(self.args.out_dir, 'output.json')
+      )
       with open(output_json_path, 'w') as f:
         json.dump(test_results, f)
 
+      write_perf_json_results(
+        self.args.out_dir,
+        test_results,
+        self.args.benchmark_name,
+        self.args.isolated_script_test_perf_output,
+      )
+
       if self.should_delete_xcode_cache and os.path.exists(
-          self.args.xcode_path):
+        self.args.xcode_path
+      ):
         shutil.rmtree(self.args.xcode_path)
 
-      test_runner.defaults_delete('com.apple.CoreSimulator',
-                                  'FramebufferServerRendererPolicy')
+      test_runner.defaults_delete(
+        'com.apple.CoreSimulator', 'FramebufferServerRendererPolicy'
+      )
 
       if exception_recorder.size() > 0 or measures.size() > 0:
         result_sink_client = ResultSinkClient()
@@ -293,227 +368,262 @@ class Runner():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        '-a',
-        '--app',
-        help='Compiled .app to run for EG1, Compiled -Runner.app for EG2',
-        metavar='app',
+      '-a',
+      '--app',
+      help='Compiled .app to run for EG1, Compiled -Runner.app for EG2',
+      metavar='app',
     )
     parser.add_argument(
-        '-b',
-        '--xcode-build-version',
-        help='Xcode build version to install.',
-        metavar='build_id',
+      '-b',
+      '--xcode-build-version',
+      help='Xcode build version to install.',
+      metavar='build_id',
     )
     parser.add_argument(
-        '-c',
-        '--clones',
-        help='Number of iOS simulator clones to split test cases across',
-        metavar='n',
-        type=int,
-        default=1,
+      '-c',
+      '--clones',
+      help='Number of iOS simulator clones to split test cases across',
+      metavar='n',
+      type=int,
+      default=1,
     )
     parser.add_argument(
-        '-e',
-        '--env-var',
-        action='append',
-        help='Environment variable to pass to the test itself.',
-        metavar='ENV=val',
+      '-e',
+      '--env-var',
+      action='append',
+      help='Environment variable to pass to the test itself.',
+      metavar='ENV=val',
     )
     parser.add_argument(
-        '--gtest_filter',
-        help='List of test names to run. Expected to be in GTest filter format,'
-        'which should be a colon delimited list. Note: Specifying test cases '
-        'is not supported in multiple swarming shards environment. Will be '
-        'merged with tests specified in --test-cases, --args-json and '
-        '--isolated-script-test-filter.',
-        metavar='gtest_filter',
+      '--gtest_filter',
+      help='List of test names to run. Expected to be in GTest filter format,'
+      'which should be a colon delimited list. Note: Specifying test cases '
+      'is not supported in multiple swarming shards environment. Will be '
+      'merged with tests specified in --test-cases, --args-json and '
+      '--isolated-script-test-filter.',
+      metavar='gtest_filter',
     )
     parser.add_argument(
-        '--isolated-script-test-filter',
-        help='A double-colon-separated ("::") list of test names to run. '
-        'Note: Specifying test cases is not supported in multiple swarming '
-        'shards environment. Will be merged with tests specified in '
-        '--test-cases, --args-json and --gtest_filter.',
-        metavar='isolated_test_filter',
+      '--isolated-script-test-filter',
+      help='A double-colon-separated ("::") list of test names to run. '
+      'Note: Specifying test cases is not supported in multiple swarming '
+      'shards environment. Will be merged with tests specified in '
+      '--test-cases, --args-json and --gtest_filter.',
+      metavar='isolated_test_filter',
     )
     parser.add_argument(
-        '--gtest_repeat',
-        '--isolated-script-test-repeat',
-        help='Number of times to repeat each test case.',
-        metavar='repeat',
-        dest='repeat',
-        type=int,
+      '--gtest_repeat',
+      '--isolated-script-test-repeat',
+      help='Number of times to repeat each test case.',
+      metavar='repeat',
+      dest='repeat',
+      type=int,
     )
     parser.add_argument(
-        '--host-app',
-        help='Compiled host .app to run.',
-        default='NO_PATH',
-        metavar='host_app',
+      '--host-app',
+      help='Compiled host .app to run.',
+      default='NO_PATH',
+      metavar='host_app',
     )
     parser.add_argument(
-        '-i',
-        '--iossim',
-        help='Compiled iossim to run the app on.',
-        metavar='iossim',
+      '-i',
+      '--iossim',
+      help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        '-j',
-        '--args-json',
-        default='{}',
-        help=
-        'Specify "env_var": [...] and "test_args": [...] using a JSON dict.',
-        metavar='{}',
+      '-j',
+      '--args-json',
+      default='{}',
+      help='Specify "env_var": [...] and "test_args": [...] using a JSON dict.',
+      metavar='{}',
     )
     parser.add_argument(
-        '--mac-toolchain-cmd',
-        help='Command to run mac_toolchain tool. Default: %(default)s.',
-        default='mac_toolchain',
-        metavar='mac_toolchain',
+      '--mac-toolchain-cmd',
+      help='Command to run mac_toolchain tool. Default: %(default)s.',
+      default='mac_toolchain',
+      metavar='mac_toolchain',
     )
     parser.add_argument(
-        '-o',
-        '--out-dir',
-        help='Directory to store all test data in.',
-        type=os.path.normpath,
-        metavar='dir',
-        required=True,
+      '-o',
+      '--out-dir',
+      help='Directory to store all test data in.',
+      type=os.path.normpath,
+      metavar='dir',
+      required=True,
     )
     parser.add_argument(
-        '-p',
-        '--platform',
-        help='Platform to simulate.',
-        metavar='sim',
+      '-p',
+      '--platform',
+      help='Platform to simulate.',
+      metavar='sim',
     )
     parser.add_argument(
-        '--readline-timeout',
-        help='Timeout to kill a test process when it doesn\'t'
-        'have output (in seconds).',
-        metavar='n',
-        type=int,
-        default=constants.READLINE_TIMEOUT,
+      '--readline-timeout',
+      help='Timeout to kill a test process when it doesn\'t'
+      'have output (in seconds).',
+      metavar='n',
+      type=int,
+      default=constants.READLINE_TIMEOUT,
     )
-    #TODO(crbug.com/40120509): Implement this arg in infra.
+    # TODO(crbug.com/40120509): Implement this arg in infra.
     parser.add_argument(
-        '--release',
-        help='Indicates if this is a release build.',
-        action='store_true',
-    )
-    parser.add_argument(
-        '--replay-path',
-        help=('Path to a directory containing WPR replay and recipe files, for '
-              'use with WprProxySimulatorTestRunner to replay a test suite '
-              'against multiple saved website interactions. '
-              'Default: %(default)s'),
-        default='NO_PATH',
-        metavar='replay-path',
+      '--release',
+      help='Indicates if this is a release build.',
+      action='store_true',
     )
     parser.add_argument(
-        '--restart',
-        action='store_true',
-        help=argparse.SUPPRESS,
+      '--replay-path',
+      help=(
+        'Path to a directory containing WPR replay and recipe files, for '
+        'use with WprProxySimulatorTestRunner to replay a test suite '
+        'against multiple saved website interactions. '
+        'Default: %(default)s'
+      ),
+      default='NO_PATH',
+      metavar='replay-path',
     )
     parser.add_argument(
-        '-r',
-        '--retries',
-        help=('Number of times to retry failed test cases. Note: This will be '
-              'overwritten as 0 if test repeat argument value > 1.'),
-        metavar='n',
-        type=int,
+      '--restart',
+      action='store_true',
+      help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        '--runtime-cache-prefix',
-        metavar='PATH',
-        help=(
-            'Path prefix for runtime cache folder. The prefix will be appended '
-            'with iOS version to construct the path. iOS simulator will be '
-            'installed to the path and further copied into Xcode. Default: '
-            '%(default)s. WARNING: this folder will be overwritten! This '
-            'folder is intended to be a cached CIPD installation.'),
-        default='Runtime-ios-',
+      '-r',
+      '--retries',
+      help=(
+        'Number of times to retry failed test cases. Note: This will be '
+        'overwritten as 0 if test repeat argument value > 1.'
+      ),
+      metavar='n',
+      type=int,
     )
     parser.add_argument(
-        '-t',
-        '--test-cases',
-        action='append',
-        help=('Tests that should be included in the test run. All other tests '
-              'will be excluded from this run. If unspecified, run all tests. '
-              'Note: Specifying test cases is not supported in multiple '
-              'swarming shards environment. Will be merged with tests '
-              'specified in --gtest_filter and --args-json.'),
-        metavar='testcase',
+      '--runtime-cache-prefix',
+      metavar='PATH',
+      help=(
+        'Path prefix for runtime cache folder. The prefix will be appended '
+        'with iOS version to construct the path. iOS simulator will be '
+        'installed to the path and further copied into Xcode. Default: '
+        '%(default)s. WARNING: this folder will be overwritten! This '
+        'folder is intended to be a cached CIPD installation.'
+      ),
+      default='Runtime-ios-',
     )
     parser.add_argument(
-        '--use-clang-coverage',
-        help='Enable code coverage related steps in test runner scripts.',
-        action='store_true',
+      '-t',
+      '--test-cases',
+      action='append',
+      help=(
+        'Tests that should be included in the test run. All other tests '
+        'will be excluded from this run. If unspecified, run all tests. '
+        'Note: Specifying test cases is not supported in multiple '
+        'swarming shards environment. Will be merged with tests '
+        'specified in --gtest_filter and --args-json.'
+      ),
+      metavar='testcase',
     )
     parser.add_argument(
-        '--use-trusted-cert',
-        action='store_true',
-        help=('Whether to install a cert to the simulator to allow for local '
-              'HTTPS testing.'),
+      '--use-clang-coverage',
+      help='Enable code coverage related steps in test runner scripts.',
+      action='store_true',
     )
     parser.add_argument(
-        '-v',
-        '--version',
-        help='Version of iOS the simulator should run.',
-        metavar='ver',
+      '--use-trusted-cert',
+      action='store_true',
+      help=(
+        'Whether to install a cert to the simulator to allow for local '
+        'HTTPS testing.'
+      ),
     )
     parser.add_argument(
-        '--variations-seed-path',
-        help=('Path to a JSON file with variations seed used in variations '
-              'smoke testing. Default: %(default)s'),
-        default='NO_PATH',
-        metavar='variations-seed-path',
+      '-v',
+      '--version',
+      help='Version of iOS the simulator should run.',
+      metavar='ver',
     )
     parser.add_argument(
-        '--xcode-path',
-        metavar='PATH',
-        help=('Path to <Xcode>.app folder where contents of the app will be '
-              'installed. Default: %(default)s. WARNING: this folder will be '
-              'overwritten! This folder is intended to be a cached CIPD '
-              'installation.'),
-        default='Xcode.app',
+      '--variations-seed-path',
+      help=(
+        'Path to a JSON file with variations seed used in variations '
+        'smoke testing. Default: %(default)s'
+      ),
+      default='NO_PATH',
+      metavar='variations-seed-path',
     )
     parser.add_argument(
-        '--xcodebuild-device-runner',
-        help='Run tests using xcodebuild\'s on real device.',
-        action='store_true',
+      '--xcode-path',
+      metavar='PATH',
+      help=(
+        'Path to <Xcode>.app folder where contents of the app will be '
+        'installed. Default: %(default)s. WARNING: this folder will be '
+        'overwritten! This folder is intended to be a cached CIPD '
+        'installation.'
+      ),
+      default='Xcode.app',
     )
     parser.add_argument(
-        '--xcodebuild-sim-runner',
-        help='Run tests using xcodebuild\'s on iOS simulators',
-        action='store_true',
+      '--xcodebuild-device-runner',
+      help='Run tests using xcodebuild\'s on real device.',
+      action='store_true',
     )
     parser.add_argument(
-        '--xctest',
-        action='store_true',
-        help='Whether or not the given app should be run as an XCTest.',
+      '--xcodebuild-sim-runner',
+      help='Run tests using xcodebuild\'s on iOS simulators',
+      action='store_true',
     )
     parser.add_argument(
-        '--test-launcher-summary-output',
-        default=None,
-        help='Full path to output.json file. output.json is consumed by both '
-        'collect_task.py and merge scripts.')
-    parser.add_argument(
-        '--record-video',
-        choices=[o.name for o in VIDEO_RECORDER_PLUGIN_OPTIONS],
-        help=(
-            'Option to record video on EG tests. Currently this feature only '
-            'works on tests running on simulators, and can only record failed '
-            'test cases by specifying failed_only. More options coming soon...'
-        ),
-        metavar='record-video',
+      '--xctest',
+      action='store_true',
+      help='Whether or not the given app should be run as an XCTest.',
     )
     parser.add_argument(
-        '--output-disabled-tests',
-        action='store_true',
-        help='Whether or not disabled test should be included in test output.',
+      '--test-launcher-summary-output',
+      default=None,
+      help='Full path to output.json file. output.json is consumed by both '
+      'collect_task.py and merge scripts.',
     )
     parser.add_argument(
-        '--use-simulator-cache',
-        action='store_true',
-        help='Whether to use a cache of prelaunched simulators for this run.',
+      '--isolated-script-test-output',
+      default=None,
+      help='Full path to isolated script test output.json file.',
+    )
+    parser.add_argument(
+      '--isolated-script-test-perf-output',
+      default=None,
+      help='Full path to isolated script perf_results.json file.',
+    )
+    parser.add_argument(
+      '--benchmark-name',
+      default=None,
+      help=(
+        'Fallback perf benchmark subdirectory name under out-dir for untagged '
+        'samples; when set, fails the run if no perf_results.json is produced.'
+      ),
+    )
+    parser.add_argument(
+      '--record-video',
+      choices=[o.name for o in VIDEO_RECORDER_PLUGIN_OPTIONS],
+      help=(
+        'Option to record video on EG tests. Currently this feature only '
+        'works on tests running on simulators, and can only record failed '
+        'test cases by specifying failed_only. More options coming soon...'
+      ),
+      metavar='record-video',
+    )
+    parser.add_argument(
+      '--output-disabled-tests',
+      action='store_true',
+      help='Whether or not disabled test should be included in test output.',
+    )
+    parser.add_argument(
+      '--use-simulator-cache',
+      action='store_true',
+      help='Whether to use a cache of prelaunched simulators for this run.',
+    )
+    parser.add_argument(
+      '--skip-enumerate-tests',
+      action='store_true',
+      help='Whether to skip enumerating tests in the EG test bundle.',
     )
 
     def load_from_json(args):
@@ -527,11 +637,15 @@ class Runner():
       args.env_var.extend(args_json.get('env_var', []))
       args.restart = args_json.get('restart', args.restart)
       args.xctest = args_json.get('xctest', args.xctest)
-      args.xcodebuild_sim_runner = args_json.get('xcodebuild_sim_runner',
-                                                 args.xcodebuild_sim_runner)
-      args.xcodebuild_device_runner = (
-          args_json.get('xcodebuild_device_runner',
-                        args.xcodebuild_device_runner))
+      args.xcodebuild_sim_runner = args_json.get(
+        'xcodebuild_sim_runner', args.xcodebuild_sim_runner
+      )
+      args.xcodebuild_device_runner = args_json.get(
+        'xcodebuild_device_runner', args.xcodebuild_device_runner
+      )
+      args.skip_enumerate_tests = args_json.get(
+        'skip_enumerate_tests', args.skip_enumerate_tests
+      )
       args.clones = args_json.get('clones', args.clones)
       test_args.extend(args_json.get('test_args', []))
 
@@ -541,17 +655,17 @@ class Runner():
       """
       if not args.xcode_build_version:
         parser.error('must specify --xcode-build-version on bot')
-      if (not use_xcodebuild_runner(args) and
-          (args.iossim or args.platform or args.version)):
-        # If any of --iossim, --platform, or --version
-        # are specified then they must all be specified.
-        if not (args.iossim and args.platform and args.version):
-          parser.error('must specify all or none of '
-                       '-i/--iossim, -p/--platform, -v/--version')
+      if not use_xcodebuild_runner(args) and (args.platform or args.version):
+        # If either --platform or --version is specified, both must be
+        # specified.
+        if not (args.platform and args.version):
+          parser.error('must specify both -p/--platform and -v/--version')
 
       if args.xcodebuild_sim_runner and not (args.platform and args.version):
-        parser.error('--xcodebuild-sim-runner also requires '
-                     'both -p/--platform and -v/--version')
+        parser.error(
+          '--xcodebuild-sim-runner also requires '
+          'both -p/--platform and -v/--version'
+        )
 
       if not use_xcodebuild_runner(args) and args.record_video:
         parser.error('--record-video is only supported on EG tests')
@@ -561,11 +675,13 @@ class Runner():
         args.retries = 0
 
       args_json = json.loads(args.args_json)
-      if (args.gtest_filter or args.test_cases or
-          args_json.get('test_cases')) and shard_util.gtest_total_shards() > 1:
+      if (
+        args.gtest_filter or args.test_cases or args_json.get('test_cases')
+      ) and shard_util.gtest_total_shards() > 1:
         parser.error(
-            'Specifying test cases is not supported in multiple swarming '
-            'shards environment.')
+          'Specifying test cases is not supported in multiple swarming '
+          'shards environment.'
+        )
 
     def merge_test_cases(args):
       """Forms |args.test_cases| considering cmd inputs.
@@ -601,10 +717,11 @@ class Runner():
     """
     if not args.xcode_build_version:
       _, args.xcode_build_version = xcode.version()
-      logging.info('Defaulting to Xcode build version %s',
-                   args.xcode_build_version)
+      logging.info(
+        'Defaulting to Xcode build version %s', args.xcode_build_version
+      )
 
-    if not args.xcodebuild_sim_runner and not args.iossim:
+    if args.xcodebuild_device_runner:
       # No need to pick a `--platform` or `--version` for on-device runs.
       return
     if args.version and args.platform:
@@ -625,37 +742,42 @@ class Runner():
       # sorted from least to most recent models. Try to pick the latest
       # iPhone. `reversed()` is needed for `max()` to tiebreak as intended.
       device_type = max(
-          reversed(runtime['supportedDeviceTypes']),
-          key=lambda device: device['productFamily'] == 'iPhone')
+        reversed(runtime['supportedDeviceTypes']),
+        key=lambda device: device['productFamily'] == 'iPhone',
+      )
       if not args.platform:
         args.platform = device_type['name']
         logging.info('Defaulting to simulating %s', args.platform)
-    except (subprocess.CalledProcessError, KeyError, IndexError):
+    except (subprocess.CalledProcessError, OSError, KeyError, IndexError):
       # Give up if:
-      # * `xcrun simctl` fails because `xcode-select` hasn't run yet.
+      # * `xcrun simctl` fails because `xcrun` is missing (e.g. Linux) or
+      #   `xcode-select` hasn't run yet.
       # * The JSON doesn't have the right shape.
       pass
 
-  def maybe_rotate_out_dir(self,
-                           out_dir: os.PathLike,
-                           archive_limit: int = 100):
+  def maybe_rotate_out_dir(
+    self, out_dir: os.PathLike, archive_limit: int = 100
+  ):
     try:
       mtime_ts = os.path.getmtime(out_dir)
     except FileNotFoundError:
       return
     if any(
-        os.path.exists(os.path.join(out_dir, filename))
-        for filename in ['args.gn', 'build.ninja']):
+      os.path.exists(os.path.join(out_dir, filename))
+      for filename in ['args.gn', 'build.ninja']
+    ):
       # Don't move build directories under `//out/`, which users generally
       # depend on to be stable.
       logging.warning(
-          'Skipping archival of %s, which appears to be a build directory',
-          out_dir)
+        'Skipping archival of %s, which appears to be a build directory',
+        out_dir,
+      )
       return
     mtime = datetime.datetime.fromtimestamp(mtime_ts)
     dirname, basename = os.path.split(out_dir)
-    dest = os.path.join(dirname,
-                        f'{basename}_{mtime.strftime("%Y-%m-%d-%H%M%S")}')
+    dest = os.path.join(
+      dirname, f'{basename}_{mtime.strftime("%Y-%m-%d-%H%M%S")}'
+    )
     os.rename(out_dir, dest)
     logging.info('Archived old test results to %s', dest)
 
@@ -667,12 +789,14 @@ class Runner():
 
 def main(args):
   logging.basicConfig(
-      format='[%(asctime)s:%(levelname)s] %(message)s',
-      level=logging.DEBUG,
-      datefmt='%I:%M:%S')
+    format='[%(asctime)s:%(levelname)s] %(message)s',
+    level=logging.DEBUG,
+    datefmt='%I:%M:%S',
+  )
 
-  test_runner.defaults_delete('com.apple.CoreSimulator',
-                              'FramebufferServerRendererPolicy')
+  test_runner.defaults_delete(
+    'com.apple.CoreSimulator', 'FramebufferServerRendererPolicy'
+  )
   runner = Runner()
   logging.debug("Arg values passed for this run: %s" % args)
   return runner.run(args)

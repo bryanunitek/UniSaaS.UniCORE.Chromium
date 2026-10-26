@@ -37,6 +37,8 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "build/build_config.h"
@@ -177,7 +179,8 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   gfx::Size ContentsPreferredMinimumSize() override;
   void UpdatePreferredSize() override;
   void EnablePreferredSizeChangedMode() override;
-  void SetZoomFactorForDeviceScaleFactor(float) override;
+  void SetZoomFactorForDeviceScaleFactor(float device_scale_factor,
+                                         float text_scale_multiplier) override;
   float ZoomFactorForViewportLayout() override {
     // This returns the zoom factor to use when determining the layout width
     // while processing the viewport meta tag. We use only the device scale
@@ -193,6 +196,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
     return compositor_device_scale_factor_override_
                ? compositor_device_scale_factor_override_
                : zoom_factor_for_device_scale_factor_;
+  }
+  float ZoomFactorForViewportLayoutWithoutTextScale() override {
+    return ZoomFactorForViewportLayout() /
+           zoom_factor_for_text_scale_multiplier_;
   }
   bool AutoResizeMode() override;
   void EnableAutoResizeForTesting(const gfx::Size& min_window_size,
@@ -258,6 +265,9 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void SetBaseBackgroundColorOverrideTransparent(bool override_to_transparent);
   void SetBaseBackgroundColorOverrideForInspector(std::optional<SkColor>);
 
+  // Called when the text-scale meta tag is added or removed
+  void OnTextScaleMetaTagPresentChanged();
+
   // Resize the WebView. You likely should be using
   // MainFrameWidget()->Resize instead.
   void Resize(const gfx::Size&);
@@ -309,8 +319,6 @@ class CORE_EXPORT WebViewImpl final : public WebView,
       override;
   void UpdatePageBrowsingContextGroup(
       const base::UnguessableToken& browsing_context_group_token) override;
-  void SetPageAttributionSupport(
-      network::mojom::AttributionSupport support) override;
   void UpdateColorProviders(
       const ColorProviderColorMaps& color_provider_colors) override;
   void SetSupportsDraggableRegions(bool supports_draggable_regions) override;
@@ -536,6 +544,11 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void DidEnterFullscreen();
   void DidExitFullscreen();
 
+  // Called when a pending fullscreen request was not granted by the browser
+  // (e.g. if an entry and exit coalesced while visual property updates were
+  // being throttled). Rejects any pending request and resets state to kInitial.
+  void DidFailToEnterFullscreen();
+
   // Called when some JS code has instructed the window associated to the main
   // frame to close, which will result in a request to the browser to close the
   // Widget associated to it.
@@ -623,7 +636,11 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void DidFirstVisuallyNonEmptyPaint();
 
   // Called once the first contentful paint happens on the main frame.
-  void OnFirstContentfulPaint(const base::TimeDelta& duration);
+  void OnFirstContentfulPaint(const base::TimeTicks& presentation_time);
+
+  // Called when the outermost main frame's largest contentful paint candidate
+  // changed.
+  void OnLargestContentfulPaint(const base::TimeTicks& presentation_time);
 
   scheduler::WebAgentGroupScheduler& GetWebAgentGroupScheduler();
 
@@ -798,7 +815,8 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   const bool widgets_never_composited_;
 
   // Can be null (e.g. unittests, shared workers, etc).
-  WebViewClient* web_view_client_;
+  raw_ptr<WebViewClient, UnprotectedInRelease | DanglingUntriaged>
+      web_view_client_;
   Persistent<ChromeClient> chrome_client_;
   Persistent<Page> page_;
 
@@ -809,6 +827,9 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   // contents [e.g. to accomodate a keyboard] without forcing the web page to
   // relayout. For more details, see the header for the VisualViewport class.
   gfx::Size size_;
+  // Size before internal scroll-width autosize measurements, used to report
+  // only a stable size change.
+  std::optional<gfx::Size> size_before_suppressed_autosize_;
   // If true, automatically resize the layout view around its content.
   bool should_auto_resize_ = false;
   // The lower bound on the size when auto-resizing.
@@ -857,6 +878,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
 
   // Additional zoom factor used to scale the content by device scale factor.
   double zoom_factor_for_device_scale_factor_ = 1.;
+
+  // The portion of |zoom_factor_for_device_scale_factor_| that is due to the
+  // system text scale factor.
+  double zoom_factor_for_text_scale_multiplier_ = 1.f;
 
   // This value, when multiplied by the font scale factor, gives the maximum
   // page scale that can result from automatic zooms.
@@ -991,7 +1016,9 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   ui::mojom::blink::VirtualKeyboardMode virtual_keyboard_mode_ =
       ui::mojom::blink::VirtualKeyboardMode::kUnset;
 
-  scheduler::WebAgentGroupScheduler& web_agent_group_scheduler_;
+  const raw_ref<scheduler::WebAgentGroupScheduler,
+                UnprotectedInRelease | DanglingUntriaged>
+      web_agent_group_scheduler_;
 
   // Indicates whether the page supports draggable regions via the app-region
   // CSS property.

@@ -10,17 +10,16 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/device_trust_constants.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service_factory.h"
 #include "chrome/browser/enterprise/signals/user_permission_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/views/device_signals_consent/consent_dialog_coordinator.h"
 #include "components/device_signals/core/browser/pref_names.h"
 #include "components/device_signals/core/browser/user_permission_service.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
+#include "components/enterprise/device_trust/core/common_types.h"
+#include "components/enterprise/device_trust/core/device_trust_constants.h"
+#include "components/enterprise/device_trust/core/device_trust_service.h"
+#include "components/enterprise/device_trust/core/metrics_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
@@ -29,8 +28,15 @@
 #include "net/http/http_response_headers.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/enterprise/connectors/device_trust/device_trust_features.h"
+#else
+#include "chrome/browser/ui/views/device_signals_consent/consent_dialog_coordinator.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace enterprise_connectors {
@@ -44,7 +50,7 @@ constexpr char kSpecificErrorCodePropertyName[] = "code";
 
 const std::string CreateErrorJsonString(
     const DeviceTrustResponse& dt_response) {
-  DCHECK(dt_response.error);
+  CHECK(dt_response.error, base::NotFatalUntil::M161);
   base::DictValue error_response;
   error_response.Set(kErrorPropertyName,
                      DeviceTrustErrorToString(dt_response.error.value()));
@@ -99,6 +105,12 @@ constexpr char kVerifiedAccessResponseHeader[] =
 // static
 void DeviceTrustNavigationThrottle::MaybeCreateAndAdd(
     content::NavigationThrottleRegistry& registry) {
+#if BUILDFLAG(IS_ANDROID)
+  if (!IsDeviceTrustConnectorAndroidEnabled()) {
+    return;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
   content::NavigationHandle& navigation_handle = registry.GetNavigationHandle();
   auto* profile = GetProfile(navigation_handle);
   auto* device_trust_service =
@@ -122,9 +134,12 @@ DeviceTrustNavigationThrottle::DeviceTrustNavigationThrottle(
     content::NavigationThrottleRegistry& registry)
     : content::NavigationThrottle(registry),
       device_trust_service_(device_trust_service),
-      user_permission_service_(user_permission_service),
-      consent_requester_(ConsentRequester::CreateConsentRequester(
-          GetProfile(registry.GetNavigationHandle()))) {}
+      user_permission_service_(user_permission_service) {
+#if !BUILDFLAG(IS_ANDROID)
+  consent_requester_ = ConsentRequester::CreateConsentRequester(
+      GetProfile(registry.GetNavigationHandle()));
+#endif  // !BUILDFLAG(IS_ANDROID)
+}
 
 DeviceTrustNavigationThrottle::~DeviceTrustNavigationThrottle() = default;
 
@@ -155,6 +170,11 @@ DeviceTrustNavigationThrottle::MayTriggerConsentDialog() {
       !navigation_handle()->IsInMainFrame()) {
     return PROCEED;
   }
+#if BUILDFLAG(IS_ANDROID)
+  // Android collects the user's consent natively during the profile sign-in
+  // flow so there is no in-flow dialog to show here.
+  return PROCEED;
+#else
   if (!consent_requester_) {
     return PROCEED;
   }
@@ -172,6 +192,7 @@ DeviceTrustNavigationThrottle::MayTriggerConsentDialog() {
           weak_ptr_factory_.GetWeakPtr()));
 
   return DEFER;
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 content::NavigationThrottle::ThrottleCheckResult
@@ -198,7 +219,7 @@ DeviceTrustNavigationThrottle::AddHeadersIfNeeded() {
 #if BUILDFLAG(IS_CHROMEOS)
     LogOrigin(GetAttestationFlowOrigin(
         navigation_handle()->GetWebContents()->GetBrowserContext()));
-    LogEnrollmentStatus();
+    LogEnrollmentStatus(ash::InstallAttributes::Get()->IsEnterpriseManaged());
 #endif  // BUILDFLAG(IS_CHROMEOS)
     LogAttestationFunnelStep(DTAttestationFunnelStep::kAttestationFlowStarted);
     navigation_handle()->SetRequestHeader(kDeviceTrustHeader,

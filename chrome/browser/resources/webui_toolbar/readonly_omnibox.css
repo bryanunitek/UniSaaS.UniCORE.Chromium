@@ -16,6 +16,8 @@
   border: none;
   color: var(--color-omnibox-text);
   display: flex;
+  /* Absorbs available free space. This mathematically isolates layout changes
+   * on the left/right sides. */
   flex: 1;
   font-family: var(--omnibox-primary-font-family);
   font-size: var(--omnibox-primary-font-size);
@@ -34,9 +36,19 @@
   /* We want to position textInput off of us */
   position: relative;
   /* Giving this a width makes flex shrink it to fit available space when this
-   * is too long. The exact value will get replaced by whatever flex computes
+   * is too long. The exact value will get replaced by whatever flex computes,
+   * but it also won't go below this.
    */
-  width: 200px;
+  width: 0;
+}
+
+/* When the popup is expanded, we take control of spacing between us and icons,
+ * so that clicks delivered before the expansion still end up with us.
+ */
+:host-context(.popup-open) #textContainer,
+:host-context(.popup-open) #textInput {
+  padding-inline-start: var(--omnibox-start-padding);
+  margin-inline-start: calc(-1*var(--omnibox-start-padding));
 }
 
 #textContainer {
@@ -65,25 +77,30 @@
   direction: ltr;
 }
 
-#textInput::selection {
+#textInput::part(searchbox-input)::selection {
   background-color: var(--color-omnibox-selection-background);
   color: var(--color-omnibox-selection-foreground);
 }
 
 /* We don't want URLs spellchecked */
-#textInput::spelling-error {
+#textInput::part(searchbox-input)::spelling-error {
   text-decoration: none;
 }
 
-#textInput::grammar-error {
+#textInput::part(searchbox-input)::grammar-error {
   text-decoration: none;
+}
+
+#textInput::part(searchbox-input)::placeholder {
+  color: var(--color-omnibox-text);
 }
 
 #textContainer .color-dim {
   color: var(--color-omnibox-text-dimmed);
 }
 
-#textContainer .color-foreground-disabled {
+#textContainer .color-foreground-disabled,
+#textInput.color-foreground-disabled::part(searchbox-input)::placeholder  {
   color: var(--color-omnibox-foreground-disabled);
 }
 
@@ -96,6 +113,12 @@
 }
 
 #textInput {
+  opacity: 0;
+}
+
+#textInput,
+#textInput::part(searchbox-input) {
+  --cr-searchbox-input-height: var(--omnibox-height);
   appearance: none;
   background-color: transparent;
   border: none;
@@ -104,12 +127,15 @@
   font-size: inherit;
   font-weight: inherit;
   height: var(--omnibox-height);
-  opacity: 0;
   outline: none;
   padding: 0;
   position: absolute;
   top: 0;
   width: 100%;
+}
+
+#textInput::part(icon) {
+  display: none;
 }
 
 :host(.dragging-over) #textContainer span {
@@ -118,9 +144,18 @@
 }
 
 #inlineAutocomplete {
-  /* This is only for sizing */
+  color: var(--color-omnibox-text);
+  background-color: var(--color-location-bar-background);
+  height: var(--omnibox-height);
+  line-height: var(--omnibox-height);
+  /* If [composing] isn't set, this is used only for positioning the additional
+   * text. */
   visibility: hidden;
   white-space: pre;
+}
+
+#inlineAutocomplete[composing] {
+  visibility: visible;
 }
 
 #additionalText {
@@ -133,5 +168,55 @@
   white-space: pre;
 
   /* Since the <input> is full-width, we want to be on top */
-  z-index: 2;
+  z-index: 102;
+}
+
+#dragTemplate {
+  align-items: center;
+  color: var(--color-textfield-foreground);
+  display: flex;
+  font-family: var(--drag-template-font-family);
+  font-size: var(--drag-template-font-size);
+  font-weight: var(--drag-template-font-weight);
+  /* Matches native drag image preferred height calculation from
+   * button_drag_utils.cc (button->GetPreferredSize({}): 16px gfx::kFaviconSize
+   * icon + 8px LabelButton padding).
+   */
+  height: 24px;
+  /* Position off-screen so the template is not visible in the transparent
+   * WebUI, while keeping its full layout intact for
+   * dataTransfer.setDragImage().
+   */
+  left: -10000px;
+  max-width: 150px;
+  pointer-events: none;
+  position: absolute;
+  top: -10000px;
+  white-space: nowrap;
+}
+
+#dragFavicon {
+  flex-shrink: 0;
+  /* Standard favicon display size (gfx::kFaviconSize). */
+  height: 16px;
+  margin-inline-end: 12px;
+  width: 16px;
+}
+
+#dragTitle {
+  overflow: hidden;
+  padding-inline: 2px;
+  text-overflow: ellipsis;
+  text-shadow:
+      0 0 1px var(--color-textfield-background),
+      0 0 1px var(--color-textfield-background),
+      0 0 2px var(--color-textfield-background),
+      0 0 2px var(--color-textfield-background);
+  white-space: nowrap;
+}
+
+/* Used for accessibility mark up only */
+#announcementDistraction {
+  position: absolute;
+  left: -10000px;
 }

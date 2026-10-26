@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/check.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
@@ -40,6 +41,7 @@
 #include "content/test/test_render_widget_host_factory.h"
 #include "content/test/test_web_contents.h"
 #include "net/base/mock_network_change_notifier.h"
+#include "services/network/network_service.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 
@@ -105,7 +107,7 @@ void RenderViewHostTester::SendTouchEvent(
     blink::SyntheticWebTouchEvent* touch_event) {
   RenderWidgetHostImpl* host_impl =
       RenderWidgetHostImpl::From(rvh->GetWidget());
-  auto* input_event_router = host_impl->delegate()->GetInputEventRouter();
+  auto* input_event_router = host_impl->GetInputEventRouter();
   input_event_router->RouteTouchEvent(host_impl->GetView(), touch_event,
                                       ui::LatencyInfo());
 }
@@ -275,7 +277,7 @@ void RenderViewHostTestHarness::TearDown() {
   base::RunLoop().RunUntilIdle();
 
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
-  dbus_thread_linux::ShutdownOnDBusThreadAndBlock();
+  dbus_thread_linux::Shutdown();
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -292,11 +294,23 @@ void RenderViewHostTestHarness::TearDown() {
 
   rvh_test_enabler_.reset();
 
-  // Release the browser context by posting itself on the end of the task
-  // queue. This is preferable to immediate deletion because it will behave
-  // properly if the |rph_factory_| reset above enqueued any tasks which
-  // depend on |browser_context_|.
-  GetUIThreadTaskRunner({})->DeleteSoon(FROM_HERE, browser_context_.release());
+  DestroyBrowserContext();
+  CHECK(!browser_context_);
+
+  // The in-process NetworkService is a leaked singleton that outlives the
+  // test harness. Its HostResolverManager holds a raw_ptr to the
+  // SystemDnsConfigChangeNotifier owned by |network_change_notifier_|. Clear
+  // that pointer (and remove the observer) before |network_change_notifier_|
+  // is destroyed to avoid a dangling pointer detection under PartitionAlloc.
+  // Found while debugging BRP on Linux (CastOS) which uses
+  // InProcessNetworkService.
+  if (auto* network_service =
+          network::NetworkService::GetNetworkServiceForTesting()) {
+    if (auto* host_resolver_manager =
+            network_service->host_resolver_manager()) {
+      host_resolver_manager->ClearSystemDnsConfigNotifierForTesting();
+    }
+  }
 
   // Although this isn't required by many, some subclasses members require that
   // the task environment is gone by the time that they are destroyed (akin to
@@ -311,6 +325,14 @@ RenderViewHostTestHarness::CreateBrowserContext() {
 
 BrowserContext* RenderViewHostTestHarness::GetBrowserContext() {
   return browser_context_.get();
+}
+
+void RenderViewHostTestHarness::DestroyBrowserContext() {
+  // Release the browser context by posting itself on the end of the task
+  // queue. This is preferable to immediate deletion because it will behave
+  // properly if the |rph_factory_| reset in TearDown() enqueued any tasks
+  // which depend on |browser_context_|.
+  GetUIThreadTaskRunner({})->DeleteSoon(FROM_HERE, browser_context_.release());
 }
 
 void RenderViewHostTestHarness::SetRenderProcessHostFactory(

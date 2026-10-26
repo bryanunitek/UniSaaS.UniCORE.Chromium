@@ -102,7 +102,6 @@ void ChromeBrowserPolicyConnector::OnResourceBundleCreated() {
 void ChromeBrowserPolicyConnector::Init(
     PrefService* local_state,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  PolicyLogger::GetInstance()->EnableLogDeletion();
   auto configuration = std::make_unique<DeviceManagementServiceConfiguration>(
       GetDeviceManagementUrl(), GetRealtimeReportingUrl(),
       GetEncryptedReportingUrl());
@@ -115,6 +114,11 @@ void ChromeBrowserPolicyConnector::Init(
   policy_cache_updater_ = std::make_unique<android::PolicyCacheUpdater>(
       GetPolicyService(), GetHandlerList());
 #endif
+
+  PolicyLogger::GetInstance()->EnableLogCompression(
+      base::ThreadPool::CreateSequencedTaskRunner(
+          {base::TaskPriority::USER_VISIBLE,
+           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
 
   InitInternal(local_state, std::move(device_management_service));
 }

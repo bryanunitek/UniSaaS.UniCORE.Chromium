@@ -47,6 +47,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_initializer.h"
 #include "third_party/blink/renderer/controller/blink_leak_detector.h"
+#include "third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h"
 #include "third_party/blink/renderer/controller/dev_tools_frontend_impl.h"
 #include "third_party/blink/renderer/controller/javascript_call_stack_generator.h"
 #include "third_party/blink/renderer/controller/memory_coordinator/v8_heap_memory_signal_generator.h"
@@ -70,16 +71,11 @@
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 #include "v8/include/v8.h"
 
-#if defined(USE_BLINK_EXTENSIONS_CHROMEOS)
-#include "third_party/blink/renderer/extensions/chromeos/chromeos_extensions.h"
-#endif
-
 #if defined(USE_BLINK_EXTENSIONS_WEBVIEW)
 #include "third_party/blink/renderer/extensions/webview/webview_extensions.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
-#include "third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h"
 #include "third_party/blink/renderer/controller/oom_intervention_impl.h"
 #include "third_party/blink/renderer/controller/private_memory_footprint_provider.h"
 #include "third_party/blink/renderer/controller/user_level_memory_pressure_signal_generator.h"
@@ -145,9 +141,6 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
   // These Initialize() methods for renderer extensions initialize strings which
   // must be done before calling CoreInitializer::Initialize() which is called
   // by GetBlinkInitializer().Initialize() below.
-#if defined(USE_BLINK_EXTENSIONS_CHROMEOS)
-  ChromeOSExtensions::Initialize();
-#endif
 #if defined(USE_BLINK_EXTENSIONS_WEBVIEW)
   WebViewExtensions::Initialize();
 #endif
@@ -260,12 +253,12 @@ void BlinkInitializer::RegisterInterfaces(mojo::BinderMap& binders) {
           &OomInterventionImpl::BindReceiver,
           blink::RetainedRef(main_thread_task_runner))),
       main_thread_task_runner);
+#endif
 
   binders.Add<mojom::blink::CrashMemoryMetricsReporter>(
       ConvertToBaseRepeatingCallback(
           CrossThreadBindRepeating(&CrashMemoryMetricsReporterImpl::Bind)),
       main_thread_task_runner);
-#endif
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   binders.Add<mojom::blink::MemoryUsageMonitorLinux>(
@@ -307,11 +300,11 @@ void BlinkInitializer::RegisterInterfaces(mojo::BinderMap& binders) {
 void BlinkInitializer::RegisterMemoryWatchers(Platform* platform) {
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner =
       Thread::MainThread()->GetTaskRunner(MainThreadTaskRunnerRestricted());
-#if BUILDFLAG(IS_ANDROID)
   // Initialize CrashMemoryMetricsReporterImpl in order to assure that memory
   // allocation does not happen in OnOOMCallback.
   CrashMemoryMetricsReporterImpl::Instance();
 
+#if BUILDFLAG(IS_ANDROID)
   // Initialize UserLevelMemoryPressureSignalGenerator so it starts monitoring.
   if (platform->IsUserLevelMemoryPressureSignalEnabled()) {
     UserLevelMemoryPressureSignalGenerator::Initialize(main_thread_task_runner);
@@ -352,9 +345,6 @@ void BlinkInitializer::InitLocalFrame(LocalFrame& frame) const {
 
 void BlinkInitializer::InitServiceWorkerGlobalScope(
     ServiceWorkerGlobalScope& worker_global_scope) const {
-#if defined(USE_BLINK_EXTENSIONS_CHROMEOS)
-  ChromeOSExtensions::InitServiceWorkerGlobalScope(worker_global_scope);
-#endif
 }
 
 void BlinkInitializer::OnClearWindowObjectInMainWorld(

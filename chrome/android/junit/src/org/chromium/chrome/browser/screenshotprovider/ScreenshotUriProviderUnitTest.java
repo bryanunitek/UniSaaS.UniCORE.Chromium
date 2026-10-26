@@ -21,13 +21,15 @@ import android.net.Uri;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
@@ -40,8 +42,9 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link ScreenshotUriProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ScreenshotUriProviderUnitTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     private static final String TARGET_PACKAGE = "com.example.app";
 
     @Mock private Tab mTab;
@@ -52,7 +55,6 @@ public class ScreenshotUriProviderUnitTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         mTabSupplier = () -> mTab;
         RenderCoordinatesImpl.setInstanceForTesting(mRenderCoordinates);
 
@@ -164,7 +166,7 @@ public class ScreenshotUriProviderUnitTest {
                         "Android.ScreenshotUriProvider.Events",
                         ScreenshotContentProviderMetrics.ScreenshotUriProviderEvent
                                 .GET_CONTENT_URI_FAILED);
-        ScreenshotUriProvider.getScreenshotUriForCurrentTab(() -> null, TARGET_PACKAGE);
+        ScreenshotUriProvider.getScreenshotUriForCurrentTab(SupplierUtils.ofNull(), TARGET_PACKAGE);
         watcher.assertExpected();
     }
 }

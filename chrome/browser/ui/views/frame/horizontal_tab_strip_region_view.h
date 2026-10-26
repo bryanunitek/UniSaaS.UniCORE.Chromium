@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_HORIZONTAL_TAB_STRIP_REGION_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_HORIZONTAL_TAB_STRIP_REGION_VIEW_H_
 
+#include <memory>
+
 #include "base/memory/raw_ptr.h"
 #include "build/buildflag.h"
 #include "chrome/browser/ui/tabs/tab_data.h"
@@ -28,7 +30,6 @@ class TabStripActionContainer;
 class TabStripComboButton;
 class TabStrip;
 class TabStripScrollContainer;
-class TabStripControlButton;
 
 // Container for the tabstrip and the other views sharing space with it -
 // with the exception of the caption buttons.
@@ -65,6 +66,7 @@ class HorizontalTabStripRegionViewOld : public TabStripRegionView {
   Profile* profile();
 
   TabStrip* tab_strip() { return tab_strip_; }
+  TabStripComboButton* combo_button() { return combo_button_; }
 
   // TabStripRegionView:
   void InitializeTabStrip() override;
@@ -78,7 +80,7 @@ class HorizontalTabStripRegionViewOld : public TabStripRegionView {
   void UpdateLoadingAnimations(const base::TimeDelta& elapsed_time) override;
   std::optional<int> GetFocusedTabIndex() const override;
   const tabs::TabData& GetTabData(const tabs::TabHandle& tab) override;
-  views::View* GetTabAnchorViewAt(int tab_index) override;
+  views::View* GetTabAnchorView(const tabs::TabHandle& tab) override;
   views::View* GetTabGroupAnchorView(
       const tab_groups::TabGroupId& group) override;
   void OnTabGroupFocusChanged(
@@ -99,8 +101,10 @@ class HorizontalTabStripRegionViewOld : public TabStripRegionView {
   void OnDragExited() override;
   void SetTabStripObserver(TabStripObserver* observer) override;
   views::View* GetTabStripView() override;
+  TabHoverCardController* GetHoverCardController() override;
   std::unique_ptr<ExpandOnHoverLock> GetExpandOnHoverLock(
       ExpandOnHoverLockType lock_type) override;
+  void OnGlassFrameEligibilityChanged(bool is_eligible) override;
 
   bool HasLeadingButtons() const;
 
@@ -126,7 +130,6 @@ class HorizontalTabStripRegionViewOld : public TabStripRegionView {
   raw_ptr<TabStripScrollContainer> tab_strip_scroll_container_ = nullptr;
   raw_ptr<TabStripComboButton> combo_button_ = nullptr;
   raw_ptr<views::Button> new_tab_button_ = nullptr;
-  raw_ptr<TabStripControlButton> unfocus_button_ = nullptr;
 
   std::unique_ptr<views::ActionViewController> action_view_controller_;
 
@@ -151,8 +154,11 @@ class HorizontalTabStripRegionViewNew : public BaseTabStripRegionView {
   views::View::Views GetChildrenInZOrder() override;
   void Layout(PassKey) override;
 
-  Profile* profile();
-  bool HasLeadingButtons() const { return false; }
+  // views::AccessiblePaneView:
+  void ChildPreferredSizeChanged(views::View* child) override;
+
+  bool HasLeadingButtons() const;
+  TabStripComboButton* combo_button() { return combo_button_; }
 
   // TabStripRegionView:
   gfx::Size GetMinimumSize() const override;
@@ -160,18 +166,25 @@ class HorizontalTabStripRegionViewNew : public BaseTabStripRegionView {
       const views::SizeBounds& available_size) const override;
   views::View* GetTabStripView() override;
   gfx::Rect GetTabStripDraggableBounds() const override;
-  views::View* SetTabStripView(std::unique_ptr<views::View> view) override;
   gfx::Point GetLinkDropArrowPosition(
       const BrowserRootView::DropIndex& drop_index,
       DropArrow::Direction* direction) override;
 
  private:
+  void AddTabStripView(std::unique_ptr<views::View> view) override;
+
+  void UpdateButtonBorders();
+  void UpdateTabStripMargin();
+  void AdjustViewBoundsRect(View* view, int offset);
+
+  raw_ptr<TabStripActionContainer> tab_strip_action_container_ = nullptr;
   raw_ptr<views::View> reserved_grab_handle_space_ = nullptr;
   raw_ptr<TabStripComboButton> combo_button_ = nullptr;
   raw_ptr<views::Button> new_tab_button_ = nullptr;
 
   std::unique_ptr<views::ActionViewController> action_view_controller_;
-  base::CallbackListSubscription on_active_tab_changed_subscription_;
+
+  base::CallbackListSubscription subscription_;
 };
 
 using HorizontalTabStripRegionView = HorizontalTabStripRegionViewOld;

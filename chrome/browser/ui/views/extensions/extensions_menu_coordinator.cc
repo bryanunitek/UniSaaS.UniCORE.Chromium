@@ -8,10 +8,10 @@
 
 #include "base/check_deref.h"
 #include "base/feature_list.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/extensions/extensions_container_views.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_delegate_desktop.h"
 #include "extensions/common/extension_features.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
@@ -38,8 +38,9 @@ ExtensionsMenuCoordinator::~ExtensionsMenuCoordinator() {
 void ExtensionsMenuCoordinator::Show(
     views::BubbleAnchor anchor,
     ExtensionsContainerViews* extensions_container_views) {
-  DCHECK(base::FeatureList::IsEnabled(
-      extensions_features::kExtensionsMenuAccessControl));
+  CHECK(base::FeatureList::IsEnabled(
+            extensions_features::kExtensionsMenuAccessControl),
+        base::NotFatalUntil::M162);
   std::unique_ptr<views::BubbleDialogDelegate> bubble_delegate =
       CreateExtensionsMenuBubbleDialogDelegate(anchor,
                                                extensions_container_views);
@@ -51,8 +52,9 @@ void ExtensionsMenuCoordinator::Show(
 }
 
 void ExtensionsMenuCoordinator::Hide() {
-  DCHECK(base::FeatureList::IsEnabled(
-      extensions_features::kExtensionsMenuAccessControl));
+  CHECK(base::FeatureList::IsEnabled(
+            extensions_features::kExtensionsMenuAccessControl),
+        base::NotFatalUntil::M162);
   if (views::Widget* const menu = GetExtensionsMenuWidget()) {
     menu->CloseNow();
   }
@@ -78,19 +80,24 @@ std::unique_ptr<views::BubbleDialogDelegate>
 ExtensionsMenuCoordinator::CreateExtensionsMenuBubbleDialogDelegate(
     views::BubbleAnchor anchor,
     ExtensionsContainerViews* extensions_container_views) {
-  DCHECK(base::FeatureList::IsEnabled(
-      extensions_features::kExtensionsMenuAccessControl));
+  CHECK(base::FeatureList::IsEnabled(
+            extensions_features::kExtensionsMenuAccessControl),
+        base::NotFatalUntil::M162);
+  views::BubbleBorder::Arrow arrow =
+      extensions_container_views ? extensions_container_views->GetPopupArrow()
+                                 : views::BubbleBorder::TOP_RIGHT;
   auto bubble_delegate = std::make_unique<views::BubbleDialogDelegate>(
-      anchor, views::BubbleBorder::TOP_RIGHT,
-      views::BubbleBorder::DIALOG_SHADOW, /*autosize=*/true);
+      anchor, arrow, views::BubbleBorder::DIALOG_SHADOW, /*autosize=*/true);
   bubble_delegate->SetOwnedByWidget(
       views::WidgetDelegate::OwnedByWidgetPassKey());
   bubble_delegate->set_margins(gfx::Insets(0));
   bubble_delegate->set_fixed_width(
       views::LayoutProvider::Get()->GetDistanceMetric(
           ChromeDistanceMetric::DISTANCE_EXTENSIONS_MENU_WIDTH));
-  // Let anchor view's MenuButtonController handle the highlight.
-  bubble_delegate->set_highlight_button_when_shown(false);
+  if (anchor.GetIfView()) {
+    // Let anchor view's MenuButtonController handle the highlight.
+    bubble_delegate->set_highlight_button_when_shown(false);
+  }
   bubble_delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   bubble_delegate->SetEnableArrowKeyTraversal(true);
 

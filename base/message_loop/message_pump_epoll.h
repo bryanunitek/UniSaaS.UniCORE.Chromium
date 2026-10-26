@@ -12,7 +12,6 @@
 #include <map>
 
 #include "base/base_export.h"
-#include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/files/scoped_file.h"
 #include "base/memory/raw_ptr.h"
@@ -23,13 +22,6 @@
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
-
-#if DCHECK_IS_ON()
-#include <deque>
-#include <optional>
-
-#include "base/debug/stack_trace.h"
-#endif
 
 namespace base {
 
@@ -49,7 +41,6 @@ namespace base {
 // Caveat: Since both we and the kernel need to walk the list of all fds at
 // every call, don't do it when we have too many FDs.
 BASE_FEATURE(kUsePollForMessagePumpEpoll,
-             "UsePollForMessagePumpEpoll",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // A MessagePump implementation suitable for I/O message loops on Linux-based
@@ -190,33 +181,14 @@ class BASE_EXPORT MessagePumpEpoll : public MessagePump,
     // it from the epoll interest list to avoid unconditionally epoll_wait
     // return, and prevent any future update on this `EpollEventEntry`.
     bool stopped = false;
-
-#if DCHECK_IS_ON()
-    struct EpollHistory {
-      base::debug::StackTrace stack_trace;
-      std::optional<epoll_event> event;
-    };
-    static constexpr ssize_t kEpollHistoryWindowSize = 5;
-    std::deque<EpollHistory> epoll_history_;
-
-    void PushEpollHistory(std::optional<epoll_event> event) {
-      EpollHistory info = {.stack_trace = base::debug::StackTrace(),
-                           .event = event};
-      epoll_history_.push_back(info);
-      if (epoll_history_.size() > kEpollHistoryWindowSize) {
-        epoll_history_.pop_front();
-      }
-    }
-#endif
   };
 
   // State which lives on the stack within Run(), to support nested run loops.
   struct RunState {
     explicit RunState(Delegate* delegate) : delegate(delegate) {}
 
-    // Uses kUnprotectedInRelease: Performance reasons (based on analysis of
-    // sampling profiler data and tab_search:top100:2020).
-    const raw_ptr<Delegate, kUnprotectedInRelease> delegate;
+    // UnprotectedInReleaseForPerformance: Based on analysis of Speedometer 3.
+    const raw_ptr<Delegate, UnprotectedInReleaseForPerformance> delegate;
 
     // Used to flag that the current Run() invocation should return ASAP.
     bool should_quit = false;

@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -23,6 +24,7 @@
 #include "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
 #include "components/password_manager/core/browser/password_cross_domain_confirmation_popup_controller.h"
+#include "components/password_manager/core/browser/password_store/actionable_error.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
 #include "components/password_manager/core/browser/undo_password_change_controller.h"
 #include "components/password_manager/core/browser/webauthn_credentials_delegate.h"
@@ -86,8 +88,9 @@ class PasswordProtectionService;
 #endif
 
 namespace device_reauth {
+class DeviceAuthAvailabilityChecker;
 class DeviceAuthenticator;
-}
+}  // namespace device_reauth
 
 namespace version_info {
 enum class Channel;
@@ -259,10 +262,19 @@ class PasswordManagerClient {
   // Checks whether user re-authentication should be triggered before password
   // filling.
   virtual bool IsReauthBeforeFillingRequired(
+      device_reauth::DeviceAuthAvailabilityChecker* checker);
+
+  // TODO(crbug.com/568405852): Remove with `kDeviceReauthRefactor`.
+  virtual bool IsReauthBeforeFillingRequiredLegacy(
       device_reauth::DeviceAuthenticator* authenticator);
 
-  // Returns a pointer to a DeviceAuthenticator. Might be null if
-  // BiometricAuthentication is not available for a given platform.
+  // Creates a `DeviceAuthAvailabilityChecker`, or returns null if device auth
+  // isn't supported on this platform (e.g. Linux).
+  virtual std::unique_ptr<device_reauth::DeviceAuthAvailabilityChecker>
+  GetDeviceAuthAvailabilityChecker();
+
+  // Creates a `DeviceAuthenticator`, or returns null if device auth isn't
+  // supported on this platform (e.g. Linux).
   virtual std::unique_ptr<device_reauth::DeviceAuthenticator>
   GetDeviceAuthenticator();
 
@@ -366,6 +378,10 @@ class PasswordManagerClient {
   // Gets the sync service associated with this client.
   virtual const syncer::SyncService* GetSyncService() const = 0;
 
+  // Returns the current sync or trusted vault error state that requires user
+  // action, or ActionableError::kNoError if there is none.
+  virtual ActionableError GetActionableError() const;
+
   // Gets the affiliation service associated with this client.
   virtual affiliations::AffiliationService* GetAffiliationService() = 0;
 
@@ -454,15 +470,13 @@ class PasswordManagerClient {
   GetPasswordProtectionService() const = 0;
 #endif
 
-  // Maybe triggers a hats survey that measures the user's perception of
-  // Autofill for passwords. When triggering happens, the survey dialog will be
-  // displayed with a 5s delay. This survey should be triggered after form
-  // submissions.
-  // `filling_assistance` will be logged together with the responses as
-  // in-product data and should be a string representation of the
-  // `FillingAssistance` enum, i.e "Manually filled".
-  virtual void TriggerUserPerceptionOfPasswordManagerSurvey(
-      const std::string& filling_assistance);
+  // Triggers a survey to ask the user about their experience regarding
+  // personalization features in Chrome. When triggering happens, the survey
+  // dialog will be displayed with a 5s delay. This survey should be triggered
+  // after form submissions. `filling_assistance` should be a human-readable
+  // string that is sent to the server in addition to the survey answers (PSD).
+  virtual void TriggerPersonalizationAndTrustSurvey(
+      std::string_view filling_assistance);
 
 #if defined(ON_FOCUS_PING_ENABLED) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   // Checks the safe browsing reputation of the webpage when the
@@ -607,9 +621,11 @@ class PasswordManagerClient {
 
   virtual UndoPasswordChangeController* GetUndoPasswordChangeController();
 
-  // TODO(crbug.com/509852350): Figure out if this is needed on iOS and
-  //  implement it.
+  // Returns true if an actor task is actively actuating on the tab/web state.
   virtual bool IsActorTaskActive();
+
+  // Notifies the client that a password fill event occurred.
+  virtual void OnPasswordFilled(PasswordManagerDriver* driver);
 };
 
 }  // namespace password_manager

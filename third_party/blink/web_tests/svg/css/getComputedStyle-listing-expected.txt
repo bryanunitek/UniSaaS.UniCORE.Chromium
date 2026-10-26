@@ -164,14 +164,14 @@ container-type: normal
 content: normal
 content-visibility: visible
 continue: normal
-corner-bottom-left-shape: round
-corner-bottom-right-shape: round
-corner-end-end-shape: round
-corner-end-start-shape: round
-corner-start-end-shape: round
-corner-start-start-shape: round
-corner-top-left-shape: round
-corner-top-right-shape: round
+corner-bottom-left-shape: superellipse(1)
+corner-bottom-right-shape: superellipse(1)
+corner-end-end-shape: superellipse(1)
+corner-end-start-shape: superellipse(1)
+corner-start-end-shape: superellipse(1)
+corner-start-start-shape: superellipse(1)
+corner-top-left-shape: superellipse(1)
+corner-top-right-shape: superellipse(1)
 counter-increment: none
 counter-reset: none
 counter-set: none
@@ -189,6 +189,7 @@ fill: rgb(0, 128, 0)
 fill-opacity: 1
 fill-rule: nonzero
 filter: none
+fit-tolerance: normal
 flex-basis: auto
 flex-direction: row
 flex-grow: 0
@@ -198,7 +199,6 @@ flex-wrap: nowrap
 float: none
 flood-color: rgb(0, 0, 0)
 flood-opacity: 1
-flow-tolerance: normal
 font-feature-settings: normal
 font-kerning: auto
 font-language-override: normal
@@ -262,6 +262,7 @@ letter-spacing: normal
 lighting-color: rgb(255, 255, 255)
 line-break: auto
 line-height: normal
+link-parameters: none
 list-style-image: none
 list-style-position: outside
 list-style-type: disc
@@ -290,6 +291,7 @@ math-depth: 0
 math-shift: normal
 math-style: normal
 max-block-size: none
+max-content-sizing: auto
 max-height: none
 max-inline-size: none
 max-lines: auto
@@ -327,6 +329,7 @@ overscroll-behavior-block: auto
 overscroll-behavior-inline: auto
 overscroll-behavior-x: auto
 overscroll-behavior-y: auto
+overscroll-container-type: auto
 padding-block-end: 0px
 padding-block-start: 0px
 padding-bottom: 0px
@@ -345,7 +348,7 @@ position-anchor: normal
 position-area: none
 position-try-fallbacks: none
 position-try-order: normal
-position-visibility: anchors-visible
+position-visibility: anchor-visible
 print-color-adjust: economy
 quotes: auto
 r: 0px
@@ -426,9 +429,10 @@ text-box-trim: none
 text-combine-upright: none
 text-decoration: none
 text-decoration-color: rgb(0, 0, 0)
+text-decoration-inset: 0px
 text-decoration-line: none
 text-decoration-skip-ink: auto
-text-decoration-skip-spaces: none
+text-decoration-skip-spaces: start end
 text-decoration-style: solid
 text-decoration-thickness: auto
 text-emphasis-color: rgb(0, 0, 0)

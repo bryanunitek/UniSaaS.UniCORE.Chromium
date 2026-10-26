@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_highlights_from_point_options.h"
 #include "third_party/blink/renderer/core/dom/abstract_range.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/node_range.h"
 #include "third_party/blink/renderer/core/dom/opaque_range.h"
 #include "third_party/blink/renderer/core/dom/static_range.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -45,22 +46,25 @@ bool IsTrackableReplacedElement(const Element& element) {
 }
 
 // Resolves `abstract_range` to an EphemeralRange for geometry queries. When the
-// OpaqueRange feature is enabled and the range is opaque, this builds its inner
-// value-geometry range and returns std::nullopt if that can't be built.
+// OpaqueRange feature is enabled and the range is opaque, this resolves its
+// value offsets to positions in the inner editor and returns std::nullopt if
+// they can't be resolved.
 std::optional<EphemeralRange> ResolveEphemeralRange(
     AbstractRange* abstract_range,
     Document* document) {
   if (RuntimeEnabledFeatures::OpaqueRangeEnabled(
           document->GetExecutionContext())) {
     if (auto* opaque_range = DynamicTo<OpaqueRange>(abstract_range)) {
-      Range* inner_range = opaque_range->BuildValueGeometryContext();
-      if (!inner_range) {
+      EphemeralRange value_range = opaque_range->GetRangeForValue();
+      if (value_range.IsNull()) {
         return std::nullopt;
       }
-      return EphemeralRange(inner_range);
+      return value_range;
     }
   }
-  return EphemeralRange(abstract_range);
+  auto* node_range = DynamicTo<NodeRange>(abstract_range);
+  CHECK(node_range);
+  return EphemeralRange(node_range);
 }
 
 }  // namespace
@@ -76,7 +80,7 @@ HighlightRegistry* HighlightRegistry::From(LocalDOMWindow& window) {
 }
 
 HighlightRegistry::HighlightRegistry(LocalDOMWindow& window)
-    : Supplement<LocalDOMWindow>(window), frame_(window.GetFrame()) {}
+    : Supplement<LocalDOMWindow>(window) {}
 
 HighlightRegistry::~HighlightRegistry() = default;
 
@@ -84,12 +88,20 @@ const char HighlightRegistry::kSupplementName[] = "HighlightRegistry";
 
 void HighlightRegistry::Trace(blink::Visitor* visitor) const {
   visitor->Trace(highlights_);
-  visitor->Trace(frame_);
   visitor->Trace(active_iterators_);
   visitor->Trace(active_highlights_in_node_);
   visitor->Trace(active_highlights_in_replaced_element_);
   ScriptWrappable::Trace(visitor);
   Supplement<LocalDOMWindow>::Trace(visitor);
+}
+
+LocalFrame* HighlightRegistry::GetFrame() const {
+  return GetSupplementable()->GetFrame();
+}
+
+Document* HighlightRegistry::GetDocument() const {
+  LocalFrame* frame = GetFrame();
+  return frame ? frame->GetDocument() : nullptr;
 }
 
 HighlightRegistry* HighlightRegistry::GetHighlightRegistry(const Node* node) {
@@ -116,10 +128,12 @@ bool HighlightRegistry::IsAbstractRangePaintable(AbstractRange* abstract_range,
     }
   }
 
-  if (!abstract_range->startContainer() ||
-      !abstract_range->startContainer()->isConnected() ||
-      !abstract_range->endContainer() ||
-      !abstract_range->endContainer()->isConnected()) {
+  auto* node_range = DynamicTo<NodeRange>(abstract_range);
+  CHECK(node_range);
+  if (!node_range->startContainer() ||
+      !node_range->startContainer()->isConnected() ||
+      !node_range->endContainer() ||
+      !node_range->endContainer()->isConnected()) {
     return false;
   }
 
@@ -134,7 +148,7 @@ bool HighlightRegistry::IsAbstractRangePaintable(AbstractRange* abstract_range,
 // Deletes all HighlightMarkers and rebuilds them with the contents of
 // highlights_.
 void HighlightRegistry::ValidateHighlightMarkers() {
-  Document* document = frame_->GetDocument();
+  Document* document = GetDocument();
   if (!document)
     return;
 
@@ -317,26 +331,42 @@ const HashSet<AtomicString>& HighlightRegistry::GetActiveHighlights(
 }
 
 void HighlightRegistry::ScheduleRepaint() {
+  LocalFrame* frame = GetFrame();
+  if (!frame) {
+    return;
+  }
   force_markers_validation_ = true;
-  if (LocalFrameView* local_frame_view = frame_->View()) {
+  if (LocalFrameView* local_frame_view = frame->View()) {
     local_frame_view->ScheduleVisualUpdateForVisualOverflowIfNeeded();
   }
 }
 
 void HighlightRegistry::SetForTesting(AtomicString highlight_name,
                                       Highlight* highlight) {
+  Set(highlight_name, highlight);
+}
+
+void HighlightRegistry::Set(const AtomicString& highlight_name,
+                            Highlight* highlight) {
+  // Register before deregistering the Highlight being replaced, so the
+  // registration count doesn't transiently drop to zero when a name is set to
+  // the Highlight it already maps to.
+  highlight->RegisterIn(this);
   auto highlights_iterator = GetMapIterator(highlight_name);
   if (highlights_iterator != highlights_.end()) {
-    highlights_iterator->Get()->highlight->DeregisterFrom(this);
-    // It's necessary to delete it and insert a new entry to the registry
-    // instead of just modifying the existing one so the insertion order is
-    // preserved.
-    NotifyIteratorsWillRemoveEntry(highlights_iterator->Get());
-    highlights_.erase(highlights_iterator);
+    // Map semantics: setting an existing key replaces the value without
+    // changing the entry's position, so the entry is updated in place instead
+    // of being erased and reinserted (which would move it to the end of the
+    // iteration order). The registration position is still updated so the
+    // highlight keeps stacking above the previously registered ones.
+    HighlightRegistryMapEntry* entry = highlights_iterator->Get();
+    entry->highlight->DeregisterFrom(this);
+    entry->highlight = highlight;
+    entry->registration_position = highlights_registered_++;
+  } else {
+    highlights_.insert(MakeGarbageCollected<HighlightRegistryMapEntry>(
+        highlight_name, highlight, highlights_registered_++));
   }
-  highlights_.insert(MakeGarbageCollected<HighlightRegistryMapEntry>(
-      highlight_name, highlight, highlights_registered_++));
-  highlight->RegisterIn(this);
   ScheduleRepaint();
 }
 
@@ -358,7 +388,7 @@ HighlightRegistry* HighlightRegistry::setForBinding(
     ExceptionState& exception_state) {
   UseCounter::Count(ExecutionContext::From(script_state),
                     WebFeature::kHighlightAPIRegisterHighlight);
-  SetForTesting(highlight_name, highlight);
+  Set(highlight_name, highlight);
   return this;
 }
 
@@ -468,7 +498,8 @@ HeapVector<Member<HighlightHitResult>> HighlightRegistry::highlightsFromPoint(
     float x,
     float y,
     const HighlightsFromPointOptions* options) {
-  Document* document = frame_->GetDocument();
+  LocalFrame* frame = GetFrame();
+  Document* document = frame ? frame->GetDocument() : nullptr;
   if (!document || !document->GetLayoutView()) {
     return HeapVector<Member<HighlightHitResult>>();
   }
@@ -545,7 +576,7 @@ HeapVector<Member<HighlightHitResult>> HighlightRegistry::highlightsFromPoint(
   // |x| and |y| are in CSS pixels, which need to be converted to physical
   // pixels to determine if they're inside layout rectangles.
   gfx::PointF hit_point(x, y);
-  hit_point.Scale(frame_->DevicePixelRatio());
+  hit_point.Scale(frame->DevicePixelRatio());
 
   HeapVector<Member<HighlightHitResult>> highlight_hit_results;
   for (const AtomicString& highlight_name : highlight_names_at_hit_node) {
@@ -553,26 +584,24 @@ HeapVector<Member<HighlightHitResult>> HighlightRegistry::highlightsFromPoint(
     CHECK(highlights_iterator != highlights_.end());
     Highlight* highlight = highlights_iterator->Get()->highlight;
     HeapVector<Member<AbstractRange>> highlight_ranges_hit;
-    for (auto& abstract_range : highlight->GetRanges()) {
+    for (AbstractRange* abstract_range : highlight->GetRanges()) {
       // If the range starts and ends in a different tree scope than the hit
       // node (i.e., the range encloses a shadow tree), do not return it when
       // the hit is on a node inside that shadow tree. Only consider ranges
       // within the same tree scope as the hit node. OpaqueRanges are internal
       // to a text control and always share the hit node's effective scope.
-      const bool is_opaque_range = RuntimeEnabledFeatures::OpaqueRangeEnabled(
-                                       document->GetExecutionContext()) &&
-                                   abstract_range->IsOpaqueRange();
-      if (!is_opaque_range &&
-          abstract_range->startContainer()->GetTreeScope() !=
-              hit_node->GetTreeScope()) {
-        continue;
-      }
-
       if (!IsAbstractRangePaintable(abstract_range, document)) {
         continue;
       }
+
+      auto* node_range = DynamicTo<NodeRange>(abstract_range);
+      if (node_range && node_range->startContainer()->GetTreeScope() !=
+                            hit_node->GetTreeScope()) {
+        continue;
+      }
+
       std::optional<EphemeralRange> ephemeral_range =
-          ResolveEphemeralRange(abstract_range.Get(), document);
+          ResolveEphemeralRange(abstract_range, document);
       if (!ephemeral_range) {
         continue;
       }

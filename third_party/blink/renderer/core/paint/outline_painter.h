@@ -16,6 +16,7 @@ class SkPath;
 
 namespace blink {
 
+class Color;
 class ComputedStyle;
 class DisplayItemClient;
 class GraphicsContext;
@@ -43,10 +44,13 @@ class CORE_EXPORT OutlinePainter {
 
   static void PaintFocusRingPath(GraphicsContext&,
                                  const Path&,
-                                 const ComputedStyle&);
+                                 const ComputedStyle&,
+                                 const Color&);
 
   static int OutlineOutsetExtent(const ComputedStyle&,
                                  const LayoutObject::OutlineInfo&);
+
+  static Color FocusRingInnerColorForTesting(const ComputedStyle&);
 
   struct Line {
     SkPoint start;

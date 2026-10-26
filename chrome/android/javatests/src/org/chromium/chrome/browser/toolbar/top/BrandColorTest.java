@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.toolbar.top;
 
+import static org.junit.Assert.assertEquals;
+
 import android.graphics.Color;
 import android.os.Build;
 import android.text.TextUtils;
@@ -11,16 +13,15 @@ import android.text.TextUtils;
 import androidx.test.filters.SmallTest;
 
 import org.hamcrest.Matchers;
-import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.ObserverList.RewindableIterator;
 import org.chromium.base.SysUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
@@ -38,8 +39,8 @@ import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabTestUtils;
 import org.chromium.chrome.browser.toolbar.ToolbarDataProvider;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -48,14 +49,15 @@ import org.chromium.ui.base.DeviceFormFactor;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Features.DisableFeatures({ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE})
-// TODO(crbug.com/428056054): Do not read color from system window bars on B+.
+// TODO(crbug.com/428281587): Do not read color from system window bars on B+.
 @DisableIf.Build(
         sdk_is_greater_than = Build.VERSION_CODES.VANILLA_ICE_CREAM,
-        message = "crbug.com/428056054")
+        message = "crbug.com/428281587")
+@Batch(Batch.PER_CLASS)
 public class BrandColorTest {
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private static final String BRAND_COLOR_1 = "#482329";
     private static final String BRAND_COLOR_2 = "#505050";
@@ -104,7 +106,7 @@ public class BrandColorTest {
     }
 
     protected WebPageStation startMainActivityWithURL(String url) {
-        WebPageStation page = mActivityTestRule.startOnUrl(url);
+        WebPageStation page = mActivityTestRule.startOnWebPage(url);
         mToolbar = (ToolbarPhone) mActivityTestRule.getActivity().findViewById(R.id.toolbar);
         mToolbarDataProvider = mToolbar.getToolbarDataProvider();
         mDefaultColor =
@@ -152,7 +154,7 @@ public class BrandColorTest {
                             .onThemeColorChanged(mDefaultColor, false);
                     // Since the color should change instantly, there is no need to use the criteria
                     // helper.
-                    Assert.assertEquals(
+                    assertEquals(
                             mToolbarDataProvider.getPrimaryColor(),
                             mToolbar.getBackgroundDrawable().getColor());
                 });
@@ -170,9 +172,8 @@ public class BrandColorTest {
                 TaskTraits.UI_DEFAULT,
                 () -> {
                     Tab tab = mActivityTestRule.getActivity().getActivityTab();
-                    RewindableIterator<TabObserver> observers = TabTestUtils.getTabObservers(tab);
-                    while (observers.hasNext()) {
-                        observers.next().onLoadStarted(tab, true);
+                    for (TabObserver observer : TabTestUtils.getTabObservers(tab)) {
+                        observer.onLoadStarted(tab, true);
                     }
                 });
         checkForBrandColor(Color.parseColor(BRAND_COLOR_1));

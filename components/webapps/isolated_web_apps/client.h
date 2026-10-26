@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/component_export.h"
 #include "base/types/expected.h"
 #include "base/version.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
@@ -15,7 +16,6 @@
 #include "components/webapps/isolated_web_apps/types/url_loading_types.h"
 #include "content/public/browser/frame_tree_node_id.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "url/gurl.h"
 
 namespace content {
 class BrowserContext;
@@ -27,7 +27,7 @@ class IwaRuntimeDataProvider;
 
 // This singleton acts as a bridge between the browser-independent IWA layer and
 // the embedder layer (i.e. Chrome).
-class IwaClient {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IwaClient {
  public:
   struct SourceRequestError {
     net::Error net_error;

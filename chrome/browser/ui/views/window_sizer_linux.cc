@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/views/window_sizer_linux.h"
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -17,11 +17,11 @@
 void WindowSizer::GetBrowserWindowBoundsAndShowState(
     std::unique_ptr<StateProvider> state_provider,
     const gfx::Rect& specified_bounds,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     gfx::Rect* bounds,
     ui::mojom::WindowShowState* show_state) {
-  DCHECK(bounds);
-  DCHECK(show_state);
+  CHECK(bounds, base::NotFatalUntil::M162);
+  CHECK(show_state, base::NotFatalUntil::M162);
   WindowSizerLinux sizer(std::move(state_provider), browser);
   // Pre-populate the window state with our default.
   *show_state = GetWindowDefaultShowState(browser);
@@ -31,7 +31,7 @@ void WindowSizer::GetBrowserWindowBoundsAndShowState(
 
 WindowSizerLinux::WindowSizerLinux(
     std::unique_ptr<StateProvider> state_provider,
-    Browser* browser)
+    BrowserWindowInterface* browser)
     : WindowSizer(std::move(state_provider), browser) {}
 
 WindowSizerLinux::~WindowSizerLinux() = default;
@@ -45,7 +45,7 @@ void WindowSizerLinux::AdjustWorkAreaForPlatform(gfx::Rect& work_area) {
   if (browser() && (!ui::OzonePlatform::GetInstance()
                          ->GetPlatformRuntimeProperties()
                          .supports_server_side_window_decorations ||
-                    browser()->profile()->GetPrefs()->GetBoolean(
+                    browser()->GetProfile()->GetPrefs()->GetBoolean(
                         prefs::kUseCustomChromeFrame))) {
     work_area.Inset(gfx::ShadowValue::GetMargin(
         BrowserFrameViewLinux::GetShadowValues(true)));

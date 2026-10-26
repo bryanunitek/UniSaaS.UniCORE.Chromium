@@ -2,29 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
+
 #include <algorithm>
 #include <memory>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/security_interstitials/core/features.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -40,7 +47,20 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/events/base_event_utils.h"
+#include "ui/events/event.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/styled_label.h"
+#include "ui/views/interaction/interaction_test_util_views.h"
+#include "ui/views/metrics.h"
+#include "ui/views/test/button_test_api.h"
+#include "ui/views/window/dialog_client_view.h"
+#include "ui/views/window/dialog_delegate.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/test/base/scoped_channel_override.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
 
 using security_interstitials::MetricsHelper;
 using security_interstitials::https_only_mode::BlockingResult;
@@ -59,6 +79,10 @@ enum class AskBeforeHttpDialogControllerTestType {
   // Enables HFM in Incognito mode. Runs testcases inside an Incognito
   // window.
   kHttpsFirstModeIncognito,
+
+  // Enables HFM in Enterprise Isolated Mode. Runs testcases inside an Isolated
+  // Mode window.
+  kHttpsFirstModeIsolatedMode,
 
   // Enables HFM in balanced mode.
   kHttpsFirstBalancedMode,
@@ -91,6 +115,8 @@ class AskBeforeHttpDialogControllerUiTest
         break;
 
       case AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIncognito:
+      case AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIsolatedMode:
+        // Isolated Mode shares the HFM-in-Incognito feature flag and pref.
         feature_list_.InitWithFeatures(
             /*enabled_features=*/{security_interstitials::features::
                                       kHttpsFirstDialogUi,
@@ -161,7 +187,9 @@ class AskBeforeHttpDialogControllerUiTest
     // window, and then should behave like kHttpsFirstMode type tests but
     // without enabling the full HFM pref.
     if (test_type() ==
-        AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIncognito) {
+            AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIncognito ||
+        test_type() == AskBeforeHttpDialogControllerTestType::
+                           kHttpsFirstModeIsolatedMode) {
       UseIncognitoBrowser();
       SetPref(false);
     }
@@ -186,17 +214,26 @@ class AskBeforeHttpDialogControllerUiTest
   }
 
   void TearDownOnMainThread() override {
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsOnlyModeEnabled);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsOnlyModeEnabled);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kHttpsOnlyModeAutoEnabled);
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsUpgradeFallbacks);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsUpgradeFallbacks);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kHttpsUpgradeNavigations);
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsFirstBalancedMode);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsFirstBalancedMode);
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     mock_cert_verifier_.SetUpCommandLine(command_line);
+    if (test_type() ==
+        AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIsolatedMode) {
+      command_line->AppendSwitch(
+          enterprise_isolated_mode::switches::
+              kForceEnterpriseIsolatedModeReplacesIncognito);
+    }
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -210,7 +247,7 @@ class AskBeforeHttpDialogControllerUiTest
   // Incognito testing support
   //
   // Returns the active Browser for the test type being run.
-  Browser* GetBrowser() const {
+  BrowserWindowInterface* GetBrowser() const {
     return incognito_browser_ ? incognito_browser_.get() : browser();
   }
   // Call to use an Incognito browser rather than the default.
@@ -224,12 +261,12 @@ class AskBeforeHttpDialogControllerUiTest
   AskBeforeHttpDialogControllerTestType test_type() const { return GetParam(); }
 
   void SetPref(bool enabled) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsOnlyModeEnabled, enabled);
   }
 
   void SetBalancedPref(bool enabled) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsFirstBalancedMode, enabled);
   }
 
@@ -258,11 +295,16 @@ class AskBeforeHttpDialogControllerUiTest
     auto* tab_strip = GetBrowser()->tab_strip_model();
     std::unique_ptr<content::WebContents> new_contents =
         content::WebContents::Create(
-            content::WebContents::CreateParams(GetBrowser()->profile()));
-    return tab_strip->DiscardWebContentsAt(index, std::move(new_contents));
+            content::WebContents::CreateParams(GetBrowser()->GetProfile()));
+    return tab_strip->DiscardWebContents(tab_strip->GetWebContentsAt(index),
+                                         std::move(new_contents));
   }
 
  private:
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
+  chrome::ScopedChannelOverride channel_override_{
+      chrome::ScopedChannelOverride::Channel::kDev};
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
   // TODO(https://crbug.com/423465927): Explore a better approach to make the
   // existing tests run with the prewarm feature enabled.
   test::ScopedPrewarmFeatureList prewarm_feature_list_{
@@ -273,7 +315,8 @@ class AskBeforeHttpDialogControllerUiTest
   content::ContentMockCertVerifier mock_cert_verifier_;
   base::HistogramTester histograms_;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -282,6 +325,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         AskBeforeHttpDialogControllerTestType::kHttpsFirstModeOnly,
         AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIncognito,
+        AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIsolatedMode,
         AskBeforeHttpDialogControllerTestType::kHttpsFirstBalancedMode,
         AskBeforeHttpDialogControllerTestType::kAll),
     // Map param to a human-readable string for better test output.
@@ -292,6 +336,8 @@ INSTANTIATE_TEST_SUITE_P(
           return "HttpsFirstModeOnly";
         case AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIncognito:
           return "HttpsFirstModeIncognito";
+        case AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIsolatedMode:
+          return "HttpsFirstModeIsolatedMode";
         case AskBeforeHttpDialogControllerTestType::kHttpsFirstBalancedMode:
           return "HttpsFirstBalancedMode";
         case AskBeforeHttpDialogControllerTestType::kAll:
@@ -366,7 +412,73 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
       histograms()->ExpectBucketCount(kInterstitialReasonHistogram,
                                       InterstitialReason::kIncognito, 1);
       break;
+    case AskBeforeHttpDialogControllerTestType::kHttpsFirstModeIsolatedMode:
+      histograms()->ExpectBucketCount(kInterstitialReasonHistogram,
+                                      InterstitialReason::kIsolatedMode, 1);
+      break;
   }
+
+  ExpectUKMEntry(http_url, BlockingResult::kInterstitialProceed);
+}
+
+// Mouse clicks landing on the "Continue to site" button while the dialog's
+// input protection window is active (e.g. a click arriving right as the
+// dialog appears) must be ignored, matching the protection that the standard
+// dialog buttons get from DialogClientView. A click arriving after the
+// protection window has passed should still proceed to the site.
+IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
+                       FailedUpgrade_WarningShown_EarlyContinueClickIgnored) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTab);
+
+  GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
+
+  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
+  EXPECT_EQ(http_url, contents->GetLastCommittedURL());
+
+  RunTestSequence(
+      InAnyContext(
+          WaitForShow(AskBeforeHttpDialogController::kContinueButtonId)),
+      InSameContext(
+          InstrumentTab(kTestTab),
+          // Simulate a mouse click on the button within the input protection
+          // window. The protection window is restarted first so that the
+          // click reliably falls inside it, regardless of how much time has
+          // passed since the dialog was shown.
+          WithView(
+              AskBeforeHttpDialogController::kContinueButtonId,
+              [](views::Button* button) {
+                button->GetWidget()
+                    ->widget_delegate()
+                    ->AsDialogDelegate()
+                    ->GetDialogClientView()
+                    ->TriggerInputProtection(/*force_early=*/true);
+                views::test::InteractionTestUtilSimulatorViews::PressButton(
+                    button, ui::test::InteractionTestUtil::InputType::kMouse);
+              }),
+          // The click must have been ignored: the dialog is still showing.
+          EnsurePresent(AskBeforeHttpDialogController::kContinueButtonId),
+          // A click arriving after the protection window has passed is
+          // accepted and continues to the site.
+          WithView(
+              AskBeforeHttpDialogController::kContinueButtonId,
+              [](views::Button* button) {
+                const ui::MouseEvent click(
+                    ui::EventType::kMousePressed, gfx::PointF(), gfx::PointF(),
+                    ui::EventTimeForNow() + 2 * views::GetDoubleClickInterval(),
+                    ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
+                views::test::ButtonTestApi(button).NotifyClick(click);
+              })
+              .SetMustRemainVisible(false),
+          WaitForWebContentsNavigation(kTestTab, http_url)));
+
+  // Only the delayed click should count as a decision on the warning.
+  histograms()->ExpectBucketCount("interstitial.https_first_mode.decision",
+                                  MetricsHelper::Decision::SHOW, 1);
+  histograms()->ExpectBucketCount("interstitial.https_first_mode.decision",
+                                  MetricsHelper::Decision::PROCEED, 1);
 
   ExpectUKMEntry(http_url, BlockingResult::kInterstitialProceed);
 }
@@ -559,7 +671,8 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
 class CrashTriggerView : public views::View {
   METADATA_HEADER(CrashTriggerView, views::View)
  public:
-  explicit CrashTriggerView(Browser* browser) : browser_(browser) {
+  explicit CrashTriggerView(BrowserWindowInterface* browser)
+      : browser_(browser) {
     SetFocusBehavior(FocusBehavior::ALWAYS);
     GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
     GetViewAccessibility().SetName(u"Crash Trigger");
@@ -567,7 +680,7 @@ class CrashTriggerView : public views::View {
 
   void OnFocus() override {
     if (auto* tab = tabs::TabInterface::MaybeGetFromContents(
-            browser_->tab_strip_model()->GetActiveWebContents())) {
+            browser_->GetTabStripModel()->GetActiveWebContents())) {
       if (auto* controller = AskBeforeHttpDialogController::From(tab)) {
         controller->CloseDialog();
       }
@@ -576,7 +689,7 @@ class CrashTriggerView : public views::View {
   }
 
  private:
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
 };
 
 BEGIN_METADATA(CrashTriggerView)
@@ -664,4 +777,39 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
             .LoadURLWithParams(params);
       }),
       WaitForWebContentsNavigation(kBackgroundTab, http_url));
+}
+
+// Tests that reparenting a tab with an open Ask-before-HTTP dialog into another
+// browser window preserves the dialog. Regression test for crbug.com/513637237.
+IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
+                       ReparentTabPreservesDialog) {
+  GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
+
+  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
+  EXPECT_EQ(http_url, contents->GetLastCommittedURL());
+
+  RunTestSequence(
+      InAnyContext(
+          WaitForShow(AskBeforeHttpDialogController::kContinueButtonId)),
+      Do([&]() {
+        // Add a placeholder tab to prevent the original browser from closing
+        // when its active tab is detached.
+        chrome::AddTabAt(GetBrowser(), GURL("about:blank"), 1,
+                         /*foreground=*/false);
+
+        // Create a second browser window and move the tab to it.
+        BrowserWindowInterface* second_browser =
+            CreateBrowser(GetBrowser()->GetProfile());
+        std::unique_ptr<tabs::TabModel> detached_tab =
+            GetBrowser()->tab_strip_model()->DetachTabAtForInsertion(0);
+        second_browser->GetTabStripModel()->AppendTab(std::move(detached_tab),
+                                                      /*foreground=*/true);
+      }),
+      // Verify that after reparenting, the dialog's continue button is still
+      // present and visible in the second browser window.
+      InAnyContext(
+          WaitForShow(AskBeforeHttpDialogController::kContinueButtonId)));
 }

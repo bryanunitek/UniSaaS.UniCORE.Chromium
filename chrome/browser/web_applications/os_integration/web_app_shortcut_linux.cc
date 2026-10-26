@@ -126,7 +126,8 @@ bool LaunchXdgUtility(const std::vector<std::string>& argv, int* exit_code) {
 
 const char kDirectoryFilename[] = "chrome-apps.directory";
 
-std::string CreateShortcutIcon(const gfx::ImageFamily& icon_images,
+std::string CreateShortcutIcon(base::Environment* env,
+                               const gfx::ImageFamily& icon_images,
                                const base::FilePath& shortcut_filename) {
   if (icon_images.empty()) {
     RecordCreateIcon(CreateShortcutIconResult::kEmptyIconImages);
@@ -143,6 +144,8 @@ std::string CreateShortcutIcon(const gfx::ImageFamily& icon_images,
   base::FilePath temp_file_path =
       temp_dir.GetPath().Append(shortcut_filename.ReplaceExtension("png"));
   std::string icon_name = temp_file_path.BaseName().RemoveExtension().value();
+  std::string desktop_icon = icon_name;
+  int largest_installed_icon_width = 0;
 
   for (gfx::ImageFamily::const_iterator it = icon_images.begin();
        it != icon_images.end(); ++it) {
@@ -188,16 +191,31 @@ std::string CreateShortcutIcon(const gfx::ImageFamily& icon_images,
       RecordCreateIcon(CreateShortcutIconResult::kFailToInstallIcon);
     } else {
       RecordCreateIcon(CreateShortcutIconResult::kSuccess);
+      if (width > largest_installed_icon_width) {
+        base::FilePath icon_path =
+            base::nix::GetXDGDataWriteLocation(env)
+                .Append("icons")
+                .Append("hicolor")
+                .AppendASCII(base::NumberToString(width) + "x" +
+                             base::NumberToString(width))
+                .Append("apps")
+                .Append(base::FilePath(icon_name).AddExtension("png"));
+        if (icon_path.IsAbsolute()) {
+          desktop_icon = icon_path.value();
+          largest_installed_icon_width = width;
+        }
+      }
     }
   }
-  return icon_name;
+  return desktop_icon;
 }
 
 bool CreateShortcutAtLocation(const base::FilePath location_path,
                               const base::FilePath& shortcut_filename,
                               const std::string& contents) {
   // Make sure that we will later call openat in a secure way.
-  DCHECK_EQ(shortcut_filename.BaseName().value(), shortcut_filename.value());
+  CHECK_EQ(shortcut_filename.BaseName().value(), shortcut_filename.value(),
+           base::NotFatalUntil::M162);
 
   int location_fd = open(location_path.value().c_str(), O_RDONLY | O_DIRECTORY);
   if (location_fd < 0) {
@@ -352,7 +370,8 @@ DesktopActionInfo::DesktopActionInfo(const std::string& id,
   auto is_character_allowed = [](auto c) {
     return base::IsAsciiAlpha(c) || base::IsAsciiDigit(c) || c == '-';
   };
-  DCHECK(std::all_of(id.begin() + 1, id.end(), is_character_allowed));
+  CHECK(std::all_of(id.begin() + 1, id.end(), is_character_allowed),
+        base::NotFatalUntil::M162);
 #endif  // DCHECK_IS_ON()
 }
 
@@ -522,7 +541,7 @@ bool CreateDesktopShortcut(base::Environment* env,
   }
 
   std::string icon_name =
-      CreateShortcutIcon(shortcut_info.favicon, shortcut_filename);
+      CreateShortcutIcon(env, shortcut_info.favicon, shortcut_filename);
 
   std::string app_name = GenerateApplicationNameFromInfo(shortcut_info);
 
@@ -580,9 +599,19 @@ bool CreateDesktopShortcut(base::Environment* env,
       NOTREACHED();
   }
 
-  std::vector<std::string> mime_types(
-      shortcut_info.file_handler_mime_types.begin(),
-      shortcut_info.file_handler_mime_types.end());
+  std::vector<std::string> mime_types;
+  // Filter out any "x-scheme-handler/*" pseudo-MIME types from file handlers.
+  // In FreeDesktop .desktop files, "x-scheme-handler/*" entries associate URL
+  // schemes and must only originate from validated protocol_handlers below.
+  for (const auto& file_handler_mime_type :
+       shortcut_info.file_handler_mime_types) {
+    if (!base::EqualsCaseInsensitiveASCII(file_handler_mime_type,
+                                          "x-scheme-handler") &&
+        !base::StartsWith(file_handler_mime_type, "x-scheme-handler/",
+                          base::CompareCase::INSENSITIVE_ASCII)) {
+      mime_types.push_back(file_handler_mime_type);
+    }
+  }
 
   // Convert protocol handlers into mime types for registration in the
   // .desktop file.
@@ -624,7 +653,7 @@ ShortcutLocations GetExistingShortcutLocations(
 
   base::FilePath shortcut_filename =
       GetAppDesktopShortcutFilename(profile_path, extension_id);
-  DCHECK(!shortcut_filename.empty());
+  CHECK(!shortcut_filename.empty(), base::NotFatalUntil::M162);
   ShortcutLocations locations;
 
   // Determine whether there is a shortcut on desktop.
@@ -674,7 +703,7 @@ bool DeleteDesktopShortcuts(base::Environment* env,
 
   base::FilePath shortcut_filename =
       GetAppDesktopShortcutFilename(profile_path, extension_id);
-  DCHECK(!shortcut_filename.empty());
+  CHECK(!shortcut_filename.empty(), base::NotFatalUntil::M162);
 
   bool deleted_from_desktop = DeleteShortcutOnDesktop(shortcut_filename);
   // Delete shortcuts from |kDirectoryFilename|.
@@ -839,7 +868,7 @@ std::vector<base::FilePath> GetShortcutLocations(
   std::vector<base::FilePath> shortcut_locations;
   base::FilePath shortcut_filename =
       GetAppDesktopShortcutFilename(profile_path, app_id);
-  DCHECK(!shortcut_filename.empty());
+  CHECK(!shortcut_filename.empty(), base::NotFatalUntil::M162);
 
   if (locations.on_desktop) {
     base::FilePath desktop_path = GetDesktopPath();
@@ -864,7 +893,7 @@ std::vector<base::FilePath> GetShortcutLocations(
   }
 
   // Can't retrieve file name for applications menu location.
-  DCHECK(!locations.applications_menu_location);
+  CHECK(!locations.applications_menu_location, base::NotFatalUntil::M162);
   return shortcut_locations;
 }
 

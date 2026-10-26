@@ -2,34 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://webui-toolbar.top-chrome/app.js';
+import 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
 import {assertArrayEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
+import {TestSearchboxBrowserProxy} from 'chrome://webui-test/cr_components/searchbox/test_searchbox_browser_proxy.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
-import {BrowserProxyImpl, EventDispositionFlag, INVALID_FOCUS_REQUEST_HANDLE, OmniboxTextColor} from 'chrome://webui-toolbar.top-chrome/app.js';
-import type {OmniboxAction} from 'chrome://webui-toolbar.top-chrome/app.js';
-import type {ReadonlyOmniboxElement} from 'chrome://webui-toolbar.top-chrome/readonly_omnibox.js';
+import {BrowserProxyImpl, EventDispositionFlag, OmniboxTextColor, SearchboxBrowserProxy} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+import type {ReadonlyOmniboxElement} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
-class MockToolbarUiHandler extends TestBrowserProxy {
-  constructor() {
-    super(['onOmniboxAction']);
-  }
-
-  onOmniboxAction(action: OmniboxAction) {
-    this.methodCalled('onOmniboxAction', action);
-  }
-}
-
-class MockBrowserProxy extends TestBrowserProxy {
-  toolbarUIHandler: MockToolbarUiHandler = new MockToolbarUiHandler();
-
-  addFocusRequestListener() {
-    return INVALID_FOCUS_REQUEST_HANDLE;
-  }
-
-  removeFocusRequestListener() {}
-}
+import {TestToolbarBrowserProxy} from './test_toolbar_browser_proxy.js';
+import type {TestToolbarUiHandler} from './test_toolbar_browser_proxy.js';
 
 // These tests care about focus and selection so can't be parallelized.
 // TODO(crbug.com/500653057): Since the <input> now keeps track of selection,
@@ -37,29 +19,37 @@ class MockBrowserProxy extends TestBrowserProxy {
 suite('ReadOnlyOmniboxFocus', function() {
   let omnibox: ReadonlyOmniboxElement;
   let other: HTMLInputElement;  // A focusable sibling element.
-  let uiHandler: MockToolbarUiHandler;
+  let uiHandler: TestToolbarUiHandler;
 
   const initialState = {
     browserVersion: 0,
     uiVersion: 0,
     textPieces: [],
+    placeholder: null,
     inlineAutocompletion: '',
     additionalText: '',
+    a11yFriendlySuggestionText: '',
     formattedFullUrl: '',
     selection: null,
     textIsUrl: false,
     userInputInProgress: false,
+    hasTemporaryText: false,
   };
 
+  function getTextInput(): HTMLInputElement|HTMLTextAreaElement {
+    return omnibox.$.textInput.inputElement;
+  }
+
   function getStringSelection(): string {
-    const inp = omnibox.$.textInput;
+    const inp = getTextInput();
     return inp.value.substring(inp.selectionStart || 0, inp.selectionEnd || 0);
   }
 
   setup(async () => {
-    const browserProxy = new MockBrowserProxy();
+    const browserProxy = new TestToolbarBrowserProxy();
     uiHandler = browserProxy.toolbarUIHandler;
-    BrowserProxyImpl.setInstance(browserProxy as any);
+    BrowserProxyImpl.setInstance(browserProxy);
+    SearchboxBrowserProxy.setInstance(new TestSearchboxBrowserProxy());
 
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     omnibox = document.createElement('readonly-omnibox');
@@ -68,7 +58,7 @@ suite('ReadOnlyOmniboxFocus', function() {
     other = document.createElement('input');
     document.body.appendChild(omnibox);
     document.body.appendChild(other);
-    omnibox.$.textInput.focus();
+    getTextInput().focus();
     await microtasksFinished();
   });
 
@@ -86,7 +76,7 @@ suite('ReadOnlyOmniboxFocus', function() {
     };
     await microtasksFinished();
     assertEquals('Hello', omnibox.$.textContainer.textContent);
-    assertEquals('Hello', omnibox.$.textInput.value);
+    assertEquals('Hello', getTextInput().value);
     assertEquals('ello', getStringSelection());
     const style = omnibox.$.textContainer.computedStyleMap();
     assertEquals('ellipsis', style.get('text-overflow')?.toString());
@@ -111,7 +101,7 @@ suite('ReadOnlyOmniboxFocus', function() {
     };
     await microtasksFinished();
     assertEquals('Hello', omnibox.$.textContainer.textContent);
-    assertEquals('Hello', omnibox.$.textInput.value);
+    assertEquals('Hello', getTextInput().value);
     assertEquals('ello', getStringSelection());
   });
 
@@ -140,7 +130,7 @@ suite('ReadOnlyOmniboxFocus', function() {
     assertEquals('ellipsis', style.get('text-overflow')?.toString());
     assertEquals('ello', getStringSelection());
 
-    omnibox.$.textInput.focus();
+    getTextInput().focus();
     await microtasksFinished();
     style = omnibox.$.textContainer.computedStyleMap();
     assertEquals('ellipsis', style.get('text-overflow')?.toString());
@@ -165,7 +155,7 @@ suite('ReadOnlyOmniboxFocus', function() {
     uiHandler.reset();
 
     // Focus us.
-    omnibox.$.textInput.focus();
+    getTextInput().focus();
     await microtasksFinished();
     assertEquals(1, uiHandler.getCallCount('onOmniboxAction'));
     let args = uiHandler.getArgs('onOmniboxAction');
@@ -181,7 +171,7 @@ suite('ReadOnlyOmniboxFocus', function() {
       key: 'Escape',
       bubbles: true,
     });
-    omnibox.$.textInput.dispatchEvent(escDown);
+    getTextInput().dispatchEvent(escDown);
     await microtasksFinished();
     assertEquals(2, uiHandler.getCallCount('onOmniboxAction'));
     args = uiHandler.getArgs('onOmniboxAction');
@@ -193,13 +183,13 @@ suite('ReadOnlyOmniboxFocus', function() {
     assertArrayEquals([], args[1].key.modifiers);
 
     // Synthetic input will report the current actual state.
-    omnibox.$.textInput.value = 'abcdefgh';
-    omnibox.$.textInput.setSelectionRange(2, 3, 'backward');
+    getTextInput().value = 'abcdefgh';
+    getTextInput().setSelectionRange(2, 3, 'backward');
     const inputEvent = new InputEvent('input', {
       data: 'Does not look at it',
       bubbles: true,
     });
-    omnibox.$.textInput.dispatchEvent(inputEvent);
+    getTextInput().dispatchEvent(inputEvent);
     await microtasksFinished();
     assertEquals(3, uiHandler.getCallCount('onOmniboxAction'));
     args = uiHandler.getArgs('onOmniboxAction');
@@ -214,7 +204,7 @@ suite('ReadOnlyOmniboxFocus', function() {
       bubbles: true,
       shiftKey: true,
     });
-    omnibox.$.textInput.dispatchEvent(controlUp);
+    getTextInput().dispatchEvent(controlUp);
     await microtasksFinished();
     assertEquals(4, uiHandler.getCallCount('onOmniboxAction'));
     args = uiHandler.getArgs('onOmniboxAction');

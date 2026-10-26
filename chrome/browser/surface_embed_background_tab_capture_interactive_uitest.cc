@@ -5,8 +5,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -50,10 +50,9 @@ class SurfaceEmbedBackgroundTabCaptureInteractiveUiTest
   base::test::ScopedFeatureList feature_list_;
 };
 
-#if BUILDFLAG(IS_CHROMEOS) || (BUILDFLAG(IS_LINUX) && defined(MEMORY_SANITIZER))
+#if BUILDFLAG(IS_CHROMEOS)
 // TODO(crbug.com/451876195): Enable this test for CrOS once WebUIBrowser
 // window management is fixed on CrOS.
-// TODO(crbug.com/515107079): Flaky on Linux MSan.
 #define MAYBE_KeepAliveWorksForCapturedBackgroundTab \
   DISABLED_KeepAliveWorksForCapturedBackgroundTab
 #else

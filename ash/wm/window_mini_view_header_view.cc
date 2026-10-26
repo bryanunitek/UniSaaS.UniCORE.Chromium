@@ -14,6 +14,7 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -97,6 +98,7 @@ WindowMiniViewHeaderView::WindowMiniViewHeaderView(
 
   separator_ = AddChildView(std::make_unique<views::View>());
   separator_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
+  separator_->layer()->SetName("WindowMiniViewHeaderView:Separator");
   separator_->SetPreferredSize(gfx::Size(1, views::Separator::kThickness));
 
   SetFlexForView(icon_label_view_, 1);
@@ -157,9 +159,10 @@ void WindowMiniViewHeaderView::ResetRoundedCorners() {
 void WindowMiniViewHeaderView::OnThemeChanged() {
   View::OnThemeChanged();
   CHECK(GetColorProvider());
-  layer()->SetColor(GetColorProvider()->GetColor(cros_tokens::kCrosSysHeader));
-  separator_->layer()->SetColor(
-      GetColorProvider()->GetColor(kColorAshWindowHeaderStrokeColor));
+  layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(cros_tokens::kCrosSysHeader)));
+  separator_->layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(kColorAshWindowHeaderStrokeColor)));
 }
 
 BEGIN_METADATA(WindowMiniViewHeaderView)

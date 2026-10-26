@@ -558,4 +558,58 @@ TEST(FlatMap, AbslHashValue) {
   }));
 }
 
+TEST(FlatMap, ConstexprBracketOperator) {
+  static_assert([] {
+    flat_map<int, int> map;
+    map[2] = 25;
+    return map[2];
+  }() == 25);
+
+  // Default element is constructed.
+  static_assert([] {
+    flat_map<int, int> map;
+    return map[2];
+  }() == 0);
+
+  // Element is overridden.
+  static_assert([] {
+    flat_map<int, int> map;
+    map[2] = 25;
+    map[2] = 20;
+    return map[2];
+  }() == 20);
+}
+
+TEST(FlatMap, Constexpr) {
+  static constexpr flat_map<int, int, std::less<>,
+                            std::array<std::pair<int, int>, 3>>
+      kMap(sorted_unique,
+           std::array<std::pair<int, int>, 3>{{{1, 10}, {2, 20}, {3, 30}}});
+
+  static_assert(kMap.size() == 3);
+  static_assert(!kMap.empty());
+  static_assert(kMap.contains(2));
+  static_assert(!kMap.contains(4));
+  static_assert(kMap.find(2)->second == 20);
+  static_assert(kMap.lower_bound(2)->second == 20);
+  static_assert(kMap.upper_bound(2)->second == 30);
+  static_assert(kMap.equal_range(2).first->second == 20);
+  EXPECT_EQ(kMap.size(), 3u);
+}
+
+TEST(FlatMap, ConstexprTryEmplace) {
+  static_assert([] {
+    flat_map<int, int> map;
+    auto try_emplace_result = map.try_emplace(2, 2);
+    return try_emplace_result.second && map.find(2)->second == 2;
+  }() == true);
+
+  static_assert([] {
+    flat_map<int, int> map;
+    map[2] = 3;
+    auto try_emplace_result = map.try_emplace(2, 2);
+    return try_emplace_result.second && map.find(2)->second == 3;
+  }() == false);
+}
+
 }  // namespace base

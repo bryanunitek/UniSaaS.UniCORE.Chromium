@@ -44,7 +44,6 @@ class SidePanel : public views::AccessiblePaneView,
   DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kCloseAnimationCompletedEvent);
 
   void SetPanelWidth(int width);
-  bool ShouldRestrictMaxWidth() const;
   void UpdateWidthOnEntryChanged();
   void UpdateSidePanelWidthPref(const std::string& panel_id, int width);
   void UpdateHorizontalAlignment(
@@ -179,9 +178,6 @@ class SidePanel : public views::AccessiblePaneView,
 
   // Subscription for animation updates.
   base::CallbackListSubscription animation_subscription_;
-
-  // Cache of recent animation values.
-  std::map<BrowserAnimationSequence, double> last_animation_values_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_H_

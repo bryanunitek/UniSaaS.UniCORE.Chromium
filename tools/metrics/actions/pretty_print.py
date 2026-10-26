@@ -8,6 +8,7 @@ import sys
 
 import setup_modules  # pylint: disable=unused-import
 
+
 import chromium_src.tools.metrics.common.presubmit_util as presubmit_util
 import chromium_src.tools.metrics.common.utf8_encoding as utf8_encoding
 import chromium_src.tools.metrics.actions.extract_actions as extract_actions
@@ -18,9 +19,12 @@ def main():
   utf8_encoding.setup_stdout_and_stderr_utf8_encoding()
 
   presubmit_util.DoPresubmitMain(
-      'actions.xml', 'actions.old.xml',
-      lambda file_content: extract_actions.UpdateXml(
-          file_content, extract_actions._GeneratedActions()))
+    'actions.xml',
+    'actions.old.xml',
+    lambda file_content: extract_actions.UpdateXml(
+      file_content, extract_actions._GeneratedActions()
+    ),
+  )
 
 
 if __name__ == '__main__':

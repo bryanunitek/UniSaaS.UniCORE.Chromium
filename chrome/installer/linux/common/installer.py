@@ -5,7 +5,8 @@
 import argparse
 import dataclasses
 import datetime
-import glob
+import enum
+import hashlib
 import logging
 import os
 import pathlib
@@ -17,6 +18,12 @@ import string
 import subprocess
 import sys
 import typing
+
+
+class PackageFormat(enum.Enum):
+    DEB = "deb"
+    RPM = "rpm"
+    FLATPAK = "flatpak"
 
 
 class StandardPermissions:
@@ -51,7 +58,6 @@ class Artifact:
 
 
 class StagingContext:
-
     def __init__(self, *dirs: pathlib.Path) -> None:
         self.dirs = dirs
 
@@ -68,20 +74,26 @@ class StagingContext:
 
 
 def parse_common_args(
-    parser: argparse.ArgumentParser = None,) -> argparse.Namespace:
+    parser: argparse.ArgumentParser = None,
+) -> argparse.Namespace:
     if parser is None:
         parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-a", "--arch", required=True, help="package architecture")
+        "-a", "--arch", required=True, help="package architecture"
+    )
     parser.add_argument(
-        "-b", "--build-time", required=True, help="build timestamp")
+        "-b", "--build-time", required=True, help="build timestamp"
+    )
     parser.add_argument(
-        "-c", "--channel", required=True, help="package channel")
+        "-c", "--channel", required=True, help="package channel"
+    )
     parser.add_argument("-d", "--branding", required=True, help="branding")
     parser.add_argument(
-        "-f", "--official", action="store_true", help="official build")
+        "-f", "--official", action="store_true", help="official build"
+    )
     parser.add_argument(
-        "-o", "--output-dir", required=True, help="output directory")
+        "-o", "--output-dir", required=True, help="output directory"
+    )
     parser.add_argument("-t", "--target-os", required=True, help="target os")
     parser.add_argument(
         "--use-static-angle",
@@ -124,8 +136,9 @@ def run_command(
             sys.exit(proc.returncode)
 
 
-def verify_package_deps(expected_deps: list[str],
-                        actual_deps: list[str]) -> None:
+def verify_package_deps(
+    expected_deps: list[str], actual_deps: list[str]
+) -> None:
     expected = set(expected_deps)
     actual = set(actual_deps)
 
@@ -163,12 +176,14 @@ def normalize_channel(channel: str) -> tuple[str, str]:
         return "canary", "N/A"
     else:
         print(
-            f"ERROR: '{channel}' is not a valid channel type.", file=sys.stderr)
+            f"ERROR: '{channel}' is not a valid channel type.", file=sys.stderr
+        )
         sys.exit(1)
 
 
-def gen_changelog(config: "InstallerConfig",
-                  deb_changelog: pathlib.Path) -> None:
+def gen_changelog(
+    config: "InstallerConfig", deb_changelog: pathlib.Path
+) -> None:
     if deb_changelog.exists():
         deb_changelog.unlink()
 
@@ -186,26 +201,30 @@ def gen_changelog(config: "InstallerConfig",
         config.get_template_context(),
     )
 
-    run_command([
-        "debchange",
-        "-a",
-        "--nomultimaint",
-        "-m",
-        "--changelog",
-        str(deb_changelog),
-        f"Release Notes: {config.releasenotes}",
-    ])
+    run_command(
+        [
+            "debchange",
+            "-a",
+            "--nomultimaint",
+            "-m",
+            "--changelog",
+            str(deb_changelog),
+            f"Release Notes: {config.releasenotes}",
+        ]
+    )
 
     gzlog_dir = (
-        config.staging_dir /
-        f"usr/share/doc/{config.info_vars['PACKAGE']}-{config.channel}")
+        config.staging_dir
+        / f"usr/share/doc/{config.info_vars['PACKAGE']}-{config.channel}"
+    )
     gzlog_dir.mkdir(parents=True, exist_ok=True)
     gzlog = gzlog_dir / "changelog.gz"
 
     with gzlog.open("wb") as f_out:
         if os.environ.get("VERBOSE"):
             subprocess.check_call(
-                ["gzip", "-9n", "-c", str(deb_changelog)], stdout=f_out)
+                ["gzip", "-9n", "-c", str(deb_changelog)], stdout=f_out
+            )
         else:
             subprocess.check_call(
                 ["gzip", "-9n", "-c", str(deb_changelog)],
@@ -219,8 +238,9 @@ class InstallerTemplate(string.Template):
     delimiter = "@@"
 
 
-def _process_template_includes(input_file: pathlib.Path,
-                               include_stack: list[pathlib.Path]) -> str:
+def _process_template_includes(
+    input_file: pathlib.Path, include_stack: list[pathlib.Path]
+) -> str:
     input_file = pathlib.Path(input_file)
     if input_file in include_stack:
         print(
@@ -247,7 +267,8 @@ def _process_template_includes(input_file: pathlib.Path,
                     )
                     sys.exit(1)
                 output_lines.append(
-                    _process_template_includes(inc_file_path, include_stack))
+                    _process_template_includes(inc_file_path, include_stack)
+                )
             else:
                 output_lines.append(line)
 
@@ -255,8 +276,9 @@ def _process_template_includes(input_file: pathlib.Path,
     return "".join(output_lines)
 
 
-def process_template(input_file: pathlib.Path, output_file: pathlib.Path,
-                     context: dict[str, str]) -> None:
+def process_template(
+    input_file: pathlib.Path, output_file: pathlib.Path, context: dict[str, str]
+) -> None:
     content = _process_template_includes(input_file, [])
 
     template = InstallerTemplate(content)
@@ -316,6 +338,9 @@ class InstallerConfig:
     repoconfig: str = ""
     repoconfigregex: str = ""
 
+    # Package Format
+    package_format: PackageFormat = PackageFormat.DEB
+
     # Deb
     deb_pre_depends: str = ""
     deb_depends: str = ""
@@ -330,32 +355,58 @@ class InstallerConfig:
     rpm_depends: str = ""
     rpm_provides: str = ""
 
+    # Flatpak
+    flatpak_arch: str = ""
+    flatpak_runtime_version: str = "24.08"
+    flatpak_command: str = ""
+    flatpak_app_id: str = ""
+    flatpak_tags: str = ""
+    developer_id: str = ""
+    project_license_spdx: str = ""
+    release_date: str = ""
+    flatpak_package_filename: str = ""
+    app_id: str = ""
+
     # Runtime/Installer
+    appstream_screenshot_url: str = (
+        "https://www.gstatic.com/chrome/appstream/chrome-2.png"
+    )
+    desktop_exec: str = ""
+    desktop_icon: str = ""
     logo_resources_png: str = ""
     uri_scheme: str = ""
     extra_desktop_entries: str = ""
     startup_wm_class: str = ""
+    include_setuid_sandbox: bool = True
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace,
-                  output_dir: pathlib.Path) -> "InstallerConfig":
-        data = cls._load_branding_and_version(output_dir, args.branding,
-                                              args.channel)
-        data.update({
-            "arch": args.arch,
-            "target_os": args.target_os,
-            "architecture": args.arch,
-            "branding": args.branding,
-            "build_timestamp": args.build_time,
-            "is_official_build": args.official,
-            "output_dir": output_dir,
-            "shlib_perms": StandardPermissions.EXECUTABLE,
-            "use_static_angle": args.use_static_angle == "true",
-            # Placeholder for build specific paths, set by caller if needed
-            "script_dir": pathlib.Path("."),
-            "staging_dir": pathlib.Path("."),
-            "tmp_file_dir": pathlib.Path("."),
-        })
+    def from_args(
+        cls,
+        args: argparse.Namespace,
+        output_dir: pathlib.Path,
+        package_format: PackageFormat,
+    ) -> "InstallerConfig":
+        data = cls._load_branding_and_version(
+            output_dir, args.branding, args.channel
+        )
+        data.update(
+            {
+                "package_format": package_format,
+                "arch": args.arch,
+                "target_os": args.target_os,
+                "architecture": args.arch,
+                "branding": args.branding,
+                "build_timestamp": args.build_time,
+                "is_official_build": args.official,
+                "output_dir": output_dir,
+                "shlib_perms": StandardPermissions.EXECUTABLE,
+                "use_static_angle": args.use_static_angle == "true",
+                # Placeholder for build specific paths, set by caller if needed
+                "script_dir": pathlib.Path("."),
+                "staging_dir": pathlib.Path("."),
+                "tmp_file_dir": pathlib.Path("."),
+            }
+        )
 
         if hasattr(args, "sysroot"):
             # Debian specific
@@ -372,11 +423,59 @@ class InstallerConfig:
 
         config = cls(**data)
         config.rpm_package_filename = f"{config.package_orig}-{config.channel}"
+        config.desktop_exec = f"/usr/bin/{config.usr_bin_symlink_name}"
+        config.desktop_icon = config.info_vars["PACKAGE"]
         return config
 
+    def flatpak_init(self) -> None:
+        if self.branding == "google_chrome":
+            self.developer_id = "com.google"
+            self.project_license_spdx = "LicenseRef-proprietary"
+            self.flatpak_command = "chrome"
+            self.flatpak_tags = "\ntags=proprietary;"
+            base_id = "com.google.Chrome"
+        else:
+            self.developer_id = "org.chromium"
+            self.project_license_spdx = (
+                "BSD-3-Clause and LGPL-2.1+ and Apache-2.0 and IJG and MIT "
+                "and GPL-2.0+ and ISC and OpenSSL and (MPL-1.1 or GPL-2.0 or "
+                "LGPL-2.0)"
+            )
+            self.flatpak_command = "chromium"
+            self.flatpak_tags = ""
+            base_id = "org.chromium.Chromium"
+
+        if self.channel == "stable":
+            self.app_id = base_id
+        elif self.channel == "beta":
+            self.app_id = f"{base_id}.beta"
+        elif self.channel in ["unstable", "dev"]:
+            self.app_id = f"{base_id}.unstable"
+        elif self.channel == "canary":
+            self.app_id = f"{base_id}.canary"
+        else:
+            self.app_id = base_id
+
+        self.flatpak_app_id = self.app_id
+        self.desktop_exec = self.flatpak_command
+        self.desktop_icon = self.app_id
+        self.flatpak_arch = self.arch
+        self.include_setuid_sandbox = False
+
+        if self.build_timestamp:
+            ts = int(self.build_timestamp)
+            dt = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+            self.release_date = dt.strftime("%Y-%m-%d")
+
+        self.flatpak_package_filename = (
+            f"{self.package_orig}-{self.channel}_{self.versionfull}_"
+            f"{self.arch}.flatpak"
+        )
+
     @staticmethod
-    def _load_branding_and_version(output_dir: pathlib.Path, branding: str,
-                                   channel: str) -> dict[str, typing.Any]:
+    def _load_branding_and_version(
+        output_dir: pathlib.Path, branding: str, channel: str
+    ) -> dict[str, typing.Any]:
         data = {}
 
         def parse_shell(file_path: pathlib.Path) -> dict[str, str]:
@@ -390,21 +489,30 @@ class InstallerConfig:
 
         def parse_simple(file_path: pathlib.Path) -> dict[str, str]:
             return dict(
-                line.strip().split("=") for line in file_path.open("r") if line)
+                line.strip().split("=") for line in file_path.open("r") if line
+            )
 
         data["info_vars"] = parse_shell(
-            output_dir / "installer/common" /
-            ("google-chrome.info"
-             if branding == "google_chrome" else "chromium-browser.info"))
+            output_dir
+            / "installer/common"
+            / (
+                "google-chrome.info"
+                if branding == "google_chrome"
+                else "chromium-browser.info"
+            )
+        )
 
-        data["branding_vars"] = parse_simple(output_dir /
-                                             "installer/theme/BRANDING")
+        data["branding_vars"] = parse_simple(
+            output_dir / "installer/theme/BRANDING"
+        )
 
-        data["version_vars"] = parse_simple(output_dir / "installer" /
-                                            "version.txt")
+        data["version_vars"] = parse_simple(
+            output_dir / "installer" / "version.txt"
+        )
         data["version"] = (
             f"{data['version_vars']['MAJOR']}.{data['version_vars']['MINOR']}."
-            f"{data['version_vars']['BUILD']}.{data['version_vars']['PATCH']}")
+            f"{data['version_vars']['BUILD']}.{data['version_vars']['PATCH']}"
+        )
         data["package_release"] = "1"
 
         # Verify channel
@@ -413,7 +521,8 @@ class InstallerConfig:
         data["versionfull"] = f"{data['version']}-{data['package_release']}"
         data["package_orig"] = data["info_vars"]["PACKAGE"]
         data["usr_bin_symlink_name"] = (
-            f"{data['info_vars']['PACKAGE']}-{channel}")
+            f"{data['info_vars']['PACKAGE']}-{channel}"
+        )
         if channel != "stable":
             data["info_vars"]["INSTALLDIR"] += f"-{channel}"
             data["info_vars"]["PACKAGE"] += f"-{channel}"
@@ -450,7 +559,9 @@ class InstallerConfig:
         ctx = self.info_vars | self.version_vars | self.branding_vars
         for field in dataclasses.fields(self):
             val = getattr(self, field.name)
-            if val is not None and type(val) is not dict:
+            if isinstance(val, enum.Enum):
+                ctx[field.name] = val.value
+            elif val is not None and type(val) is not dict:
                 ctx[field.name] = val
         return ctx
 
@@ -462,12 +573,6 @@ class InstallerConfig:
                 progname,
                 ArtifactType.BINARY,
                 StandardPermissions.EXECUTABLE,
-            ),
-            Artifact(
-                f"{progname}_sandbox.stripped",
-                "chrome-sandbox",
-                ArtifactType.BINARY,
-                StandardPermissions.SANDBOX,
             ),
             Artifact(
                 "chrome_crashpad_handler.stripped",
@@ -539,6 +644,15 @@ class InstallerConfig:
                 is_optional=True,
             ),
         ]
+        if self.include_setuid_sandbox:
+            artifacts.append(
+                Artifact(
+                    f"{progname}_sandbox.stripped",
+                    "chrome-sandbox",
+                    ArtifactType.BINARY,
+                    StandardPermissions.SANDBOX,
+                )
+            )
 
         # Widevine CDM
         if (self.output_dir / "WidevineCdm").is_dir():
@@ -548,25 +662,28 @@ class InstallerConfig:
                     "WidevineCdm",
                     ArtifactType.DIRECTORY,
                     StandardPermissions.EXECUTABLE,
-                ))
+                )
+            )
 
         if not self.use_static_angle:
-            artifacts.extend([
-                Artifact(
-                    "libEGL.so.stripped",
-                    "libEGL.so",
-                    ArtifactType.BINARY,
-                    self.shlib_perms,
-                    is_optional=True,
-                ),
-                Artifact(
-                    "libGLESv2.so.stripped",
-                    "libGLESv2.so",
-                    ArtifactType.BINARY,
-                    self.shlib_perms,
-                    is_optional=True,
-                ),
-            ])
+            artifacts.extend(
+                [
+                    Artifact(
+                        "libEGL.so.stripped",
+                        "libEGL.so",
+                        ArtifactType.BINARY,
+                        self.shlib_perms,
+                        is_optional=True,
+                    ),
+                    Artifact(
+                        "libGLESv2.so.stripped",
+                        "libGLESv2.so",
+                        ArtifactType.BINARY,
+                        self.shlib_perms,
+                        is_optional=True,
+                    ),
+                ]
+            )
 
         return artifacts
 
@@ -593,14 +710,16 @@ class InstallerConfig:
                     "chrome_100_percent.pak",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
             artifacts.append(
                 Artifact(
                     "chrome_200_percent.pak",
                     "chrome_200_percent.pak",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
         else:
             artifacts.append(
                 Artifact(
@@ -608,14 +727,16 @@ class InstallerConfig:
                     "theme_resources_100_percent.pak",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
             artifacts.append(
                 Artifact(
                     "ui_resources_100_percent.pak",
                     "ui_resources_100_percent.pak",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
 
         if (self.output_dir / "v8_context_snapshot.bin").exists():
             artifacts.append(
@@ -624,7 +745,8 @@ class InstallerConfig:
                     "v8_context_snapshot.bin",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
         else:
             artifacts.append(
                 Artifact(
@@ -632,7 +754,8 @@ class InstallerConfig:
                     "snapshot_blob.bin",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
 
         # Default apps (Recursive)
         artifacts.append(
@@ -641,7 +764,8 @@ class InstallerConfig:
                 "default_apps",
                 ArtifactType.DIRECTORY,
                 is_optional=True,
-            ))
+            )
+        )
 
         # Locales
         for pak in (self.output_dir / "locales").glob("*.pak"):
@@ -651,26 +775,8 @@ class InstallerConfig:
                     pathlib.Path("locales") / pak.name,
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
-
-        # Privacy Sandbox Attestation
-        psa_dir = "PrivacySandboxAttestationsPreloaded"
-        psa_manifest = self.output_dir / psa_dir / "manifest.json"
-        if psa_manifest.exists():
-            artifacts.append(
-                Artifact(
-                    f"{psa_dir}/manifest.json",
-                    f"{psa_dir}/manifest.json",
-                    ArtifactType.RESOURCE,
-                    StandardPermissions.REGULAR,
-                ))
-            artifacts.append(
-                Artifact(
-                    f"{psa_dir}/privacy-sandbox-attestations.dat",
-                    f"{psa_dir}/privacy-sandbox-attestations.dat",
-                    ArtifactType.RESOURCE,
-                    StandardPermissions.REGULAR,
-                ))
+                )
+            )
 
         # MEI Preload
         mei_manifest = self.output_dir / "MEIPreload/manifest.json"
@@ -681,14 +787,16 @@ class InstallerConfig:
                     "MEIPreload/manifest.json",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
             artifacts.append(
                 Artifact(
                     "MEIPreload/preloaded_data.pb",
                     "MEIPreload/preloaded_data.pb",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
 
         return artifacts
 
@@ -714,7 +822,8 @@ class InstallerConfig:
                     logo,
                     ArtifactType.ICON,
                     StandardPermissions.REGULAR,
-                ))
+                )
+            )
         self.logo_resources_png = " " + " ".join(logo_resources_png)
         return artifacts
 
@@ -730,7 +839,8 @@ class InstallerConfig:
                     ArtifactType.GENERATED,
                     StandardPermissions.REGULAR,
                     content=self.channel + "\n",
-                ))
+                )
+            )
 
         # wrapper script
         artifacts.append(
@@ -739,7 +849,15 @@ class InstallerConfig:
                 self.info_vars["PACKAGE"],
                 ArtifactType.TEMPLATE,
                 StandardPermissions.EXECUTABLE,
-            ))
+            )
+        )
+
+        # Host system integration files are only applicable to DEB and RPM
+        # packages. Flatpak exports applications via standard Flatpak
+        # directories (share/applications, share/metainfo, share/icons) staged
+        # separately.
+        if self.package_format == PackageFormat.FLATPAK:
+            return artifacts
 
         # symlink for PACKAGE_ORIG
         package_orig = self.package_orig
@@ -755,7 +873,8 @@ class InstallerConfig:
                     ArtifactType.SYMLINK,
                     dst_base="install_dir",
                     symlink_target=link_target,
-                ))
+                )
+            )
 
         # /usr/bin symlink
         if self.usr_bin_symlink_name:
@@ -770,7 +889,8 @@ class InstallerConfig:
                     ArtifactType.SYMLINK,
                     dst_base="staging_dir",
                     symlink_target=link_target,
-                ))
+                )
+            )
 
         # URI_SCHEME logic
         if self.branding == "google_chrome":
@@ -786,30 +906,33 @@ class InstallerConfig:
                 pathlib.Path("apparmor.d") / self.usr_bin_symlink_name,
                 ArtifactType.TEMPLATE,
                 StandardPermissions.REGULAR,
-            ))
+            )
+        )
 
         # appdata.xml
         artifacts.append(
             Artifact(
                 "installer/common/appdata.xml.template",
-                pathlib.Path("usr/share/appdata") /
-                f"{self.info_vars['PACKAGE']}.appdata.xml",
+                pathlib.Path("usr/share/appdata")
+                / f"{self.info_vars['PACKAGE']}.appdata.xml",
                 ArtifactType.TEMPLATE,
                 StandardPermissions.REGULAR,
                 dst_base="staging_dir",
-            ))
+            )
+        )
 
         # desktop file
         self.extra_desktop_entries = ""
         artifacts.append(
             Artifact(
                 "installer/common/desktop.template",
-                pathlib.Path("usr/share/applications") /
-                f"{self.info_vars['PACKAGE']}.desktop",
+                pathlib.Path("usr/share/applications")
+                / f"{self.info_vars['PACKAGE']}.desktop",
                 ArtifactType.TEMPLATE,
                 StandardPermissions.REGULAR,
                 dst_base="staging_dir",
-            ))
+            )
+        )
 
         # rdn desktop file
         rdn_extra_desktop_entries = (
@@ -821,31 +944,34 @@ class InstallerConfig:
             "naming requirements.\n"
             "# The old desktop file is kept to preserve default "
             "browser settings.\n"
-            "NoDisplay=true\n")
+            "NoDisplay=true\n"
+        )
 
         artifacts.append(
             Artifact(
                 "installer/common/desktop.template",
-                pathlib.Path("usr/share/applications") /
-                f"{self.rdn_desktop}.desktop",
+                pathlib.Path("usr/share/applications")
+                / f"{self.rdn_desktop}.desktop",
                 ArtifactType.TEMPLATE,
                 StandardPermissions.REGULAR,
                 dst_base="staging_dir",
                 template_context={
                     "extra_desktop_entries": rdn_extra_desktop_entries
                 },
-            ))
+            )
+        )
 
         # default-apps
         artifacts.append(
             Artifact(
                 "installer/common/default-app.template",
-                pathlib.Path("usr/share/gnome-control-center/default-apps") /
-                f"{self.info_vars['PACKAGE']}.xml",
+                pathlib.Path("usr/share/gnome-control-center/default-apps")
+                / f"{self.info_vars['PACKAGE']}.xml",
                 ArtifactType.TEMPLATE,
                 StandardPermissions.REGULAR,
                 dst_base="staging_dir",
-            ))
+            )
+        )
 
         # default-app-block
         artifacts.append(
@@ -854,12 +980,14 @@ class InstallerConfig:
                 "default-app-block",
                 ArtifactType.TEMPLATE,
                 StandardPermissions.REGULAR,
-            ))
+            )
+        )
 
         # documentation (manpage)
         man_page_dst = (
-            pathlib.Path("usr/share/man/man1") /
-            f"{self.usr_bin_symlink_name}.1")
+            pathlib.Path("usr/share/man/man1")
+            / f"{self.usr_bin_symlink_name}.1"
+        )
         artifacts.append(
             Artifact(
                 "installer/common/manpage.1.in",
@@ -868,56 +996,68 @@ class InstallerConfig:
                 StandardPermissions.REGULAR,
                 dst_base="staging_dir",
                 compress=True,
-            ))
+            )
+        )
 
         # Link for stable channel app-without-channel case
         if self.info_vars["PACKAGE"] != self.usr_bin_symlink_name:
             artifacts.append(
                 Artifact(
                     "",
-                    pathlib.Path("usr/share/man/man1") /
-                    f"{self.info_vars['PACKAGE']}.1.gz",
+                    pathlib.Path("usr/share/man/man1")
+                    / f"{self.info_vars['PACKAGE']}.1.gz",
                     ArtifactType.SYMLINK,
                     dst_base="staging_dir",
                     symlink_target=f"{self.usr_bin_symlink_name}.1.gz",
                     is_optional=True,
-                ))
+                )
+            )
 
         return artifacts
 
     def get_artifacts(self) -> list[Artifact]:
-        return (self.get_binary_artifacts() + self.get_resource_artifacts() +
-                self.get_icon_artifacts() +
-                self.get_desktop_integration_artifacts())
+        return (
+            self.get_binary_artifacts()
+            + self.get_resource_artifacts()
+            + self.get_icon_artifacts()
+            + self.get_desktop_integration_artifacts()
+        )
 
 
 class Installer:
-
     def __init__(self, config: InstallerConfig) -> None:
         self.config = config
 
     def prep_staging_common(self) -> None:
         install_dir = self.config.staging_dir / self.config.info_vars[
-            "INSTALLDIR"].lstrip("/")
-        dirs = [
-            install_dir,
-            self.config.staging_dir / "usr/bin",
-            self.config.staging_dir / "usr/share/applications",
-            self.config.staging_dir / "usr/share/appdata",
-            (self.config.staging_dir /
-             "usr/share/gnome-control-center/default-apps"),
-            self.config.staging_dir / "usr/share/man/man1",
-            install_dir / "apparmor.d",
-        ]
+            "INSTALLDIR"
+        ].lstrip("/")
+        if self.config.package_format == PackageFormat.FLATPAK:
+            dirs = [install_dir]
+        else:
+            dirs = [
+                install_dir,
+                self.config.staging_dir / "usr/bin",
+                self.config.staging_dir / "usr/share/applications",
+                self.config.staging_dir / "usr/share/appdata",
+                (
+                    self.config.staging_dir
+                    / "usr/share/gnome-control-center/default-apps"
+                ),
+                self.config.staging_dir / "usr/share/man/man1",
+                install_dir / "apparmor.d",
+            ]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
             d.chmod(StandardPermissions.EXECUTABLE)
 
     def stage_install_common(self) -> None:
         logging.info(
-            f"Staging common install files in '{self.config.staging_dir}'...")
+            f"Staging common install files in '{self.config.staging_dir}'..."
+        )
         install_dir = self.config.staging_dir / self.config.info_vars[
-            "INSTALLDIR"].lstrip("/")
+            "INSTALLDIR"
+        ].lstrip("/")
 
         artifacts = self.config.get_artifacts()
         self._process_artifacts(artifacts, install_dir)
@@ -926,8 +1066,9 @@ class Installer:
         self._verify_elf_binaries(install_dir)
         self._verify_file_permissions()
 
-    def _process_artifacts(self, artifacts: list[Artifact],
-                           install_dir: pathlib.Path) -> None:
+    def _process_artifacts(
+        self, artifacts: list[Artifact], install_dir: pathlib.Path
+    ) -> None:
         for artifact in artifacts:
             # Determine destination
             dst = install_dir / artifact.dst
@@ -942,10 +1083,11 @@ class Installer:
                     if artifact.is_optional:
                         continue
                     raise FileNotFoundError(
-                        f"Required artifact not found: {src}")
+                        f"Required artifact not found: {src}"
+                    )
             elif not artifact.is_optional and artifact.artifact_type not in (
-                    ArtifactType.GENERATED,
-                    ArtifactType.SYMLINK,
+                ArtifactType.GENERATED,
+                ArtifactType.SYMLINK,
             ):
                 # Only GENERATED and SYMLINK are allowed to have no src
                 # (unless is_optional is True)
@@ -1000,14 +1142,15 @@ class Installer:
                 self._install(src, dst, artifact.mode)
 
             elif artifact.artifact_type in (
-                    ArtifactType.BINARY,
-                    ArtifactType.RESOURCE,
+                ArtifactType.BINARY,
+                ArtifactType.RESOURCE,
             ):
                 self._install(src, dst, artifact.mode, artifact.strip)
 
             else:
                 raise ValueError(
-                    f"Unknown artifact type: {artifact.artifact_type}")
+                    f"Unknown artifact type: {artifact.artifact_type}"
+                )
 
     def _install_into_dir(
         self,
@@ -1049,7 +1192,8 @@ class Installer:
                 # file command is robust.
                 try:
                     output = subprocess.check_output(
-                        ["file", "-b", str(path)], text=True)
+                        ["file", "-b", str(path)], text=True
+                    )
                 except subprocess.CalledProcessError:
                     continue
 
@@ -1065,7 +1209,8 @@ class Installer:
                         # Check RPATH
                         try:
                             readelf_out = subprocess.check_output(
-                                ["readelf", "-d", str(path)], text=True)
+                                ["readelf", "-d", str(path)], text=True
+                            )
                             if "(RPATH)" in readelf_out:
                                 rpath_bins.append(path.name)
                         except subprocess.CalledProcessError:
@@ -1125,7 +1270,8 @@ class Installer:
                     target = os.readlink(path)
                     if target.startswith("/"):
                         expect_exists = self.config.staging_dir / target.lstrip(
-                            "/")
+                            "/"
+                        )
                     else:
                         expect_exists = path.parent / target
 
@@ -1141,7 +1287,8 @@ class Installer:
                 # Get file type
                 try:
                     file_type = subprocess.check_output(
-                        ["file", "-b", str(path)], text=True)
+                        ["file", "-b", str(path)], text=True
+                    )
                 except subprocess.CalledProcessError:
                     file_type = ""
 
@@ -1174,9 +1321,90 @@ class Installer:
                     if not ok:
                         msg = (
                             f"Expected permissions on {base_name} ({path}) to "
-                            f"be {oct(expected_perms)}")
+                            f"be {oct(expected_perms)}"
+                        )
                         if on_cog:
                             msg += f" or {oct(relaxed_expected_perms)}"
                         msg += f", but they were {oct(actual_perms)}"
                         print(msg, file=sys.stderr)
                         sys.exit(1)
+
+
+def compute_repo_package_hash_for_presubmit(
+    chrome_installer_linux_dir: str | pathlib.Path,
+    out_dir: str | pathlib.Path,
+) -> str:
+    """Builds the repo .deb package in out_dir and returns its SHA-256 hash.
+
+    This function is used during presubmit and key update to build a minimal,
+    deterministic version of the repository package ('google-chrome-repo') and
+    return its hash.
+
+    Since this is only used to verify that modifications to repository package
+    templates or packaging scripts are accompanied by version, timestamp, and
+    hash updates in 'repo_package.include', the package configuration (like
+    version, timestamp, architecture, branding, etc.) can be hardcoded.
+    This avoids needing a real, fully compiled Chrome/Chromium build output
+    directory, making the presubmit check extremely fast and lightweight.
+
+    'google-chrome-repo' is used as the representative package for verification
+    because the repo package scripts (postinst, postrm, etc.) are identical or
+    structurally equivalent under both brandings, and verifying a single
+    representative branding is sufficient to enforce version and hash updates.
+    """
+    old_umask = os.umask(0o022)
+    try:
+        local_root = os.path.abspath(str(chrome_installer_linux_dir))
+        out_dir = os.path.abspath(str(out_dir))
+        common_out = os.path.join(out_dir, "installer", "common")
+        theme_out = os.path.join(out_dir, "installer", "theme")
+        os.makedirs(common_out, exist_ok=True)
+        os.makedirs(theme_out, exist_ok=True)
+
+        # Copy the required 'google-chrome.info' directly from the source repository.
+        # This file must exist as it is a vital part of the repository structure.
+        info_path = os.path.join(local_root, "common", "google-chrome.info")
+        shutil.copy(info_path, os.path.join(common_out, "google-chrome.info"))
+
+        # Write mock files simulating a build directory so build_repo_package.py
+        # can execute in a standalone/presubmit context without requiring a real,
+        # fully-built Chromium/Chrome binary.
+        with open(os.path.join(theme_out, "BRANDING"), "w") as f:
+            f.write("COMPANY_FULLNAME=Google\n")
+        with open(os.path.join(out_dir, "installer", "version.txt"), "w") as f:
+            f.write("MAJOR=130\nMINOR=0\nBUILD=6723\nPATCH=44\n")
+
+        script = os.path.join(local_root, "debian", "build_repo_package.py")
+        cmd = [
+            sys.executable,
+            script,
+            "-a",
+            "amd64",
+            "-b",
+            "1700000000",
+            "-c",
+            "stable",
+            "-d",
+            "google_chrome",
+            "-o",
+            out_dir,
+            "-s",
+            out_dir,
+            "-t",
+            "linux",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            error_msg = f"build_repo_package.py failed (rc={res.returncode})"
+            if res.stdout:
+                error_msg += f"\nstdout:\n{res.stdout}"
+            if res.stderr:
+                error_msg += f"\nstderr:\n{res.stderr}"
+            raise RuntimeError(error_msg)
+        deb_path = os.path.join(out_dir, "google-chrome-repo_amd64.deb")
+        if not os.path.exists(deb_path):
+            raise RuntimeError(f"deb package was not created at {deb_path}")
+        with open(deb_path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    finally:
+        os.umask(old_umask)

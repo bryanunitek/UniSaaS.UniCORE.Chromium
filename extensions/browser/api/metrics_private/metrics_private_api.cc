@@ -13,6 +13,7 @@
 #include "base/hash/hash.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_samples.h"
@@ -21,6 +22,7 @@
 #include "base/metrics/user_metrics.h"
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "components/crx_file/id_util.h"
 #include "content/public/browser/histogram_fetcher.h"
 #include "extensions/browser/api/extensions_api_client.h"
@@ -57,10 +59,6 @@ namespace RecordMediumTime = api::metrics_private::RecordMediumTime;
 namespace RecordLongTime = api::metrics_private::RecordLongTime;
 
 namespace {
-
-const size_t kMaxBuckets = 10000;  // We don't ever want more than these many
-                                   // buckets; there is no real need for them
-                                   // and would cause crazy memory usage
 
 // Amount of time to give other processes to report their histograms.
 constexpr base::TimeDelta kHistogramsRefreshTimeout = base::Seconds(10);
@@ -126,17 +124,21 @@ MetricsPrivateRecordExtensionUsageUkmFunction::Run() {
   return RespondNow(NoArguments());
 }
 
-void MetricsHistogramHelperFunction::RecordValue(const std::string& name,
-                                                 base::HistogramType type,
-                                                 int min,
-                                                 int max,
-                                                 size_t buckets,
-                                                 int sample) {
-  // Make sure toxic values don't get to internal code.
-  // Fix for maximums
+ExtensionFunction::ResponseAction MetricsPrivateRecordValueFunction::Run() {
+  std::optional<RecordValue::Params> params =
+      RecordValue::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  int min = params->metric.min;
+  int max = params->metric.max;
+  size_t buckets = params->metric.buckets;
+
+  // Sanitize untrusted renderer inputs to prevent integer overflow and avoid
+  // triggering crash dumps in base::Histogram.
+  // Fix for maximums.
   min = std::min(min, INT_MAX - 3);
   max = std::min(max, INT_MAX - 3);
-  buckets = std::min(buckets, kMaxBuckets);
+  buckets = std::min(buckets, base::Histogram::kBucketCount_MAX);
   // Fix for minimums.
   min = std::max(min, 1);
   max = std::max(max, min + 1);
@@ -146,36 +148,27 @@ void MetricsHistogramHelperFunction::RecordValue(const std::string& name,
     buckets = max - min + 2;
   }
 
-  base::HistogramBase* counter;
-  if (type == base::LINEAR_HISTOGRAM) {
-    counter = base::LinearHistogram::FactoryGet(
-        name, min, max, buckets,
-        base::HistogramBase::kUmaTargetedHistogramFlag);
-  } else {
-    counter = base::Histogram::FactoryGet(
-        name, min, max, buckets,
-        base::HistogramBase::kUmaTargetedHistogramFlag);
+  base::HistogramBase* counter = nullptr;
+  switch (params->metric.type) {
+    case api::metrics_private::MetricTypeType::kHistogramLinear:
+      counter = base::LinearHistogram::FactoryGet(
+          params->metric.metric_name, min, max, buckets,
+          base::HistogramBase::kUmaTargetedHistogramFlag);
+      break;
+    case api::metrics_private::MetricTypeType::kHistogramLog:
+      counter = base::Histogram::FactoryGet(
+          params->metric.metric_name, min, max, buckets,
+          base::HistogramBase::kUmaTargetedHistogramFlag);
+      break;
+    case api::metrics_private::MetricTypeType::kNone:
+      break;
   }
 
   // The histogram can be NULL if it is constructed with bad arguments.  Ignore
   // that data for this API.  An error message will be logged.
   if (counter) {
-    counter->Add(sample);
+    counter->Add(params->value);
   }
-}
-
-ExtensionFunction::ResponseAction MetricsPrivateRecordValueFunction::Run() {
-  std::optional<RecordValue::Params> params =
-      RecordValue::Params::Create(args());
-  EXTENSION_FUNCTION_VALIDATE(params);
-
-  // Get the histogram parameters from the metric type object.
-  std::string type = api::metrics_private::ToString(params->metric.type);
-
-  base::HistogramType histogram_type(
-      type == "histogram-linear" ? base::LINEAR_HISTOGRAM : base::HISTOGRAM);
-  RecordValue(params->metric.metric_name, histogram_type, params->metric.min,
-              params->metric.max, params->metric.buckets, params->value);
   return RespondNow(NoArguments());
 }
 
@@ -221,8 +214,12 @@ MetricsPrivateRecordEnumerationValueFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
   // Uses UmaHistogramExactLinear instead of UmaHistogramEnumeration
   // because we don't have an enum type on params->value.
-  base::UmaHistogramExactLinear(params->metric_name, params->value,
-                                params->enum_size);
+  // Clamp the enum_size to UMA limits to prevent triggering excessively large
+  // allocations and avoid triggering crash dumps in base::Histogram.
+  int enum_size =
+      std::min(params->enum_size,
+               static_cast<int>(base::Histogram::kBucketCount_MAX - 1));
+  base::UmaHistogramExactLinear(params->metric_name, params->value, enum_size);
   return RespondNow(NoArguments());
 }
 
@@ -231,8 +228,7 @@ MetricsPrivateRecordPercentageFunction::Run() {
   std::optional<RecordPercentage::Params> params =
       RecordPercentage::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  RecordValue(params->metric_name, base::LINEAR_HISTOGRAM, 1, 101, 102,
-              params->value);
+  base::UmaHistogramPercentage(params->metric_name, params->value);
   return RespondNow(NoArguments());
 }
 
@@ -240,8 +236,7 @@ ExtensionFunction::ResponseAction MetricsPrivateRecordCountFunction::Run() {
   std::optional<RecordCount::Params> params =
       RecordCount::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  RecordValue(params->metric_name, base::HISTOGRAM, 1, 1000000, 50,
-              params->value);
+  base::UmaHistogramCounts1M(params->metric_name, params->value);
   return RespondNow(NoArguments());
 }
 
@@ -250,7 +245,7 @@ MetricsPrivateRecordSmallCountFunction::Run() {
   std::optional<RecordSmallCount::Params> params =
       RecordSmallCount::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  RecordValue(params->metric_name, base::HISTOGRAM, 1, 100, 50, params->value);
+  base::UmaHistogramCounts100(params->metric_name, params->value);
   return RespondNow(NoArguments());
 }
 
@@ -259,17 +254,15 @@ MetricsPrivateRecordMediumCountFunction::Run() {
   std::optional<RecordMediumCount::Params> params =
       RecordMediumCount::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  RecordValue(params->metric_name, base::HISTOGRAM, 1, 10000, 50,
-              params->value);
+  base::UmaHistogramCounts10000(params->metric_name, params->value);
   return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction MetricsPrivateRecordTimeFunction::Run() {
   std::optional<RecordTime::Params> params = RecordTime::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  static const int kTenSecMs = 10 * 1000;
-  RecordValue(params->metric_name, base::HISTOGRAM, 1, kTenSecMs, 50,
-              params->value);
+  base::UmaHistogramTimes(params->metric_name,
+                          base::Milliseconds(params->value));
   return RespondNow(NoArguments());
 }
 
@@ -278,9 +271,8 @@ MetricsPrivateRecordMediumTimeFunction::Run() {
   std::optional<RecordMediumTime::Params> params =
       RecordMediumTime::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  static const int kThreeMinMs = 3 * 60 * 1000;
-  RecordValue(params->metric_name, base::HISTOGRAM, 1, kThreeMinMs, 50,
-              params->value);
+  base::UmaHistogramMediumTimes(params->metric_name,
+                                base::Milliseconds(params->value));
   return RespondNow(NoArguments());
 }
 
@@ -288,9 +280,8 @@ ExtensionFunction::ResponseAction MetricsPrivateRecordLongTimeFunction::Run() {
   std::optional<RecordLongTime::Params> params =
       RecordLongTime::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
-  static const int kOneHourMs = 60 * 60 * 1000;
-  RecordValue(params->metric_name, base::HISTOGRAM, 1, kOneHourMs, 50,
-              params->value);
+  base::UmaHistogramLongTimes(params->metric_name,
+                              base::Milliseconds(params->value));
   return RespondNow(NoArguments());
 }
 

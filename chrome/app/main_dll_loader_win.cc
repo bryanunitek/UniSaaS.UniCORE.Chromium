@@ -11,6 +11,7 @@
 #include <userenv.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -27,18 +28,23 @@
 #include "base/logging.h"
 #include "base/memory/self_deleting.h"
 #include "base/path_service.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "base/version.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/shlwapi.h"
 #include "base/win/windows_version.h"
 #include "build/branding_buildflags.h"
+#include "chrome/app/llvm_profile_util.h"
 #include "chrome/browser/active_use_util.h"
 #include "chrome/chrome_elf/chrome_elf_main.h"
+#include "chrome/common/buildflags.h"
+#include "chrome/common/child_module/child_module_helper.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_result_codes.h"
@@ -50,8 +56,6 @@
 #include "components/version_info/channel.h"
 #include "content/public/app/sandbox_helper_win.h"
 #include "content/public/common/content_switches.h"
-#include "sandbox/policy/mojom/sandbox.mojom.h"
-#include "sandbox/policy/sandbox_type.h"
 #include "sandbox/win/src/sandbox.h"
 
 namespace {
@@ -79,14 +83,63 @@ class DllPreReader : public base::PlatformThread::Delegate,
   base::FilePath module_;
 };
 
-// The entry point signature of chrome.dll.
+// The entry point signature of all main modules.
 typedef int (*DLL_MAIN)(HINSTANCE,
                         sandbox::SandboxInterfaceInfo*,
                         int64_t exe_main_entry_point_ticks,
                         int64_t preread_begin_ticks,
                         int64_t preread_end_ticks);
 
-typedef void (*RelaunchChromeBrowserWithNewCommandLineIfNeededFunc)();
+// Properties for the main module to be loaded.
+struct ModuleProperties {
+  // The basename of the module (e.g., "chrome.dll").
+  base::FilePath::StringViewType module_name;
+
+  // The name of the main entrypoint of the module (e.g., "ChromeMain").
+  base::cstring_view entrypoint_name;
+
+  // The profile type to configure for PGO, if any.
+  std::optional<ProfileProcessType> profile_type;
+};
+
+// Returns the path to the patched renderer DLL if a valid version string and
+// user path component are specified on the command line, or an empty FilePath
+// otherwise. Does not validate whether the binary exists or is readable on
+// disk.
+base::FilePath GetPatchedRendererPath() {
+  const base::CommandLine& command_line =
+      *base::CommandLine::ForCurrentProcess();
+  return child_module::GetRendererBinaryPath(
+      child_module::GetModulesDirForUser(command_line.GetSwitchValuePath(
+          switches::kChildModuleUserPathComponent)),
+      base::Version(
+          command_line.GetSwitchValueASCII(switches::kChildModuleVersion)));
+}
+
+// Returns the properties for the module to be loaded in `process_type`.
+const ModuleProperties& ModulePropertiesFromProcessType(
+    std::string_view process_type) {
+  // Most process types load chrome.dll and run `ChromeMain`.
+  static constexpr ModuleProperties kOtherProperties = {
+      installer::kChromeDll, "ChromeMain", std::nullopt};
+  // Renderers load chrome_renderer.dll and run `ChromeRendererMain`.
+  static constexpr ModuleProperties kRendererProperties = {
+      chrome::kRendererDll, "ChromeRendererMain",
+      ProfileProcessType::kRenderer};
+
+#if BUILDFLAG(ENABLE_SEPARATE_RENDERER_BINARY)
+  if (process_type == switches::kRendererProcess) {
+    return kRendererProperties;
+  }
+#else
+  if (process_type == switches::kRendererProcess &&
+      !GetPatchedRendererPath().empty()) {
+    return kRendererProperties;
+  }
+#endif
+
+  return kOtherProperties;
+}
 
 std::wstring GetMachineGuid() {
   base::win::RegKey key;
@@ -108,7 +161,8 @@ bool ShouldPreReadFileAsynchronously() {
   // The trial only runs on lower channels for now.
   const version_info::Channel channel = install_static::GetChromeChannel();
   if (channel != version_info::Channel::CANARY &&
-      channel != version_info::Channel::DEV) {
+      channel != version_info::Channel::DEV &&
+      channel != version_info::Channel::BETA) {
     return false;
   }
 
@@ -141,6 +195,13 @@ bool ModuleCanBeRead(const base::FilePath& file_path) {
 // |module_name| is in a versioned sub-directory of the current executable's
 // directory) are supported. The identified file is not guaranteed to exist.
 base::FilePath GetModulePath(std::wstring_view module_name) {
+  if (module_name == chrome::kRendererDll) {
+    base::FilePath patched_path = GetPatchedRendererPath();
+    if (!patched_path.empty()) {
+      return patched_path;
+    }
+  }
+
   base::FilePath exe_dir;
   const bool has_path = base::PathService::Get(base::DIR_EXE, &exe_dir);
   DCHECK(has_path);
@@ -189,17 +250,17 @@ HMODULE LoadModuleWithDirectory(const base::FilePath& module,
   return handle;
 }
 
-// Prefetches and loads the appropriate DLL for the process type
-// |process_type_|. Populates |module| with the path of the loaded DLL.
-// Returns a handle to the loaded DLL, or nullptr on failure.
+// Prefetches and loads `module_name`. Populates `module` with the path of the
+// loaded DLL. Returns a handle to the loaded DLL, or nullptr on failure.
 HMODULE Load(base::FilePath* module,
+             const base::FilePath::StringViewType module_name,
              const base::CommandLine& cmd_line,
              bool is_browser,
              base::TimeTicks& preread_begin_ticks,
              base::TimeTicks& preread_end_ticks) {
-  *module = GetModulePath(installer::kChromeDll);
+  *module = GetModulePath(module_name);
   if (module->empty()) {
-    PLOG(ERROR) << "Cannot find module " << installer::kChromeDll;
+    PLOG(ERROR) << "Cannot find module " << module_name;
     return nullptr;
   }
   HMODULE dll = LoadModuleWithDirectory(*module, cmd_line, is_browser,
@@ -218,8 +279,6 @@ MainDllLoader::MainDllLoader() : dll_(nullptr) {}
 
 MainDllLoader::~MainDllLoader() = default;
 
-const int kNonBrowserShutdownPriority = 0x280;
-
 // Launching is a matter of loading the right dll and calling the entry point.
 // Derived classes can add custom code in the OnBeforeLaunch callback.
 int MainDllLoader::Launch(HINSTANCE instance,
@@ -229,45 +288,32 @@ int MainDllLoader::Launch(HINSTANCE instance,
 
   // Initialize the sandbox services.
   sandbox::SandboxInterfaceInfo sandbox_info = {nullptr};
-  const bool is_browser = process_type_.empty();
-  // IsUnsandboxedSandboxType() can't be used here because its result can be
-  // gated behind a feature flag, which are not yet initialized.
-  const bool is_sandboxed =
-      sandbox::policy::SandboxTypeFromCommandLine(cmd_line) !=
-      sandbox::mojom::Sandbox::kNoSandbox;
-
-  if (is_browser || is_sandboxed) {
-    // For child processes that are running as --no-sandbox, don't initialize
-    // the sandbox info, otherwise they'll be treated as brokers (as if they
-    // were the browser).
-    content::InitializeSandboxInfo(
-        &sandbox_info, IsExtensionPointDisableSet()
-                           ? sandbox::MITIGATION_EXTENSION_POINT_DISABLE
-                           : 0);
-  }
+  content::InitializeSandboxInfo(
+      &sandbox_info, IsExtensionPointDisableSet()
+                         ? sandbox::MITIGATION_EXTENSION_POINT_DISABLE
+                         : 0);
 
   base::TimeTicks preread_begin_ticks;
   base::TimeTicks preread_end_ticks;
 
+  // Determine the names of the module to load and its main entrypoint.
+  const auto& module_properties =
+      ModulePropertiesFromProcessType(process_type_);
+
+  if (module_properties.profile_type.has_value()) {
+    SetLLVMProfileProcessType(*module_properties.profile_type);
+  }
+
+  const bool is_browser = process_type_.empty();
   base::FilePath file;
-  dll_ =
-      Load(&file, cmd_line, is_browser, preread_begin_ticks, preread_end_ticks);
+  dll_ = Load(&file, module_properties.module_name, cmd_line, is_browser,
+              preread_begin_ticks, preread_end_ticks);
   if (!dll_)
     return CHROME_RESULT_CODE_MISSING_DATA;
 
-  if (!is_browser) {
-    // Set non-browser processes up to be killed by the system after the
-    // browser goes away. The browser uses the default shutdown order, which
-    // is 0x280. Note that lower numbers here denote "kill later" and higher
-    // numbers mean "kill sooner". This gets rid of most of those unsightly
-    // sad tabs on logout and shutdown.
-    ::SetProcessShutdownParameters(kNonBrowserShutdownPriority - 1,
-                                   SHUTDOWN_NORETRY);
-  }
-
   OnBeforeLaunch(process_type_, file);
-  DLL_MAIN chrome_main =
-      reinterpret_cast<DLL_MAIN>(::GetProcAddress(dll_, "ChromeMain"));
+  DLL_MAIN chrome_main = reinterpret_cast<DLL_MAIN>(
+      ::GetProcAddress(dll_, module_properties.entrypoint_name.c_str()));
   int rc = chrome_main(instance, &sandbox_info,
                        exe_entry_point_ticks.ToInternalValue(),
                        preread_begin_ticks.ToInternalValue(),
@@ -275,19 +321,6 @@ int MainDllLoader::Launch(HINSTANCE instance,
   return rc;
 }
 
-void MainDllLoader::RelaunchChromeBrowserWithNewCommandLineIfNeeded() {
-  // The relaunch-if-needed behavior is a NOP for processes other than the
-  // browser process, so early out here.
-  if (!dll_ || !process_type_.empty())
-    return;
-
-  RelaunchChromeBrowserWithNewCommandLineIfNeededFunc relaunch_function =
-      reinterpret_cast<RelaunchChromeBrowserWithNewCommandLineIfNeededFunc>(
-          ::GetProcAddress(dll_,
-                           "RelaunchChromeBrowserWithNewCommandLineIfNeeded"));
-  CHECK(relaunch_function);
-  relaunch_function();
-}
 
 //=============================================================================
 
@@ -304,14 +337,6 @@ void ChromeDllLoader::OnBeforeLaunch(const std::string& process_type,
     if constexpr (kShouldRecordActiveUse) {
       RecordDidRun(dll_path);
     }
-  } else {
-    // Set non-browser processes up to be killed by the system after the browser
-    // goes away. The browser uses the default shutdown order, which is 0x280.
-    // Note that lower numbers here denote "kill later" and higher numbers mean
-    // "kill sooner".
-    // This gets rid of most of those unsightly sad tabs on logout and shutdown.
-    ::SetProcessShutdownParameters(kNonBrowserShutdownPriority - 1,
-                                   SHUTDOWN_NORETRY);
   }
 }
 

@@ -15,12 +15,11 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test.pb.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/feature_registry/feature_registration.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
 #include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
+#include "components/optimization_guide/core/model_quality/model_quality_prefs.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/optimization_guide_buildflags.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
@@ -77,7 +76,7 @@ class ModelQualityLogsUploaderServiceTest : public testing::Test {
         shared_url_loader_factory_(
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &test_url_loader_factory_)) {
-    model_execution::prefs::RegisterLocalStatePrefs(pref_service_.registry());
+    RegisterModelQualityLocalStatePrefs(pref_service_.registry());
     model_quality_logs_uploader_service_ =
         std::make_unique<ModelQualityLogsUploaderService>(
             shared_url_loader_factory_, &pref_service_);
@@ -93,9 +92,7 @@ class ModelQualityLogsUploaderServiceTest : public testing::Test {
 
   ~ModelQualityLogsUploaderServiceTest() override = default;
 
-  void SetUp() override {
-    model_execution::prefs::RegisterProfilePrefs(pref_service_.registry());
-  }
+  void SetUp() override { RegisterGenAiFeatures(pref_service_.registry()); }
 
   void UploadModelQualityLogs(
       std::unique_ptr<proto::LogAiDataRequest> log_ai_data_request) {
@@ -229,8 +226,6 @@ TEST_F(ModelQualityLogsUploaderServiceTest, TestSuccessfulResponse) {
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelQualityLogsUploaderService.NetErrorCode",
       -net::OK, 1);
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelQualityLogsUploaderService.Status", 1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelQualityLogsUploaderService.UploadStatus.Compose",
       ModelQualityLogsUploadStatus::kUploadSuccessful, 1);
@@ -256,8 +251,6 @@ TEST_F(ModelQualityLogsUploaderServiceTest, TestMultipleUploads) {
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelQualityLogsUploaderService.NetErrorCode",
       -net::OK, 2);
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelQualityLogsUploaderService.Status", 2);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelQualityLogsUploaderService.UploadStatus.Compose",
       ModelQualityLogsUploadStatus::kUploadSuccessful, 2);
@@ -279,9 +272,6 @@ TEST_F(ModelQualityLogsUploaderServiceTest, TestNetErrorResponse) {
   SimulateResponse("foo response", net::HTTP_NOT_FOUND);
 
   // Make sure histograms are recorded correctly on bad response.
-  histogram_tester_.ExpectUniqueSample(
-      "OptimizationGuide.ModelQualityLogsUploaderService.Status",
-      net::HTTP_NOT_FOUND, 1);
   histogram_tester_.ExpectTotalCount(
       "OptimizationGuide.ModelQualityLogsUploaderService.NetErrorCode", 1);
 
@@ -299,9 +289,6 @@ TEST_F(ModelQualityLogsUploaderServiceTest, TestBadResponse) {
   SimulateResponse("bad response", net::HTTP_OK);
 
   // Make sure histograms are recorded correctly on bad response.
-  histogram_tester_.ExpectUniqueSample(
-      "OptimizationGuide.ModelQualityLogsUploaderService.Status", net::HTTP_OK,
-      1);
   histogram_tester_.ExpectTotalCount(
       "OptimizationGuide.ModelQualityLogsUploaderService.NetErrorCode", 1);
 }

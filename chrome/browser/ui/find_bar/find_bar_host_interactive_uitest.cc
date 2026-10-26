@@ -7,7 +7,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/run_until.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -48,10 +47,8 @@ class FindInPageInteractiveTest : public InProcessBrowserTest {
     BrowserWindowInterface* browser =
         GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
             web_contents);
-    browser->GetFeatures()
-        .GetFindBarController()
-        ->find_bar()
-        ->SetFindTextAndSelectedRange(search_str16, gfx::Range());
+    FindBarController::From(browser)->find_bar()->SetFindTextAndSelectedRange(
+        search_str16, gfx::Range());
     return ui_test_utils::FindInPage(web_contents, search_str16, forward,
                                      case_sensitive, ordinal, nullptr);
   }
@@ -78,7 +75,7 @@ IN_PROC_BROWSER_TEST_F(FindInPageInteractiveTest, FindInPageEndState) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
   find_in_page::FindTabHelper* find_tab_helper =
       find_in_page::FindTabHelper::FromWebContents(web_contents);
@@ -128,7 +125,7 @@ IN_PROC_BROWSER_TEST_F(FindInPageInteractiveTest, FindBarFocusEvents) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
 
   // Create focus event tracker.
@@ -145,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(FindInPageInteractiveTest, FindBarFocusEvents) {
   // Reset tracker for the close operation.
   focus_tracker.Reset();
   // Close the find bar.
-  browser()->GetFeatures().GetFindBarController()->EndFindSession(
+  FindBarController::From(browser())->EndFindSession(
       find_in_page::SelectionAction::kKeep, find_in_page::ResultAction::kKeep);
   // Wait for the focus event to be processed correctly.
   ASSERT_TRUE(base::test::RunUntil([&]() {

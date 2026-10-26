@@ -8,6 +8,7 @@
 #import <vector>
 
 #import "base/base_paths.h"
+#import "base/check_deref.h"
 #import "base/check_op.h"
 #import "base/command_line.h"
 #import "base/feature_list.h"
@@ -34,7 +35,7 @@
 #import "components/gcm_driver/gcm_desktop_utils.h"
 #import "components/gcm_driver/gcm_driver.h"
 #import "components/history/core/browser/history_service.h"
-#import "components/keyed_service/core/service_access_type.h"
+#import "components/metrics/metrics_features.h"
 #import "components/metrics/metrics_service.h"
 #import "components/metrics_services_manager/metrics_services_manager.h"
 #import "components/net_log/net_export_file_writer.h"
@@ -63,6 +64,7 @@
 #import "ios/chrome/browser/gcm/model/ios_chrome_gcm_profile_service_factory.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/metrics/model/ios_chrome_metrics_services_manager_client.h"
+#import "ios/chrome/browser/omaha/model/omaha_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_global_state.h"
 #import "ios/chrome/browser/policy/model/browser_policy_connector_ios.h"
 #import "ios/chrome/browser/policy/model/configuration_policy_handler_list_factory.h"
@@ -84,6 +86,8 @@
 #import "ios/public/provider/chrome/browser/additional_features/additional_features_api.h"
 #import "ios/public/provider/chrome/browser/additional_features/additional_features_controller.h"
 #import "ios/public/provider/chrome/browser/app_distribution/app_distribution_api.h"
+#import "ios/public/provider/chrome/browser/device_attestation/device_attestation_api.h"
+#import "ios/public/provider/chrome/browser/device_attestation/device_integrity_service.h"
 #import "ios/public/provider/chrome/browser/push_notification/push_notification_api.h"
 #import "ios/public/provider/chrome/browser/signin/signin_identity_api.h"
 #import "ios/public/provider/chrome/browser/signin/signin_sso_api.h"
@@ -216,6 +220,7 @@ void ApplicationContextImpl::StartTearDown() {
   CHECK_EQ(profile_manager_->GetLoadedProfiles().size(), 0u);
 
   account_profile_mapper_.reset();
+  push_notification_service_.reset();
   profile_manager_.reset();
 
   // The policy providers managed by `browser_policy_connector_` need to shut
@@ -464,7 +469,9 @@ ApplicationContextImpl::GetActivityReporter() {
             GetSharedURLLoaderFactory(),
             // Never send cookies for activity reports.
             base::BindRepeating([](const GURL& url) { return false; })),
-        base::BindRepeating(&GetChannel), base::DoNothing(), true);
+        base::BindRepeating(&::GetChannel),
+        base::BindRepeating(&ios::provider::GetBrandCode), base::DoNothing(),
+        true);
   }
   return activity_reporter_.get();
 }
@@ -618,6 +625,14 @@ ApplicationContextImpl::GetAdditionalFeaturesController() {
   return additional_features_controller_.get();
 }
 
+DeviceIntegrityService* ApplicationContextImpl::GetDeviceIntegrityService() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!device_integrity_service_) {
+    device_integrity_service_ = ios::provider::CreateDeviceIntegrityService();
+  }
+  return device_integrity_service_.get();
+}
+
 auto_deletion::AutoDeletionService*
 ApplicationContextImpl::GetAutoDeletionService() {
   if (!auto_deletion_service_) {
@@ -636,11 +651,21 @@ ApplicationContextImpl::GetDeviceParentalControls() {
   return *device_parental_controls_;
 }
 
+OmahaService& ApplicationContextImpl::GetOmahaService() {
+  if (!omaha_service_) {
+    omaha_service_ = std::make_unique<OmahaService>(
+        CHECK_DEREF(GetLocalState()), GetApplicationLocaleStorage()->GetTag());
+  }
+  return *omaha_service_;
+}
+
 optimization_guide::OptimizationGuideGlobalState*
 ApplicationContextImpl::GetOptimizationGuideGlobalState() {
   if (!optimization_guide_global_state_) {
     optimization_guide_global_state_ =
-        std::make_unique<optimization_guide::OptimizationGuideGlobalState>();
+        std::make_unique<optimization_guide::OptimizationGuideGlobalState>(
+            GetLocalState(), GetProfileManager(), GetApplicationLocaleStorage(),
+            GetSharedURLLoaderFactory());
   }
   return optimization_guide_global_state_.get();
 }
@@ -658,13 +683,15 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
   if (metrics_services_manager_) {
     if (metrics::MetricsService* metrics_service =
             metrics_services_manager_->GetMetricsService()) {
+      bool enable_background_metrics_work = base::FeatureList::IsEnabled(
+          metrics::features::kIOSBackgroundMetrics);
       switch (app_state) {
         case AppState::kForeground:
           metrics_service->OnAppEnterForeground();
           break;
 
         case AppState::kBackgroundFromActive:
-          metrics_service->OnAppEnterBackground();
+          metrics_service->OnAppEnterBackground(enable_background_metrics_work);
           break;
         case AppState::kBackgroundProcessing:
           // Background processing should be tracked in metrcis, including
@@ -675,7 +702,7 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
           // When background processing is complete, this state should be
           // treated like normal backgrounding, including specifically the
           // clean exit beacon.
-          metrics_service->OnAppEnterBackground();
+          metrics_service->OnAppEnterBackground(enable_background_metrics_work);
           break;
       }
     }
@@ -724,8 +751,7 @@ void ApplicationContextImpl::OnAppEnterState(AppState app_state) {
 
         case AppState::kBackgroundFromActive:
           if (history::HistoryService* history_service =
-                  ios::HistoryServiceFactory::GetForProfile(
-                      profile, ServiceAccessType::EXPLICIT_ACCESS)) {
+                  ios::HistoryServiceFactory::GetForProfile(profile)) {
             history_service->HandleBackgrounding();
           }
           break;

@@ -22,7 +22,7 @@
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -95,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GetBannerURLWithAction("stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
@@ -131,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GetBannerURLWithAction("verify_appinstalled_stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
@@ -185,7 +185,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GetBannerURLWithAction("stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
@@ -231,11 +231,12 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
         browser(), GetBannerURLWithManifestAndQuery("/banners/minimal-ui.json",
                                                     "action", "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   // Install the app via the menu instead of the banner.
-  browser()->command_controller()->ExecuteCommand(IDC_INSTALL_PWA);
+  chrome::BrowserCommandController::From(browser())->ExecuteCommand(
+      IDC_INSTALL_PWA);
   manager->AwaitAppInstall();
 
   EXPECT_FALSE(manager->IsPromptAvailableForTesting());
@@ -260,16 +261,14 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
         browser(), GetBannerURLWithManifestAndQuery("/banners/fullscreen.json",
                                                     "action", "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   // Install the app via the menu instead of the banner.
-  if (IsPageActionMigrated(PageActionIconType::kPwaInstall)) {
-    actions::ActionManager::Get().FindAction(kActionInstallPwa)->InvokeAction();
-  } else {
-    BrowserWindow::FromBrowser(browser())->ExecutePageActionIconForTesting(
-        PageActionIconType::kPwaInstall);
-  }
+  actions::ActionManager::Get()
+      .FindAction(kActionInstallPwa,
+                  BrowserActions::From(browser())->root_action_item())
+      ->InvokeAction();
 
   manager->AwaitAppInstall();
 
@@ -299,7 +298,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetBannerURL()));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
@@ -312,7 +311,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
   TestAppBannerManagerDesktop* manager =
       TestAppBannerManagerDesktop::FromWebContents(
           browser()->tab_strip_model()->GetActiveWebContents());
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // Install web app by policy.
   web_app::ExternalInstallOptions options =
@@ -351,7 +350,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetBannerURL()));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,
@@ -376,11 +375,12 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
                        "/banners/manifest_display_override.json", "action",
                        "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   // Install the app via the menu instead of the banner.
-  browser()->command_controller()->ExecuteCommand(IDC_INSTALL_PWA);
+  chrome::BrowserCommandController::From(browser())->ExecuteCommand(
+      IDC_INSTALL_PWA);
   manager->AwaitAppInstall();
 
   EXPECT_FALSE(manager->IsPromptAvailableForTesting());
@@ -406,7 +406,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
             "/banners/manifest_display_override_display_is_browser.json",
             "action", "stash_event")));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   {
@@ -449,7 +449,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerDesktopBrowserTest,
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetBannerURL()));
     run_loop.Run();
-    EXPECT_EQ(State::PENDING_PROMPT_NOT_CANCELED, manager->state_for_testing());
+    EXPECT_EQ(State::PENDING_PROMPT, manager->state_for_testing());
   }
 
   EXPECT_EQ(InstallableWebAppCheckResult::kYes_Promotable,

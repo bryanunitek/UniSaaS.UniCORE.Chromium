@@ -9,6 +9,7 @@
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
+#include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_features.h"
@@ -37,10 +38,10 @@ const gfx::VectorIcon& GetDropArrowIcon(DropArrow::Direction direction) {
       return features::IsRoundedIconsEnabled() ? kArrowDownwardIcon
                                                : kArrowDownwardOldIcon;
     case DropArrow::Direction::kLeft:
-      return features::IsRoundedIconsEnabled() ? kArrowBackIcon
+      return features::IsRoundedIconsEnabled() ? vector_icons::kArrowBackIcon
                                                : kArrowBackOldIcon;
     case DropArrow::Direction::kRight:
-      return features::IsRoundedIconsEnabled() ? kArrowForwardIcon
+      return features::IsRoundedIconsEnabled() ? vector_icons::kArrowForwardIcon
                                                : kArrowForwardOldIcon;
     default:
       NOTREACHED();
@@ -99,7 +100,8 @@ void DropArrow::SetIndex(const BrowserRootView::DropIndex& index) {
 }
 
 void DropArrow::OnWidgetDestroying(views::Widget* widget) {
-  DCHECK(scoped_observation_.IsObservingSource(arrow_widget_.get()));
+  CHECK(scoped_observation_.IsObservingSource(arrow_widget_.get()),
+        base::NotFatalUntil::M162);
   scoped_observation_.Reset();
   arrow_view_ = nullptr;
   arrow_widget_ = nullptr;

@@ -15,6 +15,7 @@
 #include "base/values.h"
 #include "net/base/auth.h"
 #include "net/base/url_util.h"
+#include "net/cert/x509_certificate.h"
 #include "net/dns/host_resolver.h"
 #include "net/http/http_auth_handler.h"
 #include "net/http/http_auth_handler_factory.h"
@@ -27,11 +28,23 @@
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_source_type.h"
 #include "net/log/net_log_with_source.h"
+#include "net/ssl/ssl_info.h"
 #include "url/scheme_host_port.h"
 
 namespace net {
 
 namespace {
+
+bool ServerCertMatches(const X509Certificate* handler_cert,
+                       const X509Certificate* challenge_cert) {
+  if (handler_cert == challenge_cert) {
+    return true;
+  }
+  if (!handler_cert || !challenge_cert) {
+    return false;
+  }
+  return handler_cert->EqualsExcludingChain(challenge_cert);
+}
 
 enum AuthTarget {
   AUTH_TARGET_PROXY = 0,
@@ -112,18 +125,31 @@ void HttpAuthController::BindToCallingNetLog(
 
 int HttpAuthController::MaybeGenerateAuthToken(
     const HttpRequestInfo* request,
+    const SSLInfo& ssl_info,
     CompletionOnceCallback callback,
     const NetLogWithSource& caller_net_log) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(!auth_info_);
+
+  // A connection-based handler derives per-connection state (such as channel
+  // bindings) from the server certificate at creation time. If the
+  // underlying connection has been replaced with one that presents a
+  // different certificate since the last challenge, that state is no longer
+  // valid for the current connection, so drop the handler instead of
+  // generating a token from it. The next challenge starts the authentication
+  // protocol over on the current connection.
+  InvalidateIfServerCertChanged(ssl_info.cert.get());
+
   bool needs_auth = HaveAuth() || SelectPreemptiveAuth(caller_net_log);
-  if (!needs_auth)
+  if (!needs_auth) {
     return OK;
+  }
   net_log_.BeginEventReferencingSource(NetLogEventType::AUTH_GENERATE_TOKEN,
                                        caller_net_log.source());
   const AuthCredentials* credentials = nullptr;
-  if (identity_.source != HttpAuth::IDENT_SRC_DEFAULT_CREDENTIALS)
+  if (identity_.source != HttpAuth::IDENT_SRC_DEFAULT_CREDENTIALS) {
     credentials = &identity_.credentials;
+  }
   DCHECK(auth_token_.empty());
   DCHECK(callback_.is_null());
   int rv = handler_->GenerateAuthToken(
@@ -148,8 +174,9 @@ bool HttpAuthController::SelectPreemptiveAuth(
 
   // Don't do preemptive authorization if the URL contains a username:password,
   // since we must first be challenged in order to use the URL's identity.
-  if (auth_url_.has_username())
+  if (auth_url_.has_username()) {
     return false;
+  }
 
   // SelectPreemptiveAuth() is on the critical path for each request, so it
   // is expected to be fast. LookupByPath() is fast in the common case, since
@@ -157,8 +184,9 @@ bool HttpAuthController::SelectPreemptiveAuth(
   // (For most users in fact, it will be 0.)
   HttpAuthCache::Entry* entry = http_auth_cache_->LookupByPath(
       auth_scheme_host_port_, target_, network_anonymization_key_, auth_path_);
-  if (!entry)
+  if (!entry) {
     return false;
+  }
 
   BindToCallingNetLog(caller_net_log);
 
@@ -177,6 +205,7 @@ bool HttpAuthController::SelectPreemptiveAuth(
   identity_.invalid = false;
   identity_.credentials = entry->credentials();
   handler_.swap(handler_preemptive);
+  handler_server_cert_.reset();
   return true;
 }
 
@@ -207,6 +236,13 @@ int HttpAuthController::HandleAuthChallenge(
   BindToCallingNetLog(caller_net_log);
   net_log_.BeginEventReferencingSource(NetLogEventType::AUTH_HANDLE_CHALLENGE,
                                        caller_net_log.source());
+
+  // A connection-based handler derives channel bindings from the server
+  // certificate at creation time. If the underlying connection has been
+  // replaced with one that presents a different certificate, that state is
+  // no longer valid for the current connection, so drop the handler and
+  // start the authentication protocol over.
+  InvalidateIfServerCertChanged(ssl_info.cert.get());
 
   // Give the existing auth handler first try at the authentication headers.
   // This will also evict the entry in the HttpAuthCache if the previous
@@ -267,6 +303,7 @@ int HttpAuthController::HandleAuthChallenge(
           network_anonymization_key_, target_, auth_scheme_host_port_,
           disabled_schemes_, net_log_, host_resolver_, &handler_);
       if (handler_.get()) {
+        handler_server_cert_ = ssl_info.cert;
         HistogramAuthEvent(AUTH_EVENT_START);
       }
     }
@@ -396,6 +433,7 @@ void HttpAuthController::InvalidateCurrentHandler(
   }
 
   handler_.reset();
+  handler_server_cert_.reset();
   identity_ = HttpAuth::Identity();
 }
 
@@ -645,6 +683,15 @@ void HttpAuthController::DisableEmbeddedIdentity() {
 void HttpAuthController::OnConnectionClosed() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   InvalidateCurrentHandler(INVALIDATE_HANDLER);
+}
+
+void HttpAuthController::InvalidateIfServerCertChanged(
+    const X509Certificate* cert) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (handler_ && handler_->is_connection_based() &&
+      !ServerCertMatches(handler_server_cert_.get(), cert)) {
+    InvalidateCurrentHandler(INVALIDATE_HANDLER);
+  }
 }
 
 }  // namespace net

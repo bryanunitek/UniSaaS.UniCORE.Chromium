@@ -24,6 +24,9 @@ namespace extensions {
 namespace keys = manifest_keys;
 namespace errors = manifest_errors;
 
+// static
+const char* InputComponents::kManifestDataKey = keys::kInputComponents;
+
 InputComponentInfo::InputComponentInfo() = default;
 
 InputComponentInfo::InputComponentInfo(const InputComponentInfo& other) =
@@ -37,8 +40,7 @@ InputComponents::~InputComponents() = default;
 // static
 const std::vector<InputComponentInfo>* InputComponents::GetInputComponents(
     const Extension* extension) {
-  const InputComponents* info = static_cast<const InputComponents*>(
-      extension->GetManifestData(keys::kInputComponents));
+  const auto* info = extension->GetManifestData<InputComponents>();
   return info ? &info->input_components : nullptr;
 }
 
@@ -74,6 +76,12 @@ bool InputComponentsHandler::Parse(Extension* extension,
     std::string id_str;
     const std::string* maybe_id_str = module_value->FindString(keys::kId);
     if (maybe_id_str) {
+      // Prevent delimiter injection in prefs (comma is used as a delimiter).
+      if (maybe_id_str->contains(',')) {
+        *error = ErrorUtils::FormatErrorMessageUTF16(
+            errors::kInvalidInputComponentId, base::NumberToString(i));
+        return false;
+      }
       id_str = *maybe_id_str;
     }
 
@@ -156,7 +164,7 @@ bool InputComponentsHandler::Parse(Extension* extension,
     component.input_view_url = std::move(input_view_url);
     info->input_components.push_back(std::move(component));
   }
-  extension->SetManifestData(keys::kInputComponents, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

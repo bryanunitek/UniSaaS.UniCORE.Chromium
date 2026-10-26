@@ -8,14 +8,22 @@
 #include <utility>
 
 #include "chrome/browser/ui/tabs/tab_data.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_group_desktop.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
+#include "components/tabs/public/tab_group_tab_collection.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/range/range.h"
 
-FakeBaseTabStripController::FakeBaseTabStripController() = default;
+FakeBaseTabStripController::FakeBaseTabStripController()
+    : factory_(std::make_unique<TabGroupDesktop::Factory>(nullptr)) {
+  dummy_group_collection_ = std::make_unique<tabs::TabGroupTabCollection>(
+      *factory_, tab_groups::TabGroupId::GenerateNew(),
+      tab_groups::TabGroupVisualData());
+}
 
 FakeBaseTabStripController::~FakeBaseTabStripController() = default;
 
@@ -43,7 +51,7 @@ void FakeBaseTabStripController::AddTab(int index,
 }
 
 void FakeBaseTabStripController::RemoveTab(int index) {
-  DCHECK(IsValidIndex(index));
+  CHECK(IsValidIndex(index), base::NotFatalUntil::M162);
   num_tabs_--;
   if (index < num_pinned_tabs_) {
     num_pinned_tabs_--;
@@ -156,9 +164,6 @@ void FakeBaseTabStripController::OnCloseTab(
     CloseTabSource source,
     base::OnceCallback<void(CloseTabSource)> callback) {
   std::move(callback).Run(source);
-}
-
-void FakeBaseTabStripController::CloseTab(int index) {
   RemoveTab(index);
 }
 
@@ -281,9 +286,12 @@ std::u16string FakeBaseTabStripController::GetAccessibleTabName(
   return std::u16string();
 }
 
+// Returns a dummy TabGroup for the given ID. Note that in this fake
+// controller, It is only used to satisfy interfaces and avoid crashes
+// that query the group.
 TabGroup* FakeBaseTabStripController::GetTabGroup(
     const tab_groups::TabGroupId& group_id) const {
-  return nullptr;
+  return dummy_group_collection_->GetTabGroup();
 }
 
 BrowserWindowInterface*
@@ -296,13 +304,18 @@ FakeBaseTabStripController::GetFocusedGroup() const {
   return focused_group_;
 }
 
-void FakeBaseTabStripController::SetFocusedGroup(
-    std::optional<tab_groups::TabGroupId> group) {
+void FakeBaseTabStripController::EnterFocusMode(
+    const tab_groups::TabGroupId& group) {
   focused_group_ = group;
 }
 
+void FakeBaseTabStripController::ExitFocusMode(
+    std::optional<TabGroupFocusExitReason> reason) {
+  focused_group_ = std::nullopt;
+}
+
 void FakeBaseTabStripController::SetActiveIndex(int new_index) {
-  DCHECK(IsValidIndex(new_index));
+  CHECK(IsValidIndex(new_index), base::NotFatalUntil::M162);
   active_index_ = new_index;
   selection_model_.SetSelectedIndex(active_index_);
   if (tab_strip_) {

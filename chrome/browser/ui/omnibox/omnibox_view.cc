@@ -30,7 +30,6 @@
 #include "components/search/search.h"
 #include "components/search_engines/template_url_service.h"
 #include "extensions/buildflags/buildflags.h"
-#include "ui/base/window_open_disposition.h"
 #include "url/url_constants.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -47,32 +46,10 @@ namespace {
 #if !BUILDFLAG(IS_ANDROID)
 // Return true if the given match uses a vector icon with a background.
 bool HasVectorIconBackground(const AutocompleteMatch& match) {
-  return match.type == AutocompleteMatchType::HISTORY_CLUSTER ||
-         match.type == AutocompleteMatchType::PEDAL;
+  return match.type == omnibox::AutocompleteMatchType::kHistoryCluster ||
+         match.type == omnibox::AutocompleteMatchType::kPedal;
 }
 #endif
-
-const char kOpenMatchWithKeyboardModifiersMetricName[] =
-    "Omnibox.OpenMatchWithKeyboardModifiers";
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// LINT.IfChange(OpenMatchWithKeyboardModifiers)
-enum class OpenMatchWithKeyboardModifiers {
-  kNoModifier = 0,
-  kCtrl = 1,
-  kAlt = 2,
-  kCtrlAlt = 3,
-  kShiftCommand = 4,
-  kCtrlShiftCommand = 5,
-  kAltShift = 6,
-  kCtrlAltShift = 7,
-  kCommand = 8,
-  kCtrlCommand = 9,
-  kShift = 10,
-  kCtrlShift = 11,
-  kMaxValue = kCtrlShift,
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/omnibox/enums.xml:OpenMatchWithKeyboardModifiers)
 
 }  // namespace
 
@@ -162,7 +139,7 @@ ui::ImageModel OmniboxView::GetIcon(int dip_size,
                    : controller()->client()->GetFaviconForDefaultSearchProvider(
                          std::move(on_icon_fetched));
 
-  } else if (match.type != AutocompleteMatchType::HISTORY_CLUSTER) {
+  } else if (match.type != omnibox::AutocompleteMatchType::kHistoryCluster) {
     // The starter pack suggestions are a unique case. These suggestions
     // normally use a favicon image that cannot be styled further by client
     // code. In order to apply custom styling to the icon (e.g. colors), we
@@ -203,7 +180,8 @@ ui::ImageModel OmniboxView::GetIcon(int dip_size,
                                 .use_action_icons_in_location_bar) {
     OmniboxPopupSelection selection =
         controller()->edit_model()->GetPopupSelection();
-    if (selection.state == OmniboxPopupSelection::FOCUSED_BUTTON_ACTION &&
+    if (selection.state ==
+            OmniboxPopupSelection::LineState::kFocusedButtonAction &&
         selection.action_index < match.actions.size()) {
       action = match.actions[selection.action_index].get();
     }
@@ -211,10 +189,11 @@ ui::ImageModel OmniboxView::GetIcon(int dip_size,
   const gfx::VectorIcon& vector_icon =
       action ? action->GetVectorIcon()
              : match.GetVectorIcon(is_bookmarked, turl);
-  const auto& color = (match.type == AutocompleteMatchType::HISTORY_CLUSTER ||
-                       match.type == AutocompleteMatchType::STARTER_PACK)
-                          ? color_bright_vectors
-                          : color_vectors;
+  const auto& color =
+      (match.type == omnibox::AutocompleteMatchType::kHistoryCluster ||
+       match.type == omnibox::AutocompleteMatchType::kStarterPack)
+          ? color_bright_vectors
+          : color_vectors;
   return ui::ImageModel::FromVectorIcon(
       vector_icon,
       HasVectorIconBackground(match) ? color_vectors_with_background : color,
@@ -248,6 +227,10 @@ bool OmniboxView::IsImeShowingPopup() const {
 void OmniboxView::ShowVirtualKeyboardIfEnabled() {}
 
 void OmniboxView::HideImeIfNeeded() {}
+
+bool OmniboxView::IsFullWebUIOmnibox() const {
+  return false;
+}
 
 OmniboxView::State OmniboxView::GetState() const {
   State state;
@@ -286,43 +269,6 @@ OmniboxView::StateChanges OmniboxView::GetStateChanges(const State& before,
   return state_changes;
 }
 
-// static
-WindowOpenDisposition
-OmniboxView::ComputeOpenDispositionFromModifiersAndLogToUma(bool shift,
-                                                            bool control,
-                                                            bool alt,
-                                                            bool command) {
-  WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB;
-  OpenMatchWithKeyboardModifiers metric_value;
-  if (alt && !shift) {
-    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlAlt
-                           : OpenMatchWithKeyboardModifiers::kAlt;
-    disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  } else if (shift && command) {
-    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlShiftCommand
-                           : OpenMatchWithKeyboardModifiers::kShiftCommand;
-    disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  } else if (alt && shift) {
-    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlAltShift
-                           : OpenMatchWithKeyboardModifiers::kAltShift;
-    disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
-  } else if (command && !shift) {
-    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlCommand
-                           : OpenMatchWithKeyboardModifiers::kCommand;
-    disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
-  } else if (shift && !alt) {
-    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlShift
-                           : OpenMatchWithKeyboardModifiers::kShift;
-    disposition = WindowOpenDisposition::NEW_WINDOW;
-  } else {
-    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrl
-                           : OpenMatchWithKeyboardModifiers::kNoModifier;
-  }
-  base::UmaHistogramEnumeration(kOpenMatchWithKeyboardModifiersMetricName,
-                                metric_value);
-  return disposition;
-}
-
 OmniboxView::OmniboxView(OmniboxController* controller)
     : controller_(controller) {
   controller_->SetView(this);
@@ -356,12 +302,14 @@ void OmniboxView::UpdateTextStyle(
     return;
   }
 
+  // LINT.IfChange(DemphasizeComponents)
   enum DemphasizeComponents {
     kEverything,
     kAllButScheme,
     kAllButHost,
     kNothing,
   } deemphasize = kNothing;
+  // LINT.ThenChange(//components/omnibox/browser/searchbox.mojom:UrlDeemphasisMode)
 
   url::Component scheme;
   url::Component host;
@@ -417,4 +365,49 @@ void OmniboxView::UpdateTextStyle(
       scheme_range.IsValid()) {
     UpdateSchemeStyle(scheme_range);
   }
+}
+
+bool OmniboxView::IsSuggestionNarrationOwnedByWebUIPopup() const {
+  return controller()->popup_state_manager()->popup_state() ==
+         OmniboxPopupState::kFull;
+}
+
+std::u16string OmniboxView::ComputeFriendlySuggestionTextForAccessibility(
+    const std::u16string& display_text,
+    const AutocompleteMatch& match,
+    int& suggestion_text_prefix_length) {
+  std::u16string friendly_suggestion_text;
+  suggestion_text_prefix_length = 0;
+
+  if (controller()->edit_model()->GetPopupSelection().state ==
+      OmniboxPopupSelection::LineState::kFocusedButtonAim) {
+    friendly_suggestion_text =
+        controller()->edit_model()->GetPopupAccessibilityLabelForAimButton();
+  } else if (controller()->edit_model()->GetPopupSelection().line ==
+             OmniboxPopupSelection::kNoMatch) {
+    // If nothing is selected in the popup, we are in the no-default-match edge
+    // case, and |match| is a synthetically generated match. In that case,
+    // bypass OmniboxPopupModel and get the label from our synthetic |match|.
+    friendly_suggestion_text = omnibox::AutocompleteMatchToAccessibilityLabel(
+        match, /*header_text=*/u"", display_text,
+        OmniboxPopupSelection::kNoMatch,
+        controller()->autocomplete_controller()->result().size(),
+        std::u16string(), &suggestion_text_prefix_length);
+  } else {
+    friendly_suggestion_text =
+        controller()
+            ->edit_model()
+            ->GetPopupAccessibilityLabelForCurrentSelection(
+                display_text, /*include_positional_info=*/true,
+                &suggestion_text_prefix_length);
+
+    // If the line immediately after the current selection is the
+    // informational IPH row, append its accessibility label at the end of
+    // this selection's accessibility label.
+    friendly_suggestion_text +=
+        controller()
+            ->edit_model()
+            ->MaybeGetPopupAccessibilityLabelForIPHSuggestion();
+  }
+  return friendly_suggestion_text;
 }

@@ -7,6 +7,7 @@
 
 #include <compare>
 
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "third_party/blink/public/mojom/loader/navigation_predictor.mojom-blink.h"
 #include "third_party/blink/public/mojom/preloading/anchor_element_interaction_host.mojom-blink.h"
@@ -103,6 +104,7 @@ class CORE_EXPORT AnchorElementMetricsSender final
   void SetTickClockForTesting(const base::TickClock* clock);
   void SetNowAsNavigationStartForTesting();
   void FireUpdateTimerForTesting();
+  void FlushMetricsHostForTesting();
 
   // Report the pointer event for the anchor element.
   void MaybeReportAnchorElementPointerEvent(HTMLAnchorElementBase& element,
@@ -114,11 +116,13 @@ class CORE_EXPORT AnchorElementMetricsSender final
   // calls.
   static constexpr auto kUpdateMetricsTimeGap = base::Milliseconds(200);
 
-  // Returns true if `random_anchor_sampling_period_` is configured to sample in
-  // all anchors.
+  // Returns true if every anchor is being sampled in.
   bool AllAnchorsSampledIn() const;
 
  private:
+  // Returns the effective anchor sampling period.
+  int EffectiveSamplingPeriod() const;
+
   // Associates |metrics_host_| with the IPC interface if not already, so it can
   // be used to send messages. Returns true if associated, false otherwise.
   bool AssociateInterface();
@@ -190,9 +194,6 @@ class CORE_EXPORT AnchorElementMetricsSender final
   // is no longer done.
   bool should_skip_update_delays_for_testing_ = false;
 
-  // Cached field trial param values.
-  const int random_anchor_sampling_period_;
-
   Vector<mojom::blink::AnchorElementEnteredViewportPtr>
       entered_viewport_messages_;
 
@@ -210,7 +211,8 @@ class CORE_EXPORT AnchorElementMetricsSender final
 
   Vector<mojom::blink::AnchorElementClickPtr> clicked_messages_;
 
-  const base::TickClock* clock_;
+  raw_ptr<const base::TickClock, UnprotectedInRelease | DanglingUntriaged>
+      clock_;
 
   bool is_registered_for_lifecycle_notifications_ = false;
 

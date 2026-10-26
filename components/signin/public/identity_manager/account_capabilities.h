@@ -25,6 +25,10 @@ namespace ios {
 class AccountCapabilitiesFetcherIOS;
 }  // namespace ios
 
+namespace signin::test {
+class AccountCapabilitiesObserver;
+}  // namespace signin::test
+
 namespace supervised_user {
 class FamilyLinkUserCapabilitiesObserver;
 }  // namespace supervised_user
@@ -55,10 +59,6 @@ class AccountCapabilities {
   const base::flat_map<std::string, bool>& ConvertToAccountCapabilitiesIOS();
 #endif
 
-  // Resets the cached list of supported account capability names.
-  // Useful for testing scenarios where feature flags change between tests.
-  static void ResetSupportedAccountCapabilityNamesForTesting();
-
   // clang-format off
   // keep-sorted start newline_separated=yes sticky_prefixes=#if,BUILDFLAG group_prefixes=#endif,can,has,is,must
   // clang-format on
@@ -77,10 +77,8 @@ class AccountCapabilities {
   signin::Tribool can_make_chrome_search_engine_choice_screen_choice() const;
 #endif
 
-#if !BUILDFLAG(IS_IOS)
-  // Chrome can run privacy sandbox trials for accounts with this capability.
-  signin::Tribool can_run_chrome_privacy_sandbox_trials() const;
-#endif
+  // Chrome can override the account info for accounts with this capability.
+  signin::Tribool can_override_account_info() const;
 
   // Chrome can show history sync opt in screens without minor mode
   // restrictions with this capability.
@@ -156,11 +154,6 @@ class AccountCapabilities {
   // with accounts with this capability.
   signin::Tribool is_subject_to_account_level_enterprise_policies() const;
 
-  // Chrome must show the notice before using the privacy sandbox restricted
-  // measurement API
-  signin::Tribool
-  is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice() const;
-
   // Chrome applies enterprise features to accounts with this capability.
   // This capability returns true all managed accounts and does not reflect
   // whether the account will receive account level enterprise policies or not
@@ -169,6 +162,15 @@ class AccountCapabilities {
 
   // Chrome applies parental controls to accounts with this capability.
   signin::Tribool is_subject_to_parental_controls() const;
+
+  // Chrome applies parental controls via the Chrome supervision bundle to
+  // accounts with this capability.
+  // This should only be used for logging; use is_subject_to_parental_controls()
+  // for feature logic.
+  signin::Tribool is_subject_to_parental_controls_via_bundle() const;
+
+  // Whether the user is subject to Universal Opt-Out.
+  signin::Tribool is_subject_to_universal_opt_out() const;
 
 #if BUILDFLAG(IS_IOS)
   // Whether the client must fetch Apple's age range in Chrome.
@@ -189,9 +191,6 @@ class AccountCapabilities {
   // `signin::Tribool::kUnknown`.
   bool AreAnyCapabilitiesKnown() const;
 
-  // Whether none of the capabilities has `signin::Tribool::kUnknown`.
-  bool AreAllCapabilitiesKnown() const;
-
   // Updates the capability state value for keys in `other`. If a value is
   // `signin::Tribool::kUnknown` in `other` the corresponding key will not
   // be updated in order to avoid overriding known values.
@@ -204,6 +203,9 @@ class AccountCapabilities {
   // override.
   void SetCapabilityOverride(std::string_view name,
                              std::optional<signin::Tribool> value);
+
+  // Whether none of the capabilities has `signin::Tribool::kUnknown`.
+  bool AreAllCapabilitiesKnown() const;
 
   // Returns the list of account capability service names supported in Chrome.
   static base::span<const std::string_view>
@@ -222,11 +224,6 @@ class AccountCapabilities {
   const base::flat_map<std::string, signin::Tribool>& GetCapabilityOverrides()
       const;
 
-  // Internal version of GetSupportedAccountCapabilityNames that calculates the
-  // list on each call, rather than returning a cached value.
-  static std::vector<std::string_view>
-  GetSupportedAccountCapabilityNamesInternal();
-
   friend std::optional<AccountCapabilities>
   signin::AccountCapabilitiesFromServerResponse(
       const base::DictValue& account_capabilities);
@@ -239,22 +236,29 @@ class AccountCapabilities {
       const base::DictValue& overrides_dict);
   friend class AboutSigninInternals;
   friend class AccountCapabilitiesFetcherGaia;
+  friend class signin::test::AccountCapabilitiesObserver;
+  friend class AccountFetcherService;
 #if BUILDFLAG(IS_IOS)
   friend base::span<const std::string_view>
   GetAccountCapabilityNamesForPrefetch();
   friend class ios::AccountCapabilitiesFetcherIOS;
 #endif
+  // keep-sorted start
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
+                           AreAllCapabilitiesKnown_Empty);
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
+                           AreAllCapabilitiesKnown_Filled);
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
+                           AreAllCapabilitiesKnown_PartiallyFilled);
+  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
+                           CapabilityOverrides);
   FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
                            GetSupportedAccountCapabilityNames);
-  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest, CapabilityOverrides);
-  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
-                           GetSupportedAccountCapabilityNames_FlagDisabled);
-  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
-                           GetSupportedAccountCapabilityNames_FlagEnabled);
-  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
-                           ConversionWithJNI_FlagGuardDisabled_JavaToCpp);
-  FRIEND_TEST_ALL_PREFIXES(AccountCapabilitiesTest,
-                           ConversionWithJNI_FlagGuardDisabled_CppToJava);
+  FRIEND_TEST_ALL_PREFIXES(AccountTrackerServiceTest,
+                           TokenAvailable_AccountCapabilitiesCancelled);
+  FRIEND_TEST_ALL_PREFIXES(AccountTrackerServiceTest,
+                           TokenAvailable_AccountCapabilitiesFailed);
+  // keep-sorted end
   friend class AccountCapabilitiesTestMutator;
   friend class AccountTrackerService;
   friend class supervised_user::FamilyLinkUserCapabilitiesObserver;

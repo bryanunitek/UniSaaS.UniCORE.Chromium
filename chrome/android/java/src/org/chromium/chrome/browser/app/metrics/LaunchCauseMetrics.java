@@ -23,7 +23,6 @@ import org.chromium.build.annotations.CheckDiscard;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.ui.display.DisplayAndroidManager;
 
 import java.lang.annotation.Retention;
@@ -47,7 +46,6 @@ public abstract class LaunchCauseMetrics
     private BetweenLaunchState mBetweenLaunchState = new BetweenLaunchState();
     private final Activity mActivity;
     private long mActivityId;
-    private final boolean mUseStopForScreenOff;
 
     @SuppressLint("StaticFieldLeak")
     private static @Nullable Activity sLastResumedActivity;
@@ -60,13 +58,10 @@ public abstract class LaunchCauseMetrics
 
     private static void doStaticInit() {
         sAppActivityListener =
-                new ActivityStateListener() {
-                    @Override
-                    public void onActivityStateChange(Activity activity, int newState) {
-                        if (newState == ActivityState.RESUMED) sLastResumedActivity = activity;
-                        if (newState == ActivityState.DESTROYED) {
-                            if (activity == sLastResumedActivity) sLastResumedActivity = null;
-                        }
+                (Activity activity, int newState) -> {
+                    if (newState == ActivityState.RESUMED) sLastResumedActivity = activity;
+                    if (newState == ActivityState.DESTROYED) {
+                        if (activity == sLastResumedActivity) sLastResumedActivity = null;
                     }
                 };
         ApplicationStatus.registerStateListenerForAllActivities(sAppActivityListener);
@@ -160,7 +155,6 @@ public abstract class LaunchCauseMetrics
         mActivity = activity;
         ApplicationStatus.registerApplicationStateListener(this);
         ApplicationStatus.registerStateListenerForActivity(this, activity);
-        mUseStopForScreenOff = ChromeFeatureList.sLaunchCauseScreenOffFix.isEnabled();
     }
 
     @Override
@@ -170,8 +164,7 @@ public abstract class LaunchCauseMetrics
             ApplicationStatus.unregisterApplicationStateListener(this);
             ApplicationStatus.unregisterActivityStateListener(this);
         }
-        if ((!mUseStopForScreenOff && newState == ActivityState.PAUSED)
-                || (mUseStopForScreenOff && newState == ActivityState.STOPPED)) {
+        if (newState == ActivityState.STOPPED) {
             mBetweenLaunchState.mScreenOffWhenStopped = isDisplayOff(mActivity);
         }
     }
@@ -196,11 +189,9 @@ public abstract class LaunchCauseMetrics
     protected abstract @LaunchCause int computeIntentLaunchCause();
 
     /**
-     * Computes and returns the cause of an Intentional transition between Chrome Activity
-     * types, or other if the transition wasn't Intentional.
-     *
-     * Intentional here means that the user knew they were transitioning between Chrome Activities,
-     * and made an explicit choice to do so.
+     * Computes and returns the cause of an Intentional transition between Chrome Activity types, or
+     * other if the transition wasn't Intentional. Intentional here means that the user knew they
+     * were transitioning between Chrome Activities, and made an explicit choice to do so.
      */
     protected @LaunchCause int getIntentionalTransitionCauseOrOther() {
         return LaunchCause.OTHER;
@@ -384,6 +375,6 @@ public abstract class LaunchCauseMetrics
                 launchCause = "HOME_SCREEN_SHORTCUT";
                 break;
         }
-        Log.d(TAG, "Launch Cause: " + launchCause);
+        Log.d(TAG, "Launch Cause: %s", launchCause);
     }
 }

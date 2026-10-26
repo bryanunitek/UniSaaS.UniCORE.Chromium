@@ -47,7 +47,6 @@
 #include "gpu/command_buffer/service/scheduler.h"
 #include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
-#include "gpu/command_buffer/service/shared_image/shared_memory_image_backing_factory.h"
 #include "gpu/command_buffer/service/sync_point_manager.h"
 #include "gpu/command_buffer/service/task_graph.h"
 #include "gpu/config/gpu_finch_features.h"
@@ -106,7 +105,6 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelMessageFilter
       gpu::GpuChannel* gpu_channel,
       const base::UnguessableToken& channel_token,
       Scheduler* scheduler,
-      const gfx::GpuExtraInfo& gpu_extra_info,
       scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
   GpuChannelMessageFilter(const GpuChannelMessageFilter&) = delete;
@@ -168,6 +166,13 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelMessageFilter
                              const viz::SharedImageFormat& format,
                              gfx::BufferUsage buffer_usage,
                              CreateGpuMemoryBufferCallback callback) override;
+
+  void CreateSharedImageWithHandle(
+      const Mailbox& mailbox,
+      mojom::SharedImageInfoPtr info,
+      gfx::BufferUsage buffer_usage,
+      const std::optional<SharedImagePoolId>& pool_id,
+      CreateSharedImageWithHandleCallback callback) override;
 #if BUILDFLAG(IS_WIN)
   void CreateDCOMPTexture(
       int32_t route_id,
@@ -185,6 +190,8 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelMessageFilter
       base::UnsafeSharedMemoryRegion shared_memory,
       CopyNativeGmbToSharedMemoryAsyncCallback callback) override;
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+  void SignalSyncToken(const std::vector<gpu::SyncToken>& sync_tokens,
+                       SignalSyncTokenCallback callback) override;
   void WaitForTokenInRange(int32_t routing_id,
                            int32_t start,
                            int32_t end,
@@ -233,7 +240,6 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelMessageFilter
   const scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 
-  const gfx::GpuExtraInfo gpu_extra_info_;
   base::ThreadChecker io_thread_checker_;
 
   bool allow_process_kill_for_testing_ = false;
@@ -250,15 +256,13 @@ GpuChannelMessageFilter::GpuChannelMessageFilter(
     gpu::GpuChannel* gpu_channel,
     const base::UnguessableToken& channel_token,
     Scheduler* scheduler,
-    const gfx::GpuExtraInfo& gpu_extra_info,
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
     : gpu_channel_(gpu_channel),
       channel_token_(channel_token),
       scheduler_(scheduler),
       main_task_runner_(std::move(main_task_runner)),
-      io_task_runner_(std::move(io_task_runner)),
-      gpu_extra_info_(gpu_extra_info) {
+      io_task_runner_(std::move(io_task_runner)) {
   // GpuChannel and CommandBufferStub implementations assume that it is not
   // possible to simultaneously execute tasks on these two task runners.
   DCHECK_EQ(main_task_runner_, gpu_channel->task_runner());
@@ -428,36 +432,36 @@ void GpuChannelMessageFilter::CreateGpuMemoryBuffer(
     const viz::SharedImageFormat& format,
     gfx::BufferUsage buffer_usage,
     CreateGpuMemoryBufferCallback callback) {
-  gfx::GpuMemoryBufferHandle handle;
-  if (SharedImageFactory::IsNativeBufferSupported(format, buffer_usage,
-                                                  gpu_extra_info_)) {
-#if BUILDFLAG(IS_ANDROID)
-    // Creation of native buffer handles is not supported on Android (the
-    // only way that a non-null GpuMemoryBufferHandle can be created on
-    // Android is by importing an external AHB).
-    std::move(callback).Run(std::move(handle));
-#else
-    base::AutoLock auto_lock(gpu_channel_lock_);
-    if (!gpu_channel_) {
-      std::move(callback).Run(gfx::GpuMemoryBufferHandle());
-      return;
-    }
-
-    handle =
-        gpu_channel_->shared_image_stub()
-            ->factory()
-            ->CreateNativeGpuMemoryBufferHandle(size, format, buffer_usage);
-#endif
-  } else {
-    if (SharedMemoryImageBackingFactory::IsBufferUsageSupported(buffer_usage) &&
-        SharedMemoryImageBackingFactory::IsSizeValidForFormat(size, format)) {
-      handle = SharedMemoryImageBackingFactory::CreateGpuMemoryBufferHandle(
-          size, format);
-    }
+  base::AutoLock auto_lock(gpu_channel_lock_);
+  if (!gpu_channel_) {
+    std::move(callback).Run(gfx::GpuMemoryBufferHandle());
+    return;
   }
+
+  gfx::GpuMemoryBufferHandle handle =
+      gpu_channel_->shared_image_stub()->CreateGpuMemoryBufferHandle(
+          size, format, buffer_usage);
+
   if (handle.is_null()) {
     DLOG(ERROR) << "Buffer Handle is null.";
   }
+  std::move(callback).Run(std::move(handle));
+}
+
+void GpuChannelMessageFilter::CreateSharedImageWithHandle(
+    const Mailbox& mailbox,
+    mojom::SharedImageInfoPtr info,
+    gfx::BufferUsage buffer_usage,
+    const std::optional<SharedImagePoolId>& pool_id,
+    CreateSharedImageWithHandleCallback callback) {
+  base::AutoLock auto_lock(gpu_channel_lock_);
+  if (!gpu_channel_) {
+    std::move(callback).Run(gfx::GpuMemoryBufferHandle());
+    return;
+  }
+
+  auto handle = gpu_channel_->shared_image_stub()->CreateSharedImageWithHandle(
+      mailbox, std::move(info), buffer_usage, pool_id);
   std::move(callback).Run(std::move(handle));
 }
 
@@ -603,6 +607,7 @@ void GpuChannelMessageFilter::CopyToGpuMemoryBufferAsync(
          CopyToGpuMemoryBufferAsyncCallback callback) {
         if (!channel) {
           std::move(callback).Run(false);
+          return;
         }
         channel->shared_image_stub()->CopyToGpuMemoryBufferAsync(
             mailbox, std::move(callback));
@@ -628,11 +633,36 @@ void GpuChannelMessageFilter::CopyNativeGmbToSharedMemoryAsync(
 
   std::move(callback).Run(
       gpu_channel_->shared_image_stub()
-          ->factory()
           ->CopyNativeBufferToSharedMemoryAsync(std::move(buffer_handle),
                                                 std::move(shared_memory)));
 }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+
+void GpuChannelMessageFilter::SignalSyncToken(
+    const std::vector<gpu::SyncToken>& sync_tokens,
+    SignalSyncTokenCallback callback) {
+  base::AutoLock auto_lock(gpu_channel_lock_);
+  if (!gpu_channel_) {
+    std::move(callback).Run();
+    std::visit([](auto& receiver) { receiver.reset(); }, receiver_);
+    return;
+  }
+  int32_t routing_id =
+      static_cast<int32_t>(GpuChannelReservedRoutes::kSharedImageInterface);
+  auto it = route_sequences_.find(routing_id);
+  if (it == route_sequences_.end()) {
+    LOG(ERROR) << "Could not find SharedImageInterface route id!";
+    std::move(callback).Run();
+    return;
+  }
+
+  auto run_on_main = base::BindOnce(
+      [](SignalSyncTokenCallback callback) { std::move(callback).Run(); },
+      base::BindPostTask(base::SequencedTaskRunner::GetCurrentDefault(),
+                         std::move(callback)));
+  scheduler_->ScheduleTask(Scheduler::Task(it->second, std::move(run_on_main),
+                                           sync_tokens, SyncToken()));
+}
 
 void GpuChannelMessageFilter::WaitForTokenInRange(
     int32_t routing_id,
@@ -683,9 +713,7 @@ GpuChannel::GpuChannel(
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
     int32_t client_id,
     uint64_t client_tracing_id,
-    bool is_gpu_host,
-    bool enable_extra_handles_validation,
-    const gfx::GpuExtraInfo& gpu_extra_info,
+    viz::mojom::GpuClientType client_type,
     const gpu::GPUInfo& gpu_info,
     const gpu::GpuFeatureInfo& gpu_feature_info)
     : gpu_channel_manager_(gpu_channel_manager),
@@ -698,18 +726,15 @@ GpuChannel::GpuChannel(
       task_runner_(task_runner),
       io_task_runner_(io_task_runner),
       share_group_(share_group),
-      is_gpu_host_(is_gpu_host),
-      enable_extra_handles_validation_(enable_extra_handles_validation),
+      client_type_(client_type),
       filter_(base::MakeRefCounted<GpuChannelMessageFilter>(
           this,
           channel_token,
           scheduler,
-          gpu_extra_info,
           std::move(task_runner),
           std::move(io_task_runner))) {
   DCHECK(gpu_channel_manager_);
   DCHECK(client_id_);
-  DCHECK(!(is_gpu_host_ && enable_extra_handles_validation_));
 }
 
 GpuChannel::~GpuChannel() {
@@ -741,19 +766,15 @@ std::unique_ptr<GpuChannel> GpuChannel::Create(
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
     int32_t client_id,
     uint64_t client_tracing_id,
-    bool is_gpu_host,
-    bool enable_extra_handles_validation,
-    const gfx::GpuExtraInfo& gpu_extra_info,
+    viz::mojom::GpuClientType client_type,
     const gpu::GPUInfo& gpu_info,
     const gpu::GpuFeatureInfo& gpu_feature_info) {
   auto gpu_channel = base::WrapUnique(new GpuChannel(
       gpu_channel_manager, channel_token, scheduler, sync_point_manager,
       std::move(share_group), std::move(task_runner), std::move(io_task_runner),
-      client_id, client_tracing_id, is_gpu_host,
-      enable_extra_handles_validation, gpu_extra_info, gpu_info,
-      gpu_feature_info));
+      client_id, client_tracing_id, client_type, gpu_info, gpu_feature_info));
 
-  if (!gpu_channel->CreateSharedImageStub(gpu_extra_info)) {
+  if (!gpu_channel->CreateSharedImageStub()) {
     LOG(ERROR) << "GpuChannel: Failed to create SharedImageStub";
     return nullptr;
   }
@@ -769,14 +790,14 @@ void GpuChannel::Stop() {
   Destroy();
 }
 
-void GpuChannel::Init(mojo::MessagePipeHandle channel_handle,
-                      base::WaitableEvent* shutdown_event) {
-  sync_channel_ = IPC::SyncChannel::Create(this, io_task_runner_.get(),
-                                           task_runner_.get(), shutdown_event);
-  sync_channel_->AddAssociatedInterfaceForIOThread(
+void GpuChannel::Init(mojo::MessagePipeHandle channel_handle) {
+  channel_proxy_ =
+      std::make_unique<IPC::ChannelProxy>(this, io_task_runner_, task_runner_);
+  channel_proxy_->AddAssociatedInterfaceForIOThread(
       base::BindRepeating(&GpuChannelMessageFilter::BindGpuChannel, filter_));
-  sync_channel_->Init(channel_handle, IPC::Channel::MODE_SERVER,
-                      /*create_pipe_now=*/false);
+  channel_proxy_->Init(mojo::ScopedMessagePipeHandle(channel_handle),
+                       IPC::Channel::MODE_SERVER,
+                       /*create_pipe_now=*/false);
 }
 
 base::WeakPtr<GpuChannel> GpuChannel::AsWeakPtr() {
@@ -910,8 +931,7 @@ mojom::GpuChannel& GpuChannel::GetGpuChannelForTesting() {
   return *filter_;
 }
 
-bool GpuChannel::CreateSharedImageStub(
-    const gfx::GpuExtraInfo& gpu_extra_info) {
+bool GpuChannel::CreateSharedImageStub() {
   // SharedImageInterfaceProxy/Stub is a singleton per channel, using a reserved
   // route.
   const int32_t shared_image_route_id =
@@ -920,7 +940,6 @@ bool GpuChannel::CreateSharedImageStub(
   if (!shared_image_stub_) {
     return false;
   }
-  shared_image_stub_->SetGpuExtraInfo(gpu_extra_info);
   filter_->AddRoute(shared_image_route_id, shared_image_stub_->sequence());
   shared_image_capabilities_ =
       shared_image_stub_->factory()->MakeCapabilities();

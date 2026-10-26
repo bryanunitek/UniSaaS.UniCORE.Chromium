@@ -6,13 +6,16 @@
 #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_COLLECTION_ANIMATING_LAYOUT_MANAGER_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "ui/gfx/animation/slide_animation.h"
+#include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/layout/layout_manager_base.h"
 #include "ui/views/layout/proposed_layout.h"
@@ -21,13 +24,56 @@
 // to child view bounds. It wraps another LayoutManager (the
 // target_layout_manager) which calculates the desired final positions. When the
 // target layout changes, this manager animates the transition.
-class TabCollectionAnimatingLayoutManager
-    : public views::LayoutManagerBase,
-      public views::AnimationDelegateViews {
+class TabCollectionAnimatingLayoutManager : public views::LayoutManagerBase {
  public:
+  // Coordinates animations across all `TabCollectionAnimatingLayoutManager`
+  // instances in a tab strip in lockstep using a single `gfx::SlideAnimation`.
+  class AnimationCoordinator : public views::AnimationDelegateViews {
+   public:
+    explicit AnimationCoordinator(views::View& view);
+    AnimationCoordinator(const AnimationCoordinator&) = delete;
+    AnimationCoordinator& operator=(const AnimationCoordinator&) = delete;
+    ~AnimationCoordinator() override;
+
+    void RegisterManager(TabCollectionAnimatingLayoutManager* manager);
+    void UnregisterManager(TabCollectionAnimatingLayoutManager* manager);
+
+    // Prepares the animation coordinator and synchronizes active managers for a
+    // new target layout on `requesting_manager`, then ensures the animation is
+    // running.
+    void StartOrUpdateAnimation(
+        TabCollectionAnimatingLayoutManager* requesting_manager);
+
+    // Marks `manager` as no longer animating and stops the underlying animation
+    // if no other registered managers are animating.
+    void StopAnimation(TabCollectionAnimatingLayoutManager* manager);
+
+    double current_offset() const { return current_offset_; }
+    double starting_offset() const { return starting_offset_; }
+    double GetCurrentProgress() const;
+
+    // views::AnimationDelegateViews:
+    void AnimationProgressed(const gfx::Animation* animation) override;
+    void AnimationEnded(const gfx::Animation* animation) override;
+
+   private:
+    bool HasAnimatingManagers() const;
+
+    gfx::SlideAnimation animation_{this};
+    std::vector<raw_ptr<TabCollectionAnimatingLayoutManager>> managers_;
+    // Where in the animation the last layout recalculation happened.
+    double starting_offset_ = 0.0;
+    // The current animation progress.
+    double current_offset_ = 1.0;
+  };
+
   // Controls along which axis view bounds are animated during animate-in and
   // animate-out transitions.
-  enum class AnimationAxis { kVertical, kHorizontal };
+  enum class AnimationAxis {
+    kVertical,
+    kHorizontal,
+    kHorizontalWrappingVertically,
+  };
 
   // Represents how animations should progress along the animation axis.
   enum class AnimationDirection { kStartToEnd, kEndToStart };
@@ -53,14 +99,16 @@ class TabCollectionAnimatingLayoutManager
     virtual bool ShouldAnimateOpacityForAddAndRemove(
         const views::View& child_view) const;
     virtual void OnAnimationEnded();
+    virtual bool ShouldAnimateLayout();
 
    protected:
     virtual ~Delegate() = default;
   };
 
-  explicit TabCollectionAnimatingLayoutManager(
+  TabCollectionAnimatingLayoutManager(
       std::unique_ptr<LayoutManagerBase> target_layout_manager,
       Delegate& delegate,
+      AnimationCoordinator& animation_coordinator,
       AnimationAxis animation_axis = AnimationAxis::kVertical,
       bool animate_host_size = false);
   TabCollectionAnimatingLayoutManager(
@@ -80,10 +128,6 @@ class TabCollectionAnimatingLayoutManager
   int GetPreferredHeightForWidth(const views::View* host,
                                  int width) const override;
   void OnLayoutChanged() override;
-
-  // views::AnimationDelegateViews:
-  void AnimationProgressed(const gfx::Animation* animation) override;
-  void AnimationEnded(const gfx::Animation* animation) override;
 
   // Used by clients to directly set `SourceLayoutInfo` on `view_to_reparent`
   // before it is added to its destination container.
@@ -108,7 +152,28 @@ class TabCollectionAnimatingLayoutManager
 
   const views::ProposedLayout& target_layout() const { return target_layout_; }
 
-  bool is_animating() const { return animation_.is_animating(); }
+  // Returns the target preferred size that `host_view()` will occupy once
+  // current animations complete.
+  gfx::Size GetTargetPreferredSize() const;
+
+  // Returns whether `view` has an animating
+  // TabCollectionAnimatingLayoutManager.
+  static bool IsViewAnimating(views::View* view);
+
+  bool is_animating() const { return is_animating_; }
+  AnimationCoordinator& animation_coordinator() {
+    return *animation_coordinator_;
+  }
+  const AnimationCoordinator& animation_coordinator() const {
+    return *animation_coordinator_;
+  }
+
+  views::LayoutManagerBase* target_layout_manager() {
+    return &*target_layout_manager_;
+  }
+  const views::LayoutManagerBase* target_layout_manager() const {
+    return &*target_layout_manager_;
+  }
 
  protected:
   // LayoutManagerBase:
@@ -118,24 +183,62 @@ class TabCollectionAnimatingLayoutManager
   void OnInstalled(views::View* host) override;
 
  private:
+  // Invoked by `AnimationCoordinator` as the shared animation progresses or
+  // ends.
+  void OnAnimationProgressed();
+  void OnAnimationEnded();
+
+  // Invalidates the host view to schedule a layout pass for an animation update
+  // without recalculating target layouts on ancestor animating containers.
+  void InvalidateHostForAnimation();
+
   // Sets `starting_layout_` and `target_layout_` respectively. Clients must
   // set these via the below helpers to ensure `start_view_bounds_map_` and
   // `target_view_set_` reflect the current layout state.
   void SetStartingLayout(const views::ProposedLayout& starting_layout);
   void SetTargetLayout(const views::ProposedLayout& target_layout);
 
-  // Updates `current_layout_` to reflect the current state of `animation_`.
+  // Sets `starting_layout_` to `current_layout_`. For horizontal tabs,
+  // `current_layout_` is sorted first.
+  void SetStartingLayoutToCurrent();
+
+  // Updates `current_layout_` to reflect the current state of
+  // `animation_coordinator_`.
   void UpdateCurrentLayout();
+
+  // Returns the available `SizeBounds` used to calculate `target_layout_`.
+  views::SizeBounds GetAvailableHostSize() const;
+
+  // Recalculates the target layout for this manager and any nested child
+  // animating layout managers top-down.
+  void PropagateRecalculateTarget();
 
   // Recalculates the target layout and starts/updates animation if necessary.
   // Returns true if a new target layout was computed.
-  // Note: This is called in `OnLayoutChanged()` to ensure preferred size
-  // calculations immediately reflect the new target layout state.
+  // Note: This is called via `PropagateRecalculateTarget()` in
+  // `OnLayoutChanged()` to ensure preferred size calculations immediately
+  // reflect the new target layout state.
   bool RecalculateTarget();
 
   // Interpolates between `starting_layout_` and `target_layout_` based on
-  // current `animation_` value.
+  // current `animation_coordinator_` progress.
+  // TODO(crbug.com/552080931): Reconsider how this function works, so that
+  // `current_layout_content_size_` and `closing_views_target_x_` don't have to
+  // be mutable.
   views::ProposedLayout InterpolateLayout(double value) const;
+
+  // For horizontal tabs, the positions of adding views shift based on the
+  // surrounding views. Precompute the starting x-position for those views.
+  // Needs to be called after the starting or target layouts change.
+  void CalculateAddingViewsStartX() const;
+
+  // For horizontal tabs, the positions of closing views shift based on the
+  // surrounding views. Precompute the target x-position for those views. Needs
+  // to be called after the starting or target layouts change.
+  void CalculateClosingViewsTargetX() const;
+
+  // Returns true if the animation axis is vertical or wraps vertically.
+  bool IsVerticalOrWrappingVertically() const;
 
   // Removes and destroys any views marked for deletion that are no longer
   // needed for animated effects. This is called after a new layout has been
@@ -145,8 +248,34 @@ class TabCollectionAnimatingLayoutManager
   // Clears any child view metadata and state relevant only for the most
   // recent animation sequence, e.g. any state needed to animate Views moving
   // between independent TabCollectionNodes. Invoked after the current
-  // `animation_` has ended.
+  // `animation_coordinator_` animation has ended.
   void ClearViewAnimationMetadata();
+
+  // Start, target, and current offsets of `host_view()` in its parent's space.
+  struct HostAnimationOffsets {
+    gfx::Vector2d start;
+    gfx::Vector2d target;
+    gfx::Vector2d current;
+    gfx::Vector2d start_to_current_bounds;
+
+    // Converts `bounds_in_screen` into `host`'s starting coordinate space,
+    // avoiding parabolic overshoot when `host` moves during a reparent
+    // animation.
+    gfx::Rect ConvertScreenRectToStartBounds(
+        const views::View* host,
+        const gfx::Rect& bounds_in_screen) const;
+
+    gfx::Rect InterpolateChildBounds(double value,
+                                     const gfx::Rect& start_bounds,
+                                     const gfx::Rect& target_bounds) const;
+  };
+
+  // Returns `host_view()`'s start, target, and current animation offsets in its
+  // parent's coordinate space (or zero vectors if not animated by a parent).
+  // Used to interpolate child bounds in parent space before converting back to
+  // local coordinates, avoiding +/-1px rounding jitter on stationary children
+  // when `host_view()` shifts and resizes simultaneously.
+  HostAnimationOffsets GetHostAnimationOffsets(double value) const;
 
   // Clears any metadata specific to the animating layout manager from `view`.
   void ClearViewAnimationMetadataForView(views::View* view);
@@ -154,8 +283,18 @@ class TabCollectionAnimatingLayoutManager
   // The layout manager that defines the goal state.
   const raw_ref<LayoutManagerBase> target_layout_manager_;
 
-  // Animation handling.
-  gfx::SlideAnimation animation_;
+  // Shared animation coordinator driving this layout manager.
+  const raw_ref<AnimationCoordinator> animation_coordinator_;
+
+  // Whether this layout manager is currently animating toward `target_layout_`.
+  bool is_animating_ = false;
+
+  // When true, `OnLayoutChanged()` skips calling `RecalculateTarget()` during
+  // host invalidations that only schedule a layout pass for animation frames.
+  bool suppress_recalculate_target_ = false;
+
+  // The `SizeBounds` used the last time `RecalculateTarget()` ran.
+  views::SizeBounds last_target_size_bounds_;
 
   // Layout states.
   views::ProposedLayout starting_layout_;  // State at start of animation.
@@ -169,11 +308,15 @@ class TabCollectionAnimatingLayoutManager
   ChildViewLayoutMap start_view_layout_map_;
   ChildViewLayoutMap target_view_layout_map_;
 
-  // Where in the animation the last layout recalculation happened.
-  double starting_offset_ = 0.0;
-
-  // The current animation progress.
-  double current_offset_ = 1.0;
+  using ChildViewXMap = base::flat_map<raw_ptr<const views::View>, int>;
+  // Precomputed starting x values for adding tabs. When this is std::nullopt,
+  // it represents an invalidated cache that needs to be recomputed. Only used
+  // when `animation_axis_` is `kHorizontal`.
+  mutable std::optional<ChildViewXMap> adding_views_start_x_ = std::nullopt;
+  // Precomputed target x values for closing tabs. When this is std::nullopt, it
+  // represents an invalidated cache that needs to be recomputed. Only used when
+  // `animation_axis_` is `kHorizontal`.
+  mutable std::optional<ChildViewXMap> closing_views_target_x_ = std::nullopt;
 
   const raw_ref<Delegate> delegate_;
 
@@ -181,10 +324,11 @@ class TabCollectionAnimatingLayoutManager
   // interpolated.
   AnimationAxis animation_axis_;
 
-  // Stores the height of the `current_layout_`. Recomputed on each call to
-  // `InterpolateLayout()`. Mutable since this is a cached artifact of
-  // calculating `current_layout_` and does not affect logical constness.
-  mutable int current_layout_content_height_ = 0;
+  // Stores the content size (height for vertical, width for horizontal) of the
+  // `current_layout_`. Recomputed on each call to `InterpolateLayout()`.
+  // Mutable since this is a cached artifact of calculating `current_layout_`
+  // and does not affect logical constness.
+  mutable int current_layout_content_size_ = 0;
 
   // True if the manager should animate its preferred size, i.e. the manager
   // will update the host's preferred size to match the layout calculated in
@@ -194,5 +338,13 @@ class TabCollectionAnimatingLayoutManager
   // avoids clipping close / fade-out animations.
   const bool animate_host_size_ = false;
 };
+
+extern const ui::ClassProperty<bool>* const kHasAnimatingLayoutManagerKey;
+
+// Denotes that a view is not part of the sequential order of views in the
+// animation axis, so that it will be ignored by `CalculateAddingViewsStartX()`
+// and `CalculateClosingViewsTargetX()`.
+extern const ui::ClassProperty<bool>* const
+    kIgnoredByAnimatingBoundsCalculationsKey;
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_COLLECTION_ANIMATING_LAYOUT_MANAGER_H_

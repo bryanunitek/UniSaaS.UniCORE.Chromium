@@ -161,6 +161,11 @@ bool ShouldUseDohFallback(net::SecureDnsMode secure_dns_mode,
 // For insecure DNS resolution in Chrome, enables the usage of platform DNS
 // APIs, instead of Chrome's built-in DNS client.
 BASE_FEATURE(kChromeEnableDnsPlatform, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(bool,
+                   kChromeEnableDnsPlatformNoSystem,
+                   &kChromeEnableDnsPlatform,
+                   "no_system",
+                   false);
 
 }  // namespace
 
@@ -168,6 +173,9 @@ BASE_FEATURE(kChromeEnableDnsPlatform, base::FEATURE_DISABLED_BY_DEFAULT);
 // static
 bool StubResolverConfigReader::is_ztdns_enabled_for_testing_ = false;
 #endif
+
+// static
+bool StubResolverConfigReader::dns_overridden_for_testing_ = false;
 
 // static
 constexpr base::TimeDelta StubResolverConfigReader::kParentalControlsCheckDelay;
@@ -313,7 +321,7 @@ StubResolverConfigReader::GetFallbackDohNameservers() {
 }
 
 void StubResolverConfigReader::OnParentalControlsDelayTimer() {
-  DCHECK(!parental_controls_delay_timer_.IsRunning());
+  CHECK(!parental_controls_delay_timer_.IsRunning(), base::NotFatalUntil::M161);
 
   // No need to act if parental controls were checked early.
   if (parental_controls_checked_)
@@ -440,12 +448,27 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
   }
 
   if (update_network_service) {
+    net::InsecureDnsMode insecure_dns_mode = net::InsecureDnsMode::kDisabled;
+    if (GetInsecureStubResolverEnabled()) {
+      // Platform DNS APIs query the OS resolver directly. This bypasses both
+      // test host resolver overrides and replacement `net::DnsConfig`. Fall
+      // back to the built-in DNS client whenever tests override DNS, so that
+      // tests keep resolving hosts through their own rules instead of the real
+      // OS resolver.
+      if (net::features::IsDnsPlatformSupported() &&
+          !dns_overridden_for_testing_ &&
+          base::FeatureList::IsEnabled(kChromeEnableDnsPlatform)) {
+        insecure_dns_mode = kChromeEnableDnsPlatformNoSystem.Get()
+                                ? net::InsecureDnsMode::kEnabledPlatformNoSystem
+                                : net::InsecureDnsMode::kEnabledPlatform;
+      } else {
+        insecure_dns_mode = net::InsecureDnsMode::kEnabledBuiltIn;
+      }
+    }
     content::GetNetworkService()->ConfigureStubHostResolver(
-        GetInsecureStubResolverEnabled(), GetHappyEyeballsV3Enabled(),
-        secure_dns_mode, doh_config, additional_dns_query_types_enabled,
-        fallback_doh_nameservers,
-        net::features::IsDnsPlatformSupported() &&
-            base::FeatureList::IsEnabled(kChromeEnableDnsPlatform));
+        insecure_dns_mode, GetHappyEyeballsV3Enabled(), secure_dns_mode,
+        doh_config, additional_dns_query_types_enabled,
+        fallback_doh_nameservers);
   }
 
   return SecureDnsConfig(secure_dns_mode, std::move(doh_config),

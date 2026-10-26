@@ -5,6 +5,8 @@
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer_source_handler.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 #include "base/containers/span.h"
 #include "base/numerics/safe_conversions.h"
@@ -34,6 +36,63 @@ constexpr double kMaxRate = 1024.0;
 // Default to mono. A call to setBuffer() will set the number of output
 // channels to that of the buffer.
 constexpr unsigned kDefaultNumberOfOutputChannels = 1;
+
+// Convert the time to a floating-point sample frame at the given sample rate,
+// snapping to the nearest integer frame if within machine tolerance to
+// eliminate IEEE-754 roundoff from integer divisions (e.g. Fs * (k / Fs) != k).
+double TimeToFloatingSampleFrame(double time, double sample_rate) {
+  DCHECK_GE(time, 0.0);
+  DCHECK_GT(sample_rate, 0.0);
+
+  const double frame = time * sample_rate;
+  const double round_frame = std::round(frame);
+  // Floating-point time values in JavaScript are commonly derived through
+  // chained arithmetic operations such as dividing integer frame counts by
+  // the audio sample rate and adding segment offsets (for example, computing
+  // a loop boundary or grain offset as time = frame_offset / sample_rate +
+  // slice_duration).
+  //
+  // In IEEE 754 double-precision floating-point arithmetic (used by JavaScript
+  // Numbers and Web Audio time parameters), each fundamental arithmetic
+  // operation (+, -, *, /) can introduce a rounding error of up to 0.5 unit
+  // in the last place (ULP) relative to the exact mathematical result.
+  //
+  // For a typical sequence of four chained operations:
+  //   1. Division of start frame index by sample rate: start_time = N1 / Fs
+  //   2. Division of duration frame count by sample rate: duration = N2 / Fs
+  //   3. Addition of time values: end_time = start_time + duration
+  //   4. Multiplication by sample rate in Blink: frame = end_time * Fs
+  //
+  // Each operation incurs a relative error bounded by the machine unit
+  // roundoff u = 0.5 * std::numeric_limits<double>::epsilon(). Propagating
+  // these errors across all four stages yields a total roundoff error bounded
+  // by:
+  //   |frame - round_frame| <= 4 * ULP(round_frame)
+  //
+  // Here, one Unit in the Last Place (ULP) for a floating-point value N is the
+  // distance between N and the next representable floating-point number, which
+  // is given by:
+  //   ULP(N) = std::numeric_limits<double>::epsilon() * std::max(N, 1.0)
+  //
+  // Therefore, a tolerance of 4 ULPs is mathematically sufficient to eliminate
+  // all accumulated roundoff error from standard four-operation chained
+  // calculations.
+  //
+  // We choose a threshold of 10 ULPs (10.0 * epsilon * round_frame) to provide
+  // safe headroom for deeper or more complex JavaScript arithmetic expressions
+  // (such as tempo synchronization or multi-segment timeline splices), while
+  // still remaining orders of magnitude below any intentional sub-sample
+  // fractional offset. For example, for a 1-hour audio buffer at 48 kHz
+  // (where round_frame ~ 1.7e8), 10 ULPs is approximately 3.8e-10 frames,
+  // whereas intentional sub-sample musical loop points or interpolation
+  // boundaries are on the order of 1e-4 frames or larger.
+  const double tolerance = std::max(round_frame, 1.0) *
+                           (10.0 * std::numeric_limits<double>::epsilon());
+  if (std::abs(frame - round_frame) <= tolerance) {
+    return round_frame;
+  }
+  return frame;
+}
 
 }  // namespace
 
@@ -98,9 +157,9 @@ void AudioBufferSourceHandler::Process(uint32_t frames_to_process) {
       return;
     }
 
-    uint32_t quantum_frame_offset;
-    uint32_t buffer_frames_to_process;
-    double start_time_offset;
+    uint32_t quantum_frame_offset = 0;
+    uint32_t buffer_frames_to_process = 0;
+    double start_time_offset = 0.0;
 
     std::tie(quantum_frame_offset, buffer_frames_to_process,
              start_time_offset) =
@@ -130,97 +189,46 @@ void AudioBufferSourceHandler::Process(uint32_t frames_to_process) {
   }
 }
 
-// Returns true if we're finished.
-bool AudioBufferSourceHandler::RenderSilenceAndFinishIfNotLooping(
-    unsigned index,
-    uint32_t frames_to_process) {
-  if (!Loop()) {
-    // If we're not looping, then stop playing when we get to the end.
-
-    if (frames_to_process > 0) {
-      // We're not looping and we've reached the end of the sample data, but we
-      // still need to provide more output, so generate silence for the
-      // remaining.
-      for (unsigned i = 0; i < NumberOfChannels(); ++i) {
-        std::ranges::fill(
-            destination_channels_[i].subspan(index, frames_to_process), 0.0f);
-      }
+void AudioBufferSourceHandler::RenderSilenceAndFinish(
+    size_t index,
+    size_t frames_to_process) {
+  if (frames_to_process > 0) {
+    for (auto& destination : destination_channels_) {
+      std::ranges::fill(destination.subspan(index, frames_to_process), 0.0f);
     }
-
-    Finish();
-    return true;
   }
-  return false;
+  Finish();
 }
 
-bool AudioBufferSourceHandler::HandleLoopWrapping(double virtual_start_frame,
-                                                  double virtual_end_frame,
-                                                  double virtual_delta_frames,
-                                                  double computed_playback_rate,
-                                                  unsigned write_index,
-                                                  uint32_t frames_remaining,
-                                                  double& virtual_read_index) {
-  if (virtual_delta_frames <= 0) {
-    Finish();
-    return true;
-  }
-
-  // Used to retain the sub-sample fractional frame position across loop bounds.
-  double overflow = 0.0;
-
-  if (computed_playback_rate >= 0 && virtual_read_index >= virtual_end_frame) {
-    overflow = virtual_read_index - virtual_end_frame;
-    virtual_read_index -= virtual_delta_frames;
-    if (RenderSilenceAndFinishIfNotLooping(write_index, frames_remaining)) {
-      return true;
-    }
-    virtual_read_index = virtual_end_frame - virtual_delta_frames +
-                         std::fmod(overflow, virtual_delta_frames);
-  } else if (computed_playback_rate < 0 &&
-             virtual_read_index < virtual_start_frame) {
-    overflow = virtual_start_frame - virtual_read_index;
-    virtual_read_index += virtual_delta_frames;
-    if (RenderSilenceAndFinishIfNotLooping(write_index, frames_remaining)) {
-      return true;
-    }
-    virtual_read_index = virtual_start_frame + virtual_delta_frames -
-                         std::fmod(overflow, virtual_delta_frames);
-  }
-
-  return false;
-}
-
-void AudioBufferSourceHandler::ProcessFastPath(double virtual_delta_frames,
-                                               double virtual_end_frame,
-                                               uint32_t buffer_length,
-                                               size_t destination_length,
-                                               unsigned number_of_channels,
-                                               int& frames_to_process,
-                                               unsigned& write_index,
-                                               double& virtual_read_index) {
-  auto source_channels = source_channels_.as_span();
-  auto destination_channels = destination_channels_.as_span();
-
+AudioBufferSourceHandler::ProcessResult
+AudioBufferSourceHandler::ProcessFastPath(double virtual_delta_frames,
+                                          double virtual_end_frame,
+                                          uint32_t buffer_length,
+                                          size_t destination_length,
+                                          unsigned number_of_channels,
+                                          int frames_to_process,
+                                          unsigned write_index,
+                                          double virtual_read_index) {
   unsigned read_index = static_cast<unsigned>(virtual_read_index);
-  unsigned delta_frames = static_cast<unsigned>(virtual_delta_frames);
-  unsigned end_frame = static_cast<unsigned>(virtual_end_frame);
+  const unsigned delta_frames = static_cast<unsigned>(virtual_delta_frames);
+  const unsigned end_frame = static_cast<unsigned>(virtual_end_frame);
 
   while (frames_to_process > 0) {
-    int frames_to_end = end_frame - read_index;
-    int frames_this_time = std::min(frames_to_process, frames_to_end);
-    frames_this_time = std::max(0, frames_this_time);
-    size_t frames_this_time_size = base::checked_cast<size_t>(frames_this_time);
+    const int frames_to_end = end_frame - read_index;
+    int frames_this_time = std::clamp(frames_to_end, 0, frames_to_process);
+    const size_t frames_this_time_size =
+        base::checked_cast<size_t>(frames_this_time);
 
     DCHECK_LE(write_index + frames_this_time, destination_length);
     DCHECK_LE(read_index + frames_this_time, buffer_length);
 
     for (unsigned i = 0; i < number_of_channels; ++i) {
       auto dest =
-          destination_channels[i].subspan(write_index, frames_this_time_size);
+          destination_channels_[i].subspan(write_index, frames_this_time_size);
 
-      if (!source_channels[i].empty()) {
+      if (!source_channels_[i].empty()) {
         dest.copy_from(
-            source_channels[i].subspan(read_index, frames_this_time_size));
+            source_channels_[i].subspan(read_index, frames_this_time_size));
       } else {
         std::ranges::fill(dest, 0.0f);
       }
@@ -237,32 +245,58 @@ void AudioBufferSourceHandler::ProcessFastPath(double virtual_delta_frames,
 
     // Wrap-around.
     double temp_read_index = read_index;
-    if (HandleLoopWrapping(0.0, end_frame, delta_frames, 1.0, write_index,
-                           frames_to_process, temp_read_index)) {
+
+    if (delta_frames <= 0) {
+      Finish();
       break;
     }
+
+    if (temp_read_index >= end_frame) {
+      if (!is_looping_) {
+        // We're not looping and we've reached the end of the sample data.
+        // Generate silence for any remaining samples and stop playing.
+        RenderSilenceAndFinish(write_index, frames_to_process);
+        read_index = std::min(read_index, buffer_length);
+        break;
+      }
+
+      // Used to retain the sub-sample fractional frame position across loop
+      // bounds.
+      const double overflow = temp_read_index - end_frame;
+      temp_read_index =
+          end_frame - delta_frames + std::fmod(overflow, delta_frames);
+    }
+
     read_index = static_cast<unsigned>(temp_read_index);
   }
   virtual_read_index = read_index;
+
+  return ProcessResult{write_index, virtual_read_index};
 }
 
-void AudioBufferSourceHandler::ProcessInterpolatedPath(
-    double virtual_start_frame,
-    double virtual_delta_frames,
-    double virtual_end_frame,
-    uint32_t buffer_length,
-    unsigned number_of_channels,
-    double computed_playback_rate,
-    int& frames_to_process,
-    unsigned& write_index,
-    double& virtual_read_index) {
-  auto source_channels = source_channels_.as_span();
-  auto destination_channels = destination_channels_.as_span();
+AudioBufferSourceHandler::ProcessResult
+AudioBufferSourceHandler::ProcessInterpolatedPath(double virtual_start_frame,
+                                                  double virtual_delta_frames,
+                                                  double virtual_end_frame,
+                                                  uint32_t buffer_length,
+                                                  unsigned number_of_channels,
+                                                  double computed_playback_rate,
+                                                  int frames_to_process,
+                                                  unsigned write_index,
+                                                  double virtual_read_index) {
+  DCHECK_GT(buffer_length, 0u);
+  const unsigned max_index = buffer_length - 1;
+
+  // Hoisted out of the per-frame loop below: these are loop-invariant.
+  const base::span<const base::raw_span<float>> destinations =
+      destination_channels_.as_span();
+  const base::span<const base::raw_span<const float>> sources =
+      source_channels_.as_span();
 
   for (int i = 0; i < frames_to_process; ++i) {
-    uint32_t frames_remaining = frames_to_process - i - 1;
+    const uint32_t frames_remaining = frames_to_process - i - 1;
     unsigned read_index = static_cast<unsigned>(virtual_read_index);
-    double interpolation_factor = virtual_read_index - read_index;
+    const double interpolation_factor = virtual_read_index - read_index;
 
     // For linear interpolation we need the next sample-frame too.
     unsigned read_index2 = read_index + 1;
@@ -271,43 +305,52 @@ void AudioBufferSourceHandler::ProcessInterpolatedPath(
     // interpolation wraps around to the start of the loop. Note: We strictly
     // require `read_index < virtual_end_frame` because negative playback rates
     // can start in the tail past the loop end.
-    if (Loop() && read_index < virtual_end_frame &&
+    if (is_looping_ && read_index < virtual_end_frame &&
         read_index2 >= virtual_end_frame) {
       // If we hit the end of the loop, the next sample for interpolation is
       // the start of the loop. We calculate this instead of directly setting to
       // virtual_start_frame to preserve fractional loop bounds, and defensively
-      // clamp to 0 to protect against floating point rounding issues.
-      double next_index = virtual_read_index + 1.0 - virtual_delta_frames;
-      read_index2 = next_index >= 0 ? static_cast<unsigned>(next_index) : 0;
+      // clamp to protect against floating point rounding issues.
+      double wrapped_index = 0.0;
+      if (virtual_delta_frames >= 1.0) {
+        wrapped_index = virtual_read_index + 1.0 - virtual_delta_frames;
+      } else if (virtual_delta_frames > 0) {
+        wrapped_index =
+            virtual_start_frame +
+            std::fmod(virtual_read_index + 1.0 - virtual_start_frame,
+                      virtual_delta_frames);
+      } else {
+        wrapped_index = virtual_start_frame;
+      }
+      read_index2 =
+          wrapped_index >= 0 ? static_cast<unsigned>(wrapped_index) : 0;
     } else if (read_index2 >= buffer_length) {
       read_index2 = read_index;
     }
 
-    // Final sanity check on buffer access.
-    // TODO(crbug.com/436880897): as an optimization, try to get rid of this
-    // inner-loop check and put assertions and guards before the loop.
-    if (read_index >= buffer_length || read_index2 >= buffer_length) {
-      break;
-    }
+    read_index = std::min(read_index, max_index);
+    read_index2 = std::min(read_index2, max_index);
 
     // Linear interpolation.
     for (unsigned channel = 0; channel < number_of_channels; ++channel) {
-      auto destination = destination_channels[channel];
-      auto source = source_channels[channel];
+      // Not `auto`: it would deduce and copy a `base::raw_span`, which is
+      // not free under BackupRefPtr.
+      base::span<float> destination = destinations[channel];
+      base::span<const float> source = sources[channel];
 
       // The source channel may have been transferred already, so don't try
       // to read from it if it was. Just set the destination to 0.
       if (!source.empty()) {
-        double sample;
+        double sample = 0.0;
         if (read_index == read_index2 && read_index >= 1) {
           // We're at the end of the buffer, so just linearly extrapolate
           // from the last two samples.
-          double sample1 = source[read_index - 1];
-          double sample2 = source[read_index];
+          const double sample1 = source[read_index - 1];
+          const double sample2 = source[read_index];
           sample = sample2 + (sample2 - sample1) * interpolation_factor;
         } else {
-          double sample1 = source[read_index];
-          double sample2 = source[read_index2];
+          const double sample1 = source[read_index];
+          const double sample2 = source[read_index2];
           sample = (1.0 - interpolation_factor) * sample1 +
                    interpolation_factor * sample2;
         }
@@ -322,14 +365,49 @@ void AudioBufferSourceHandler::ProcessInterpolatedPath(
 
     // Wrap-around, retaining sub-sample position since virtualReadIndex is
     // floating-point.
-    if (HandleLoopWrapping(virtual_start_frame, virtual_end_frame,
-                           virtual_delta_frames, computed_playback_rate,
-                           write_index, frames_remaining, virtual_read_index)) {
+    if (virtual_delta_frames <= 0) {
+      Finish();
       break;
     }
+
+    if (computed_playback_rate >= 0 &&
+        virtual_read_index >= virtual_end_frame) {
+      if (!is_looping_) {
+        // We're not looping and we've reached the end of the sample data.
+        // Generate silence for any remaining samples and stop playing.
+        RenderSilenceAndFinish(write_index, frames_remaining);
+        virtual_read_index =
+            std::min(virtual_read_index, static_cast<double>(buffer_length));
+        break;
+      }
+
+      // Used to retain the sub-sample fractional frame position across loop
+      // bounds.
+      const double overflow = virtual_read_index - virtual_end_frame;
+      virtual_read_index = virtual_end_frame - virtual_delta_frames +
+                           std::fmod(overflow, virtual_delta_frames);
+    } else if (computed_playback_rate < 0 &&
+               virtual_read_index < virtual_start_frame) {
+      if (!is_looping_) {
+        // We're not looping and we've reached the end of the sample data.
+        // Generate silence for any remaining samples and stop playing.
+        RenderSilenceAndFinish(write_index, frames_remaining);
+        virtual_read_index = std::max(0.0, virtual_read_index);
+        break;
+      }
+
+      // Used to retain the sub-sample fractional frame position across loop
+      // bounds.
+      const double overflow = virtual_start_frame - virtual_read_index;
+      virtual_read_index = virtual_start_frame + virtual_delta_frames -
+                           std::fmod(overflow, virtual_delta_frames);
+    }
   }
+
   // Update frames_to_process for the caller.
   frames_to_process = 0;
+
+  return ProcessResult{write_index, virtual_read_index};
 }
 
 bool AudioBufferSourceHandler::RenderFromBuffer(
@@ -371,28 +449,11 @@ bool AudioBufferSourceHandler::RenderFromBuffer(
   unsigned write_index = destination_frame_offset;
 
   uint32_t buffer_length = shared_buffer_->length();
-  double buffer_sample_rate = shared_buffer_->sampleRate();
 
-  // If the .loop attribute is true, then values of
-  // m_loopStart == 0 && m_loopEnd == 0 implies that we should use the entire
-  // buffer as the loop, otherwise use the loop values in m_loopStart and
-  // m_loopEnd.
-  double virtual_start_frame = 0;
-  double virtual_end_frame = buffer_length;
-  double virtual_delta_frames = buffer_length;
+  const double virtual_start_frame = virtual_loop_start_frame_;
+  const double virtual_end_frame = virtual_loop_end_frame_;
+  const double virtual_delta_frames = virtual_end_frame - virtual_start_frame;
 
-  if (Loop() && (loop_start_ || loop_end_) && loop_start_ >= 0 &&
-      loop_end_ > 0 && loop_start_ < loop_end_) {
-    // Convert from seconds to sample-frames.
-    double loop_start_frame = loop_start_ * shared_buffer_->sampleRate();
-    double loop_end_frame = loop_end_ * shared_buffer_->sampleRate();
-
-    virtual_start_frame = loop_start_frame;
-    virtual_end_frame = std::min(loop_end_frame, virtual_end_frame);
-    virtual_delta_frames = virtual_end_frame - loop_start_frame;
-  }
-
-  // Check that our playback rate isn't larger than the loop size.
   double computed_playback_rate = ComputePlaybackRate();
   if (std::abs(computed_playback_rate) > virtual_delta_frames) {
     return false;
@@ -405,9 +466,8 @@ bool AudioBufferSourceHandler::RenderFromBuffer(
   // Directional playhead setup
   if (computed_playback_rate >= 0) {
     // 1. Forward Loop Clamping
-    if (Loop() && virtual_read_index >= virtual_end_frame) {
-      virtual_read_index =
-          (loop_start_ < 0) ? 0 : (loop_start_ * shared_buffer_->sampleRate());
+    if (is_looping_ && virtual_read_index >= virtual_end_frame) {
+      virtual_read_index = virtual_start_frame;
       virtual_read_index =
           std::min(virtual_read_index, static_cast<double>(buffer_length - 1));
       virtual_read_index_ = virtual_read_index;
@@ -421,7 +481,7 @@ bool AudioBufferSourceHandler::RenderFromBuffer(
     }
   } else {
     // 1. Reverse Loop Clamping
-    if (Loop() && virtual_read_index < virtual_start_frame) {
+    if (is_looping_ && virtual_read_index < virtual_start_frame) {
       virtual_read_index = virtual_start_frame;
       virtual_read_index_ = virtual_read_index;
     }
@@ -448,6 +508,7 @@ bool AudioBufferSourceHandler::RenderFromBuffer(
   bool is_stopping_this_quantum = false;
 
   if (is_duration_given_) {
+    double buffer_sample_rate = shared_buffer_->sampleRate();
     double max_source_frames = grain_duration_ * buffer_sample_rate;
     double source_frames_left = max_source_frames - buffer_played_frames_;
     if (source_frames_left <= 0.0) {
@@ -463,25 +524,40 @@ bool AudioBufferSourceHandler::RenderFromBuffer(
     }
   }
 
+  if (!is_looping_ &&
+      ((computed_playback_rate >= 0 && virtual_read_index >= buffer_length) ||
+       (computed_playback_rate < 0 && virtual_read_index < 0))) {
+    virtual_read_index =
+        std::clamp(virtual_read_index, 0.0, static_cast<double>(buffer_length));
+    frames_to_process = 0;
+    is_stopping_this_quantum = true;
+  }
+
   DCHECK_GE(virtual_read_index, 0);
   DCHECK_GE(virtual_delta_frames, 0);
   DCHECK_GE(virtual_end_frame, 0);
 
   // Optimize for the very common case of playing back with
   // computedPlaybackRate == 1.  We can avoid the linear interpolation.
+  ProcessResult process_result;
   if (computed_playback_rate == 1 &&
       virtual_read_index == floor(virtual_read_index) &&
       virtual_delta_frames == floor(virtual_delta_frames) &&
       virtual_end_frame == floor(virtual_end_frame)) {
-    ProcessFastPath(virtual_delta_frames, virtual_end_frame, buffer_length,
-                    destination_length, number_of_channels, frames_to_process,
-                    write_index, virtual_read_index);
+    is_using_fast_path_for_testing_ = true;
+    process_result =
+        ProcessFastPath(virtual_delta_frames, virtual_end_frame, buffer_length,
+                        destination_length, number_of_channels,
+                        frames_to_process, write_index, virtual_read_index);
   } else {
-    ProcessInterpolatedPath(virtual_start_frame, virtual_delta_frames,
-                            virtual_end_frame, buffer_length,
-                            number_of_channels, computed_playback_rate,
-                            frames_to_process, write_index, virtual_read_index);
+    is_using_fast_path_for_testing_ = false;
+    process_result = ProcessInterpolatedPath(
+        virtual_start_frame, virtual_delta_frames, virtual_end_frame,
+        buffer_length, number_of_channels, computed_playback_rate,
+        frames_to_process, write_index, virtual_read_index);
   }
+  write_index = process_result.write_index;
+  virtual_read_index = process_result.virtual_read_index;
 
   bus->ClearSilentFlag();
 
@@ -579,6 +655,8 @@ void AudioBufferSourceHandler::SetBuffer(AudioBuffer* buffer,
     }
   }
 
+  UpdateEffectiveLoopPoints();
+
   virtual_read_index_ = 0;
   buffer_played_frames_ = 0;
 }
@@ -621,6 +699,52 @@ void AudioBufferSourceHandler::ClampGrainParameters(
     // TimeToSampleFrame rounds to integers; raw multiplication preserves
     // sub-sample accuracy for fractional rates.
     virtual_read_index_ = grain_offset_ * shared_buffer_->sampleRate();
+  }
+}
+
+void AudioBufferSourceHandler::UpdateEffectiveLoopPoints() {
+  if (!Buffer()) {
+    virtual_loop_start_frame_ = 0.0;
+    virtual_loop_end_frame_ = 0.0;
+    return;
+  }
+
+  const double buffer_duration = shared_buffer_->duration();
+  const double buffer_sample_rate = shared_buffer_->sampleRate();
+  const double buffer_length = static_cast<double>(shared_buffer_->length());
+
+  // Default to whole buffer.
+  virtual_loop_start_frame_ = 0.0;
+  virtual_loop_end_frame_ = buffer_length;
+
+  if (!is_looping_) {
+    return;
+  }
+
+  // Clamp loopStart to [0, buffer_duration]
+  const double start = std::clamp(loop_start_, 0.0, buffer_duration);
+
+  // Resolve loopEnd: 0 means buffer duration, otherwise clamp to [0,
+  // buffer_duration]
+  const double end = (loop_end_ == 0.0)
+                         ? buffer_duration
+                         : std::clamp(loop_end_, 0.0, buffer_duration);
+
+  if (start < end) {
+    if (start > 0.0) {
+      virtual_loop_start_frame_ =
+          TimeToFloatingSampleFrame(start, buffer_sample_rate);
+    }
+    if (end < buffer_duration) {
+      virtual_loop_end_frame_ =
+          TimeToFloatingSampleFrame(end, buffer_sample_rate);
+    }
+  }
+
+  // If snapped loop points collapse or invert, fall back to the whole buffer.
+  if (virtual_loop_start_frame_ >= virtual_loop_end_frame_) {
+    virtual_loop_start_frame_ = 0.0;
+    virtual_loop_end_frame_ = buffer_length;
   }
 }
 
@@ -716,6 +840,7 @@ void AudioBufferSourceHandler::SetLoop(bool looping) {
 
   is_looping_ = looping;
   SetDidSetLooping(looping);
+  UpdateEffectiveLoopPoints();
 }
 
 void AudioBufferSourceHandler::SetLoopStart(double loop_start) {
@@ -725,6 +850,7 @@ void AudioBufferSourceHandler::SetLoopStart(double loop_start) {
   base::AutoLock process_locker(process_lock_);
 
   loop_start_ = loop_start;
+  UpdateEffectiveLoopPoints();
 }
 
 void AudioBufferSourceHandler::SetLoopEnd(double loop_end) {
@@ -734,6 +860,7 @@ void AudioBufferSourceHandler::SetLoopEnd(double loop_end) {
   base::AutoLock process_locker(process_lock_);
 
   loop_end_ = loop_end;
+  UpdateEffectiveLoopPoints();
 }
 
 double AudioBufferSourceHandler::ComputePlaybackRate() {

@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_AD_TAGGING_UTILS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_AD_TAGGING_UTILS_H_
 
+#include <optional>
 #include <variant>
 
 #include "base/types/strong_alias.h"
@@ -18,7 +19,7 @@ using V8ScriptId = base::StrongAlias<class V8ScriptIdTag, int>;
 
 template <>
 struct HashTraits<V8ScriptId> : GenericHashTraits<V8ScriptId> {
-  static unsigned GetHash(const V8ScriptId& value) {
+  static uint32_t GetHash(const V8ScriptId& value) {
     return blink::HashInt(value.value());
   }
   static constexpr bool kEmptyValueIsZero = true;
@@ -40,6 +41,12 @@ struct NoProvenance {};
 //   "ancestor") exists in its creation stack.
 using AdProvenance =
     std::variant<NoProvenance, subresource_filter::ScopedRule, V8ScriptId>;
+
+// If a stack scanner (such as the AdTracker) detects something interesting
+// about the resource request, it can provide an annotation here.
+struct ResourceAnnotations {
+  std::optional<AdProvenance> ad_provenance;
+};
 
 }  // namespace blink
 

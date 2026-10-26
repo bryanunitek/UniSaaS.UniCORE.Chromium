@@ -50,6 +50,7 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
   static Sanitizer* Create(const V8SanitizerPresets::Enum, ExceptionState&);
 
   static Sanitizer* CreateEmpty();
+  static bool IsEmpty(const SanitizerConfig*);
 
   Sanitizer* Clone() const;
 
@@ -66,6 +67,8 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
             std::unique_ptr<SanitizerNameSet>,
             SanitizerNameMap,
             SanitizerNameMap,
+            std::unique_ptr<HashSet<AtomicString>>,
+            std::unique_ptr<HashSet<AtomicString>>,
             bool,
             bool);
 
@@ -81,9 +84,9 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
       const V8UnionSanitizerProcessingInstructionOrString*);
   bool allowAttribute(const V8UnionSanitizerAttributeNamespaceOrString*);
   bool removeAttribute(const V8UnionSanitizerAttributeNamespaceOrString*);
-  void setComments(bool);
-  void setDataAttributes(bool);
-  void removeUnsafe();
+  bool setComments(bool);
+  bool setDataAttributes(bool);
+  bool removeUnsafe();
   SanitizerConfig* get() const;
 
   // Internal versions of API methods that use Blink types (rather than IDL):
@@ -96,11 +99,6 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
   bool RemoveAttribute(const QualifiedName&);
   bool AllowProcessingInstruction(const AtomicString& target);
   bool RemoveProcessingInstruction(const AtomicString& target);
-
-  // The core methods (not directly exposed to the API): Recursively sanitize
-  // the node according to the current config.
-  void SanitizeSafe(Node* node) const;
-  void SanitizeUnsafe(Node* node) const;
 
   // Unit test support:
   const SanitizerNameSet* AllowElements() const {
@@ -127,13 +125,13 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
     return comments_ == SanitizerBoolWithAbsence::kTrue;
   }
 
-  Action ActionForNode(Node* node, Node* root) const;
+  Action ActionForNode(Node* node) const;
   // Sanitizes a node insertion operation. Can modify element attributes, change
   // the insertion target, or discard the element. Returns the adjusted
   // insertion target, or null if the element is to be discarded.
   // This is used for streaming.
+  bool IsElementAllowed(const QualifiedName& name) const;
   Action SanitizeSingleNode(Node* node, Mode safe) const;
-  bool ShouldReplaceNodeWithChildren(Node* node) const;
   void ProcessElement(Element* element, Mode safe) const;
   bool AllowIsAttribute(const QualifiedName& element_name) const;
 
@@ -142,17 +140,12 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
   // Helper for constructors: Copy from other Sanitizer.
   void setFrom(const Sanitizer&);
 
-  FRIEND_TEST_ALL_PREFIXES(SanitizerTest, SvgSetWithMultipleColons);
-
  private:
   enum class SanitizerBoolWithAbsence { kAbsent, kTrue, kFalse };
 
-  // Helper methods for SanitizeSafe/Unsafe:
-  void Sanitize(Node* node, Mode safe) const;
   void SanitizeElement(Element* element, Mode safe) const;
   void SanitizeJavascriptNavigationAttributes(Element* element,
                                               Mode safe) const;
-  void SanitizeTemplate(Node* node, Mode safe) const;
   bool KeepAttribute(const SanitizerNameSet* allow_per_element,
                      const SanitizerNameSet* remove_per_element,
                      const QualifiedName& attribute) const;
@@ -192,18 +185,24 @@ class CORE_EXPORT Sanitizer final : public ScriptWrappable {
   SanitizerBoolWithAbsence comments_;
 };
 
-class StreamingSanitizer : public GarbageCollected<StreamingSanitizer> {
+class CORE_EXPORT StreamingSanitizer
+    : public GarbageCollected<StreamingSanitizer> {
  public:
-  StreamingSanitizer(Sanitizer* sanitizer, Sanitizer::Mode mode)
+  StreamingSanitizer(const Sanitizer* sanitizer, Sanitizer::Mode mode)
       : sanitizer_(sanitizer), mode_(mode) {}
 
+  static StreamingSanitizer* SafeFor(StreamingSanitizer*);
   bool Sanitize(Node* node) {
     return sanitizer_->SanitizeSingleNode(node, mode_) ==
            Sanitizer::Action::kKeep;
   }
 
-  bool ShouldReplaceWithChildren(Node* node) const {
-    return sanitizer_->ShouldReplaceNodeWithChildren(node);
+  Sanitizer::Action SanitizeAndReturnAction(Node* node) {
+    return sanitizer_->SanitizeSingleNode(node, mode_);
+  }
+
+  Sanitizer::Action CheckSanitizerAction(Node* node) const {
+    return sanitizer_->ActionForNode(node);
   }
 
   // Special treaming for parser-processed HTML feature:
@@ -213,11 +212,15 @@ class StreamingSanitizer : public GarbageCollected<StreamingSanitizer> {
     return sanitizer_->AllowIsAttribute(element_name);
   }
 
+  bool IsElementAllowed(const QualifiedName& element_name) const {
+    return sanitizer_->IsElementAllowed(element_name);
+  }
+
   void DidParseDocument(Document* document);
   void Trace(Visitor* visitor) const { visitor->Trace(sanitizer_); }
 
  private:
-  Member<Sanitizer> sanitizer_;
+  Member<const Sanitizer> sanitizer_;
   Sanitizer::Mode mode_;
 };
 

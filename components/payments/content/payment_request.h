@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "components/payments/content/developer_console_logger.h"
 #include "components/payments/content/initialization_task.h"
 #include "components/payments/content/payment_handler_host.h"
@@ -69,6 +70,7 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
     virtual void OnPayCalled() = 0;
     virtual void OnAbortCalled() = 0;
     virtual void OnInternalError() = 0;
+    virtual void OnPaymentRequestStateInitDone(PaymentRequestState* state) {}
     virtual void OnCompleteCalled() {}
 
    protected:
@@ -76,12 +78,11 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   };
 
   PaymentRequest(std::unique_ptr<ContentPaymentRequestDelegate> delegate,
-                 mojo::PendingReceiver<mojom::PaymentRequest> receiver);
+                 mojo::PendingReceiver<mojom::PaymentRequest> receiver,
+                 base::SelfDeletingPassKey key);
 
   PaymentRequest(const PaymentRequest&) = delete;
   PaymentRequest& operator=(const PaymentRequest&) = delete;
-
-  ~PaymentRequest() override;
 
   // mojom::PaymentRequest
   void Init(mojo::PendingRemote<mojom::PaymentRequestClient> client,
@@ -120,7 +121,8 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   void OnPayerInfoSelected(mojom::PayerDetailPtr payer_info) override;
 
   // Called when the Payment Request is being aborted due to an internal error,
-  // such as the browser window being too small to show the UX.
+  // such as the browser window being too small to show the UX. Posts a task to
+  // notify the client and destroy this object asynchronously.
   void OnInternalError(const std::string& error_message);
 
   // Called when the user wants to authenticate in a different way. This is
@@ -180,6 +182,8 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   }
 
  private:
+  ~PaymentRequest() override;
+
   // CSPChecker.
   void AllowConnectToSource(
       const GURL& url,
@@ -238,6 +242,10 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
 
   void OnAbortResult(bool aborted);
 
+  // Notifies the renderer client of an internal error and destroys `this`.
+  // Posted as a task by `OnInternalError()`.
+  void OnInternalErrorImpl(const std::string& error_message);
+
   // Show an error message in the UI (if available) and abort payment.
   void ShowErrorMessageAndAbortPayment();
 
@@ -290,6 +298,10 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   // Whether PaymentRequest mojo connection has been initialized from the
   // renderer.
   bool is_initialized_ = false;
+
+  // Timestamps for checkout duration tracking.
+  base::TimeTicks init_time_;
+  base::TimeTicks show_time_;
 
   // Whether PaymentRequest.show() has been called.
   bool is_show_called_ = false;

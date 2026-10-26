@@ -28,6 +28,7 @@
 <translation id="1757786065507923842">תהליך בקשת ההרשאה של ההורה נכשל.</translation>
 <translation id="1803557475693955505">לא היתה אפשרות לטעון את דף הרקע '<ph name="BACKGROUND_PAGE" />'.</translation>
 <translation id="1875387611427697908">ניתן להוסיף את הפריט הזה רק מ-<ph name="CHROME_WEB_STORE" /></translation>
+<translation id="1901182793187376715">בסביבות עם רמת אמון נמוכה, לא ניתן להתקין בהתאם למדיניות את <ph name="EXTENSION_NAME" /> (מזהה התוסף "<ph name="EXTENSION_ID" />").</translation>
 <translation id="2131077480075264">לא ניתן להתקין את האפליקציה '<ph name="APP_NAME" />' מכיוון שהיא לא מאושרת על ידי '<ph name="IMPORT_NAME" />'</translation>
 <translation id="2150661552845026580">להוסיף את "<ph name="EXTENSION_NAME" />"?</translation>
 <translation id="2159915644201199628">לא ניתן לפענח תמונה: '<ph name="IMAGE_NAME" />'</translation>
@@ -73,6 +74,7 @@
 <translation id="4233778200880751280">לא ניתן לטעון את דף המידע '<ph name="ABOUT_PAGE" />'.</translation>
 <translation id="424963718355121712">הפעלת אפליקציות חייבת להתבצע מהמארח שעליו הן משפיעות</translation>
 <translation id="4306119971288449206">הפעלת אפליקציות חייבת להתבצע עם סוג תוכן "<ph name="CONTENT_TYPE" />"</translation>
+<translation id="4349181963619779233">אי אפשר להוסיף תוספים ואפליקציות מהאתר הזה</translation>
 <translation id="4625078469366263107">הפעלת האפליקציה</translation>
 <translation id="4633003931260532286">כדי להשתמש בתוסף יש צורך ב-"<ph name="IMPORT_NAME" />" בגרסה "<ph name="IMPORT_VERSION" />" לפחות, אך הגרסה המותקנת היא רק "<ph name="INSTALLED_VERSION" />"</translation>
 <translation id="4660476621274971848">הגרסה הצפויה היא "<ph name="EXPECTED_VERSION" />", אבל הגרסה הייתה "<ph name="NEW_ID" />"</translation>

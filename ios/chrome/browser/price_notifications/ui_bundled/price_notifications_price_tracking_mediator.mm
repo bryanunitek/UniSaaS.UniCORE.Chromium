@@ -174,13 +174,16 @@ using PriceNotificationItems =
 - (void)navigateToWebpageForItem:(PriceNotificationsTableViewItem*)item {
   DCHECK(item.tracking);
   [self navigateToWebpageForURL:item.entryURL
-                    disposition:WindowOpenDisposition::CURRENT_TAB];
+                    disposition:WindowOpenDisposition::kCurrentTab];
   [self.handler hidePriceTrackedItems];
 }
 
 - (void)navigateToBookmarks {
   [self.handler hidePriceTrackedItems];
-  GURL URL = _webState->GetLastCommittedURL();
+  if (!self.webState) {
+    return;
+  }
+  GURL URL = self.webState->GetLastCommittedURL();
   [self.bookmarksHandler showBookmarkInBookmarksUI:URL];
 }
 
@@ -230,7 +233,7 @@ using PriceNotificationItems =
   [self.priceInsightsConsumer
       didStartNavigationToWebpageWithPriceBucket:item.priceBucket];
   [self navigateToWebpageForURL:item.buyingOptionsURL
-                    disposition:WindowOpenDisposition::NEW_FOREGROUND_TAB];
+                    disposition:WindowOpenDisposition::kNewForegroundTab];
 }
 
 #pragma mark - Private
@@ -285,8 +288,7 @@ using PriceNotificationItems =
   NSData* data = [NSData dataWithBytes:imageData.data()
                                 length:imageData.size()];
   if (data) {
-    item.productImage = [UIImage imageWithData:data
-                                         scale:[UIScreen mainScreen].scale];
+    item.productImage = [UIImage imageWithData:data];
   }
 
   [self.consumer reconfigureCellsForItems:@[ item ]];
@@ -545,6 +547,12 @@ using PriceNotificationItems =
 
 - (void)navigateToWebpageForURL:(const GURL&)URL
                     disposition:(WindowOpenDisposition)disposition {
+  if (!URL.SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
+  if (!self.webState) {
+    return;
+  }
   self.webState->OpenURL(web::WebState::OpenURLParams(
       URL, web::Referrer(), disposition, ui::PAGE_TRANSITION_GENERATED,
       /*is_renderer_initiated=*/false));

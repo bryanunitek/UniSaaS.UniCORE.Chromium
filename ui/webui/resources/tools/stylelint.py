@@ -12,8 +12,8 @@ _SRC_PATH = os.path.normpath(os.path.join(_HERE_PATH, '..', '..', '..', '..'))
 
 _NODE_PATH = os.path.join(_SRC_PATH, 'third_party', 'node')
 sys.path.append(_NODE_PATH)
-import node
-import node_modules
+import node  # noqa: E402
+import node_modules  # noqa: E402
 
 
 def main(argv):
@@ -39,17 +39,20 @@ def main(argv):
     chunk_size = min(round(len(in_files) / 2), 100)
 
   in_files_chunks = [
-      in_files[i:i + chunk_size] for i in range(0, len(in_files), chunk_size)
+    in_files[i : i + chunk_size] for i in range(0, len(in_files), chunk_size)
   ]
 
   for files in in_files_chunks:
-    node.RunNode([
+    node.RunNode(
+      [
         node_modules.PathToStylelint(),
         # Force colored output, otherwise no colors appear when running locally.
         '--color',
         '--config',
         args.config,
-    ] + files)
+      ]
+      + files
+    )
 
   with open(args.out_file, 'w', newline='', encoding='utf-8') as f:
     f.write('OK')

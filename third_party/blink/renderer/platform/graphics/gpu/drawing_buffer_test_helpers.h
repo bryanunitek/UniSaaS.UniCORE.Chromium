@@ -5,6 +5,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_DRAWING_BUFFER_TEST_HELPERS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_DRAWING_BUFFER_TEST_HELPERS_H_
 
+#include <array>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "cc/test/stub_decode_cache.h"
@@ -224,6 +228,8 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   }
 
   void GenTextures(GLsizei n, GLuint* textures) override;
+  void GenRenderbuffers(GLsizei n, GLuint* renderbuffers) override;
+  void GenFramebuffers(GLsizei n, GLuint* framebuffers) override;
 
   // ImplementationBase implementation
   void GenSyncTokenCHROMIUM(GLbyte* sync_token) override;
@@ -248,8 +254,15 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
 
   MOCK_METHOD1(WaitSyncTokenCHROMIUMMock, void(const GLbyte* sync_token));
   void WaitSyncTokenCHROMIUM(const GLbyte* sync_token) override {
-    UNSAFE_TODO(memcpy(&most_recently_waited_sync_token_, sync_token,
-                       sizeof(most_recently_waited_sync_token_)));
+    // SAFETY: The CHROMIUM_sync_point GL API requires `sync_token` to point to
+    // a GL_SYNC_TOKEN_SIZE_CHROMIUM-byte sync token, and sync_token.h
+    // static_asserts that gpu::SyncToken fits in it. In these tests, callers
+    // (e.g. gpu::ClientSharedImage on behalf of DrawingBuffer) pass a
+    // gpu::SyncToken's data.
+    base::byte_span_from_ref(base::allow_nonunique_obj,
+                             most_recently_waited_sync_token_)
+        .copy_from(base::as_bytes(
+            UNSAFE_BUFFERS(base::span(sync_token, sizeof(gpu::SyncToken)))));
     WaitSyncTokenCHROMIUMMock(sync_token);
   }
 
@@ -262,13 +275,11 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   }
   void DrawingBufferClientRestoreRasterizerDiscard() override {}
   void DrawingBufferClientRestoreMaskAndClearValues() override {
-    UNSAFE_TODO(memcpy(state_.color_mask, saved_state_.color_mask,
-                       sizeof(state_.color_mask)));
+    state_.color_mask = saved_state_.color_mask;
     state_.clear_depth = saved_state_.clear_depth;
     state_.clear_stencil = saved_state_.clear_stencil;
 
-    UNSAFE_TODO(memcpy(state_.clear_color, saved_state_.clear_color,
-                       sizeof(state_.clear_color)));
+    state_.clear_color = saved_state_.clear_color;
     state_.depth_mask = saved_state_.depth_mask;
     state_.stencil_mask = saved_state_.stencil_mask;
   }
@@ -331,10 +342,8 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   // Saves current GL state for later verification.
   void SaveState() { saved_state_ = state_; }
   void VerifyStateHasNotChangedSinceSave() const {
-    for (size_t i = 0; i < 4; ++i) {
-      EXPECT_EQ(state_.clear_color[0], saved_state_.clear_color[0]);
-      EXPECT_EQ(state_.color_mask[0], saved_state_.color_mask[0]);
-    }
+    EXPECT_EQ(state_.clear_color, saved_state_.clear_color);
+    EXPECT_EQ(state_.color_mask, saved_state_.color_mask);
     EXPECT_EQ(state_.clear_depth, saved_state_.clear_depth);
     EXPECT_EQ(state_.clear_stencil, saved_state_.clear_stencil);
     EXPECT_EQ(state_.depth_mask, saved_state_.depth_mask);
@@ -375,11 +384,11 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   struct State {
     bool scissor_enabled = false;
 
-    GLfloat clear_color[4] = {0, 0, 0, 0};
+    std::array<GLfloat, 4> clear_color = {0, 0, 0, 0};
     GLfloat clear_depth = 0;
     GLint clear_stencil = 0;
 
-    GLboolean color_mask[4] = {0, 0, 0, 0};
+    std::array<GLboolean, 4> color_mask = {0, 0, 0, 0};
     GLboolean depth_mask = 0;
     GLuint stencil_mask = 0;
 
@@ -421,13 +430,15 @@ class DrawingBufferForTests : public DrawingBuffer {
       const gfx::Size& size,
       PreserveDrawingBuffer preserve,
       UseMultisampling use_multisampling,
-      bool desynchronized = false) {
+      bool desynchronized = false,
+      bool want_depth = false,
+      bool want_stencil = false) {
     std::unique_ptr<Extensions3DUtil> extensions_util =
         Extensions3DUtil::Create(context_provider->ContextGL());
-    scoped_refptr<DrawingBufferForTests> drawing_buffer =
-        base::AdoptRef(new DrawingBufferForTests(
-            std::move(context_provider), context_info,
-            std::move(extensions_util), client, preserve, desynchronized));
+    scoped_refptr<DrawingBufferForTests> drawing_buffer = base::AdoptRef(
+        new DrawingBufferForTests(std::move(context_provider), context_info,
+                                  std::move(extensions_util), client, preserve,
+                                  desynchronized, want_depth, want_stencil));
     if (!drawing_buffer->Initialize(
             size, use_multisampling != kDisableMultisampling)) {
       drawing_buffer->BeginDestruction();
@@ -445,7 +456,9 @@ class DrawingBufferForTests : public DrawingBuffer {
       std::unique_ptr<Extensions3DUtil> extensions_util,
       DrawingBuffer::Client* client,
       PreserveDrawingBuffer preserve,
-      bool desynchronized)
+      bool desynchronized,
+      bool want_depth,
+      bool want_stencil)
       : DrawingBuffer(std::move(context_provider),
                       context_info,
                       desynchronized,
@@ -457,9 +470,10 @@ class DrawingBufferForTests : public DrawingBuffer {
                       true /* premultipliedAlpha */,
                       preserve,
                       Platform::kWebGL1ContextType,
-                      false /* wantDepth */,
-                      false /* wantStencil */,
+                      want_depth,
+                      want_stencil,
                       PredefinedColorSpace::kSRGB,
+                      gfx::HDRMetadata(),
                       gl::GpuPreference::kHighPerformance),
         live_(nullptr) {}
 
@@ -479,12 +493,26 @@ class DrawingBufferForTests : public DrawingBuffer {
 
   raw_ptr<bool> live_;
 
-  int RecycledSoftwareResourceCount() {
-    return recycled_software_resources_.size();
+  void SetSharedImageInterfaceProviderForSoftwareRenderingTest(
+      std::unique_ptr<WebGraphicsSharedImageInterfaceProvider> sii_provider) {
+    DrawingBuffer::SetSharedImageInterfaceProviderForSoftwareRenderingTest(
+        std::move(sii_provider));
+  }
+
+  int RecycledSoftwareResourceCount() const {
+    return DrawingBuffer::RecycledSoftwareResourceCountForTesting();
   }
 
   bool HasBackColorBufferForTesting() const {
     return DrawingBuffer::HasBackColorBufferForTesting();
+  }
+
+  bool HasMultisampleRenderbufferForTesting() const {
+    return DrawingBuffer::HasMultisampleRenderbufferForTesting();
+  }
+
+  bool HasDepthStencilBufferForTesting() const {
+    return DrawingBuffer::HasDepthStencilBufferForTesting();
   }
 };
 

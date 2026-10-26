@@ -18,6 +18,7 @@ class DebugInfoGetter;
 class ExtensionsActivity;
 class DataTypeRegistry;
 class ServerConnectionManager;
+class SyncAccessTokenFetcher;
 class SyncCycleContext;
 class SyncEngineEventListener;
 class SyncScheduler;
@@ -49,8 +50,7 @@ class EngineComponentsFactory {
   virtual std::unique_ptr<SyncScheduler> BuildScheduler(
       const std::string& name,
       SyncCycleContext* context,
-      CancelationSignal* cancelation_signal,
-      bool ignore_auth_credentials) = 0;
+      CancelationSignal* cancelation_signal) = 0;
 
   virtual std::unique_ptr<SyncCycleContext> BuildContext(
       ServerConnectionManager* connection_manager,
@@ -61,7 +61,14 @@ class EngineComponentsFactory {
       const std::string& cache_guid,
       const std::string& store_birthday,
       const std::string& bag_of_chips,
-      base::TimeDelta poll_interval) = 0;
+      base::TimeDelta poll_interval,
+      const std::string& account_email,
+      SyncAccessTokenFetcher* sync_access_token_fetcher) = 0;
+
+  // May be invoked at most once.
+  virtual std::unique_ptr<ServerConnectionManager> BuildConnectionManager(
+      const std::string& cache_guid,
+      CancelationSignal* cancelation_signal) = 0;
 };
 
 }  // namespace syncer

@@ -4,9 +4,11 @@
 
 #include "chrome/test/base/ash/extension_js_browser_test.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -22,7 +24,6 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ash/javascript_browser_test.h"
 #include "chrome/test/base/test_switches.h"
 #include "content/public/browser/browser_accessibility_state.h"
@@ -44,17 +45,15 @@
 
 namespace {
 
-const std::vector<std::string>& GetExtensionIdsToCollectCoverage() {
-  static const std::vector<std::string> extensions_for_coverage = {
-      extension_misc::kChromeVoxExtensionId,
-      extension_misc::kSelectToSpeakExtensionId,
-      extension_misc::kSwitchAccessExtensionId,
-      extension_misc::kAccessibilityCommonExtensionId,
-      extension_misc::kEnhancedNetworkTtsExtensionId,
-      ash::extension_ime_util::kBrailleImeExtensionId,
-  };
-  return extensions_for_coverage;
-}
+constexpr auto kExtensionIdsToCollectCoverage =
+    std::to_array<std::string_view>({
+        extension_misc::kChromeVoxExtensionId,
+        extension_misc::kSelectToSpeakExtensionId,
+        extension_misc::kSwitchAccessExtensionId,
+        extension_misc::kAccessibilityCommonExtensionId,
+        extension_misc::kEnhancedNetworkTtsExtensionId,
+        ash::extension_ime_util::kBrailleImeExtensionId,
+    });
 
 }  // namespace
 
@@ -74,8 +73,7 @@ void ExtensionJSBrowserTest::SetUpOnMainThread() {
         command_line->GetSwitchValuePath(switches::kDevtoolsCodeCoverage);
     ShouldInspectDevToolsAgentHostCallback callback =
         base::BindRepeating([](content::DevToolsAgentHost* host) {
-          const auto& ext_ids = GetExtensionIdsToCollectCoverage();
-          for (const auto& ext_id : ext_ids) {
+          for (std::string_view ext_id : kExtensionIdsToCollectCoverage) {
             if (host->GetURL().GetPath().contains(ext_id) &&
                 host->GetType() == "background_page") {
               return true;

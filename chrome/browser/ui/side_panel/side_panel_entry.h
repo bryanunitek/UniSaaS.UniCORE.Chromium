@@ -32,7 +32,6 @@ enum class SidePanelEntryHideReason;
 // a SidePanelRegistry (either a per-tab or a per-window registry).
 class SidePanelEntry final : public ui::PropertyHandler {
  public:
-
   // The default and minimum acceptable side panel content width.
   static constexpr int kSidePanelDefaultContentWidth = 360;
   using CreateContentCallback =
@@ -81,6 +80,8 @@ class SidePanelEntry final : public ui::PropertyHandler {
   void OnEntryHideCancelled();
   void OnEntryHidden();
 #if BUILDFLAG(IS_ANDROID)
+  void OnEntryShowDeferred();
+
   // TODO(crbug.com/496962614): compile OnEntryHiddenWithReason() into all
   // platforms.
   void OnEntryHiddenWithReason(SidePanelEntryHideReason reason);
@@ -207,7 +208,12 @@ class SidePanelEntry final : public ui::PropertyHandler {
   base::WeakPtrFactory<SidePanelEntry> weak_factory_{this};
 };
 
+#if BUILDFLAG(IS_ANDROID)
+// Title is retrieved from SidePanelHelper::GetActionItem() on non-Android.
+extern const ui::ClassProperty<std::u16string*>* const kSidePanelTitleKey;
+#else
 extern const ui::ClassProperty<bool>* const
     kShouldShowTitleInSidePanelHeaderKey;
+#endif
 
 #endif  // CHROME_BROWSER_UI_SIDE_PANEL_SIDE_PANEL_ENTRY_H_

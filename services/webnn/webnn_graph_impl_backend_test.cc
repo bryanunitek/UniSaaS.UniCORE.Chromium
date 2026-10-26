@@ -47,12 +47,6 @@ namespace webnn::test {
 
 namespace {
 
-// TODO(crbug.com/373443096): Consolidate with the other Float16 types declared
-// elsewhere.
-struct Float16 {
-  uint16_t data;
-};
-
 struct TensorRemoteAndHandle {
   mojo::AssociatedRemote<mojom::WebNNTensor> remote;
   blink::WebNNTensorToken handle;
@@ -64,7 +58,7 @@ TensorRemoteAndHandle CreateTensor(
   mojo::AssociatedRemote<mojom::WebNNTensor> webnn_tensor_remote;
 
   base::test::TestFuture<mojom::CreateTensorResultPtr> create_tensor_future;
-  context_remote->CreateTensor(std::move(tensor_info), mojo_base::BigBuffer(0),
+  context_remote->CreateTensor(std::move(tensor_info),
                                create_tensor_future.GetCallback());
   mojom::CreateTensorResultPtr create_tensor_result =
       create_tensor_future.Take();
@@ -373,7 +367,8 @@ void WebNNGraphImplBackendTest::SetUp() {
       "BuildAndComputeGraphWithTransposeAndTwoOutputs",
       "BuildAndComputeGraphWithTransposeAndTwoReshape",
 #endif  // !BUILDFLAG(IS_WIN)
-      "BuildAndComputeGraphWithTwoOutputs", "BuildAndComputeGraphWithTwoRelu",
+      "BuildAndComputeGraphWithTwoOutputs",
+      "BuildAndComputeGraphWithTwoRelu",
       "BuildAndComputeGraphWithTwoReshape",
       "BuildAndComputeGraphWithTwoTranspose",
       "BuildAndComputeMultipleOperatorGemm",
@@ -394,13 +389,18 @@ void WebNNGraphImplBackendTest::SetUp() {
       "BuildAndComputeSingleOperatorTanh",
       "BuildGemmWithReshapedConstantOperand",
 #if !BUILDFLAG(IS_WIN)
-      "BuildMaxPoolingAsFirstOperator", "BuildMaxPoolingAsSecondOperator",
+      "BuildMaxPoolingAsFirstOperator",
+      "BuildMaxPoolingAsSecondOperator",
       "BuildMaxPoolingAsThirdOperator",
 #endif  // !BUILDFLAG(IS_WIN)
       "BuildMultipleConstantsAppendingInputs",
       "BuildMultipleInputsAppendingConstants",
       "BuildSingleOperatorLayerNormalization",
-      "BuildOneInputAndOneConstantOperand", "DestroyContextDuringBuild",
+      "BuildOneInputAndOneConstantOperand",
+#if !BUILDFLAG(IS_WIN)
+      "Conv2dIgemmPackedWeightsOverflow",
+#endif  // !BUILDFLAG(IS_WIN)
+      "DestroyContextDuringBuild",
       // "FuseStandaloneActivationIntoBatchNormalization",
       // "FuseStandaloneActivationIntoConv2d",
       "FuseStandaloneActivationIntoElementWiseBinaryAdd",
@@ -409,6 +409,7 @@ void WebNNGraphImplBackendTest::SetUp() {
       "FuseStandaloneActivationIntoLayerNormalization",
       "FuseStandaloneOperationsIntoMatmul",
       // "MultipleOutputsCanNotFuseStandaloneActivation",
+      "NewGraphInputTensorIsZeroInitialized",
   });
 
   if (!kSupportedTests.contains(GetBaseTestName(current_test_name))) {
@@ -3785,6 +3786,46 @@ TEST_P(WebNNGraphImplBackendTest,
   }
 }
 
+// Regression test: depthwise conv2d with kernel_size > kMaxPrimaryTile (25)
+// causes XNNPACK to use the igemm path instead of dwconv. With large groups
+// the igemm packed-weights size overflows int32_t.
+TEST_P(WebNNGraphImplBackendTest, Conv2dIgemmPackedWeightsOverflow) {
+  // groups chosen so that igemm packed weights =
+  //   ((26 * RoundUp(1,8) * 4) + 12) * RoundUp(1,128) * groups
+  //   = 108032 * 19879 > INT32_MAX.
+  constexpr uint32_t kGroups = 19879;
+  constexpr uint32_t kFilterHeight = 26;
+  constexpr uint32_t kFilterWidth = 1;
+
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
+  GraphInfoBuilder builder(remote);
+
+  OperandId input_operand_id =
+      builder.BuildInput("input", {1, kFilterHeight, kFilterWidth, kGroups},
+                         OperandDataType::kFloat32);
+
+  std::vector<float> filter_data(kFilterHeight * kFilterWidth * kGroups, 0.0f);
+  OperandId filter_operand_id = builder.BuildConstant(
+      {1, kFilterHeight, kFilterWidth, kGroups}, OperandDataType::kFloat32,
+      base::as_byte_span(base::allow_nonunique_obj, filter_data));
+
+  OperandId output_operand_id = builder.BuildOutput(
+      "output", {1, 1, 1, kGroups}, OperandDataType::kFloat32);
+
+  builder.BuildConv2d(mojom::Conv2d::Kind::kDirect, input_operand_id,
+                      filter_operand_id, output_operand_id,
+                      BuildConv2dAttributes{.groups = kGroups},
+                      /*bias_operand_id=*/std::nullopt);
+
+  std::vector<float> input_data(kFilterHeight * kFilterWidth * kGroups, 0.0f);
+  base::flat_map<std::string, base::span<const float>> named_inputs;
+  named_inputs.insert({"input", input_data});
+
+  std::ignore = BuildAndCompute(
+      context(), std::move(remote), builder.TakeGraphInfo(),
+      std::move(named_inputs), BuildAndComputeExpectation::kCreateGraphFailure);
+}
+
 TEST_P(WebNNGraphImplBackendTest, DestroyContextDuringBuild) {
   // Build the mojom graph info.
   mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
@@ -3805,6 +3846,73 @@ TEST_P(WebNNGraphImplBackendTest, DestroyContextDuringBuild) {
   // Destroy the context and wait for any pending tasks to complete.
   context().reset();
   webnn_test_environment_.RunUntilIdle();
+}
+
+// A tensor the renderer never writes must read as zeros, so a renderer cannot
+// observe whatever the allocation previously held. A tensor without read or
+// write usage is the one that may live in device-only memory, and that same
+// lack of read usage means it cannot be read back directly, so a graph copies
+// it into a tensor that can be.
+TEST_P(WebNNGraphImplBackendTest, NewGraphInputTensorIsZeroInitialized) {
+  // The staging chunk is 4 MiB, so these cover a partial chunk, exactly one
+  // chunk, and several chunks followed by a partial one.
+  for (uint32_t elements :
+       {uint32_t{1}, uint32_t{1024 * 1024}, uint32_t{2 * 1024 * 1024 + 2}}) {
+    SCOPED_TRACE(elements);
+
+    mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
+    GraphInfoBuilder builder(remote);
+    const OperandId input_operand_id =
+        builder.BuildInput("input", {elements}, OperandDataType::kFloat32);
+    const OperandId output_operand_id =
+        builder.BuildOutput("output", {elements, 1}, OperandDataType::kFloat32);
+    builder.BuildReshape(input_operand_id, output_operand_id);
+
+    base::test::TestFuture<
+        base::expected<mojom::CreateGraphSuccessPtr, mojom::ErrorPtr>>
+        create_graph_future;
+    remote->CreateGraph(builder.TakeGraphInfo(),
+                        create_graph_future.GetCallback());
+    auto create_graph_result = create_graph_future.Take();
+    ASSERT_TRUE(create_graph_result.has_value())
+        << create_graph_result.error()->message;
+
+    // Never written, and without read or write usage so that a backend with
+    // device-only memory places it there.
+    TensorRemoteAndHandle input = CreateTensor(
+        context(),
+        mojom::TensorInfo::New(
+            OperandDescriptor::UnsafeCreateForTesting(
+                OperandDataType::kFloat32, std::array<uint32_t, 1>{elements}),
+            MLTensorUsage()));
+
+    // Filled with a non-zero pattern first, so a dispatch that never wrote the
+    // output could not be mistaken for a zeroed input.
+    const std::vector<uint8_t> non_zero(elements * sizeof(float), 0xff);
+    TensorRemoteAndHandle output = CreateTensorWithValues(
+        context(),
+        mojom::TensorInfo::New(OperandDescriptor::UnsafeCreateForTesting(
+                                   OperandDataType::kFloat32,
+                                   std::array<uint32_t, 2>{elements, 1}),
+                               MLTensorUsage{MLTensorUsageFlags::kRead,
+                                             MLTensorUsageFlags::kWrite}),
+        non_zero);
+
+    context()->Dispatch(create_graph_result.value()->graph_token,
+                        {{"input", input.handle}}, {{"output", output.handle}});
+
+    base::test::TestFuture<mojom::ReadTensorResultPtr> read_tensor_future;
+    output.remote->ReadTensor(read_tensor_future.GetCallback());
+    mojom::ReadTensorResultPtr read_tensor_result = read_tensor_future.Take();
+    ASSERT_FALSE(read_tensor_result->is_error());
+
+    // Checked as bytes rather than floats because -0.0f compares equal to 0.
+    const mojo_base::BigBuffer buffer =
+        std::move(read_tensor_result->get_buffer());
+    ASSERT_EQ(buffer.size(), non_zero.size());
+    EXPECT_TRUE(std::ranges::all_of(base::span(buffer),
+                                    [](uint8_t byte) { return byte == 0; }));
+  }
 }
 
 }  // namespace webnn::test

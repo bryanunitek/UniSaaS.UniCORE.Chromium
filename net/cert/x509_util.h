@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,7 +17,7 @@
 #include "base/memory/raw_span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "net/base/hash_value.h"
 #include "net/base/net_export.h"
 #include "net/cert/x509_certificate.h"
@@ -170,17 +171,38 @@ NET_EXPORT bool CreateCertBuffersFromPKCS7Bytes(
 // Returns the default ParseCertificateOptions for the net stack.
 NET_EXPORT bssl::ParseCertificateOptions DefaultParseCertificateOptions();
 
+// Values for the Net.Certificate.SerialNumberType histogram. These values are
+// persisted to logs. Entries should not be renumbered and numeric values should
+// never be reused.
+// LINT.IfChange(SerialNumberType)
+enum class SerialNumberType {
+  kPositive = 0,
+  kZero = 1,
+  kNegative = 2,
+  kInvalid = 3,
+  kMaxValue = kInvalid,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:NetCertificateSerialNumberType)
+
+// Parses a certificate from `cert_buffer` with
+// `DefaultParseCertificateOptions()` and records histograms on the certificate.
+NET_EXPORT std::shared_ptr<const bssl::ParsedCertificate>
+CreateParsedCertificate(bssl::UniquePtr<CRYPTO_BUFFER> cert_buffer,
+                        bssl::CertErrors* errors);
+
 // Returns the SHA-256 hash of the SubjectPublicKeyInfo of the certificate in
 // |buffer|. CHECK-fails if |buffer| is not a valid certificate, so don't use
 // this to parse certificates in production code.
 NET_EXPORT SHA256HashValue CalculateSha256SpkiHash(const CRYPTO_BUFFER* buffer);
 
-// Calls |verifier->VerifyInit|, using the public key from |certificate|,
-// checking if the digitalSignature key usage bit is present, and returns true
-// on success or false on error.
-NET_EXPORT bool SignatureVerifierInitWithCertificate(
-    crypto::SignatureVerifier* verifier,
-    crypto::SignatureVerifier::SignatureAlgorithm signature_algorithm,
+// Creates a `crypto::sign::Verifier` using the public key from `certificate`,
+// checking that the digitalSignature key usage bit is present (if the
+// keyUsage extension is present). Returns `std::nullopt` on certificate or key
+// usage error. `signature_algorithm` must be compatible with `certificate`'s
+// public key (CHECKed by `crypto::sign::Verifier`).
+NET_EXPORT std::optional<crypto::sign::Verifier>
+CreateSignatureVerifierWithCertificate(
+    crypto::sign::SignatureKind signature_algorithm,
     base::span<const uint8_t> signature,
     const CRYPTO_BUFFER* certificate);
 
@@ -238,6 +260,18 @@ NET_EXPORT std::vector<std::vector<uint8_t>> ParseTlsTrustAnchorIDs(
 // stringifying each ID (using RelativeOidToString) and joining them with ", ".
 NET_EXPORT std::string TrustAnchorIDsToString(
     const std::vector<std::vector<uint8_t>>& trust_anchor_ids);
+
+NET_EXPORT std::vector<uint8_t> CreateMtcLandmarkGroupTrustAnchorID(
+    base::span<const uint8_t> ca_id,
+    uint16_t log_number,
+    uint64_t landmark_number);
+
+// Encodes a list of Trust Anchor IDs into a TLS wire format
+// RequestedTrustAnchorList. The contents will be sorted so that the result is
+// the same regardless of the input ordering. The output does not include the
+// 16-bit length for the whole list.
+NET_EXPORT std::vector<uint8_t> EncodeTlsRequestedTrustAnchorIDList(
+    std::vector<std::vector<uint8_t>> trust_anchor_ids);
 
 }  // namespace x509_util
 

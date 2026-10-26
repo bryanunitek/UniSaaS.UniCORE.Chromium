@@ -51,6 +51,7 @@
 #include "third_party/blink/renderer/platform/graphics/platform_focus_ring.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -77,7 +78,7 @@ namespace {
 SkColor4f DarkModeColor(GraphicsContext& context,
                         const SkColor4f& color,
                         const AutoDarkMode& auto_dark_mode) {
-  if (auto_dark_mode.enabled) {
+  if (auto_dark_mode.enabled && !context.IsAutoDarkModePaused()) {
     return context.GetDarkModeFilter()->InvertColorIfNeeded(
         color, auto_dark_mode.role,
         SkColor4f::FromColor(auto_dark_mode.contrast_color));
@@ -189,7 +190,7 @@ class GraphicsContext::DarkModeFlags final {
   DarkModeFlags(GraphicsContext* context,
                 const AutoDarkMode& auto_dark_mode,
                 const cc::PaintFlags& flags) {
-    if (auto_dark_mode.enabled) {
+    if (auto_dark_mode.enabled && !context->IsAutoDarkModePaused()) {
       dark_mode_flags_ = context->GetDarkModeFilter()->ApplyToFlagsIfNeeded(
           flags, auto_dark_mode.role,
           SkColor4f::FromColor(auto_dark_mode.contrast_color));
@@ -248,10 +249,20 @@ DarkModeFilter* GraphicsContext::GetDarkModeFilterForImage(
     const ImageAutoDarkMode& auto_dark_mode) {
   if (!auto_dark_mode.enabled)
     return nullptr;
+  // Images are gated by their own size classification, not by the context's
+  // auto dark mode paused state, so an icon-sized image is still inverted even
+  // while dark mode is paused for its container.
   DarkModeFilter* dark_mode_filter = GetDarkModeFilter();
   if (!dark_mode_filter->ShouldApplyFilterToImage(auto_dark_mode.image_type))
     return nullptr;
   return dark_mode_filter;
+}
+
+bool GraphicsContext::IsAutoDarkModePaused() const {
+  if (!RuntimeEnabledFeatures::AutoDarkModeSVGSizeThresholdEnabled()) {
+    return false;
+  }
+  return !auto_dark_mode_states_.empty() && auto_dark_mode_states_.back();
 }
 
 void GraphicsContext::SetDarkModeFilterForTest(
@@ -509,7 +520,7 @@ void GraphicsContext::DrawImage(
     Image& image,
     Image::ImageDecodingMode decode_mode,
     const ImageAutoDarkMode& auto_dark_mode,
-    const ImagePaintTimingInfo& paint_timing_info,
+    ReportPaintTiming report_paint_timing,
     const gfx::RectF& dest,
     const gfx::RectF* src_ptr,
     SkBlendMode op,
@@ -523,18 +534,18 @@ void GraphicsContext::DrawImage(
 
   SkSamplingOptions sampling = ComputeSamplingOptions(image, dest, src);
   DarkModeFilter* dark_mode_filter = GetDarkModeFilterForImage(auto_dark_mode);
-  ImageDrawOptions draw_options(
-      dark_mode_filter, sampling, should_respect_image_orientation,
-      clamping_mode, decode_mode, auto_dark_mode.enabled,
-      paint_timing_info.image_may_be_lcp_candidate, image_node_animation_info);
+  ImageDrawOptions draw_options(dark_mode_filter, sampling,
+                                should_respect_image_orientation, clamping_mode,
+                                decode_mode, auto_dark_mode.enabled,
+                                image_node_animation_info);
   image.Draw(canvas_, image_flags, dest, src, draw_options);
-  SetImagePainted(paint_timing_info.report_paint_timing);
+  SetImagePainted(report_paint_timing);
 }
 void GraphicsContext::DrawImageRRect(
     Image& image,
     Image::ImageDecodingMode decode_mode,
     const ImageAutoDarkMode& auto_dark_mode,
-    const ImagePaintTimingInfo& paint_timing_info,
+    ReportPaintTiming report_paint_timing,
     const FloatRoundedRect& dest,
     const gfx::RectF& src_rect,
     SkBlendMode op,
@@ -542,7 +553,7 @@ void GraphicsContext::DrawImageRRect(
     Image::ImageClampingMode clamping_mode,
     const ImageNodeAnimationInfo* image_node_animation_info) {
   if (!dest.IsRounded()) {
-    DrawImage(image, decode_mode, auto_dark_mode, paint_timing_info,
+    DrawImage(image, decode_mode, auto_dark_mode, report_paint_timing,
               dest.Rect(), &src_rect, op, respect_orientation, clamping_mode,
               image_node_animation_info);
     return;
@@ -564,8 +575,7 @@ void GraphicsContext::DrawImageRRect(
   DarkModeFilter* dark_mode_filter = GetDarkModeFilterForImage(auto_dark_mode);
   ImageDrawOptions draw_options(
       dark_mode_filter, sampling, respect_orientation, clamping_mode,
-      decode_mode, auto_dark_mode.enabled,
-      paint_timing_info.image_may_be_lcp_candidate, image_node_animation_info);
+      decode_mode, auto_dark_mode.enabled, image_node_animation_info);
 
   bool use_shader = (visible_src == src_rect) &&
                     (respect_orientation == kDoNotRespectImageOrientation ||
@@ -592,11 +602,11 @@ void GraphicsContext::DrawImageRRect(
     image.Draw(canvas_, image_flags, dest.Rect(), src_rect, draw_options);
   }
 
-  SetImagePainted(paint_timing_info.report_paint_timing);
+  SetImagePainted(report_paint_timing);
 }
 
-void GraphicsContext::SetImagePainted(bool report_paint_timing) {
-  if (!report_paint_timing) {
+void GraphicsContext::SetImagePainted(ReportPaintTiming report_paint_timing) {
+  if (report_paint_timing == ReportPaintTiming::kDoNotReport) {
     return;
   }
 
@@ -632,7 +642,7 @@ void GraphicsContext::DrawImageTiled(
     const gfx::RectF& dest_rect,
     const ImageTilingInfo& tiling_info,
     const ImageAutoDarkMode& auto_dark_mode,
-    const ImagePaintTimingInfo& paint_timing_info,
+    ReportPaintTiming report_paint_timing,
     SkBlendMode op,
     RespectImageOrientationEnum respect_orientation,
     const ImageNodeAnimationInfo* image_node_animation_info) {
@@ -643,10 +653,9 @@ void GraphicsContext::DrawImageTiled(
   ImageDrawOptions draw_options(dark_mode_filter, sampling, respect_orientation,
                                 Image::kClampImageToSourceRect,
                                 Image::kSyncDecode, auto_dark_mode.enabled,
-                                paint_timing_info.image_may_be_lcp_candidate,
                                 image_node_animation_info);
   image.DrawPattern(*this, image_flags, dest_rect, tiling_info, draw_options);
-  SetImagePainted(paint_timing_info.report_paint_timing);
+  SetImagePainted(report_paint_timing);
 }
 
 void GraphicsContext::DrawLine(const gfx::PointF& from,

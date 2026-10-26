@@ -25,7 +25,7 @@ import {castExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './internet_detail_menu.html.js';
@@ -78,7 +78,7 @@ export class SettingsInternetDetailMenuElement extends
     };
   }
 
-  deviceState: OncMojo.DeviceStateProperties|undefined;
+  declare deviceState: OncMojo.DeviceStateProperties|undefined;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -86,9 +86,9 @@ export class SettingsInternetDetailMenuElement extends
     Setting.kCellularRemoveESimNetwork,
   ]);
 
-  private eSimNetworkState_: OncMojo.NetworkStateProperties|null;
-  private isGuest_: boolean;
-  private guid_: string;
+  declare private eSimNetworkState_: OncMojo.NetworkStateProperties|null;
+  declare private isGuest_: boolean;
+  declare private guid_: string;
 
   /**
    * Overridden from DeepLinkingMixin.

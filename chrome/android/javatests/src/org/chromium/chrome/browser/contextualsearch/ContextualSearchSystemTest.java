@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.contextualsearch;
 
+import android.os.SystemClock;
 import android.view.KeyEvent;
 
 import androidx.test.filters.SmallTest;
@@ -42,7 +43,7 @@ import org.chromium.ui.base.DeviceFormFactor;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures(ChromeFeatureList.CONTEXTUAL_SEARCH_DISABLE_ONLINE_DETECTION)
 @Batch(Batch.PER_CLASS)
-@DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287523
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // Explicitly not supported.
 public class ContextualSearchSystemTest extends ContextualSearchInstrumentationBase {
     @Override
     @Before
@@ -55,9 +56,27 @@ public class ContextualSearchSystemTest extends ContextualSearchInstrumentationB
     // App Menu suppression support
     // ============================================================================================
 
-    /** Simulates pressing the App Menu button. */
+    /** Simulates pressing the App Menu shortcut (Alt + E). */
     private void pressAppMenuKey() {
-        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_MENU);
+        long eventTime = SystemClock.uptimeMillis();
+        InstrumentationRegistry.getInstrumentation()
+                .sendKeySync(
+                        new KeyEvent(
+                                eventTime,
+                                eventTime,
+                                KeyEvent.ACTION_DOWN,
+                                KeyEvent.KEYCODE_E,
+                                0,
+                                KeyEvent.META_ALT_ON));
+        InstrumentationRegistry.getInstrumentation()
+                .sendKeySync(
+                        new KeyEvent(
+                                eventTime,
+                                eventTime,
+                                KeyEvent.ACTION_UP,
+                                KeyEvent.KEYCODE_E,
+                                0,
+                                KeyEvent.META_ALT_ON));
     }
 
     /** Simulates pressing back button. */

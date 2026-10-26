@@ -85,10 +85,11 @@ class ProjectorSodaInstallationControllerTest : public ChromeAshTestBase {
               availability.on_device_availability =
                   SpeechRecognitionRecognizerClientImpl::
                       GetOnDeviceSpeechRecognitionAvailability(
-                          TestingBrowserProcess::GetGlobal()
-                              ->GetFeatures()
-                              ->application_locale_storage()
-                              ->Get());
+                          std::string(TestingBrowserProcess::GetGlobal()
+                                          ->GetFeatures()
+                                          ->application_locale_storage()
+                                          ->GetTag()
+                                          .tag_string()));
               return availability;
             });
 
@@ -112,13 +113,13 @@ class ProjectorSodaInstallationControllerTest : public ChromeAshTestBase {
     soda_installer_.reset();
 
     ChromeAshTestBase::TearDown();
-    // ProfileManager is destroyed in OnHelperWillBeDestroyed()
-    // invoked in ChromeAshTestBase::TearDown().
+    // ProfileManager is destroyed in OnSubsystemsTornDown()
+    // invoked inside AshTestHelper::TearDown().
     EXPECT_FALSE(testing_profile_manager_.get());
   }
 
-  void OnHelperWillBeDestroyed() override {
-    ChromeAshTestBase::OnHelperWillBeDestroyed();
+  void OnSubsystemsTornDown() override {
+    ChromeAshTestBase::OnSubsystemsTornDown();
     testing_profile_manager_.reset();
   }
 

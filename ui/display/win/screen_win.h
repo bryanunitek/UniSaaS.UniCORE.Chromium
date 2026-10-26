@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -112,6 +113,11 @@ class DISPLAY_EXPORT ScreenWin : public Screen,
   // Returns the number of physical pixels per inch for a display associated
   // with the point.
   virtual gfx::Vector2dF GetPixelsPerInch(const gfx::PointF& point) const;
+
+  // Returns the per-axis PPI for a pointer device, or nullopt when the device's
+  // physical range cannot be retrieved.
+  virtual std::optional<gfx::Vector2dF> GetPixelsPerInchForPointerDevice(
+      HANDLE source_device) const;
 
   // Returns the result of GetSystemMetrics for |metric| scaled to |monitor|'s
   // DPI. Use this function if you're already working with screen pixels, as
@@ -312,6 +318,11 @@ class DISPLAY_EXPORT ScreenWin : public Screen,
   // called with initialize set to false.
   bool PerProcessDPIAwarenessDisabledForTesting() const;
 
+  // Updates information about current monitor configuration,
+  // e.g.,  `screen_win_displays_`, `displays_`, and the primary monitor.
+  void UpdateFromDisplayInfosImpl(
+      const std::vector<internal::DisplayInfo>& display_infos);
+
   // Helper implementing the DisplayObserver handling.
   DisplayChangeNotifier change_notifier_;
 
@@ -344,6 +355,9 @@ class DISPLAY_EXPORT ScreenWin : public Screen,
   // screen_win_displays_ needs to be updated. This should be updated when
   // screen_win_displays_ is updated.
   HMONITOR primary_monitor_ = nullptr;
+
+  bool is_updating_displays_ = false;
+  std::optional<std::vector<internal::DisplayInfo>> pending_display_infos_;
 };
 
 // Returns a ScreenWin instance. If one does not exist, creates a fallback

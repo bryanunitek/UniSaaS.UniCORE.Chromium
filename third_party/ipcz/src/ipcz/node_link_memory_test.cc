@@ -7,11 +7,14 @@
 #include <utility>
 #include <vector>
 
+#include "base/rand_util.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "ipcz/driver_memory.h"
 #include "ipcz/driver_transport.h"
 #include "ipcz/features.h"
 #include "ipcz/ipcz.h"
 #include "ipcz/link_side.h"
+#include "ipcz/metrics.h"
 #include "ipcz/node.h"
 #include "ipcz/node_link.h"
 #include "ipcz/node_link_memory.h"
@@ -24,7 +27,9 @@
 namespace ipcz {
 namespace {
 
-const IpczDriver& kTestDriver = reference_drivers::kSyncReferenceDriver;
+const IpczDriver& GetTestDriver() {
+  return reference_drivers::GetSyncReferenceDriver();
+}
 
 constexpr NodeName kTestNonBrokerName(2, 3);
 constexpr NodeName kOtherTestNonBrokerName(3, 5);
@@ -42,9 +47,9 @@ class NodeLinkMemoryTest : public testing::Test {
       Ref<Node> non_broker,
       const NodeName& non_broker_name) {
     std::pair<Ref<NodeLink>, Ref<NodeLink>> links;
-    auto transports = DriverTransport::CreatePair(kTestDriver);
+    auto transports = DriverTransport::CreatePair(GetTestDriver());
     DriverMemoryWithMapping buffer =
-        NodeLinkMemory::AllocateMemory(kTestDriver);
+        NodeLinkMemory::AllocateMemory(GetTestDriver());
     links.first = NodeLink::CreateInactive(
         broker, LinkSide::kA, broker->GetAssignedName(), non_broker_name,
         Node::Type::kNormal, 0, Features{}, transports.first,
@@ -65,7 +70,7 @@ class NodeLinkMemoryTest : public testing::Test {
 
   static void AddBlocksToMemory(NodeLinkMemory& memory, size_t block_size) {
     constexpr size_t kNumBlocks = 32;
-    auto mapping = DriverMemory(kTestDriver, block_size * kNumBlocks).Map();
+    auto mapping = DriverMemory(GetTestDriver(), block_size * kNumBlocks).Map();
 
     BlockAllocator allocator(mapping.bytes(),
                              static_cast<uint32_t>(block_size));
@@ -89,9 +94,9 @@ class NodeLinkMemoryTest : public testing::Test {
 
  private:
   const Ref<Node> node_a_{
-      MakeRefCounted<Node>(Node::Type::kBroker, kTestDriver)};
+      MakeRefCounted<Node>(Node::Type::kBroker, GetTestDriver())};
   const Ref<Node> node_b_{
-      MakeRefCounted<Node>(Node::Type::kNormal, kTestDriver)};
+      MakeRefCounted<Node>(Node::Type::kNormal, GetTestDriver())};
   Ref<NodeLink> link_a_;
   Ref<NodeLink> link_b_;
 };
@@ -275,7 +280,7 @@ TEST_F(NodeLinkMemoryTest, ParcelDataAllocation) {
       .memory_flags = IPCZ_MEMORY_FIXED_PARCEL_CAPACITY,
   };
   const Ref<Node> node_c{
-      MakeRefCounted<Node>(Node::Type::kNormal, kTestDriver, &options)};
+      MakeRefCounted<Node>(Node::Type::kNormal, GetTestDriver(), &options)};
   auto links = ConnectNodes(node_a(), node_c, kOtherTestNonBrokerName);
 
   // We use a small enough size that this is guaranteed to allocate within
@@ -353,6 +358,126 @@ TEST_F(NodeLinkMemoryTest, AdoptFragmentRefIfValid) {
   ASSERT_TRUE(adopted_object.is_addressable());
   EXPECT_EQ(5, adopted_object->x);
   EXPECT_EQ(42, adopted_object->y);
+}
+
+TEST_F(NodeLinkMemoryTest, AllocateFragmentHistogram) {
+  base::MetricsSubSampler::ScopedAlwaysSampleForTesting always_sample;
+  base::HistogramTester histogram_tester;
+
+  // Successful allocation (64 bytes).
+  Fragment fragment = memory_a().AllocateFragment(64);
+  EXPECT_TRUE(fragment.is_addressable());
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.BufferPoolAllocateBlockResult",
+                                     /*sample=*/true, 1);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.BufferPoolAllocateBlockSuccessSize2",
+      static_cast<int>(metrics::BlockAllocationSize::k64B), 1);
+
+  // Small requests (<= kMaxFragmentSizeForBlockAllocation) go through the
+  // BufferPool, so they land in both sets of metrics.
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.ParcelAllocateBlockResult",
+                                     /*sample=*/true, 1);
+
+  // Failed allocation for an unregistered size (8192 bytes).
+  Fragment failed = memory_a().AllocateFragment(8192);
+  EXPECT_TRUE(failed.is_null());
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.BufferPoolAllocateBlockResult",
+                                     /*sample=*/false, 1);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.BufferPoolAllocateBlockFailureSize2",
+      static_cast<int>(metrics::BlockAllocationSize::k8KB), 1);
+}
+
+TEST_F(NodeLinkMemoryTest, AllocateRouterLinkStateHistogram) {
+  base::MetricsSubSampler::ScopedAlwaysSampleForTesting always_sample;
+  base::HistogramTester histogram_tester;
+
+  // AllocateRouterLinkState.
+  bool callback_run = false;
+  memory_a().AllocateRouterLinkState(
+      [&](FragmentRef<RouterLinkState> async_state) {
+        EXPECT_TRUE(async_state.is_addressable());
+        callback_run = true;
+      });
+  EXPECT_TRUE(callback_run);
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.BufferPoolAllocateBlockResult",
+                                     /*sample=*/true, 1);
+  constexpr int kBlockAllocationSize64Bytes =
+      static_cast<int>(metrics::BlockAllocationSize::k64B);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.BufferPoolAllocateBlockSuccessSize2",
+      /*sample=*/kBlockAllocationSize64Bytes, 1);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.BufferPoolAllocateBlockFailureSize2",
+      /*sample=*/kBlockAllocationSize64Bytes, 0);
+
+  // RouterLinkState allocation goes straight to the BufferPool, so it must not
+  // show up in the parcel metrics.
+  histogram_tester.ExpectTotalCount("Mojo.Ipcz.ParcelAllocateBlockResult", 0);
+}
+
+TEST_F(NodeLinkMemoryTest, ParcelAllocateBlockHistogram) {
+  base::MetricsSubSampler::ScopedAlwaysSampleForTesting always_sample;
+  base::HistogramTester histogram_tester;
+
+  // A zero-sized request is not a meaningful allocation attempt.
+  EXPECT_TRUE(memory_a().AllocateFragment(0).is_null());
+  histogram_tester.ExpectTotalCount("Mojo.Ipcz.ParcelAllocateBlockResult", 0);
+
+  // Successful parcel shared memory allocation (50 bytes plus a FragmentHeader
+  // fits in a 64B block).
+  Parcel parcel1;
+  parcel1.AllocateData(/*num_bytes=*/50, /*allow_partial=*/false, &memory_a());
+  EXPECT_TRUE(parcel1.has_data_fragment());
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.ParcelAllocateBlockResult",
+                                     /*sample=*/true, 1);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.ParcelAllocateBlockSuccessSize",
+      static_cast<int>(metrics::BlockAllocationSize::k64B), 1);
+
+  // Best-effort parcel shared memory allocation (allow_partial=true) should NOT
+  // record to parcel histograms.
+  Parcel parcel_best_effort;
+  parcel_best_effort.AllocateData(/*num_bytes=*/4000, /*allow_partial=*/true,
+                                  &memory_a());
+  EXPECT_TRUE(parcel_best_effort.has_data_fragment());
+  histogram_tester.ExpectTotalCount("Mojo.Ipcz.ParcelAllocateBlockResult", 1);
+
+  // Failed parcel shared memory allocation for unregistered size (8192 bytes
+  // plus a FragmentHeader requires a 16KB block).
+  Parcel parcel2;
+  parcel2.AllocateData(/*num_bytes=*/8192, /*allow_partial=*/false,
+                       &memory_a());
+  EXPECT_FALSE(parcel2.has_data_fragment());
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.ParcelAllocateBlockResult",
+                                     /*sample=*/false, 1);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.ParcelAllocateBlockFailureSize",
+      static_cast<int>(metrics::BlockAllocationSize::k16KB), 1);
+
+  // Failed allocation for size exceeding 1MB (2MB maps to kOther). The request
+  // never reaches the BufferPool, so it records no BufferPool sample.
+  const auto buffer_pool_samples =
+      histogram_tester.GetAllSamples("Mojo.Ipcz.BufferPoolAllocateBlockResult");
+  EXPECT_FALSE(buffer_pool_samples.empty());
+  Parcel parcel3;
+  parcel3.AllocateData(/*num_bytes=*/2 * 1024 * 1024, /*allow_partial=*/false,
+                       &memory_a());
+  EXPECT_FALSE(parcel3.has_data_fragment());
+  EXPECT_EQ(buffer_pool_samples,
+            histogram_tester.GetAllSamples(
+                "Mojo.Ipcz.BufferPoolAllocateBlockResult"));
+  histogram_tester.ExpectBucketCount("Mojo.Ipcz.ParcelAllocateBlockResult",
+                                     /*sample=*/false, 2);
+  histogram_tester.ExpectBucketCount(
+      "Mojo.Ipcz.ParcelAllocateBlockFailureSize",
+      static_cast<int>(metrics::BlockAllocationSize::kOther), 1);
+
+  histogram_tester.ExpectTotalCount("Mojo.Ipcz.ParcelAllocateBlockResult", 3);
+  histogram_tester.ExpectTotalCount("Mojo.Ipcz.ParcelAllocateBlockSuccessSize",
+                                    1);
+  histogram_tester.ExpectTotalCount("Mojo.Ipcz.ParcelAllocateBlockFailureSize",
+                                    2);
 }
 
 }  // namespace

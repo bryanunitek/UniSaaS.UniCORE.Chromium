@@ -12,27 +12,19 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.protobuf.testing.Proto2Testing.Proto2Message;
 import com.google.protobuf.testing.Proto3Testing.Proto3Message;
 import java.io.IOException;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
 public final class CodedAdapterTest {
-  @Before
-  public void setup() {
-    TestSchemas.registerGenericProto2Schemas();
-
-    Protobuf.getInstance()
-        .registerSchemaOverride(Proto3Message.class, TestSchemas.genericProto3Schema);
-  }
 
   @Test
   public void proto3Roundtrip() throws Exception {
     Proto3Message expected = new Proto3MessageFactory(5, 10, 2, 2).newMessage();
     byte[] expectedBytes = expected.toByteArray();
 
-    // Deserialize with BinaryReader and verify that the message matches the original.
+    // Deserialize with CodedInputStreamReader and verify that the message matches the original.
     Proto3Message result = fromByteArray(expectedBytes, Proto3Message.class);
     assertThat(result).isEqualTo(expected);
 
@@ -49,7 +41,7 @@ public final class CodedAdapterTest {
     Proto2Message expected = new Proto2MessageFactory(5, 10, 2, 2).newMessage();
     byte[] expectedBytes = expected.toByteArray();
 
-    // Deserialize with BinaryReader and verify that the message matches the original.
+    // Deserialize with CodedInputStreamReader and verify that the message matches the original.
     Proto2Message result = fromByteArray(expectedBytes, Proto2Message.class);
     assertThat(result).isEqualTo(expected);
 
@@ -61,7 +53,7 @@ public final class CodedAdapterTest {
     assertThat(actual).isEqualTo(expected);
   }
 
-  public static <T> byte[] toByteArray(T msg, int size) throws Exception {
+  public static <T extends GeneratedMessageLite<?, ?>> byte[] toByteArray(T msg, int size) throws Exception {
     Schema<T> schema = Protobuf.getInstance().schemaFor(msg);
     byte[] out = new byte[size];
     CodedOutputStreamWriter writer =
@@ -71,7 +63,7 @@ public final class CodedAdapterTest {
     return out;
   }
 
-  public static <T> T fromByteArray(byte[] data, Class<T> messageType) {
+  public static <T extends GeneratedMessageLite<?, ?>> T fromByteArray(byte[] data, Class<T> messageType) {
     Schema<T> schema = Protobuf.getInstance().schemaFor(messageType);
     try {
       T msg = schema.newInstance();

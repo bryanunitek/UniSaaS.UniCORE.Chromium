@@ -13,7 +13,8 @@
 #include "net/device_bound_sessions/registration_fetcher.h"
 #include "net/net_buildflags.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "url/gurl.h"
+
+class GURL;
 
 namespace net::device_bound_sessions {
 
@@ -57,6 +58,10 @@ class ScopedTestRegistrationFetcher {
   static ScopedTestRegistrationFetcher CreateWithTermination(
       std::string_view session_id,
       std::string_view refresh_url_string);
+
+  // Creates a `ScopedTestRegistrationFetcher` with a custom dynamic callback
+  static ScopedTestRegistrationFetcher CreateWithDynamicCallback(
+      RegistrationFetcher::FetcherType fetcher);
 
   explicit ScopedTestRegistrationFetcher(
       RegistrationFetcher::FetcherType fetcher);

@@ -41,11 +41,11 @@ LayoutTable* LayoutTable::CreateAnonymousWithParent(
   // must be generated; otherwise it must be a table box.
   const EDisplay display =
       parent.IsLayoutInline() ? EDisplay::kInlineTable : EDisplay::kTable;
-  const ComputedStyle* new_style =
+  const ComputedStyle& new_style =
       parent.GetDocument().GetStyleResolver().CreateAnonymousStyleWithDisplay(
-          parent.StyleRef(), display);
+          parent.Style(), display);
   auto* new_table = MakeGarbageCollected<LayoutTable>(nullptr);
-  new_table->SetDocumentForAnonymous(&parent.GetDocument());
+  new_table->SetDocumentForAnonymous(parent.GetDocument());
   new_table->SetStyle(new_style);
   return new_table;
 }
@@ -158,8 +158,9 @@ void LayoutTable::InvalidateCachedTableBorders() {
 
 const TableTypes::Columns* LayoutTable::GetCachedTableColumnConstraints() {
   NOT_DESTROYED();
-  if (IsTableColumnsConstraintsDirty())
+  if (IsTableColumnConstraintsDirty()) {
     cached_table_columns_.reset();
+  }
   return cached_table_columns_.get();
 }
 
@@ -167,13 +168,13 @@ void LayoutTable::SetCachedTableColumnConstraints(
     scoped_refptr<const TableTypes::Columns> columns) {
   NOT_DESTROYED();
   cached_table_columns_ = std::move(columns);
-  SetTableColumnConstraintDirty(false);
+  SetTableColumnConstraintsDirty(false);
 }
 
 void LayoutTable::GridBordersChanged() {
   NOT_DESTROYED();
   InvalidateCachedTableBorders();
-  if (StyleRef().BorderCollapse() == EBorderCollapse::kCollapse) {
+  if (Style().BorderCollapse() == EBorderCollapse::kCollapse) {
     SetShouldDoFullPaintInvalidationWithoutLayoutChange(
         PaintInvalidationReason::kStyle);
     // If borders change, table fragment must be regenerated.
@@ -186,14 +187,16 @@ void LayoutTable::TableGridStructureChanged() {
   NOT_DESTROYED();
   // Callers must ensure table layout gets invalidated.
   InvalidateCachedTableBorders();
-  if (StyleRef().BorderCollapse() == EBorderCollapse::kCollapse)
+  if (Style().BorderCollapse() == EBorderCollapse::kCollapse) {
     SetShouldDoFullPaintInvalidation();
+  }
 }
 
 bool LayoutTable::HasBackgroundForPaint() const {
   NOT_DESTROYED();
-  if (StyleRef().HasBackground())
+  if (Style().HasBackground()) {
     return true;
+  }
   DCHECK_GT(PhysicalFragmentCount(), 0u);
   const GCedTableColumnGeometries* column_geometries =
       GetPhysicalFragment(0)->TableColumnGeometries();
@@ -206,63 +209,11 @@ bool LayoutTable::HasBackgroundForPaint() const {
   return false;
 }
 
-void LayoutTable::AddChildBeforeDescendant(LayoutObject* new_child,
-                                           LayoutObject* before_descendant,
-                                           bool can_be_direct_child) {
-  NOT_DESTROYED();
-  DCHECK_NE(before_descendant->Parent(), this);
-
-  if (can_be_direct_child) {
-    LayoutObject* before_child =
-        SplitAnonymousBoxesAroundChild(before_descendant);
-    DCHECK_EQ(before_child->Parent(), this);
-    AddChild(new_child, before_child);
-    return;
-  }
-
-  LayoutObject* before_descendant_container = before_descendant->Parent();
-  while (before_descendant_container->Parent() != this) {
-    before_descendant_container = before_descendant_container->Parent();
-  }
-  CHECK(before_descendant_container->IsAnonymous());
-  CHECK(before_descendant_container->IsTableSection());
-
-  // Insert the child into the anonymous table-section instead of here.
-  before_descendant_container->AddChild(new_child, before_descendant);
-}
-
 void LayoutTable::AddChild(LayoutObject* new_child,
                            LayoutObject* before_child) {
   NOT_DESTROYED();
   TableGridStructureChanged();
-
-  const bool can_be_direct_child = new_child->IsTableCaption() ||
-                                   new_child->IsLayoutTableCol() ||
-                                   new_child->IsTableSection();
-
-  if (before_child && before_child->Parent() != this) {
-    AddChildBeforeDescendant(new_child, before_child, can_be_direct_child);
-    return;
-  }
-
-  if (!can_be_direct_child) {
-    LayoutObject* after_child =
-        before_child ? before_child->PreviousSibling() : LastChild();
-
-    if (after_child && after_child->IsAnonymous()) {
-      after_child->AddChild(new_child);
-      return;
-    }
-
-    // No suitable existing anonymous table-section - create a new one.
-    LayoutTableSection* section =
-        LayoutTableSection::CreateAnonymousWithParent(*this);
-    LayoutBox::AddChild(section, before_child);
-    section->AddChild(new_child);
-    return;
-  }
-
-  LayoutBox::AddChild(new_child, before_child);
+  LayoutBlock::AddChild(new_child, before_child);
 }
 
 void LayoutTable::RemoveChild(LayoutObject* child) {
@@ -274,21 +225,27 @@ void LayoutTable::RemoveChild(LayoutObject* child) {
 void LayoutTable::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   // StyleDifference handles changes in table-layout, border-spacing.
   if (old_style) {
     bool borders_changed =
-        !old_style->BorderVisuallyEqual(StyleRef()) ||
-        old_style->GetWritingDirection() != StyleRef().GetWritingDirection() ||
-        old_style->IsFixedTableLayout() != StyleRef().IsFixedTableLayout() ||
-        old_style->EmptyCells() != StyleRef().EmptyCells();
+        !old_style->BorderVisuallyEqual(new_style) ||
+        old_style->GetWritingDirection() != new_style.GetWritingDirection() ||
+        old_style->IsFixedTableLayout() != new_style.IsFixedTableLayout() ||
+        old_style->EmptyCells() != new_style.EmptyCells();
     bool collapse_changed =
-        StyleRef().BorderCollapse() != old_style->BorderCollapse();
+        new_style.BorderCollapse() != old_style->BorderCollapse();
     if (borders_changed || collapse_changed)
       GridBordersChanged();
   }
-  LayoutBlock::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBlock::StyleDidChange(diff, old_style, new_style, style_change_context);
+}
+
+LayoutBlock* LayoutTable::CreateAnonymousChild() const {
+  NOT_DESTROYED();
+  return LayoutTableSection::CreateAnonymousWithParent(*this);
 }
 
 LayoutBox* LayoutTable::CreateAnonymousBoxWithSameTypeAs(
@@ -298,12 +255,11 @@ LayoutBox* LayoutTable::CreateAnonymousBoxWithSameTypeAs(
 }
 
 PhysicalRect LayoutTable::OverflowClipRect(
-    const PhysicalOffset& location,
     OverlayScrollbarClipBehavior overlay_scrollbar_clip_behavior) const {
   NOT_DESTROYED();
   PhysicalRect clip_rect;
-  if (StyleRef().BorderCollapse() == EBorderCollapse::kCollapse) {
-    clip_rect = PhysicalRect(location, StitchedSize());
+  if (Style().BorderCollapse() == EBorderCollapse::kCollapse) {
+    clip_rect = PhysicalRect(PhysicalOffset(), StitchedSize());
     const auto overflow_clip = GetOverflowClipAxes();
     gfx::Rect infinite_rect = InfiniteIntRect();
     if ((overflow_clip & kOverflowClipX) == kNoOverflowClip) {
@@ -315,8 +271,7 @@ PhysicalRect LayoutTable::OverflowClipRect(
       clip_rect.size.height = LayoutUnit(infinite_rect.height());
     }
   } else {
-    clip_rect = LayoutBlock::OverflowClipRect(location,
-                                              overlay_scrollbar_clip_behavior);
+    clip_rect = LayoutBlock::OverflowClipRect(overlay_scrollbar_clip_behavior);
   }
   // TODO(1142929)
   // We cannot handle table hidden overflow with captions correctly.
@@ -330,7 +285,7 @@ PhysicalRect LayoutTable::OverflowClipRect(
   while (child) {
     if (child->IsTableCaption()) {
       // If there are captions, we cannot clip to content box.
-      clip_rect.Unite(PhysicalRect(location, StitchedSize()));
+      clip_rect.Unite(PhysicalRect(PhysicalOffset(), StitchedSize()));
       break;
     }
     child = child->NextSibling();
@@ -344,7 +299,7 @@ PhysicalBoxStrut LayoutTable::BorderOutsets() const {
   // ScrollAnchoring fails this DCHECK.
   if (HasCollapsedBorders() && cached_table_borders_) {
     return cached_table_borders_->TableBorder().ConvertToPhysical(
-        StyleRef().GetWritingDirection());
+        Style().GetWritingDirection());
   }
   return LayoutBlock::BorderOutsets();
 }

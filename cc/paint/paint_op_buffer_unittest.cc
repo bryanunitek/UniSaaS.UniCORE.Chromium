@@ -140,6 +140,15 @@ class PaintOpSerializationTestUtils {
   static void ResetShaderType(PaintShader* shader, PaintShader::Type type) {
     shader->shader_type_ = type;
   }
+
+  static void SetRecordShaderId(PaintShader* shader,
+                                PaintShader::RecordShaderId id) {
+    shader->id_ = id;
+  }
+
+  static sk_sp<SkPicture> GetCachedPicture(const PaintShader* shader) {
+    return shader->sk_cached_picture_;
+  }
 };
 
 TEST(PaintOpBufferTest, Empty) {
@@ -188,7 +197,6 @@ class PaintOpAppendTest : public ::testing::Test {
 
   void CheckInitialState(PaintOpBuffer* buffer, bool expect_empty_buffer) {
     EXPECT_FALSE(buffer->has_draw_ops());
-    EXPECT_FALSE(buffer->has_save_layer_ops());
     EXPECT_EQ(0u, buffer->size());
     EXPECT_EQ(0u, buffer->total_op_count());
     EXPECT_EQ(0u, buffer->next_op_offset());
@@ -1979,6 +1987,8 @@ class PaintOpSerializationTest : public ::testing::TestWithParam<uint8_t> {
         // TODO(crbug.com/40223786): fix the test for kDrawtextblobs
         // PushDrawTextBlobOps(&buffer_);
         break;
+      case PaintOpType::kDrawTextSlugs:
+        break;
       case PaintOpType::kDrawVertices:
         PushDrawVerticesOps(&buffer_);
         break;
@@ -2027,6 +2037,7 @@ class PaintOpSerializationTest : public ::testing::TestWithParam<uint8_t> {
   bool IsTypeSupported() {
     // TODO(crbug.com/40223786): fix the test for kDrawTextBlobs
     if (GetParamType() == PaintOpType::kDrawTextBlob ||
+        GetParamType() == PaintOpType::kDrawTextSlugs ||
         GetParamType() == PaintOpType::kDrawSlug) {
       return false;
     }
@@ -2284,6 +2295,7 @@ TEST_P(PaintOpSerializationTest, UsesOverridenFlags) {
 
   // See https://crbug.com/1321150#c3.
   if (GetParamType() == PaintOpType::kDrawTextBlob ||
+      GetParamType() == PaintOpType::kDrawTextSlugs ||
       GetParamType() == PaintOpType::kDrawSlug) {
     return;
   }
@@ -2394,29 +2406,20 @@ TEST(PaintOpSerializationTest,
   size_t output_size = kSerializedBytesPerOp * buffer.size();
   auto output = AllocateSerializedBuffer(output_size);
   base::span<uint8_t> output_span = output.as_span();
-  SimpleSerializer serializer(output_span);
-
-  auto canvas =
-      serializer.options_provider()->strike_server()->makeAnalysisCanvas(
-          1024, 768, {}, nullptr, true);
-  PlaybackParams params(nullptr, canvas->getLocalToDevice());
-  params.is_analyzing = true;
-  buffer.Playback(canvas.get(), params);
-
-  std::vector<uint8_t> strike_data;
-  serializer.options_provider()->strike_server()->writeStrikeData(&strike_data);
-
-  if (!strike_data.empty()) {
-    serializer.options_provider()->strike_client()->readStrikeData(
-        strike_data.data(), strike_data.size());
-  }
-
+  TestOptionsProvider options_provider;
+  SimpleBufferSerializer serializer(output_span,
+                                    options_provider.serialize_options());
   serializer.Serialize(buffer);
 
+  std::vector<uint8_t> strike_data;
+  options_provider.strike_server()->writeStrikeData(&strike_data);
+  ASSERT_FALSE(strike_data.empty());
+  options_provider.strike_client()->readStrikeData(strike_data.data(),
+                                                   strike_data.size());
   size_t i = 0;
-  for (const PaintOp& base_written : DeserializerIterator(
-           output_span.first(serializer.TotalBytesWritten()),
-           serializer.options_provider()->deserialize_options())) {
+  for (const PaintOp& base_written :
+       DeserializerIterator(output_span.first(serializer.written()),
+                            options_provider.deserialize_options())) {
     ASSERT_TRUE(iter);
     EXPECT_EQ(PaintOpType::kDrawSlug, base_written.GetType());
     ++iter;
@@ -2424,6 +2427,59 @@ TEST(PaintOpSerializationTest,
   }
 
   EXPECT_EQ(buffer.size(), i);
+}
+
+TEST(PaintOpSerializationTest, DrawSlugDeserializationUsesScratchBuffer) {
+  PaintOpBuffer buffer;
+  SkFont font;
+  font.setTypeface(skia::DefaultTypeface());
+  SkTextBlobBuilder builder;
+  constexpr size_t kGlyphCount = 5u;
+  const auto& run = builder.allocRun(font, kGlyphCount, 1.2f, 2.3f);
+  // allocRun() allocates only the glyph buffer.
+  // SAFETY: SkTextBlobBuilder::allocRun allocates a glyph buffer of size
+  // kGlyphCount.
+  std::ranges::fill(UNSAFE_BUFFERS(base::span(run.glyphs, kGlyphCount)), 0);
+  buffer.push<DrawTextBlobOp>(builder.make(), 0.f, 0.f, PaintFlags());
+
+  size_t output_size = kSerializedBytesPerOp * buffer.size();
+  auto output = AllocateSerializedBuffer(output_size);
+  base::span<uint8_t> output_span = output.as_span();
+  TestOptionsProvider options_provider;
+  SimpleBufferSerializer serializer(output_span,
+                                    options_provider.serialize_options());
+  serializer.Serialize(buffer);
+
+  std::vector<uint8_t> strike_data;
+  options_provider.strike_server()->writeStrikeData(&strike_data);
+  if (!strike_data.empty()) {
+    options_provider.strike_client()->readStrikeData(strike_data.data(),
+                                                     strike_data.size());
+  }
+
+  // Deserialize with a caller-owned scratch buffer. Serialized slug data must
+  // be staged into the scratch buffer and parsed from there, like other
+  // externally-defined complex types (e.g. SkPath, SkColorSpace), rather than
+  // being parsed in place from the input buffer, whose backing memory may
+  // change while it is being parsed.
+  std::vector<uint8_t> scratch_buffer;
+  PaintOp::DeserializeOptions options{
+      .transfer_cache = options_provider.transfer_cache_helper(),
+      .paint_cache = options_provider.service_paint_cache(),
+      .strike_client = options_provider.strike_client(),
+      .scratch_buffer = scratch_buffer,
+      .is_privileged = true};
+
+  size_t deserialized_count = 0;
+  for (const PaintOp& base_written :
+       DeserializerIterator(output_span.first(serializer.written()), options)) {
+    ASSERT_EQ(PaintOpType::kDrawSlug, base_written.GetType());
+    EXPECT_TRUE(static_cast<const DrawSlugOp&>(base_written).slug);
+    ++deserialized_count;
+  }
+
+  EXPECT_EQ(buffer.size(), deserialized_count);
+  EXPECT_FALSE(scratch_buffer.empty());
 }
 
 TEST(PaintOpSerializationTest, SerializesNestedRecords) {
@@ -4077,6 +4133,135 @@ TEST(PaintOpBufferTest, RecordShadersCachedSize) {
   EXPECT_GT(shader_size, estimated_image_size);
 }
 
+TEST(PaintOpBufferTest, RecordShaderIdSerialization) {
+  PaintOpBuffer shader_buffer;
+  shader_buffer.push<DrawRectOp>(SkRect::MakeWH(10.f, 10.f), PaintFlags());
+  auto shader = PaintShader::MakePaintRecord(
+      shader_buffer.ReleaseAsRecord(), SkRect::MakeWH(10.f, 10.f),
+      SkTileMode::kClamp, SkTileMode::kClamp, nullptr);
+  // Record shader ids are minted by a 64-bit counter, so ids wider than 32
+  // bits must round-trip through serialization at full width.
+  const uint64_t shader_id =
+      uint64_t{shader->paint_record_shader_id()} + (uint64_t{1} << 32);
+  PaintOpSerializationTestUtils::SetRecordShaderId(shader.get(), shader_id);
+
+  PaintOpBuffer buffer;
+  PaintFlags flags;
+  flags.setShader(shader);
+  buffer.push<DrawRectOp>(SkRect::MakeWH(10.f, 10.f), flags);
+
+  auto deserialized = SerializeAndDeserialize(buffer);
+  ASSERT_TRUE(deserialized);
+  bool found_draw_rect = false;
+  for (const PaintOp& base_op : *deserialized) {
+    if (base_op.GetType() != PaintOpType::kDrawRect) {
+      continue;
+    }
+    found_draw_rect = true;
+    const auto& op = static_cast<const DrawRectOp&>(base_op);
+    ASSERT_TRUE(op.flags.getShader());
+    EXPECT_EQ(shader_id, op.flags.getShader()->paint_record_shader_id());
+  }
+  EXPECT_TRUE(found_draw_rect);
+}
+
+TEST(PaintOpBufferTest, RecordShadersWithDistinctIdsCachedSeparately) {
+  auto make_solid_color_record_shader = [](SkColor4f color) {
+    PaintOpBuffer shader_buffer;
+    PaintFlags record_flags;
+    record_flags.setColor(color);
+    shader_buffer.push<DrawRectOp>(SkRect::MakeWH(10.f, 10.f), record_flags);
+    return PaintShader::MakePaintRecord(
+        shader_buffer.ReleaseAsRecord(), SkRect::MakeWH(10.f, 10.f),
+        SkTileMode::kClamp, SkTileMode::kClamp, nullptr);
+  };
+
+  auto shader1 = make_solid_color_record_shader(SkColors::kRed);
+  auto shader2 = make_solid_color_record_shader(SkColors::kBlue);
+  const uint64_t shader1_id = shader1->paint_record_shader_id();
+  // Give the second shader an id that matches the first shader's id in the
+  // low 32 bits. The shaders have different contents, so they must not share
+  // cached pictures.
+  const uint64_t shader2_id = shader1_id + (uint64_t{1} << 32);
+  PaintOpSerializationTestUtils::SetRecordShaderId(shader2.get(), shader2_id);
+
+  TestOptionsProvider options_provider;
+  auto* transfer_cache = options_provider.transfer_cache_helper();
+
+  auto serialize_draw_rect_with_shader = [&](sk_sp<PaintShader> shader) {
+    PaintOpBuffer buffer;
+    PaintFlags flags;
+    flags.setShader(std::move(shader));
+    buffer.push<DrawRectOp>(SkRect::MakeWH(10.f, 10.f), flags);
+    auto memory = AllocateSerializedBuffer();
+    SimpleBufferSerializer serializer(memory.as_span(),
+                                      options_provider.serialize_options());
+    serializer.Serialize(buffer);
+    CHECK(serializer.valid());
+    CHECK_GT(serializer.written(), 0u);
+    return std::make_pair(std::move(memory), serializer.written());
+  };
+
+  auto [memory1, written1] = serialize_draw_rect_with_shader(shader1);
+  auto [memory2, written2] = serialize_draw_rect_with_shader(shader2);
+
+  auto deserialized1 =
+      PaintOpBuffer::MakeFromMemory(memory1.as_span().first(written1),
+                                    options_provider.deserialize_options());
+  auto deserialized2 =
+      PaintOpBuffer::MakeFromMemory(memory2.as_span().first(written2),
+                                    options_provider.deserialize_options());
+  ASSERT_TRUE(deserialized1);
+  ASSERT_TRUE(deserialized2);
+
+  auto find_draw_rect_shader =
+      [](const PaintOpBuffer& buffer) -> const PaintShader* {
+    for (const PaintOp& base_op : buffer) {
+      if (base_op.GetType() != PaintOpType::kDrawRect) {
+        continue;
+      }
+      return static_cast<const DrawRectOp&>(base_op).flags.getShader();
+    }
+    return nullptr;
+  };
+
+  const PaintShader* deserialized_shader1 =
+      find_draw_rect_shader(*deserialized1);
+  const PaintShader* deserialized_shader2 =
+      find_draw_rect_shader(*deserialized2);
+  ASSERT_TRUE(deserialized_shader1);
+  ASSERT_TRUE(deserialized_shader2);
+
+  // Each shader gets its own transfer cache entry.
+  auto* entry1 =
+      transfer_cache->GetEntryAs<ServiceShaderTransferCacheEntry>(shader1_id);
+  auto* entry2 =
+      transfer_cache->GetEntryAs<ServiceShaderTransferCacheEntry>(shader2_id);
+  ASSERT_TRUE(entry1);
+  ASSERT_TRUE(entry2);
+  EXPECT_NE(entry1, entry2);
+
+  sk_sp<SkPicture> picture1 =
+      PaintOpSerializationTestUtils::GetCachedPicture(deserialized_shader1);
+  sk_sp<SkPicture> picture2 =
+      PaintOpSerializationTestUtils::GetCachedPicture(deserialized_shader2);
+  ASSERT_TRUE(picture1);
+  ASSERT_TRUE(picture2);
+  EXPECT_NE(picture1.get(), picture2.get());
+
+  // Each deserialized shader draws its own contents.
+  auto center_pixel_color = [](const sk_sp<SkPicture>& picture) {
+    SkBitmap bitmap;
+    bitmap.allocN32Pixels(10, 10);
+    bitmap.eraseColor(SK_ColorTRANSPARENT);
+    SkCanvas canvas(bitmap);
+    canvas.drawPicture(picture);
+    return bitmap.getColor(5, 5);
+  };
+  EXPECT_EQ(SK_ColorRED, center_pixel_color(picture1));
+  EXPECT_EQ(SK_ColorBLUE, center_pixel_color(picture2));
+}
+
 TEST(PaintOpBufferTest, RecordFilterSerializeScaledImages) {
   PaintOpBuffer filter_buffer;
   filter_buffer.push<DrawImageOp>(
@@ -4691,14 +4876,16 @@ TEST(IteratorTest, PlaybackFoldingIteratorEmptyDrawRecordInSaveLayerAlpha) {
 
 TEST(PaintOpBufferTest, ContentColorUsageFromImages) {
   PaintOpBuffer buffer;
-  EXPECT_EQ(gfx::ContentColorUsage::kSRGB, buffer.content_color_usage());
+  EXPECT_FALSE(buffer.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer.content_color_volume().hdr_headroom);
 
   // Adding a SRGB image should remain SRGB.
   PaintImage srgb = CreateDiscardablePaintImage(
       gfx::Size(1, 1), gfx::ColorSpace::CreateSRGB().ToSkColorSpace());
   ASSERT_EQ(gfx::ContentColorUsage::kSRGB, srgb.GetContentColorUsage());
   buffer.push<DrawImageOp>(srgb, 0.f, 0.f);
-  EXPECT_EQ(gfx::ContentColorUsage::kSRGB, buffer.content_color_usage());
+  EXPECT_FALSE(buffer.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer.content_color_volume().hdr_headroom);
 
   // Adding a WCG image should switch to WCG.
   PaintImage wcg = CreateDiscardablePaintImage(
@@ -4706,8 +4893,8 @@ TEST(PaintOpBufferTest, ContentColorUsageFromImages) {
   ASSERT_EQ(gfx::ContentColorUsage::kWideColorGamut,
             wcg.GetContentColorUsage());
   buffer.push<DrawImageOp>(wcg, 0.f, 0.f);
-  EXPECT_EQ(gfx::ContentColorUsage::kWideColorGamut,
-            buffer.content_color_usage());
+  EXPECT_TRUE(buffer.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer.content_color_volume().hdr_headroom);
 
   // Adding a HDR image should switch to HDR.
   PaintOpBuffer sub_buffer;
@@ -4717,9 +4904,11 @@ TEST(PaintOpBufferTest, ContentColorUsageFromImages) {
   sub_buffer.push<DrawImageRectOp>(hdr, SkRect::MakeWH(10, 10),
                                    SkRect::MakeWH(20, 20),
                                    SkCanvas::kStrict_SrcRectConstraint);
-  EXPECT_EQ(gfx::ContentColorUsage::kHDR, sub_buffer.content_color_usage());
+  EXPECT_TRUE(sub_buffer.content_color_volume().is_wide_color_gamut);
+  EXPECT_GT(sub_buffer.content_color_volume().hdr_headroom, 0.f);
   buffer.push<DrawRecordOp>(sub_buffer.ReleaseAsRecord());
-  EXPECT_EQ(gfx::ContentColorUsage::kHDR, buffer.content_color_usage());
+  EXPECT_TRUE(buffer.content_color_volume().is_wide_color_gamut);
+  EXPECT_GT(buffer.content_color_volume().hdr_headroom, 0.f);
 }
 
 TEST(PaintOpBufferTest, ContentColorUsageFromShader) {
@@ -4733,8 +4922,8 @@ TEST(PaintOpBufferTest, ContentColorUsageFromShader) {
                                         SkTileMode::kClamp, nullptr);
   flags1.setShader(std::move(shader1));
   buffer1.push<DrawRectOp>(SkRect::MakeWH(10, 20), flags1);
-  EXPECT_EQ(gfx::ContentColorUsage::kWideColorGamut,
-            buffer1.content_color_usage());
+  EXPECT_TRUE(buffer1.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer1.content_color_volume().hdr_headroom);
 
   PaintOpBuffer buffer2;
   PaintFlags flags2;
@@ -4743,8 +4932,8 @@ TEST(PaintOpBufferTest, ContentColorUsageFromShader) {
       SkTileMode::kClamp, nullptr);
   flags2.setShader(std::move(shader2));
   buffer2.push<DrawRectOp>(SkRect::MakeWH(10, 20), flags2);
-  EXPECT_EQ(gfx::ContentColorUsage::kWideColorGamut,
-            buffer2.content_color_usage());
+  EXPECT_TRUE(buffer2.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer2.content_color_volume().hdr_headroom);
 }
 
 TEST(PaintOpBufferTest, ContentColorUsageFromFilter) {
@@ -4759,8 +4948,8 @@ TEST(PaintOpBufferTest, ContentColorUsageFromFilter) {
                                               PaintFlags::FilterQuality::kNone);
   flags1.setImageFilter(std::move(filter1));
   buffer1.push<DrawRectOp>(SkRect::MakeWH(10, 20), flags1);
-  EXPECT_EQ(gfx::ContentColorUsage::kWideColorGamut,
-            buffer1.content_color_usage());
+  EXPECT_TRUE(buffer1.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer1.content_color_volume().hdr_headroom);
 
   PaintOpBuffer buffer2;
   PaintFlags flags2;
@@ -4770,8 +4959,8 @@ TEST(PaintOpBufferTest, ContentColorUsageFromFilter) {
                                     SkRect::MakeWH(5, 5)));
   flags2.setImageFilter(std::move(filter2));
   buffer2.push<DrawRectOp>(SkRect::MakeWH(10, 20), flags2);
-  EXPECT_EQ(gfx::ContentColorUsage::kWideColorGamut,
-            buffer2.content_color_usage());
+  EXPECT_TRUE(buffer2.content_color_volume().is_wide_color_gamut);
+  EXPECT_EQ(0.f, buffer2.content_color_volume().hdr_headroom);
 }
 
 TEST(PaintOpBufferTest, SkSLShaderPrivilegeEnforcement) {

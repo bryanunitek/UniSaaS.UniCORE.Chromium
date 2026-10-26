@@ -19,7 +19,6 @@ import '../settings_shared.css.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/ash/common/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {isExternalStorageEnabled} from '../common/load_time_booleans.js';
@@ -30,7 +29,7 @@ import {GraphicsTabletSettingsObserverReceiver, KeyboardSettingsObserverReceiver
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
 import {ACCESSIBILITY_COMMON_IME_ID} from '../os_languages_page/languages.js';
 import type {LanguageHelper, LanguagesModel} from '../os_languages_page/languages_types.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './device_page.html.js';
@@ -91,17 +90,6 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
       hasStylus_: {
         type: Boolean,
         value: false,
-      },
-
-      /**
-       * Whether users are allowed to customize buttons on their peripherals.
-       */
-      isPeripheralCustomizationEnabled: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enablePeripheralCustomization');
-        },
-        readOnly: true,
       },
 
       isExternalStorageEnabled_: {
@@ -167,35 +155,37 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
     ];
   }
 
-  languages: LanguagesModel|undefined;
-  languageHelper: LanguageHelper|undefined;
-  prefs: PrefsState|undefined;
+  declare languages: LanguagesModel|undefined;
+  declare languageHelper: LanguageHelper|undefined;
+  declare prefs: PrefsState|undefined;
 
-  protected pointingSticks: PointingStick[];
-  protected keyboards: Keyboard[];
-  protected keyboardPolicies: KeyboardPolicies;
-  protected touchpads: Touchpad[];
-  protected mice: Mouse[];
-  protected mousePolicies: MousePolicies;
-  protected graphicsTablets: GraphicsTablet[];
+  declare protected pointingSticks: PointingStick[];
+  declare protected keyboards: Keyboard[];
+  declare protected keyboardPolicies: KeyboardPolicies;
+  declare protected touchpads: Touchpad[];
+  declare protected mice: Mouse[];
+  declare protected mousePolicies: MousePolicies;
+  declare protected graphicsTablets: GraphicsTablet[];
   private browserProxy_: DevicePageBrowserProxy;
-  private hasMouse_: boolean;
-  private hasPointingStick_: boolean;
-  private hasStylus_: boolean;
-  private hasTouchpad_: boolean;
-  private hasHapticTouchpad_: boolean;
-  private inputMethodDisplayName_: string;
-  private isExternalStorageEnabled_: boolean;
-  private isPeripheralCustomizationEnabled: boolean;
-  private pointingStickSettingsObserverReceiver:
-      PointingStickSettingsObserverReceiver;
-  private keyboardSettingsObserverReceiver: KeyboardSettingsObserverReceiver;
-  private touchpadSettingsObserverReceiver: TouchpadSettingsObserverReceiver;
-  private inputDeviceSettingsProvider: InputDeviceSettingsProviderInterface;
-  private mouseSettingsObserverReceiver: MouseSettingsObserverReceiver;
-  private graphicsTabletSettingsObserverReceiver:
-      GraphicsTabletSettingsObserverReceiver;
-  private section_: Section;
+  declare private hasMouse_: boolean;
+  declare private hasPointingStick_: boolean;
+  declare private hasStylus_: boolean;
+  declare private hasTouchpad_: boolean;
+  declare private hasHapticTouchpad_: boolean;
+  declare private inputMethodDisplayName_: string;
+  declare private isExternalStorageEnabled_: boolean;
+  private pointingStickSettingsObserverReceiver_ =
+      new PointingStickSettingsObserverReceiver(this);
+  private keyboardSettingsObserverReceiver_ =
+      new KeyboardSettingsObserverReceiver(this);
+  private touchpadSettingsObserverReceiver_ =
+      new TouchpadSettingsObserverReceiver(this);
+  private inputDeviceSettingsProvider_: InputDeviceSettingsProviderInterface;
+  private mouseSettingsObserverReceiver_ =
+      new MouseSettingsObserverReceiver(this);
+  private graphicsTabletSettingsObserverReceiver_ =
+      new GraphicsTabletSettingsObserverReceiver(this);
+  declare private section_: Section;
 
   constructor() {
     super();
@@ -204,14 +194,12 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
     this.route = routes.DEVICE;
 
     this.browserProxy_ = DevicePageBrowserProxyImpl.getInstance();
-    this.inputDeviceSettingsProvider = getInputDeviceSettingsProvider();
+    this.inputDeviceSettingsProvider_ = getInputDeviceSettingsProvider();
     this.observePointingStickSettings();
     this.observeKeyboardSettings();
     this.observeTouchpadSettings();
     this.observeMouseSettings();
-    if (this.isPeripheralCustomizationEnabled) {
-      this.observeGraphicsTabletSettings();
-    }
+    this.observeGraphicsTabletSettings();
   }
 
   override connectedCallback(): void {
@@ -253,17 +241,14 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
   }
 
   private observePointingStickSettings(): void {
-    if (this.inputDeviceSettingsProvider instanceof
+    if (this.inputDeviceSettingsProvider_ instanceof
         FakeInputDeviceSettingsProvider) {
-      this.inputDeviceSettingsProvider.observePointingStickSettings(this);
+      this.inputDeviceSettingsProvider_.observePointingStickSettings(this);
       return;
     }
 
-    this.pointingStickSettingsObserverReceiver =
-        new PointingStickSettingsObserverReceiver(this);
-
-    this.inputDeviceSettingsProvider.observePointingStickSettings(
-        this.pointingStickSettingsObserverReceiver.$
+    this.inputDeviceSettingsProvider_.observePointingStickSettings(
+        this.pointingStickSettingsObserverReceiver_.$
             .bindNewPipeAndPassRemote());
   }
 
@@ -272,17 +257,14 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
   }
 
   private observeKeyboardSettings(): void {
-    if (this.inputDeviceSettingsProvider instanceof
+    if (this.inputDeviceSettingsProvider_ instanceof
         FakeInputDeviceSettingsProvider) {
-      this.inputDeviceSettingsProvider.observeKeyboardSettings(this);
+      this.inputDeviceSettingsProvider_.observeKeyboardSettings(this);
       return;
     }
 
-    this.keyboardSettingsObserverReceiver =
-        new KeyboardSettingsObserverReceiver(this);
-
-    this.inputDeviceSettingsProvider.observeKeyboardSettings(
-        this.keyboardSettingsObserverReceiver.$.bindNewPipeAndPassRemote());
+    this.inputDeviceSettingsProvider_.observeKeyboardSettings(
+        this.keyboardSettingsObserverReceiver_.$.bindNewPipeAndPassRemote());
   }
 
   onKeyboardListUpdated(keyboards: Keyboard[]): void {
@@ -294,17 +276,14 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
   }
 
   private observeTouchpadSettings(): void {
-    if (this.inputDeviceSettingsProvider instanceof
+    if (this.inputDeviceSettingsProvider_ instanceof
         FakeInputDeviceSettingsProvider) {
-      this.inputDeviceSettingsProvider.observeTouchpadSettings(this);
+      this.inputDeviceSettingsProvider_.observeTouchpadSettings(this);
       return;
     }
 
-    this.touchpadSettingsObserverReceiver =
-        new TouchpadSettingsObserverReceiver(this);
-
-    this.inputDeviceSettingsProvider.observeTouchpadSettings(
-        this.touchpadSettingsObserverReceiver.$.bindNewPipeAndPassRemote());
+    this.inputDeviceSettingsProvider_.observeTouchpadSettings(
+        this.touchpadSettingsObserverReceiver_.$.bindNewPipeAndPassRemote());
   }
 
   onTouchpadListUpdated(touchpads: Touchpad[]): void {
@@ -312,17 +291,14 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
   }
 
   private observeMouseSettings(): void {
-    if (this.inputDeviceSettingsProvider instanceof
+    if (this.inputDeviceSettingsProvider_ instanceof
         FakeInputDeviceSettingsProvider) {
-      this.inputDeviceSettingsProvider.observeMouseSettings(this);
+      this.inputDeviceSettingsProvider_.observeMouseSettings(this);
       return;
     }
 
-    this.mouseSettingsObserverReceiver =
-        new MouseSettingsObserverReceiver(this);
-
-    this.inputDeviceSettingsProvider.observeMouseSettings(
-        this.mouseSettingsObserverReceiver.$.bindNewPipeAndPassRemote());
+    this.inputDeviceSettingsProvider_.observeMouseSettings(
+        this.mouseSettingsObserverReceiver_.$.bindNewPipeAndPassRemote());
   }
 
   onMouseListUpdated(mice: Mouse[]): void {
@@ -334,17 +310,14 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
   }
 
   private observeGraphicsTabletSettings(): void {
-    if (this.inputDeviceSettingsProvider instanceof
+    if (this.inputDeviceSettingsProvider_ instanceof
         FakeInputDeviceSettingsProvider) {
-      this.inputDeviceSettingsProvider.observeGraphicsTabletSettings(this);
+      this.inputDeviceSettingsProvider_.observeGraphicsTabletSettings(this);
       return;
     }
 
-    this.graphicsTabletSettingsObserverReceiver =
-        new GraphicsTabletSettingsObserverReceiver(this);
-
-    this.inputDeviceSettingsProvider.observeGraphicsTabletSettings(
-        this.graphicsTabletSettingsObserverReceiver.$
+    this.inputDeviceSettingsProvider_.observeGraphicsTabletSettings(
+        this.graphicsTabletSettingsObserverReceiver_.$
             .bindNewPipeAndPassRemote());
   }
 
@@ -498,9 +471,8 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
     return this.pointingSticks && this.pointingSticks.length !== 0;
   }
 
-  private showGraphicsTabletRow_(): boolean {
-    return this.isPeripheralCustomizationEnabled && this.graphicsTablets &&
-        this.graphicsTablets.length !== 0;
+  private showGraphicsTabletRow_(graphicsTablets: GraphicsTablet[]): boolean {
+    return !!graphicsTablets && graphicsTablets.length !== 0;
   }
 
   protected restoreDefaults(): void {

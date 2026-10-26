@@ -4,18 +4,26 @@
 
 #include "third_party/blink/renderer/core/xml/parser/xml_document_parser.h"
 
+#include <libxml/encoding.h>
+#include <libxml/parser.h>
+
+#include <fstream>
+#include <iterator>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
+#include "third_party/blink/renderer/core/xml/parser/xml_document_parser_rs.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
-#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
@@ -154,6 +162,151 @@ TEST_P(XMLDocumentParserParameterizedTest, NestedNamespaceReset) {
   // ensuring that the inner <b> declaration didn't clobber the reset state.
   EXPECT_EQ(iframe->namespaceURI(), g_null_atom)
       << "iframe should be in null namespace due to outer <a> reset";
+}
+
+static xmlCharEncError flushCrashConvert(void* vctxt,
+                                         unsigned char* out,
+                                         int* outlen,
+                                         const unsigned char* in,
+                                         int* inlen,
+                                         int flush) {
+  int toCopy = *inlen;
+  if (!flush && toCopy > 0) {
+    toCopy--;
+  }
+  if (toCopy > *outlen) {
+    toCopy = *outlen;
+  }
+  // SAFETY: This implements a libxml2 callback interface using raw pointer
+  // arguments, where safe spans are not possible. toCopy is bounded by the
+  // buffer sizes of both in and out.
+  UNSAFE_BUFFERS(memcpy(out, in, toCopy));
+  *inlen = toCopy;
+  *outlen = toCopy;
+  return XML_ENC_ERR_SUCCESS;
+}
+
+static xmlParserErrors flushCrashConvImpl(void* vctxt,
+                                          const char* name,
+                                          xmlCharEncFlags flags,
+                                          xmlCharEncodingHandler** out) {
+  if (std::string_view(name) != "flush-crash") {
+    return XML_ERR_UNSUPPORTED_ENCODING;
+  }
+
+  return xmlCharEncNewCustomHandler(name, flushCrashConvert, nullptr, nullptr,
+                                    nullptr, nullptr, out);
+}
+
+TEST(XMLDocumentParserTest, ReproICUFlushCrash) {
+  test::TaskEnvironment task_environment;
+  ScopedNullExecutionContext execution_context;
+  execution_context.GetExecutionContext().SetUpSecurityContextForTesting();
+
+  xmlParserCtxtPtr ctxt = xmlNewParserCtxt();
+  xmlCtxtSetCharEncConvImpl(ctxt, flushCrashConvImpl, nullptr);
+
+  // XML document with a trailing space that decodes only on flush.
+  std::string xml = "<?xml version=\"1.0\" encoding=\"flush-crash\"?><root/> ";
+
+  xmlDocPtr xml_doc = xmlCtxtReadMemory(
+      ctxt, xml.data(), static_cast<int>(xml.size()), "http://example.com",
+      nullptr,
+      XML_PARSE_NOENT | XML_PARSE_DTDLOAD | XML_PARSE_DTDATTR |
+          XML_PARSE_NOCDATA | XML_PARSE_HUGE);
+
+  if (xml_doc) {
+    xmlFreeDoc(xml_doc);
+  }
+  EXPECT_EQ(ctxt->errNo, XML_ERR_OK);
+  xmlFreeParserCtxt(ctxt);
+}
+
+TEST(XMLDocumentParserTest, FlushTrailingNonWhitespaceIsDocumentEndError) {
+  test::TaskEnvironment task_environment;
+  ScopedNullExecutionContext execution_context;
+  execution_context.GetExecutionContext().SetUpSecurityContextForTesting();
+
+  xmlParserCtxtPtr ctxt = xmlNewParserCtxt();
+  xmlCtxtSetCharEncConvImpl(ctxt, flushCrashConvImpl, nullptr);
+
+  // XML document with trailing non-whitespace that decodes only on flush.
+  std::string xml = "<?xml version=\"1.0\" encoding=\"flush-crash\"?><root/>x";
+
+  xmlDocPtr xml_doc = xmlCtxtReadMemory(
+      ctxt, xml.data(), static_cast<int>(xml.size()), "http://example.com",
+      nullptr,
+      XML_PARSE_NOENT | XML_PARSE_DTDLOAD | XML_PARSE_DTDATTR |
+          XML_PARSE_NOCDATA | XML_PARSE_HUGE);
+
+  if (xml_doc) {
+    xmlFreeDoc(xml_doc);
+  }
+  EXPECT_EQ(ctxt->errNo, XML_ERR_DOCUMENT_END);
+  xmlFreeParserCtxt(ctxt);
+}
+
+TEST(XMLDocumentParserTest, ChunkedParsingWithPauseRust) {
+  test::TaskEnvironment task_environment;
+  ScopedNullExecutionContext execution_context;
+  execution_context.GetExecutionContext().SetUpSecurityContextForTesting();
+  auto& doc = *Document::CreateForTest(execution_context.GetExecutionContext());
+
+  ScopedXMLParsingRustForTest scoped_rust(true);
+
+  ScriptableDocumentParser* parser =
+      MakeGarbageCollected<XMLDocumentParserRs>(doc, nullptr);
+
+  // 1. Append first incomplete chunk. This sets carry_unbalanced_root_error_.
+  parser->Append("<root><child>");
+
+  // 2. Simulate a pending stylesheet that blocks the parser.
+  parser->DidAddPendingParserBlockingStylesheet();
+
+  // 3. Append second chunk that closes elements.
+  // This will trigger EndElementNs, which calls
+  // CheckIfBlockingStyleSheetAdded() and pauses the parser.
+  parser->Append("</child></root>");
+
+  parser->Finish();
+
+  EXPECT_TRUE(parser->WellFormed());
+}
+
+TEST(XMLDocumentParserTest, RustParserInstantiation) {
+  test::TaskEnvironment task_environment;
+  ScopedNullExecutionContext execution_context;
+  execution_context.GetExecutionContext().SetUpSecurityContextForTesting();
+
+  {
+    auto& doc =
+        *Document::CreateForTest(execution_context.GetExecutionContext());
+    ScopedXMLRustForNonXsltForTest rust_non_xslt(false);
+    ScopedXMLParsingRustForTest rust_all(false);
+    DocumentParser* parser = doc.CreateParser();
+    EXPECT_FALSE(doc.UsingRustXmlParserForTesting());
+    EXPECT_TRUE(parser);
+  }
+
+  {
+    auto& doc =
+        *Document::CreateForTest(execution_context.GetExecutionContext());
+    ScopedXMLRustForNonXsltForTest rust_non_xslt(false);
+    ScopedXMLParsingRustForTest rust_all(true);
+    DocumentParser* parser = doc.CreateParser();
+    EXPECT_TRUE(doc.UsingRustXmlParserForTesting());
+    EXPECT_TRUE(parser);
+  }
+
+  {
+    auto& doc =
+        *Document::CreateForTest(execution_context.GetExecutionContext());
+    ScopedXMLRustForNonXsltForTest rust_non_xslt(true);
+    ScopedXMLParsingRustForTest rust_all(false);
+    DocumentParser* parser = doc.CreateParser();
+    EXPECT_TRUE(doc.UsingRustXmlParserForTesting());
+    EXPECT_TRUE(parser);
+  }
 }
 
 }  // namespace blink

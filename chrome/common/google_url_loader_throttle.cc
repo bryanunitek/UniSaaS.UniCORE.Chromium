@@ -16,6 +16,7 @@
 #include "chrome/common/renderer_configuration.mojom.h"
 #include "components/google/core/common/google_util.h"
 #include "components/safe_search_api/safe_search_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -25,7 +26,7 @@
 #include "services/network/public/mojom/x_frame_options.mojom.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/extension_urls.h"
 #endif
 
@@ -264,11 +265,15 @@ void GoogleURLLoaderThrottle::WillRedirectRequest(
             dynamic_params_->youtube_restrict));
   }
 
-  if (!dynamic_params_->allowed_domains_for_apps.empty() &&
-      redirect_info->new_url.DomainIs("google.com")) {
-    headers_update_params->modified_cors_exempt_headers.SetHeader(
-        safe_search_api::kGoogleAppsAllowedDomains,
-        dynamic_params_->allowed_domains_for_apps);
+  if (!dynamic_params_->allowed_domains_for_apps.empty()) {
+    if (redirect_info->new_url.DomainIs("google.com")) {
+      headers_update_params->modified_cors_exempt_headers.SetHeader(
+          safe_search_api::kGoogleAppsAllowedDomains,
+          dynamic_params_->allowed_domains_for_apps);
+    } else {
+      headers_update_params->removed_headers.push_back(
+          safe_search_api::kGoogleAppsAllowedDomains);
+    }
   }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -318,7 +323,7 @@ void GoogleURLLoaderThrottle::WillProcessResponse(
   }
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Built-in additional protection for the chrome web store origin by
   // ensuring that the X-Frame-Options protection mechanism is set to either
   // DENY or SAMEORIGIN.
@@ -336,7 +341,7 @@ void GoogleURLLoaderThrottle::WillProcessResponse(
           network::mojom::XFrameOptionsValue::kSameOrigin;
     }
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)

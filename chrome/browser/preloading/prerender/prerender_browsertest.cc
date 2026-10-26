@@ -12,23 +12,23 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
+#include "chrome/browser/page_load_metrics/chrome_navigation_initiator.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/new_tab_page_preload/new_tab_page_preload_pipeline_manager.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
-#include "chrome/browser/preloading/prerender/search_prewarm_progress_service.h"
-#include "chrome/browser/preloading/prerender/search_prewarm_progress_service_factory.h"
-#include "chrome/browser/preloading/prerender/search_prewarm_progress_test_utils.h"
+#include "chrome/browser/preloading/prerender/search_preload_progress_service.h"
+#include "chrome/browser/preloading/prerender/search_preload_progress_service_factory.h"
+#include "chrome/browser/preloading/prerender/search_preload_progress_test_utils.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
-#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
+#include "components/page_load_metrics/browser/navigation_initiator.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/common/content_features.h"
@@ -45,6 +45,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
@@ -191,7 +193,8 @@ void PrerenderBrowserTest::TestPrerenderAndActivateInNewTab(
 
 // An end-to-end test of prerendering in a new tab and activating.
 // Disabled on Android due to failures: https://crbug.com/355255740.
-#if BUILDFLAG(IS_ANDROID)
+// TODO(crbug.com/556255865): Flaky on Mac.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
 #define MAYBE_PrerenderAndActivate_InNewTab \
   DISABLED_PrerenderAndActivate_InNewTab
 #else
@@ -203,7 +206,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
 }
 
 // Disabled on Android due to failures: https://crbug.com/355255740.
-#if BUILDFLAG(IS_ANDROID)
+// TODO(crbug.com/556255865): Flaky on Mac.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
 #define MAYBE_PrerenderAndActivate_InNewTab_Noopener \
   DISABLED_PrerenderAndActivate_InNewTab_Noopener
 #else
@@ -314,6 +318,13 @@ IN_PROC_BROWSER_TEST_F(PrerenderUntilScriptBrowserTest, UseCounter) {
 
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest,
                        PrerenderTriggeredByEmbedderAndActivate) {
+#if BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/576393693): Prerender activation fails with
+  // kActivationNavigationParameterMismatch on Android tablets.
+  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+    GTEST_SKIP() << "Prerender activation fails on Android tablets.";
+  }
+#endif
   base::HistogramTester histogram_tester;
 
   // Navigate to an initial page.
@@ -750,18 +761,15 @@ class PrerenderNewTabPageBrowserTest
 
   void SimulateNewTabNavigation(const GURL& url) {
     GetActiveWebContents()->OpenURL(
-        content::OpenURLParams(
-            url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
-            ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
-            /*is_renderer_initiated=*/false),
-        base::BindRepeating(&page_load_metrics::NavigationHandleUserData::
-                                AttachNewTabPageNavigationHandleUserData));
+        content::OpenURLParams::CreateBrowserInitiated(
+            url, WindowOpenDisposition::kCurrentTab,
+            ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK)),
+        page_load_metrics::NavigationInitiatorHolder::AttacherCallback(
+            chrome_navigation_initiator::kNewTabPage));
   }
 
-  void ExpectPrerenderPageLoad(
-      const GURL& prerender_url,
-      page_load_metrics::NavigationHandleUserData::InitiatorLocation
-          initiator_location) {
+  void ExpectPrerenderPageLoad(const GURL& prerender_url,
+                               int64_t initiator_id) {
     auto entries =
         test_ukm_recorder()->GetMergedEntriesByName("PrerenderPageLoad");
     for (auto& kv : entries) {
@@ -778,7 +786,7 @@ class PrerenderNewTabPageBrowserTest
       test_ukm_recorder()->ExpectEntryMetric(
           entry,
           ukm::builders::PrerenderPageLoad::kNavigation_InitiatorLocationName,
-          static_cast<int>(initiator_location));
+          initiator_id);
       return;
     }
     EXPECT_TRUE(false) << "PrerenderPageLoad hasn't been recorded.";
@@ -833,8 +841,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderNewTabPageBrowserTest,
       "NewTabPage.PrerenderNavigationToActivation", 1);
 
   ExpectPrerenderPageLoad(prerender_url,
-                          page_load_metrics::NavigationHandleUserData::
-                              InitiatorLocation::kNewTabPage);
+                          chrome_navigation_initiator::kNewTabPage.id());
   histogram_tester.ExpectUniqueSample(
       "Prerender.IsPrerenderingSRPUrl.Embedder_NewTabPage", false, 1);
 }
@@ -1039,13 +1046,11 @@ class PrerenderPrewarmDefaultSearchEngineTest
   content::WebContents* CreateNewTab() {
     content::WebContents* original_web_contents = GetActiveWebContents();
     original_web_contents->OpenURL(
-        content::OpenURLParams(
-            GURL(url::kAboutBlankURL), content::Referrer(),
-            WindowOpenDisposition::NEW_FOREGROUND_TAB,
-            ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
-            /*is_renderer_initiated=*/false),
-        base::BindRepeating(&page_load_metrics::NavigationHandleUserData::
-                                AttachNewTabPageNavigationHandleUserData));
+        content::OpenURLParams::CreateBrowserInitiated(
+            GURL(url::kAboutBlankURL), WindowOpenDisposition::kNewForegroundTab,
+            ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK)),
+        page_load_metrics::NavigationInitiatorHolder::AttacherCallback(
+            chrome_navigation_initiator::kNewTabPage));
     content::WebContents* new_web_contents = GetActiveWebContents();
     EXPECT_TRUE(new_web_contents);
     EXPECT_NE(new_web_contents, original_web_contents);
@@ -1250,18 +1255,18 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
   prerender_helper().WaitForPrerenderLoadCompletion(prerender_host_id);
 }
 
-// Tests that the SearchPrewarmProgressService correctly tracks the prewarm
+// Tests that the SearchPreloadProgressService correctly tracks the prewarm
 // status when prewarming the default search engine, and resets when the
 // prewarm is stopped.
 IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
-                       SearchPrewarmProgressService) {
+                       SearchPreloadProgressService) {
   // Navigate to an initial page.
   GURL url = embedded_test_server()->GetURL("/empty.html");
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), url));
 
   auto* profile =
       Profile::FromBrowserContext(GetActiveWebContents()->GetBrowserContext());
-  auto* service = SearchPrewarmProgressServiceFactory::GetForProfile(profile);
+  auto* service = SearchPreloadProgressServiceFactory::GetForProfile(profile);
   ASSERT_TRUE(service);
   EXPECT_FALSE(service->HasOnGoingSearchPrewarm());
 
@@ -1277,7 +1282,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
   ASSERT_TRUE(host_id);
   EXPECT_TRUE(service->IsOnGoingSearchPrewarm(host_id));
 
-  SearchPrewarmProgressTestObserver observer(service);
+  SearchPreloadProgressTestObserver observer(service);
   EXPECT_FALSE(observer.was_notified());
 
   // Resume the navigation.
@@ -1298,7 +1303,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
 
   auto* profile =
       Profile::FromBrowserContext(GetActiveWebContents()->GetBrowserContext());
-  auto* service = SearchPrewarmProgressServiceFactory::GetForProfile(profile);
+  auto* service = SearchPreloadProgressServiceFactory::GetForProfile(profile);
   ASSERT_TRUE(service);
   EXPECT_FALSE(service->ShouldBlockPrewarm());
 
@@ -1311,7 +1316,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
                                                 "/non-existent.html");
   prerender_manager->SetPrewarmUrlForTesting(url_404);
 
-  SearchPrewarmProgressTestObserver observer(service);
+  SearchPreloadProgressTestObserver observer(service);
 
   // Start prewarm.
   EXPECT_TRUE(prerender_manager->MaybeStartPrewarmSearchResult());
@@ -1326,16 +1331,16 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
 
 // Tests that if the `PrerenderManager` is destroyed (by closing the tab) while
 // a search prewarm is ongoing, the registered callbacks on
-// `SearchPrewarmProgressService` will be correctly triggered.
+// `SearchPreloadProgressService` will be correctly triggered.
 IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
-                       SearchPrewarmProgressPrerenderManagerDestroyed) {
+                       SearchPreloadProgressPrerenderManagerDestroyed) {
   // Navigate to an initial page.
   GURL url = embedded_test_server()->GetURL("/empty.html");
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), url));
 
   auto* profile =
       Profile::FromBrowserContext(GetActiveWebContents()->GetBrowserContext());
-  auto* service = SearchPrewarmProgressServiceFactory::GetForProfile(profile);
+  auto* service = SearchPreloadProgressServiceFactory::GetForProfile(profile);
   ASSERT_TRUE(service);
   EXPECT_FALSE(service->HasOnGoingSearchPrewarm());
 
@@ -1356,7 +1361,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
   auto host_id = prerender_helper().GetPrewarmSearchResultHost(prewarm_url_);
   ASSERT_TRUE(host_id);
   EXPECT_TRUE(service->IsOnGoingSearchPrewarm(host_id));
-  SearchPrewarmProgressTestObserver observer(service);
+  SearchPreloadProgressTestObserver observer(service);
   EXPECT_FALSE(observer.was_notified());
 
   // Destroy the tab.
@@ -1368,18 +1373,18 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
   EXPECT_FALSE(service->IsOnGoingSearchPrewarm(host_id));
 }
 
-// Tests that `SearchPrewarmProgressService` handles multiple prewarms happening
+// Tests that `SearchPreloadProgressService` handles multiple prewarms happening
 // concurrently in different `WebContents` and the callback is triggered only
 // after all prewarms finish.
 IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
-                       SearchPrewarmProgressServiceMultipleWebContents) {
+                       SearchPreloadProgressServiceMultipleWebContents) {
   // Navigate to an initial page.
   GURL url = embedded_test_server()->GetURL("/empty.html");
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), url));
 
   auto* profile =
       Profile::FromBrowserContext(GetActiveWebContents()->GetBrowserContext());
-  auto* service = SearchPrewarmProgressServiceFactory::GetForProfile(profile);
+  auto* service = SearchPreloadProgressServiceFactory::GetForProfile(profile);
   ASSERT_TRUE(service);
   EXPECT_FALSE(service->HasOnGoingSearchPrewarm());
 
@@ -1415,7 +1420,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderPrewarmDefaultSearchEngineTest,
   ASSERT_TRUE(host_id2);
   EXPECT_TRUE(service->IsOnGoingSearchPrewarm(host_id2));
 
-  SearchPrewarmProgressTestObserver observer(service);
+  SearchPreloadProgressTestObserver observer(service);
   EXPECT_FALSE(observer.was_notified());
 
   // Resume the navigation in the first tab.
@@ -1568,6 +1573,14 @@ IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, HTTPFormActivation) {
 
 // Verifies that a search form will not be blocked.
 IN_PROC_BROWSER_TEST_F(PrerenderBrowserTest, SearchableFormActivation) {
+#if BUILDFLAG(IS_ANDROID)
+  // Prerender activation times out on Android tablets / large screens.
+  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET ||
+      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_DESKTOP) {
+    GTEST_SKIP() << "Prerender activation times out on Android tablets and "
+                    "large screens.";
+  }
+#endif
   base::HistogramTester histogram_tester;
 
   // Navigate to an initial page.

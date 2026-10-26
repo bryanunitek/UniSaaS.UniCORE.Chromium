@@ -10,10 +10,6 @@
 #include <memory>
 #include <utility>
 #include <vector>
-
-#include "ash/constants/ash_features.h"
-#include "base/compiler_specific.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -142,8 +138,8 @@ void NetworkDeviceHandlerImpl::SetDeviceProperty(
       // NetworkConfigurationUpdater.
       shill::kCellularPolicyAllowRoamingProperty};
 
-  for (size_t i = 0; i < std::size(blocked_properties); ++i) {
-    if (property_name == UNSAFE_TODO(blocked_properties[i])) {
+  for (const char* blocked_property : blocked_properties) {
+    if (property_name == blocked_property) {
       InvokeErrorCallback(
           device_path, std::move(error_callback),
           "SetDeviceProperty called on blocked property " + property_name);
@@ -309,7 +305,6 @@ void NetworkDeviceHandlerImpl::DeviceListChanged() {
   ApplyCellularAllowRoamingToShill();
   ApplyMACAddressRandomizationToShill();
   ApplyUsbEthernetMacAddressSourceToShill();
-  ApplyWakeOnWifiAllowedToShill();
 }
 
 void NetworkDeviceHandlerImpl::DevicePropertiesUpdated(
@@ -408,15 +403,6 @@ void NetworkDeviceHandlerImpl::ApplyMACAddressRandomizationToShill() {
       mac_addr_randomization_enabled_,
       shill::kMacAddressRandomizationSupportedProperty,
       &mac_addr_randomization_supported_);
-}
-
-void NetworkDeviceHandlerImpl::ApplyWakeOnWifiAllowedToShill() {
-  // Get the setting from feature flags.
-  wake_on_wifi_allowed_ =
-      base::FeatureList::IsEnabled(features::kWakeOnWifiAllowed);
-  ApplyWifiFeatureToShillIfSupported(
-      shill::kWakeOnWiFiAllowedProperty, wake_on_wifi_allowed_,
-      shill::kWakeOnWiFiSupportedProperty, &wake_on_wifi_supported_);
 }
 
 void NetworkDeviceHandlerImpl::ApplyUsbEthernetMacAddressSourceToShill() {

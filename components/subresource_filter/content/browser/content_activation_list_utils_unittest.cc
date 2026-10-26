@@ -5,7 +5,7 @@
 #include "components/subresource_filter/content/browser/content_activation_list_utils.h"
 
 #include "base/test/scoped_feature_list.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,7 +36,7 @@ TEST(ContentActivationListUtilsTest, GetListForThreatTypeAndMetadata) {
        SB_THREAT_TYPE_SUBRESOURCE_FILTER,
        {},
        AdBlockOnAbusiveSitesTest::kDisabled,
-       ActivationList::SUBRESOURCE_FILTER,
+       ActivationList::NONE,
        false},
       {"BetterAds_Warn_DisableAdBlockOnAbusiveSites",
        SB_THREAT_TYPE_SUBRESOURCE_FILTER,

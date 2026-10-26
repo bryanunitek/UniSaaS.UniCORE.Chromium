@@ -52,11 +52,22 @@
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 
+namespace base {
+template <typename T>
+class DeleteHelper;
+}
+
 namespace media {
 struct AudioGlitchInfo;
 }
 
 namespace blink {
+
+class AudioDestination;
+
+struct PLATFORM_EXPORT AudioDestinationTraits {
+  static void Destruct(const AudioDestination* destination);
+};
 
 class PushPullFIFO;
 class WebAudioLatencyHint;
@@ -70,7 +81,7 @@ class WebAudioSinkDescriptor;
 // For a detailed architectural overview of this class, see the documentation at
 // `docs/audio_destination_lifetime_threading.md`.
 class PLATFORM_EXPORT AudioDestination final
-    : public ThreadSafeRefCounted<AudioDestination>,
+    : public ThreadSafeRefCounted<AudioDestination, AudioDestinationTraits>,
       public media::AudioRendererSink::RenderCallback {
  public:
   // Represents the current state of the underlying `WebAudioDevice` object
@@ -91,7 +102,6 @@ class PLATFORM_EXPORT AudioDestination final
 
   AudioDestination(const AudioDestination&) = delete;
   AudioDestination& operator=(const AudioDestination&) = delete;
-  ~AudioDestination() override;
 
   // The actual render function isochronously invoked by the media
   // renderer. This is never called after Stop() is called.
@@ -163,6 +173,11 @@ class PLATFORM_EXPORT AudioDestination final
   }
 
  private:
+  friend struct AudioDestinationTraits;
+  friend class base::DeleteHelper<AudioDestination>;
+
+  ~AudioDestination() override;
+
   explicit AudioDestination(AudioIOCallback&,
                             const WebAudioSinkDescriptor& sink_descriptor,
                             unsigned number_of_output_channels,
@@ -185,7 +200,8 @@ class PLATFORM_EXPORT AudioDestination final
                          base::TimeTicks delay_timestamp,
                          const media::AudioGlitchInfo& glitch_info,
                          base::TimeTicks request_timestamp,
-                         uint32_t session_id);
+                         uint32_t session_id,
+                         bool has_unexpected_fifo_underrun_occurred);
 
   // Returns true if it was able to provide audio, false otherwise (this would
   // happen if and only if rendering is stopping or stopped.
@@ -196,6 +212,7 @@ class PLATFORM_EXPORT AudioDestination final
                      const media::AudioGlitchInfo& glitch_info,
                      base::TimeTicks request_timestamp,
                      uint32_t session_id,
+                     bool has_unexpected_fifo_underrun_occurred = false,
                      bool has_fifo_underrun_occurred = false);
 
   // Provide input to the resampler (if used).
@@ -242,6 +259,10 @@ class PLATFORM_EXPORT AudioDestination final
   // one.
   std::unique_ptr<MediaMultiChannelResampler> resampler_;
   std::unique_ptr<media::AudioBus> resampler_bus_;
+  // Non-allocating wrapper used to pull individual render quanta from the Web
+  // Audio graph when `render_quantum_frames_` is smaller than the minimum
+  // request size required by `media::SincResampler` (`kMinRequestSize`).
+  scoped_refptr<AudioBus> resampler_render_bus_;
 
   // Required for RequestRender and also in the resampling callback (if used).
   AudioIOPosition output_position_;
@@ -284,11 +305,14 @@ class PLATFORM_EXPORT AudioDestination final
 
   const bool is_output_buffer_bypassed_ = false;
   std::atomic<bool> is_state_change_underrun_in_bypass_mode_ = false;
+  bool has_unexpected_fifo_underrun_occurred_ = false;
 
   // Incremented on every Start() to identify tasks from the current session.
   // uint32 is safe because overflow requires over 100,000 years of typical
   // usage.
   std::atomic<uint32_t> session_id_ = 0;
+
+  scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner_;
 };
 
 }  // namespace blink

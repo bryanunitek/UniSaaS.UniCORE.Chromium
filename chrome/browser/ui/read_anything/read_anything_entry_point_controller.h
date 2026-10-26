@@ -11,7 +11,7 @@
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "ui/actions/actions.h"
 
-class ReadAnythingController;
+using read_anything::mojom::ReadAnythingOpenTrigger;
 
 namespace read_anything {
 
@@ -22,7 +22,6 @@ class ReadAnythingEntryPointController {
       delete;
   ReadAnythingEntryPointController& operator=(
       const ReadAnythingEntryPointController&) = delete;
-  ~ReadAnythingEntryPointController();
 
   // Toggles Reading Mode on or off.
   // This and other methods below can handle null `bwi`.

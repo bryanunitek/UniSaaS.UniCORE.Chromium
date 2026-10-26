@@ -13,10 +13,11 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
@@ -236,7 +237,7 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest,
 
   const webapps::AppId iwa_app_id = InstallIwaV1AndWait(bundle_id);
 
-  Browser* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
+  BrowserWindowInterface* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
   ASSERT_NE(iwa_browser, nullptr);
 
   IsolatedWebAppUrlInfo iwa_url_info =
@@ -267,7 +268,8 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest,
   manifest_observer.BeginListening({sub_app_id});
 
   // Launch the browser. It will load the updated HTML from the new bundle.
-  Browser* sub_app_browser = LaunchWebAppBrowserAndWait(sub_app_id);
+  BrowserWindowInterface* sub_app_browser =
+      LaunchWebAppBrowserAndWait(sub_app_id);
   ASSERT_NE(sub_app_browser, nullptr);
 
   manifest_observer.Wait();
@@ -312,7 +314,7 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest,
 
   const webapps::AppId iwa_app_id = InstallIwaV1AndWait(bundle_id);
 
-  Browser* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
+  BrowserWindowInterface* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
   ASSERT_NE(iwa_browser, nullptr);
 
   IsolatedWebAppUrlInfo iwa_url_info =
@@ -344,7 +346,8 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest,
       &provider().install_manager());
   manifest_observer.BeginListening({sub_app_id});
 
-  Browser* sub_app_browser = LaunchWebAppBrowserAndWait(sub_app_id);
+  BrowserWindowInterface* sub_app_browser =
+      LaunchWebAppBrowserAndWait(sub_app_id);
   ASSERT_NE(sub_app_browser, nullptr);
   manifest_observer.Wait();
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
@@ -459,7 +462,7 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest, SubAppScopeOverlap) {
       IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(bundle_id);
   webapps::AppId iwa_app_id = iwa_url_info.app_id();
 
-  Browser* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
+  BrowserWindowInterface* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
   ASSERT_NE(iwa_browser, nullptr);
 
   webapps::AppId sub_app_1_id = InstallSubAppAndWait(
@@ -569,7 +572,8 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest, SubAppScopeOverlap) {
 
   // Now launch Sub App 2 to trigger its manifest update check.
   // We expect the update to fail due to scope overlap validation.
-  Browser* sub_app_2_browser = LaunchWebAppBrowserAndWait(sub_app_2_id);
+  BrowserWindowInterface* sub_app_2_browser =
+      LaunchWebAppBrowserAndWait(sub_app_2_id);
   ASSERT_NE(sub_app_2_browser, nullptr);
 
   EXPECT_TRUE(
@@ -646,7 +650,7 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest, SubAppParentInScope) {
       IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(bundle_id);
   webapps::AppId iwa_app_id = iwa_url_info.app_id();
 
-  Browser* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
+  BrowserWindowInterface* iwa_browser = LaunchWebAppBrowserAndWait(iwa_app_id);
   ASSERT_NE(iwa_browser, nullptr);
 
   webapps::AppId sub_app_1_id = InstallSubAppAndWait(
@@ -720,7 +724,8 @@ IN_PROC_BROWSER_TEST_F(SubAppUpdateBrowserTest, SubAppParentInScope) {
 
   // Now launch Sub App to trigger its manifest update check.
   // We expect the update to fail due to scope overlap validation.
-  Browser* sub_app_1_browser = LaunchWebAppBrowserAndWait(sub_app_1_id);
+  BrowserWindowInterface* sub_app_1_browser =
+      LaunchWebAppBrowserAndWait(sub_app_1_id);
   ASSERT_NE(sub_app_1_browser, nullptr);
 
   EXPECT_TRUE(

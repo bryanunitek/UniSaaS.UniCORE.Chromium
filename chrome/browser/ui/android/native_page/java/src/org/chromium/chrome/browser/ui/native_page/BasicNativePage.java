@@ -4,7 +4,7 @@
 
 package org.chromium.chrome.browser.ui.native_page;
 
-import android.graphics.Rect;
+import android.util.Pair;
 import android.view.View;
 import android.view.View.OnAttachStateChangeListener;
 import android.widget.FrameLayout.LayoutParams;
@@ -14,7 +14,6 @@ import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandlerRegistry;
@@ -28,12 +27,12 @@ import org.chromium.content_public.browser.LoadUrlParams;
  */
 @NullMarked
 public abstract class BasicNativePage implements NativePage, OnAttachStateChangeListener {
-    private final NativePageHost mHost;
+    protected final NativePageHost mHost;
     private final int mBackgroundColor;
     private @Nullable BackPressHandler mBackPressHandler;
     private @Nullable BackPressHandlerRegistry mRegistry;
-    private final SettableMonotonicObservableSupplier<Rect> mBrowserControlsMarginsSupplier =
-            ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<Pair<Integer, Integer>>
+            mBrowserControlsMarginsSupplier = ObservableSuppliers.createMonotonic();
     private @Nullable Destroyable mMarginsAdapter;
 
     private @Nullable View mView;
@@ -138,11 +137,23 @@ public abstract class BasicNativePage implements NativePage, OnAttachStateChange
     }
 
     /** Updates the top margin depending on whether the browser controls are shown or hidden. */
-    private void updateMargins(Rect margins) {
-        LayoutParams layoutParams =
+    private void updateMargins(Pair<Integer, Integer> margins) {
+        LayoutParams newlayoutParams =
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
-        layoutParams.setMargins(margins.left, margins.top, margins.left, margins.bottom);
-        getView().setLayoutParams(layoutParams);
+
+        int topMargin = margins.first;
+        int bottomMargin = margins.second;
+
+        int leftMargin = 0;
+        int rightMargin = 0;
+        LayoutParams oldlayoutParams = (LayoutParams) getView().getLayoutParams();
+        if (oldlayoutParams != null) {
+            leftMargin = oldlayoutParams.leftMargin;
+            rightMargin = oldlayoutParams.rightMargin;
+        }
+
+        newlayoutParams.setMargins(leftMargin, topMargin, rightMargin, bottomMargin);
+        getView().setLayoutParams(newlayoutParams);
     }
 
     public @Nullable SmoothTransitionDelegate getSmoothTransitionDelegateForTesting() {
@@ -159,10 +170,6 @@ public abstract class BasicNativePage implements NativePage, OnAttachStateChange
      */
     protected void setBackPressHandler(
             BackPressHandler handler, BackPressHandlerRegistry registry) {
-        if (!ChromeFeatureList.isEnabled(
-                ChromeFeatureList.ENABLE_ESCAPE_HANDLING_FOR_SECONDARY_ACTIVITIES)) {
-            return;
-        }
         assert mView != null : "setBackPressHandler must be called after initWithView()";
         mBackPressHandler = handler;
         mRegistry = registry;

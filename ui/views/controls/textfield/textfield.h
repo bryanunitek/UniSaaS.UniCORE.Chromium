@@ -19,6 +19,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -216,6 +217,11 @@ class VIEWS_EXPORT Textfield : public View,
   std::optional<ui::ColorId> text_color_id() const { return text_color_id_; }
   void SetTextColorId(std::optional<ui::ColorId> color_id);
 
+  std::optional<ui::ColorId> disabled_text_color_id() const {
+    return disabled_text_color_id_;
+  }
+  void SetDisabledTextColorId(std::optional<ui::ColorId> color_id);
+
   // Gets/sets the background color to be used when painting the Textfield.
   SkColor GetBackgroundColor() const;
   std::optional<ui::ColorVariant> background_color() const {
@@ -227,6 +233,10 @@ class VIEWS_EXPORT Textfield : public View,
   // whether a background is drawn for this view.
   bool GetBackgroundEnabled() const;
   void SetBackgroundEnabled(bool enabled);
+
+  // Gets the corner radius used for painting the background and highlight path.
+  float GetCornerRadius() const;
+  void SetCornerRadius(std::optional<float> corner_radius);
 
   // Gets/sets the selection text color to be used when painting the Textfield.
   SkColor GetSelectionTextColor() const;
@@ -443,6 +453,9 @@ class VIEWS_EXPORT Textfield : public View,
   // ui::SimpleMenuModel::Delegate overrides:
   bool IsCommandIdChecked(int command_id) const override;
   bool IsCommandIdEnabled(int command_id) const override;
+
+  static bool GetStandardAcceleratorForCommandId(int command_id,
+                                                 ui::Accelerator* accelerator);
   bool GetAcceleratorForCommandId(int command_id,
                                   ui::Accelerator* accelerator) const override;
   void ExecuteCommand(int command_id, int event_flags) override;
@@ -539,6 +552,14 @@ class VIEWS_EXPORT Textfield : public View,
   virtual bool SupportsLookUp() const;
 #endif
 
+  // Utility function to prepare the contents of the context menu.
+  // `controller` may be null. Returns ownership of platform-specific
+  // text services menu.
+  static std::unique_ptr<views::ViewsTextServicesContextMenu>
+  UpdateContextMenuContents(Textfield* textfield,
+                            TextfieldController* controller,
+                            ui::SimpleMenuModel* menu_contents);
+
  protected:
   TextfieldModel* textfield_model() { return model_.get(); }
 
@@ -550,6 +571,9 @@ class VIEWS_EXPORT Textfield : public View,
 
   // Returns the last click root location (relative to the root window).
   gfx::Point GetLastClickRootLocation() const;
+
+  // Returns the time stamp of the last click.
+  base::TimeTicks GetLastClickTime() const;
 
   // Called when PasteSelectionClipboard() is done reading text from the
   // clipboard. The callback is passed the result of the paste operation, i.e.
@@ -616,6 +640,9 @@ class VIEWS_EXPORT Textfield : public View,
   void UpdateAccessibleTextOffsetsIfNeeded();
 #endif  // BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
 
+  // Updates the painted background color.
+  void UpdateBackgroundColor();
+
  private:
   friend class TextfieldTestApi;
 
@@ -643,9 +670,6 @@ class VIEWS_EXPORT Textfield : public View,
   void PasteSelectionClipboard(
       base::OnceCallback<void(bool)> callback) override;
   void UpdateSelectionClipboard() override;
-
-  // Updates the painted background color.
-  void UpdateBackgroundColor();
 
   // Updates the border per the state of the textfield (i.e. Normal, Invalid,
   // Readonly, Disabled). This will not do anything if a custom border has been
@@ -757,8 +781,6 @@ class VIEWS_EXPORT Textfield : public View,
       ui::mojom::DragOperation& output_drag_op,
       std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
 
-  // Returns the corner radius of the text field.
-  float GetCornerRadius();
 
   // Prepares the Textfield for gesture scrolling by setting the drag start
   // state.
@@ -822,9 +844,12 @@ class VIEWS_EXPORT Textfield : public View,
 
   // Colors which override default system colors.
   std::optional<ui::ColorId> text_color_id_;
+  std::optional<ui::ColorId> disabled_text_color_id_;
   std::optional<ui::ColorVariant> background_color_;
   std::optional<ui::ColorId> selection_text_color_id_;
   std::optional<ui::ColorId> selection_background_color_id_;
+
+  std::optional<float> corner_radius_;
 
   // Text to display when empty and its color.
   std::u16string placeholder_text_;
@@ -1002,6 +1027,7 @@ class VIEWS_EXPORT Textfield : public View,
 BEGIN_VIEW_BUILDER(VIEWS_EXPORT, Textfield, View)
 VIEW_BUILDER_PROPERTY(std::optional<ui::ColorVariant>, BackgroundColor)
 VIEW_BUILDER_PROPERTY(bool, BackgroundEnabled)
+VIEW_BUILDER_PROPERTY(std::optional<float>, CornerRadius)
 VIEW_BUILDER_PROPERTY(TextfieldController*, Controller)
 VIEW_BUILDER_PROPERTY(bool, CursorEnabled)
 VIEW_BUILDER_PROPERTY(int, DefaultWidthInChars)

@@ -18,16 +18,16 @@
  * non-CrOS platforms. DO NOT add new uses of this element in non-CrOS Print
  * Preview.
  */
-import '//resources/cr_elements/cr_input/cr_input.js';
-import '//resources/cr_elements/cr_hidden_style.css.js';
-import '//resources/cr_elements/icons.html.js';
-import '//resources/cr_elements/cr_shared_style.css.js';
-import '//resources/cr_elements/cr_shared_vars.css.js';
+import '//resources/ash/common/cr_elements/cr_input/cr_input.js';
+import '//resources/ash/common/cr_elements/cr_hidden_style.css.js';
+import '//resources/ash/common/cr_elements/icons.html.js';
+import '//resources/ash/common/cr_elements/cr_shared_style.css.js';
+import '//resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import '//resources/polymer/v3_0/iron-dropdown/iron-dropdown.js';
-import '//resources/cr_elements/cr_icon/cr_icon.js';
+import '//resources/polymer/v3_0/iron-icon/iron-icon.js';
 import '//resources/polymer/v3_0/paper-spinner/paper-spinner-lite.js';
 
-import type {CrInputElement} from '//resources/cr_elements/cr_input/cr_input.js';
+import type {CrInputElement} from '//resources/ash/common/cr_elements/cr_input/cr_input.js';
 import type {IronDropdownElement} from '//resources/polymer/v3_0/iron-dropdown/iron-dropdown.js';
 import type {DomRepeatEvent} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -52,12 +52,6 @@ export class SearchableDropDownCrosElement extends PolymerElement {
 
   static get properties() {
     return {
-      autofocus: {
-        type: Boolean,
-        value: false,
-        reflectToAttribute: true,
-      },
-
       readonly: {
         type: Boolean,
         reflectToAttribute: true,
@@ -139,30 +133,29 @@ export class SearchableDropDownCrosElement extends PolymerElement {
     };
   }
 
-  override autofocus: boolean;
-  readonly: boolean;
-  errorMessageAllowed: boolean;
-  errorMessage: string;
-  loadingMessage: string;
-  placeholder: string;
-  invalid: boolean;
-  items: string[];
-  value: string;
-  label: string;
-  updateValueOnInput: boolean;
-  showLoading: boolean;
+  declare readonly: boolean;
+  declare errorMessageAllowed: boolean;
+  declare errorMessage: string;
+  declare loadingMessage: string;
+  declare placeholder: string;
+  declare invalid: boolean;
+  declare items: string[];
+  declare value: string;
+  declare label: string;
+  declare updateValueOnInput: boolean;
+  declare showLoading: boolean;
 
-  private searchTerm_: string;
-  private dropdownRefitPending_: boolean;
-  private opened_: boolean;
+  declare private searchTerm_: string;
+  declare private dropdownRefitPending_: boolean;
+  declare private opened_: boolean;
   private openDropdownTimeoutId_: number = 0;
   private resizeObserver_: ResizeObserver|null = null;
-  private pointerDownListener_: (e: Event) => void;
+  private pointerDownListener_:
+      (e: Event) => void = (e: Event) => this.onPointerDown_(e);
 
   override connectedCallback() {
     super.connectedCallback();
 
-    this.pointerDownListener_ = this.onPointerDown_.bind(this);
     document.addEventListener('pointerdown', this.pointerDownListener_);
     this.resizeObserver_ = new ResizeObserver(() => {
       this.resizeDropdown_();

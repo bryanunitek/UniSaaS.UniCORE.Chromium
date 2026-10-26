@@ -9,11 +9,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import static org.chromium.ui.hierarchicalmenu.HierarchicalMenuTestUtils.ALL_MENU_ITEM_KEYS;
 import static org.chromium.ui.hierarchicalmenu.HierarchicalMenuTestUtils.ALL_SUBMENU_ITEM_KEYS;
@@ -31,26 +29,33 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.View.MeasureSpec;
 import android.view.View.OnClickListener;
+import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.ui.base.DeviceInput;
+import org.chromium.ui.base.UiAndroidFeatures;
+import org.chromium.ui.hierarchicalmenu.FlyoutController.FlyoutHandler;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController.SubmenuHeaderFactory;
 import org.chromium.ui.modelutil.ListObservable;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -69,11 +74,13 @@ public class HierarchicalMenuControllerUnitTest {
 
     @Mock private OnClickListener mItemClickListener;
     @Mock private Runnable mDismissDialog;
-    @Mock private View mParentView;
-    @Mock private ListView mHeaderListView;
-    @Mock private ListView mListView;
     @Mock private ListObservable.ListObserver<Void> mListObserver;
+    @Mock private FlyoutHandler<Object> mFlyoutHandler;
+    @Mock private Object mMainPopup;
 
+    private View mParentView;
+    private ListView mHeaderListView;
+    private ListView mListView;
     private final ModelList mHeaderModelList = new ModelList();
     private final ModelList mModelList = new ModelList();
     private ListItem mListItemWithModelClickCallback;
@@ -86,6 +93,11 @@ public class HierarchicalMenuControllerUnitTest {
     @Before
     public void setUp() {
         Context context = ContextUtils.getApplicationContext();
+        mParentView = new View(context);
+        mParentView.setFocusable(true);
+        mParentView.setFocusableInTouchMode(true);
+        mHeaderListView = createListView(context);
+        mListView = createListView(context);
 
         HierarchicalMenuKeyProvider keyProvider = HierarchicalMenuTestUtils.createKeyProvider();
         SubmenuHeaderFactory headerFactory =
@@ -154,9 +166,6 @@ public class HierarchicalMenuControllerUnitTest {
                                 .with(IS_HIGHLIGHTED, false)
                                 .build());
         mModelList.add(mListItemWithoutModelClickCallback);
-
-        when(mListView.getContext()).thenReturn(context);
-        when(mParentView.getContext()).thenReturn(context);
     }
 
     @Test
@@ -300,6 +309,70 @@ public class HierarchicalMenuControllerUnitTest {
     }
 
     @Test
+    public void handleBackPress_drillDownNavigation_popsSubmenuStack() {
+        mController.setupCallbacks(/* headerModelList= */ null, mModelList, mDismissDialog);
+        assertFalse(
+                "handleBackPress should return false at root level", mController.handleBackPress());
+        assertFalse(
+                "Back press supplier should yield false at root level",
+                mController.getHandleBackPressChangedSupplier().get());
+
+        // Click into submenu 0.
+        activateClickListener(mSubmenuLevel0);
+        assertEquals("Expected 3 items inside submenu 0", 3, mModelList.size());
+        assertTrue(
+                "Back press supplier should yield true when inside drill-down submenu",
+                mController.getHandleBackPressChangedSupplier().get());
+
+        // Call {@link handleBackPress()} instead of clicking header.
+        assertTrue(
+                "handleBackPress should return true and navigate back",
+                mController.handleBackPress());
+        assertEquals("Expected 2 items after navigating back to root", 2, mModelList.size());
+        assertFalse(
+                "handleBackPress should return false once back at root level",
+                mController.handleBackPress());
+        assertFalse(
+                "Back press supplier should yield false after navigating back to root level",
+                mController.getHandleBackPressChangedSupplier().get());
+    }
+
+    @Test
+    public void handleBackPress_multiLevelDrillDown_popsSubmenuStackInOrder() {
+        mController.setupCallbacks(/* headerModelList= */ null, mModelList, mDismissDialog);
+        assertFalse(mController.getHandleBackPressChangedSupplier().get());
+
+        // Navigate to level 0.
+        activateClickListener(mSubmenuLevel0);
+        assertEquals(3, mModelList.size());
+        assertTrue(mController.getHandleBackPressChangedSupplier().get());
+
+        // Navigate to level 1.
+        activateClickListener(mSubmenuLevel1);
+        assertEquals(2, mModelList.size());
+        assertTrue(mController.getHandleBackPressChangedSupplier().get());
+
+        // First back press: pops level 1, returns to level 0.
+        assertTrue("First handleBackPress should pop to level 0", mController.handleBackPress());
+        assertEquals("Expected 3 items in level 0", 3, mModelList.size());
+        assertTrue(
+                "Back press supplier should remain true at submenu level 0",
+                mController.getHandleBackPressChangedSupplier().get());
+
+        // Second back press: pops level 0, returns to root level.
+        assertTrue(
+                "Second handleBackPress should pop to root level", mController.handleBackPress());
+        assertEquals("Expected 2 items in root level", 2, mModelList.size());
+        assertFalse(
+                "Back press supplier should be false at root level",
+                mController.getHandleBackPressChangedSupplier().get());
+
+        // Third back press: stack empty.
+        assertFalse(
+                "handleBackPress should return false at root level", mController.handleBackPress());
+    }
+
+    @Test
     public void testSubmenuObserver_notifiedOnLoad() {
         mController.setupCallbacks(mHeaderModelList, mModelList, mDismissDialog);
 
@@ -406,15 +479,23 @@ public class HierarchicalMenuControllerUnitTest {
 
         mController.setupCallbacks(mHeaderModelList, mModelList, mDismissDialog);
 
+        scrollListViewTo(mListView, 5);
+        scrollListViewTo(mHeaderListView, 5);
+        List<Integer> positionsOnFocus = new ArrayList<>();
+        // setSelection() only takes effect on the next layout, so lay out when focus arrives.
+        mParentView.setOnFocusChangeListener(
+                (v, hasFocus) -> {
+                    positionsOnFocus.add(layoutAndGetFirstVisiblePosition(mListView));
+                    positionsOnFocus.add(layoutAndGetFirstVisiblePosition(mHeaderListView));
+                });
+
         // Click into submenu 0
         activateClickListener(mSubmenuLevel0);
 
-        // Assert correct a11y behavior
-        verify(mParentView).setAccessibilityPaneTitle(SUBMENU_LEVEL_0);
-        InOrder inOrder = inOrder(mParentView, mHeaderListView, mListView);
-        inOrder.verify(mListView).setSelection(0);
-        inOrder.verify(mHeaderListView).setSelection(0);
-        inOrder.verify(mParentView).requestFocus();
+        // Assert correct a11y behavior: lists are scrolled to the top before the pane is focused.
+        assertEquals(SUBMENU_LEVEL_0, mParentView.getAccessibilityPaneTitle());
+        assertTrue(mParentView.isFocused());
+        assertEquals(List.of(0, 0), positionsOnFocus);
     }
 
     @Test
@@ -431,14 +512,19 @@ public class HierarchicalMenuControllerUnitTest {
 
         mController.setupCallbacks(/* headerModelList= */ null, mModelList, mDismissDialog);
 
+        scrollListViewTo(mListView, 5);
+        List<Integer> positionsOnFocus = new ArrayList<>();
+        // setSelection() only takes effect on the next layout, so lay out when focus arrives.
+        mParentView.setOnFocusChangeListener(
+                (v, hasFocus) -> positionsOnFocus.add(layoutAndGetFirstVisiblePosition(mListView)));
+
         // Click into submenu 0
         activateClickListener(mSubmenuLevel0);
 
-        // Assert correct a11y behavior
-        verify(mParentView).setAccessibilityPaneTitle(SUBMENU_LEVEL_0);
-        InOrder inOrder = inOrder(mParentView, mListView);
-        inOrder.verify(mListView).setSelection(0);
-        inOrder.verify(mParentView).requestFocus();
+        // Assert correct a11y behavior: lists are scrolled to the top before the pane is focused.
+        assertEquals(SUBMENU_LEVEL_0, mParentView.getAccessibilityPaneTitle());
+        assertTrue(mParentView.isFocused());
+        assertEquals(List.of(0), positionsOnFocus);
     }
 
     @Test
@@ -564,6 +650,54 @@ public class HierarchicalMenuControllerUnitTest {
                         mainPopupRect, windowWidth, minSpacing, minMargin, menuMaxWidth));
     }
 
+    @Test
+    @EnableFeatures(UiAndroidFeatures.SUBMENU_TYPE_OVERRIDE + ":force_drilldown/false")
+    public void shouldUseDrillDown_forceFlyoutIfSupported_whenSupported() {
+        DeviceInput.setSupportsPrecisionPointerForTesting(false);
+        mController.setupFlyoutController(
+                mFlyoutHandler, mMainPopup, (listener) -> {}, /* drillDownOverrideValue= */ null);
+
+        assertFalse(
+                "Should use flyout when flag forces flyout and component supports flyout.",
+                mController.shouldUseDrillDown());
+    }
+
+    @Test
+    @EnableFeatures(UiAndroidFeatures.SUBMENU_TYPE_OVERRIDE + ":force_drilldown/false")
+    public void shouldUseDrillDown_forceFlyoutIfSupported_whenNotSupported() {
+        DeviceInput.setSupportsPrecisionPointerForTesting(true);
+        // Do not call setupFlyoutController so mFlyoutController remains null.
+
+        assertTrue(
+                "Should still use drilldown when component does not support flyout.",
+                mController.shouldUseDrillDown());
+    }
+
+    @Test
+    @EnableFeatures(UiAndroidFeatures.SUBMENU_TYPE_OVERRIDE + ":force_drilldown/true")
+    public void shouldUseDrillDown_forceDrilldown() {
+        DeviceInput.setSupportsPrecisionPointerForTesting(true);
+        mController.setupFlyoutController(
+                mFlyoutHandler, mMainPopup, (listener) -> {}, /* drillDownOverrideValue= */ null);
+
+        assertTrue(
+                "Should use drilldown when flag forces drilldown.",
+                mController.shouldUseDrillDown());
+    }
+
+    @Test
+    @DisableFeatures(UiAndroidFeatures.SUBMENU_TYPE_OVERRIDE)
+    public void shouldUseDrillDown_defaultFlagUsesPointerCheck() {
+        DeviceInput.setSupportsPrecisionPointerForTesting(false);
+        mController.setupFlyoutController(
+                mFlyoutHandler, mMainPopup, (listener) -> {}, /* drillDownOverrideValue= */ null);
+
+        assertTrue(
+                "Should use drilldown when precision pointer is not supported and flag is"
+                        + " disabled.",
+                mController.shouldUseDrillDown());
+    }
+
     private void triggerHoverEnter(ListItem item, int level, List<ListItem> path) {
         mController.handleHoverEvent(
                 createHoverEnterEvent(), item, mListView, level, path, () -> {});
@@ -579,5 +713,26 @@ public class HierarchicalMenuControllerUnitTest {
 
     private static CharSequence getTitle(ListItem item) {
         return item.model.get(TITLE);
+    }
+
+    private static ListView createListView(Context context) {
+        List<String> items = new ArrayList<>();
+        for (int i = 0; i < 10; i++) items.add("Item " + i);
+        ListView listView = new ListView(context);
+        listView.setAdapter(
+                new ArrayAdapter<>(context, android.R.layout.simple_list_item_1, items));
+        return listView;
+    }
+
+    private static void scrollListViewTo(ListView listView, int position) {
+        listView.setSelection(position);
+        assertEquals(position, layoutAndGetFirstVisiblePosition(listView));
+    }
+
+    private static int layoutAndGetFirstVisiblePosition(ListView listView) {
+        int spec = MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY);
+        listView.measure(spec, spec);
+        listView.layout(0, 0, 100, 100);
+        return listView.getFirstVisiblePosition();
     }
 }

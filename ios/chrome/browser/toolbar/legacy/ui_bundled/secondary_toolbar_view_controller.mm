@@ -173,11 +173,11 @@
       hasBottomSafeArea ? kBottomAdaptiveLocationBarVerticalMarginFullscreen
                         : 0;
 
-  return AlignValueToPixel((kBottomAdaptiveLocationBarTopMargin * progress +
-                            fullscreenMargin * (1 - progress)) *
-                               clampedFontSizeMultiplier +
-                           (clampedFontSizeMultiplier - 1) *
-                               kLocationBarVerticalMarginDynamicType);
+  return AlignValueToLowerPixel(
+      (kBottomAdaptiveLocationBarTopMargin * progress +
+       fullscreenMargin * (1 - progress)) *
+          clampedFontSizeMultiplier +
+      (clampedFontSizeMultiplier - 1) * kLocationBarVerticalMarginDynamicType);
 }
 
 /// Updates keyboard constraints with `notification`. When
@@ -366,6 +366,11 @@
   [super setLocationBarViewController:locationBarViewController];
   if (!self.hasOmnibox && self.locationIndicatorActive) {
     self.locationIndicatorActive = NO;
+    [self.toolbarHeightDelegate
+        adjustSecondaryToolbarForKeyboardHeight:0
+                                    isCollapsed:NO
+                                       duration:0
+                                          curve:UIViewAnimationCurveEaseInOut];
   }
 }
 

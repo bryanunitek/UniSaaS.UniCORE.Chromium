@@ -14,6 +14,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/devtools/chrome_devtools_session.h"
 #include "chrome/browser/devtools/device/android_device_manager.h"
 #include "chrome/browser/devtools/device/tcp_device_provider.h"
@@ -24,6 +25,8 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/devtools/protocol/target_handler.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -31,7 +34,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -48,6 +51,7 @@
 #include "components/guest_view/browser/guest_view_base.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -62,7 +66,9 @@
 #include "extensions/browser/view_type_utils.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/mojom/view_type.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/switches.h"
 #include "ui/views/controls/webview/webview.h"
 
@@ -182,7 +188,7 @@ ChromeDevToolsManagerDelegate* ChromeDevToolsManagerDelegate::GetInstance() {
 }
 
 ChromeDevToolsManagerDelegate::ChromeDevToolsManagerDelegate() {
-  DCHECK(!g_instance);
+  CHECK(!g_instance, base::NotFatalUntil::M161);
   g_instance = this;
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -218,7 +224,7 @@ ChromeDevToolsManagerDelegate::ChromeDevToolsManagerDelegate() {
 }
 
 ChromeDevToolsManagerDelegate::~ChromeDevToolsManagerDelegate() {
-  DCHECK(g_instance == this);
+  CHECK(g_instance == this, base::NotFatalUntil::M161);
   g_instance = nullptr;
   if (infobar_) {
     infobar_->Close();
@@ -402,8 +408,12 @@ bool ChromeDevToolsManagerDelegate::AllowInspectingRenderFrameHost(
     content::RenderFrameHost* rfh) {
   Profile* profile =
       Profile::FromBrowserContext(rfh->GetProcess()->GetBrowserContext());
-  return IsInspectionAllowed(profile,
-                             content::WebContents::FromRenderFrameHost(rfh));
+  if (!profile) {
+    return true;
+  }
+  // Evaluate policy for the specific RenderFrameHost so target-level URL
+  // restrictions apply to both main frames and subframes.
+  return IsInspectionAllowed(profile, rfh);
 }
 
 bool ChromeDevToolsManagerDelegate::AllowInspectingTarget(
@@ -420,7 +430,7 @@ bool ChromeDevToolsManagerDelegate::AllowInspectingTarget(
 
 void ChromeDevToolsManagerDelegate::ClientAttached(
     content::DevToolsAgentHostClientChannel* channel) {
-  DCHECK(sessions_.find(channel) == sessions_.end());
+  CHECK(sessions_.find(channel) == sessions_.end(), base::NotFatalUntil::M161);
   sessions_.emplace(channel, std::make_unique<ChromeDevToolsSession>(channel));
 }
 
@@ -433,9 +443,13 @@ scoped_refptr<DevToolsAgentHost> ChromeDevToolsManagerDelegate::CreateNewTarget(
     const GURL& url,
     DevToolsManagerDelegate::TargetType target_type,
     bool new_window) {
-  NavigateParams params(ProfileManager::GetLastUsedProfile(), url,
-                        ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Profile* profile = ProfileManager::GetLastUsedProfile();
+  if (!profile) {
+    // The last used profile can't be loaded.
+    return nullptr;
+  }
+  NavigateParams params(profile, url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
   if (!params.navigated_or_inserted_contents)
     return nullptr;
@@ -446,7 +460,7 @@ scoped_refptr<DevToolsAgentHost> ChromeDevToolsManagerDelegate::CreateNewTarget(
                    params.navigated_or_inserted_contents);
 }
 
-std::vector<content::BrowserContext*>
+std::vector<base::WeakPtr<content::BrowserContext>>
 ChromeDevToolsManagerDelegate::GetBrowserContexts() {
   return DevToolsBrowserContextManager::GetInstance().GetBrowserContexts();
 }
@@ -455,6 +469,12 @@ content::BrowserContext*
 ChromeDevToolsManagerDelegate::GetDefaultBrowserContext() {
   return DevToolsBrowserContextManager::GetInstance()
       .GetDefaultBrowserContext();
+}
+
+content::BrowserContext* ChromeDevToolsManagerDelegate::GetBrowserContext(
+    const std::string& context_id) {
+  return DevToolsBrowserContextManager::GetInstance().GetProfileById(
+      context_id);
 }
 
 content::BrowserContext* ChromeDevToolsManagerDelegate::CreateBrowserContext() {
@@ -531,15 +551,35 @@ void ChromeDevToolsManagerDelegate::AcceptDebugging(AcceptCallback callback) {
         std::move(inner_callback).Run(result);
       },
       std::move(callback));
+  Profile* profile = Profile::FromBrowserContext(GetDefaultBrowserContext());
+  ProfileBrowserCollection* collection =
+      profile ? ProfileBrowserCollection::GetForProfile(profile) : nullptr;
   BrowserWindowInterface* last_active =
-      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
-  DevToolsConnectionDialog::Show(
-      last_active ? last_active->GetBrowserForMigrationOnly() : nullptr,
-      std::move(wrapped_callback));
+      collection ? collection->GetLastActiveBrowser() : nullptr;
+  DevToolsConnectionDialog::Show(last_active, std::move(wrapped_callback));
 }
 
 void ChromeDevToolsManagerDelegate::SetActiveWebSocketConnections(
     size_t count) {
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::
+              DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE)) {
+    auto* browser_infobar_manager =
+        infobars::BrowserInfoBarManager::From(g_browser_process);
+    CHECK(browser_infobar_manager);
+
+    if (count == 0) {
+      browser_infobar_manager->Hide(
+          infobars::InfoBarDelegate::
+              DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE);
+    } else {
+      browser_infobar_manager->ShowGlobally(
+          infobars::InfoBarDelegate::
+              DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE);
+    }
+    return;
+  }
+
   if (count == 0 && infobar_) {
     // We need to reset the pointer to the infobar before closing it because
     // closing the infobar deletes it.

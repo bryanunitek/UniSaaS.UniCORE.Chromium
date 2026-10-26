@@ -4,6 +4,8 @@
 
 #include "chrome/browser/devtools/devtools_select_file_dialog.h"
 
+#include "base/files/file_util.h"
+#include "build/build_config.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "content/public/browser/web_contents.h"
@@ -24,7 +26,21 @@ void DevToolsSelectFileDialog::SelectFile(content::WebContents* web_contents,
 
 void DevToolsSelectFileDialog::FileSelected(const ui::SelectedFileInfo& file,
                                             int index) {
-  std::move(selected_callback_).Run(file);
+  ui::SelectedFileInfo selected_file = file;
+#if BUILDFLAG(IS_ANDROID)
+  // DevTools workspace and file operations append relative paths to the root
+  // path (e.g., `path.Append("example.com/index.html")`). Raw Android SAF
+  // `content://` URIs cannot be safely concatenated with relative subpaths.
+  // Resolving to a VirtualDocumentPath (`/SAF/...`) allows standard FilePath
+  // operations while resolving under the hood to valid document URIs.
+  if (selected_file.file_path.IsContentUri()) {
+    if (auto vp = base::ResolveToVirtualDocumentPath(selected_file.file_path)) {
+      selected_file.file_path = *vp;
+      selected_file.local_path = *vp;
+    }
+  }
+#endif
+  std::move(selected_callback_).Run(selected_file);
   delete this;
 }
 
@@ -54,9 +70,11 @@ void DevToolsSelectFileDialog::Show(content::WebContents* web_contents,
                                     const base::FilePath& default_path) {
   base::FilePath::StringType ext;
   ui::SelectFileDialog::FileTypeInfo file_type_info;
+  // Platform file pickers, notably on Mac and Windows, tend to break with
+  // double extensions like .json.gz, so only pass in the final extension.
   if (type == ui::SelectFileDialog::SELECT_SAVEAS_FILE &&
-      default_path.Extension().length() > 0) {
-    ext = default_path.Extension().substr(1);
+      default_path.FinalExtension().length() > 0) {
+    ext = default_path.FinalExtension().substr(1);
     file_type_info.extensions.resize(1);
     file_type_info.extensions[0].push_back(ext);
   }

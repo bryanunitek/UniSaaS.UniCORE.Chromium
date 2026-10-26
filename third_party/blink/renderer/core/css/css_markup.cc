@@ -29,11 +29,13 @@
 #include "third_party/blink/renderer/core/css/css_markup.h"
 
 #include "third_party/blink/renderer/core/css/css_url_data.h"
+#include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_idioms.h"
 #include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
 #include "third_party/blink/renderer/platform/fonts/font_family.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -138,7 +140,7 @@ static void SerializeCharacter(UChar32 c, StringBuilder& append_to) {
 }
 
 static void SerializeCharacterAsCodePoint(UChar32 c, StringBuilder& append_to) {
-  append_to.AppendFormat("\\%x ", c);
+  FormatTo(append_to, "\\{:x} ", c);
 }
 
 void SerializeIdentifier(const String& identifier,
@@ -227,6 +229,26 @@ String SerializeFontFamily(const AtomicString& string) {
   return css_parsing_utils::FontFamilyNeedsQuoting(string)
              ? SerializeString(string)
              : string;
+}
+
+void AppendDescriptorIfNotEmpty(StringBuilder& result,
+                                const char* name,
+                                const String& value) {
+  if (!value.empty()) {
+    result.Append(" ");
+    result.Append(name);
+    result.Append(": ");
+    result.Append(value);
+    result.Append(";");
+  }
+}
+
+void AppendDescriptorIfNotEmpty(StringBuilder& result,
+                                const char* name,
+                                const CSSValue* value) {
+  if (value) {
+    AppendDescriptorIfNotEmpty(result, name, value->CssText());
+  }
 }
 
 }  // namespace blink

@@ -18,6 +18,7 @@ import org.chromium.build.annotations.Contract;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.url_formatter.UrlFormatter;
+import org.chromium.content_public.common.ContentUrlConstants;
 import org.chromium.url.GURL;
 
 import java.util.ArrayList;
@@ -126,8 +127,26 @@ public class UrlUtilities {
     }
 
     /**
-     * @param url A URL.
+     * Returns whether the URL's scheme is for a chrome page.
      *
+     * @param gurl A GURL.
+     */
+    public static boolean isChromeScheme(@Nullable GURL gurl) {
+        return gurl != null && isChromeScheme(gurl.getScheme());
+    }
+
+    /**
+     * Returns whether the scheme represented by the given string is for a chrome page.
+     *
+     * @param scheme A scheme string.
+     */
+    public static boolean isChromeScheme(@Nullable String scheme) {
+        return UrlConstants.CHROME_SCHEME.equalsIgnoreCase(scheme)
+                || UrlConstants.CHROME_NATIVE_SCHEME.equalsIgnoreCase(scheme);
+    }
+
+    /**
+     * @param url A URL.
      * @return Whether the URL's scheme is HTTP or HTTPS.
      */
     public static boolean isHttpOrHttps(GURL url) {
@@ -308,6 +327,7 @@ public class UrlUtilities {
         if (!gurl.isValid() || !isInternalScheme(gurl)) return false;
         return UrlConstants.NTP_HOST.equals(gurl.getHost())
                 || UrlConstants.NEW_TAB_PAGE_HOST.equals(gurl.getHost())
+                || UrlConstants.NEW_TAB_PAGE_THIRD_PARTY_HOST.equals(gurl.getHost())
                 || UrlConstants.NEW_TAB_PAGE_URL_LEGACY.equals(gurl.getValidSpecOrEmpty());
     }
 
@@ -330,6 +350,18 @@ public class UrlUtilities {
     }
 
     /**
+     * @param url The GURL to check.
+     * @return Whether the passed in URL is for the NTP or about:blank.
+     */
+    public static boolean isNtpOrAboutBlank(@Nullable GURL url) {
+        if (url == null) return false;
+        String urlString = url.getValidSpecOrEmpty();
+        return isNtpUrl(url)
+                || TextUtils.equals(urlString, ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL)
+                || TextUtils.equals(urlString, ContentUrlConstants.ABOUT_BLANK_URL);
+    }
+
+    /**
      * @param url The URL to check whether it is for the Chrome native pages.
      * @return Whether the passed in URL is used to render a chrome native page.
      */
@@ -340,7 +372,7 @@ public class UrlUtilities {
 
     /**
      * Returns whether the url matches an NTP URL exactly. This is used to support features showing
-     * the omnibox before native is loaded. Prefer using {@see #isNtpUrl(GURL gurl)} when native is
+     * the omnibox before native is loaded. Prefer using {@link #isNtpUrl(GURL gurl)} when native is
      * loaded.
      *
      * @param url The current URL to compare.

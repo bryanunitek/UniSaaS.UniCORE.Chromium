@@ -32,14 +32,14 @@ public class ActionChipsProcessor {
     }
 
     /**
-     * Setup ActionChips for the suggestion.
+     * Sets up ActionChips for the suggestion.
      *
      * @param suggestion The suggestion to process.
      * @param model Property model to update.
      * @param position The position of the suggestion with OmniboxAction(s) on the suggestion list.
      */
     public void populateModel(AutocompleteMatch suggestion, PropertyModel model, int position) {
-        if (suggestion.getActions().isEmpty()) {
+        if (suggestion.getActions().isEmpty() || suggestion.getTakeoverAction() != null) {
             model.set(ActionChipsProperties.ACTION_CHIPS, null);
             return;
         }
@@ -82,7 +82,7 @@ public class ActionChipsProcessor {
         model.set(ActionChipsProperties.ACTION_CHIPS, modelList);
     }
 
-    /** Invoke action associated with the ActionChip. */
+    /** Invokes the action associated with the ActionChip. */
     private void executeAction(OmniboxAction action, int position) {
         mSuggestionHost.onOmniboxActionClicked(action, position);
     }

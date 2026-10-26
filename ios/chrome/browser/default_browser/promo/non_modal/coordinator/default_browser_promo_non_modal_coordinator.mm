@@ -10,6 +10,7 @@
 #import "ios/chrome/browser/default_browser/model/features.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
 #import "ios/chrome/browser/default_browser/promo/non_modal/public/default_browser_promo_non_modal_commands.h"
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/infobars/ui_bundled/banners/infobar_banner_view_controller.h"
 #import "ios/chrome/browser/infobars/ui_bundled/coordinators/infobar_coordinator+subclassing.h"
@@ -46,8 +47,8 @@
                                    browser:browser
                                       type:InfobarType::kInfobarTypeConfirm];
   if (self) {
-    CHECK(viewController, base::NotFatalUntil::M145);
-    CHECK(browser, base::NotFatalUntil::M145);
+    CHECK(viewController);
+    CHECK(browser);
     self.shouldUseDefaultDismissal = NO;
     _promoReason = promoReason;
   }
@@ -160,8 +161,20 @@
 - (NSString*)defaultBrowserNonModalSubtitleForPromoReason {
   switch (_promoReason) {
     case NonModalDefaultBrowserPromoReason::PromoReasonOmniboxPaste:
-      return l10n_util::GetNSString(
-          IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION);
+      if (IsDefaultBrowserNonModalPromoStringsEnabled()) {
+        switch (GetDefaultBrowserNonModalPromoStringsArm()) {
+          case DefaultBrowserNonModalPromoStringsArm::kSkipCopyPaste:
+            return l10n_util::GetNSString(
+                IDS_IOS_DEFAULT_BROWSER_NON_MODAL_PROMO_STRINGS_SKIP_COPY_PASTE_SUBTITLE);
+          case DefaultBrowserNonModalPromoStringsArm::kFewerSteps:
+            return l10n_util::GetNSString(
+                IDS_IOS_DEFAULT_BROWSER_NON_MODAL_PROMO_STRINGS_FEWER_STEPS_SUBTITLE);
+        }
+      }
+      return l10n_util::GetNSString([self
+          stringIdForOmniboxPasteExperimentWithDefaultId:
+              IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION
+                                                 isTitle:NO]);
     case NonModalDefaultBrowserPromoReason::PromoReasonAppSwitcher:
       return l10n_util::GetNSString(
           IDS_IOS_DEFAULT_BROWSER_NON_MODAL_1P_APP_DESCRIPTION);
@@ -178,8 +191,20 @@
 - (NSString*)defaultBrowserNonModalTitleForPromoReason {
   switch (_promoReason) {
     case NonModalDefaultBrowserPromoReason::PromoReasonOmniboxPaste:
-      return l10n_util::GetNSString(
-          IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE);
+      if (IsDefaultBrowserNonModalPromoStringsEnabled()) {
+        switch (GetDefaultBrowserNonModalPromoStringsArm()) {
+          case DefaultBrowserNonModalPromoStringsArm::kSkipCopyPaste:
+            return l10n_util::GetNSString(
+                IDS_IOS_DEFAULT_BROWSER_NON_MODAL_PROMO_STRINGS_SKIP_COPY_PASTE_TITLE);
+          case DefaultBrowserNonModalPromoStringsArm::kFewerSteps:
+            return l10n_util::GetNSString(
+                IDS_IOS_DEFAULT_BROWSER_NON_MODAL_PROMO_STRINGS_FEWER_STEPS_TITLE);
+        }
+      }
+      return l10n_util::GetNSString([self
+          stringIdForOmniboxPasteExperimentWithDefaultId:
+              IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE
+                                                 isTitle:YES]);
     case NonModalDefaultBrowserPromoReason::PromoReasonAppSwitcher:
       return l10n_util::GetNSString(
           IDS_IOS_DEFAULT_BROWSER_NON_MODAL_1P_APP_TITLE);
@@ -188,6 +213,58 @@
           IDS_IOS_DEFAULT_BROWSER_NON_MODAL_SHARE_TITLE);
     default:
       NOTREACHED();
+  }
+}
+
+// Returns the string resource ID for the active Omnibox Paste experiment arm.
+- (int)stringIdForOmniboxPasteExperimentWithDefaultId:(int)defaultId
+                                              isTitle:(BOOL)isTitle {
+  if (!base::FeatureList::IsEnabled(kOmniboxPastePromoExperiment)) {
+    return defaultId;
+  }
+  switch (GetOmniboxPastePromoExperimentType()) {
+    case 1:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP1
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP1;
+    case 2:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP2
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP2;
+    case 3:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP3
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP3;
+    case 4:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP4
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP4;
+    case 5:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP5
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP5;
+    case 6:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP6
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP6;
+    case 7:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP7
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP7;
+    case 8:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP8
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP8;
+    case 9:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP9
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP9;
+    case 10:
+      return isTitle
+                 ? IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE_EXP10
+                 : IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP10;
+    default:
+      return defaultId;
   }
 }
 

@@ -10,8 +10,8 @@
 
 #include "base/no_destructor.h"
 #include "components/content_settings/core/common/host_indexed_content_settings.h"
-
-class GURL;
+#include "components/origin_gating/core/decision.h"
+#include "components/origin_gating/core/gateable_event.h"
 
 // Manages configuration rules for DevTools navigation gating.
 // The configuration is loaded globally from command-line switches as a
@@ -22,7 +22,7 @@ class DevToolsNavigationGatingRuleManager {
   static const DevToolsNavigationGatingRuleManager& Get();
 
   // Creates an instance for testing purposes with a custom JSON configuration.
-  static DevToolsNavigationGatingRuleManager CreateForTesting(
+  static std::unique_ptr<DevToolsNavigationGatingRuleManager> CreateForTesting(
       std::string_view rules_json);
 
   DevToolsNavigationGatingRuleManager(
@@ -36,8 +36,9 @@ class DevToolsNavigationGatingRuleManager {
 
   ~DevToolsNavigationGatingRuleManager();
 
-  // Returns whether navigation to `url` is allowed based on the loaded rules.
-  bool IsNavigationAllowed(const GURL& url) const;
+  // Evaluates `event`'s destination against the configured rules.
+  origin_gating::Decision EvaluateRules(
+      const origin_gating::GateableEvent& event) const;
 
   // Returns true if this manager has any policies that might block a
   // navigation.

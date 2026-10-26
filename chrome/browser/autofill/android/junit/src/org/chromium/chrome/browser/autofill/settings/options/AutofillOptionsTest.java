@@ -15,7 +15,9 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -27,13 +29,13 @@ import static org.chromium.chrome.browser.autofill.settings.options.AutofillOpti
 import static org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsProperties.THIRD_PARTY_TOGGLE_IS_READ_ONLY;
 
 import android.content.ComponentName;
-import android.content.Context;
 import android.text.SpannableString;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.autofill.AutofillManager;
+import android.widget.TextView;
 
 import androidx.annotation.StringRes;
 import androidx.fragment.app.Fragment;
@@ -42,7 +44,6 @@ import androidx.fragment.app.testing.FragmentScenario;
 import androidx.lifecycle.Lifecycle.Event;
 import androidx.lifecycle.LifecycleRegistry;
 import androidx.preference.PreferenceViewHolder;
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -52,13 +53,13 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadow.api.Shadow;
-import org.robolectric.shadows.ShadowApplication;
+import org.robolectric.shadows.ShadowAutofillManager;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -71,10 +72,9 @@ import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
 import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManager;
 import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManagerFactory;
-import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManagerJni;
 import org.chromium.chrome.browser.autofill.settings.AutofillHelpMenuProvider;
-import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment.AutofillOptionsReferrer;
 import org.chromium.chrome.browser.device_reauth.BiometricStatus;
+import org.chromium.chrome.browser.device_reauth.DeviceAuthAvailabilityCheckerBridge;
 import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
 import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
@@ -82,8 +82,11 @@ import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManagerUtils;
+import org.chromium.chrome.browser.profiles.ProfileManagerUtilsJni;
 import org.chromium.components.autofill.autofill_ai.AutofillAiOptInStatus;
 import org.chromium.components.browser_ui.settings.TextMessagePreference;
+import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefsJni;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
@@ -98,15 +101,13 @@ import org.chromium.ui.text.SpanApplier;
 
 /** Unit tests for autofill options settings screen. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@EnableFeatures({ChromeFeatureList.AUTOFILL_AI_ONLINE_MODEL_TOGGLE_NEW_TITLE})
 @DisableFeatures({
     ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
-    ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
+    ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED,
+    ChromeFeatureList.AUTOFILL_AI_USE_PRIVATE_AI
 })
 public class AutofillOptionsTest {
-    private static final String SKIP_ALL_CHECKS_PARAM_VALUE = "skip_all_checks";
-    private static final String ONLY_SKIP_AWG_CHECK_PARAM_VALUE = "only_skip_awg_check";
-
     private static final ComponentName AWG_PACKAGE =
             new ComponentName(
                     "com.google.android.gms",
@@ -125,17 +126,18 @@ public class AutofillOptionsTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private UserPrefsJni mMockUserPrefsJni;
+    @Mock private ProfileManagerUtils.Natives mProfileManagerUtilsJniMock;
     @Mock private PrefService mPrefs;
     @Mock private Profile mProfile;
     @Mock private HelpAndFeedbackLauncher mHelpAndFeedbackLauncher;
     @Mock private FeedbackPolicyManager mFeedbackPolicyManager;
     @Mock private Runnable mRestartRunnable;
     @Mock private ModalDialogManager mDialogManager;
-    @Mock private AutofillManager mAutofillManager;
     @Mock private EntityDataManager mMockEntityDataManager;
     @Mock private PersonalDataManager mMockPersonalDataManager;
-    @Mock private EntityDataManager.Natives mMockEntityDataManagerJni;
     @Mock private ReauthenticatorBridge mMockReauthenticatorBridge;
+    @Mock private SettingsIndexData mSearchIndexDataMock;
+    private ShadowAutofillManager mShadowAutofillManager;
 
     @Captor ArgumentCaptor<PropertyModel> mRestartConfirmationDialogModelCaptor;
 
@@ -147,15 +149,19 @@ public class AutofillOptionsTest {
         ReauthenticatorBridge.setInstanceForTesting(mMockReauthenticatorBridge);
         EntityDataManagerFactory.setInstanceForTesting(mMockEntityDataManager);
         PersonalDataManagerFactory.setInstanceForTesting(mMockPersonalDataManager);
-        EntityDataManagerJni.setInstanceForTesting(mMockEntityDataManagerJni);
+        ProfileManagerUtilsJni.setInstanceForTesting(mProfileManagerUtilsJniMock);
         UserPrefsJni.setInstanceForTesting(mMockUserPrefsJni);
         doReturn(mPrefs).when(mMockUserPrefsJni).get(mProfile);
         doReturn(mProfile).when(mProfile).getOriginalProfile();
         HelpAndFeedbackLauncherFactory.setInstanceForTesting(mHelpAndFeedbackLauncher);
         FeedbackPolicyManager.setInstanceForTesting(mFeedbackPolicyManager);
         doReturn(true).when(mFeedbackPolicyManager).isUserFeedbackAllowed();
-        ShadowApplication shadowApplication = Shadow.extract(RuntimeEnvironment.getApplication());
-        shadowApplication.setSystemService(Context.AUTOFILL_MANAGER_SERVICE, mAutofillManager);
+        mShadowAutofillManager =
+                Shadow.extract(
+                        RuntimeEnvironment.getApplication()
+                                .getSystemService(AutofillManager.class));
+        mShadowAutofillManager.setEnabled(true);
+        mShadowAutofillManager.setAutofillSupported(true);
 
         mScenario =
                 FragmentScenario.launchInContainer(
@@ -189,9 +195,8 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void constructedWithPrefAsDefaultForOption() {
-        doReturn(EXAMPLE_SERVICE_PACKAGE).when(mAutofillManager).getAutofillServiceComponentName();
+        mShadowAutofillManager.setAutofillServiceComponentName(EXAMPLE_SERVICE_PACKAGE);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
 
@@ -206,9 +211,8 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void optionDisabledForAwgUpdatesOnResume() {
-        doReturn(AWG_PACKAGE).when(mAutofillManager).getAutofillServiceComponentName();
+        mShadowAutofillManager.setAutofillServiceComponentName(AWG_PACKAGE);
         doReturn(false).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
 
@@ -235,9 +239,8 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void optionDisabledByPolicy() {
-        doReturn(EXAMPLE_SERVICE_PACKAGE).when(mAutofillManager).getAutofillServiceComponentName();
+        mShadowAutofillManager.setAutofillServiceComponentName(EXAMPLE_SERVICE_PACKAGE);
         doReturn(false).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(false)
                 .when(mPrefs)
@@ -256,9 +259,8 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void optionEnabledToSwitchOffAwg() {
-        doReturn(AWG_PACKAGE).when(mAutofillManager).getAutofillServiceComponentName();
+        mShadowAutofillManager.setAutofillServiceComponentName(AWG_PACKAGE);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
 
@@ -275,7 +277,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void toggledOptionRecordedInHistogram() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -308,7 +309,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void updateSettingsFromPrefOnViewCreated() {
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
@@ -321,7 +321,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void toggledOptionSetsPrefAndRestarts() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -337,15 +336,16 @@ public class AutofillOptionsTest {
 
         verifyAndDismissDialogManager(ButtonType.POSITIVE);
 
-        verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(true));
+        InOrder inOrder = inOrder(mPrefs, mProfileManagerUtilsJniMock, mRestartRunnable);
+        inOrder.verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(true));
+        inOrder.verify(mProfileManagerUtilsJniMock).flushPersistentDataForAllProfiles();
+        inOrder.verify(mRestartRunnable).run();
         assertTrue(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
         verifyOptionReflectedInView(USE_3P);
         histogramWatcher.assertExpected();
-        verify(mRestartRunnable).run();
     }
 
     @Test
-    @SmallTest
     public void toggledOptionResetsWithoutConfirmation() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -363,6 +363,7 @@ public class AutofillOptionsTest {
 
         verify(mPrefs, times(0))
                 .setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), anyBoolean());
+        verify(mProfileManagerUtilsJniMock, times(0)).flushPersistentDataForAllProfiles();
         assertFalse(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
         verifyOptionReflectedInView(DEFAULT);
         histogramWatcher.assertExpected();
@@ -370,7 +371,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void toggledOptionResetsWhenDismissed() {
         doReturn(false).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
@@ -385,13 +385,13 @@ public class AutofillOptionsTest {
 
         verify(mPrefs, times(0))
                 .setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), anyBoolean());
+        verify(mProfileManagerUtilsJniMock, times(0)).flushPersistentDataForAllProfiles();
         assertFalse(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
         verifyOptionReflectedInView(DEFAULT);
         verify(mRestartRunnable, times(0)).run();
     }
 
     @Test
-    @SmallTest
     public void setPrefTogglesOptionOnResume() {
         doReturn(false).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
@@ -411,7 +411,40 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
+    public void toggledOptionPreservedOnResumeWhileRestartDialogShown() {
+        mShadowAutofillManager.setAutofillServiceComponentName(EXAMPLE_SERVICE_PACKAGE);
+        doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
+        doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
+        AutofillOptionsCoordinator autofillOptions =
+                new AutofillOptionsCoordinator(mFragment, () -> mDialogManager, mRestartRunnable);
+        PropertyModel model = autofillOptions.initializeNow();
+        LifecycleRegistry lifecycleRegistry = new LifecycleRegistry(mFragment);
+        autofillOptions.observeLifecycle(lifecycleRegistry);
+        assertTrue(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
+
+        getRadioButtonComponent().getDefaultButton().performClick();
+        assertFalse(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
+        verifyOptionReflectedInView(DEFAULT);
+
+        // Resuming the fragment while the confirmation dialog is open must not overwrite the
+        // pending toggle state from the uncommitted pref.
+        lifecycleRegistry.handleLifecycleEvent(Event.ON_RESUME);
+        assertFalse(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
+        verifyOptionReflectedInView(DEFAULT);
+
+        verifyAndDismissDialogManager(ButtonType.POSITIVE);
+
+        InOrder inOrder = inOrder(mPrefs, mProfileManagerUtilsJniMock, mRestartRunnable);
+        inOrder.verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(false));
+        inOrder.verify(mPrefs)
+                .setString(
+                        eq(Pref.AUTOFILL_THIRD_PARTY_PACKAGE_USED_FOR_PLATFORM_AUTOFILL), eq(""));
+        inOrder.verify(mProfileManagerUtilsJniMock).flushPersistentDataForAllProfiles();
+        inOrder.verify(mRestartRunnable).run();
+        assertFalse(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
+    }
+
+    @Test
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void suppliesTitleWhenAutofillAiDisabled() {
         AutofillOptionsCoordinator.createFor(mFragment, this::assertModalNotUsed, Assert::fail);
@@ -420,7 +453,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED)
     public void suppliesTitle() {
@@ -430,7 +462,36 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
+    @EnableFeatures({
+        ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
+        ChromeFeatureList.AUTOFILL_AI_ONLINE_MODEL_TOGGLE_NEW_TITLE
+    })
+    public void testAutofillAiTitle_NewTitle() {
+        AutofillOptionsCoordinator.createFor(mFragment, this::assertModalNotUsed, Assert::fail);
+
+        assertEquals(
+                mFragment.getAutofillAiCategory().getTitle(),
+                getString(R.string.settings_autofill_ai_page_title_v2));
+        assertEquals(
+                mFragment.getAutofillAiSwitch().getTitle(),
+                getString(R.string.settings_autofill_ai_page_title_v2));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_ONLINE_MODEL_TOGGLE_NEW_TITLE)
+    public void testAutofillAiTitle_OldTitle() {
+        AutofillOptionsCoordinator.createFor(mFragment, this::assertModalNotUsed, Assert::fail);
+
+        assertEquals(
+                mFragment.getAutofillAiCategory().getTitle(),
+                getString(R.string.settings_autofill_ai_page_title));
+        assertEquals(
+                mFragment.getAutofillAiSwitch().getTitle(),
+                getString(R.string.settings_autofill_ai_page_title));
+    }
+
+    @Test
     public void setsPref() {
         // Update on initial binding. Shouldn't trigger dialogs or restart.
         AutofillOptionsCoordinator.createFor(mFragment, this::assertModalNotUsed, Assert::fail);
@@ -453,7 +514,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testOptInDescriptionWithAutofillAiEnabled() {
         AutofillOptionsCoordinator.createFor(mFragment, this::assertModalNotUsed, Assert::fail);
@@ -464,7 +524,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void injectedHelpTriggersAutofillHelp() {
         AutofillHelpMenuProvider menuProvider = new AutofillHelpMenuProvider(mFragment);
 
@@ -487,7 +546,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void passedReferrerRecordedInHistogram() {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -501,9 +559,8 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     public void toggledOptionStoresPackageNamePref() {
-        doReturn(EXAMPLE_SERVICE_PACKAGE).when(mAutofillManager).getAutofillServiceComponentName();
+        mShadowAutofillManager.setAutofillServiceComponentName(EXAMPLE_SERVICE_PACKAGE);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
         doReturn(false).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         PropertyModel model =
@@ -514,18 +571,20 @@ public class AutofillOptionsTest {
         getRadioButtonComponent().getOptInButton().performClick();
         verifyAndDismissDialogManager(ButtonType.POSITIVE);
 
-        verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(true));
-        verify(mPrefs)
+        InOrder inOrder = inOrder(mPrefs, mProfileManagerUtilsJniMock, mRestartRunnable);
+        inOrder.verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(true));
+        inOrder.verify(mPrefs)
                 .setString(
                         eq(Pref.AUTOFILL_THIRD_PARTY_PACKAGE_USED_FOR_PLATFORM_AUTOFILL),
-                        eq(EXAMPLE_SERVICE_PACKAGE.flattenToString()));
+                        eq(EXAMPLE_SERVICE_PACKAGE.getPackageName()));
+        inOrder.verify(mProfileManagerUtilsJniMock).flushPersistentDataForAllProfiles();
+        inOrder.verify(mRestartRunnable).run();
         assertTrue(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
     }
 
     @Test
-    @SmallTest
     public void toggledOptionResetsPackageNamePref() {
-        doReturn(EXAMPLE_SERVICE_PACKAGE).when(mAutofillManager).getAutofillServiceComponentName();
+        mShadowAutofillManager.setAutofillServiceComponentName(EXAMPLE_SERVICE_PACKAGE);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_THIRD_PARTY_PASSWORD_MANAGERS_ALLOWED);
         doReturn(true).when(mPrefs).getBoolean(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL);
         PropertyModel model =
@@ -536,15 +595,17 @@ public class AutofillOptionsTest {
         getRadioButtonComponent().getDefaultButton().performClick();
         verifyAndDismissDialogManager(ButtonType.POSITIVE);
 
-        verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(false));
-        verify(mPrefs)
+        InOrder inOrder = inOrder(mPrefs, mProfileManagerUtilsJniMock, mRestartRunnable);
+        inOrder.verify(mPrefs).setBoolean(eq(Pref.AUTOFILL_USING_PLATFORM_AUTOFILL), eq(false));
+        inOrder.verify(mPrefs)
                 .setString(
                         eq(Pref.AUTOFILL_THIRD_PARTY_PACKAGE_USED_FOR_PLATFORM_AUTOFILL), eq(""));
+        inOrder.verify(mProfileManagerUtilsJniMock).flushPersistentDataForAllProfiles();
+        inOrder.verify(mRestartRunnable).run();
         assertFalse(model.get(THIRD_PARTY_AUTOFILL_ENABLED));
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
@@ -557,7 +618,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
@@ -572,7 +632,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
@@ -587,7 +646,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
@@ -616,7 +674,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiToggleOffWhenIneligibleEvenIfOptedIn() {
         doReturn(false).when(mMockEntityDataManager).isEligibleToAutofillAi();
@@ -629,7 +686,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
@@ -654,7 +710,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiToggleHiddenWhenFeatureDisabled() {
         new AutofillOptionsCoordinator(mFragment, this::assertModalNotUsed, Assert::fail)
@@ -664,7 +719,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiToggleHiddenWhenDeepLinkOpened() {
         mScenario =
@@ -696,7 +750,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
@@ -724,11 +777,11 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
     })
+    @DisableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
     public void testAutofillAiReauthToggleSuccessful() {
         doReturn(false)
                 .when(mPrefs)
@@ -762,11 +815,11 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({
         ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
         ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED
     })
+    @DisableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
     public void testAutofillAiReauthToggleFailed() {
         doReturn(true)
                 .when(mPrefs)
@@ -800,7 +853,82 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
+    @EnableFeatures({
+        ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
+        ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED,
+        ChromeFeatureList.DEVICE_REAUTH_REFACTOR
+    })
+    public void testAutofillAiReauthToggleSuccessful_refactorFlagEnabled() {
+        doReturn(false)
+                .when(mPrefs)
+                .getBoolean(Pref.AUTOFILL_AI_REAUTH_BEFORE_VIEWING_SENSITIVE_DATA);
+        DeviceAuthAvailabilityCheckerBridge.setBiometricAvailabilityStatusForTesting(
+                BiometricStatus.BIOMETRICS_AVAILABLE);
+
+        new AutofillOptionsCoordinator(mFragment, this::assertModalNotUsed, Assert::fail)
+                .initializeNow();
+
+        // Toggle the switch to ON.
+        mFragment
+                .getAutofillAiAuthenticationSwitch()
+                .getOnPreferenceChangeListener()
+                .onPreferenceChange(mFragment.getAutofillAiAuthenticationSwitch(), true);
+
+        // Verify reauth is triggered and bridge availability was never queried.
+        ArgumentCaptor<Callback<Boolean>> callbackCaptor = MockitoHelper.callbackCaptor();
+        verify(mMockReauthenticatorBridge).reauthenticate(callbackCaptor.capture());
+        verify(mMockReauthenticatorBridge, never()).getBiometricAvailabilityStatus();
+
+        // Simulate successful reauth.
+        doReturn(true)
+                .when(mPrefs)
+                .getBoolean(Pref.AUTOFILL_AI_REAUTH_BEFORE_VIEWING_SENSITIVE_DATA);
+        callbackCaptor.getValue().onResult(true);
+
+        // Verify pref is updated.
+        verify(mPrefs).setBoolean(Pref.AUTOFILL_AI_REAUTH_BEFORE_VIEWING_SENSITIVE_DATA, true);
+        assertTrue(mFragment.getAutofillAiAuthenticationSwitch().isChecked());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
+        ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED,
+        ChromeFeatureList.DEVICE_REAUTH_REFACTOR
+    })
+    public void testAutofillAiReauthToggleFailed_refactorFlagEnabled() {
+        doReturn(true)
+                .when(mPrefs)
+                .getBoolean(Pref.AUTOFILL_AI_REAUTH_BEFORE_VIEWING_SENSITIVE_DATA);
+        DeviceAuthAvailabilityCheckerBridge.setBiometricAvailabilityStatusForTesting(
+                BiometricStatus.BIOMETRICS_AVAILABLE);
+
+        new AutofillOptionsCoordinator(mFragment, this::assertModalNotUsed, Assert::fail)
+                .initializeNow();
+
+        // Toggle the switch to OFF.
+        mFragment
+                .getAutofillAiAuthenticationSwitch()
+                .getOnPreferenceChangeListener()
+                .onPreferenceChange(mFragment.getAutofillAiAuthenticationSwitch(), false);
+
+        // Verify reauth is triggered and bridge availability was never queried.
+        ArgumentCaptor<Callback<Boolean>> callbackCaptor = MockitoHelper.callbackCaptor();
+        verify(mMockReauthenticatorBridge).reauthenticate(callbackCaptor.capture());
+        verify(mMockReauthenticatorBridge, never()).getBiometricAvailabilityStatus();
+
+        // Simulate failed reauth.
+        callbackCaptor.getValue().onResult(false);
+
+        // Verify pref is NOT updated.
+        verify(mPrefs, times(0))
+                .setBoolean(
+                        eq(Pref.AUTOFILL_AI_REAUTH_BEFORE_VIEWING_SENSITIVE_DATA), anyBoolean());
+        // Switch should be reset to ON.
+        assertTrue(mFragment.getAutofillAiAuthenticationSwitch().isChecked());
+    }
+
+    @Test
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED)
     public void testAutofillAiReauthToggleHiddenWhenFeatureDisabled() {
@@ -811,7 +939,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_REAUTH_REQUIRED)
     public void testAutofillAiReauthToggleHiddenWhenAutofillAiFeatureDisabled() {
@@ -822,7 +949,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiManagedByPolicy_Disabled() {
         doReturn(true).when(mMockEntityDataManager).getIsAutofillAiDisabledByEnterprisePolicy();
@@ -837,7 +963,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiManagedByPolicy_PersonalDataManagerManagedAndDisabled() {
         doReturn(false).when(mMockEntityDataManager).getIsAutofillAiDisabledByEnterprisePolicy();
@@ -854,7 +979,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiNotManagedByPolicy_PersonalDataManagerManagedButEnabled() {
         doReturn(false).when(mMockEntityDataManager).getIsAutofillAiDisabledByEnterprisePolicy();
@@ -871,7 +995,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiNotManagedByPolicy() {
         doReturn(false).when(mMockEntityDataManager).getIsAutofillAiDisabledByEnterprisePolicy();
@@ -886,7 +1009,6 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiEnterpriseDisclaimerVisible() {
         doReturn(false).when(mMockEntityDataManager).getIsAutofillAiAllowedByEnterprisePolicy();
@@ -906,10 +1028,12 @@ public class AutofillOptionsTest {
         assertEquals(
                 View.VISIBLE,
                 thingsToConsider.findViewById(R.id.info_item_summary_2).getVisibility());
+        assertEquals(
+                getString(R.string.settings_autofill_ai_enterprise_logging_managed_disabled),
+                ((TextView) thingsToConsider.findViewById(R.id.info_item_summary_2)).getText());
     }
 
     @Test
-    @SmallTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiEnterpriseDisclaimerHidden() {
         doReturn(true).when(mMockEntityDataManager).getIsAutofillAiAllowedByEnterprisePolicy();
@@ -931,7 +1055,111 @@ public class AutofillOptionsTest {
     }
 
     @Test
-    @SmallTest
+    @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_PRIVATE_AI)
+    public void testAutofillAiStrings_PrivateAiDisabled() {
+        doReturn(true).when(mMockEntityDataManager).getIsAutofillAiAllowedByEnterprisePolicy();
+
+        new AutofillOptionsCoordinator(mFragment, this::assertModalNotUsed, Assert::fail)
+                .initializeNow();
+
+        @StringRes
+        int expectedTitle =
+                ChromeFeatureList.isEnabled(
+                                ChromeFeatureList.AUTOFILL_AI_ONLINE_MODEL_TOGGLE_NEW_TITLE)
+                        ? R.string.settings_autofill_ai_page_title_v2
+                        : R.string.settings_autofill_ai_page_title;
+        assertEquals(getString(expectedTitle), mFragment.getAutofillAiCategory().getTitle());
+
+        AutofillAiPreference preference = (AutofillAiPreference) mFragment.getAutofillAiSwitch();
+        assertEquals(getString(expectedTitle), preference.getTitle());
+
+        PreferenceViewHolder holder =
+                PreferenceViewHolder.createInstanceForTests(
+                        mFragment
+                                .getLayoutInflater()
+                                .inflate(R.layout.autofill_ai_preference, null));
+        preference.onBindViewHolder(holder);
+
+        assertEquals(
+                getString(R.string.settings_autofill_ai_toggle_sub_label), preference.getSummary());
+
+        View whenOn = holder.findViewById(R.id.autofill_ai_when_on);
+        TextView whenOnTitle = whenOn.findViewById(R.id.info_item_title);
+        TextView whenOnSummary = whenOn.findViewById(R.id.info_item_summary);
+        assertEquals(getString(R.string.settings_autofill_ai_when_on), whenOnTitle.getText());
+        assertEquals(
+                getString(R.string.settings_autofill_ai_when_on_can_fill_difficult_fields),
+                whenOnSummary.getText());
+
+        View thingsToConsider = holder.findViewById(R.id.autofill_ai_things_to_consider);
+        TextView considerTitle = thingsToConsider.findViewById(R.id.info_item_title);
+        TextView considerSummary = thingsToConsider.findViewById(R.id.info_item_summary);
+        assertEquals(
+                getString(R.string.settings_autofill_ai_things_to_consider),
+                considerTitle.getText());
+        assertEquals(
+                getString(R.string.settings_autofill_ai_to_consider_data_usage),
+                considerSummary.getText());
+        assertEquals(
+                View.GONE, thingsToConsider.findViewById(R.id.info_item_summary_2).getVisibility());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
+        ChromeFeatureList.AUTOFILL_AI_USE_PRIVATE_AI
+    })
+    public void testAutofillAiStrings_PrivateAiEnabled() {
+        doReturn(true).when(mMockEntityDataManager).getIsAutofillAiAllowedByEnterprisePolicy();
+
+        new AutofillOptionsCoordinator(mFragment, this::assertModalNotUsed, Assert::fail)
+                .initializeNow();
+
+        @StringRes
+        int expectedTitle =
+                ChromeFeatureList.isEnabled(
+                                ChromeFeatureList.AUTOFILL_AI_ONLINE_MODEL_TOGGLE_NEW_TITLE)
+                        ? R.string.settings_autofill_ai_page_title_v2
+                        : R.string.settings_autofill_ai_page_title;
+        assertEquals(getString(expectedTitle), mFragment.getAutofillAiCategory().getTitle());
+
+        AutofillAiPreference preference = (AutofillAiPreference) mFragment.getAutofillAiSwitch();
+        assertEquals(getString(expectedTitle), preference.getTitle());
+
+        PreferenceViewHolder holder =
+                PreferenceViewHolder.createInstanceForTests(
+                        mFragment
+                                .getLayoutInflater()
+                                .inflate(R.layout.autofill_ai_preference, null));
+        preference.onBindViewHolder(holder);
+
+        assertEquals(
+                getString(R.string.settings_autofill_ai_toggle_sub_label_v2),
+                preference.getSummary());
+
+        View whenOn = holder.findViewById(R.id.autofill_ai_when_on);
+        TextView whenOnTitle = whenOn.findViewById(R.id.info_item_title);
+        TextView whenOnSummary = whenOn.findViewById(R.id.info_item_summary);
+        assertEquals(getString(R.string.settings_autofill_ai_when_on), whenOnTitle.getText());
+        assertEquals(
+                getString(R.string.settings_autofill_ai_when_on_can_fill_difficult_fields),
+                whenOnSummary.getText());
+
+        View thingsToConsider = holder.findViewById(R.id.autofill_ai_things_to_consider);
+        TextView considerTitle = thingsToConsider.findViewById(R.id.info_item_title);
+        TextView considerSummary = thingsToConsider.findViewById(R.id.info_item_summary);
+        assertEquals(
+                getString(R.string.settings_autofill_ai_things_to_consider),
+                considerTitle.getText());
+        assertEquals(
+                getString(R.string.settings_autofill_ai_to_consider_data_usage_v2),
+                considerSummary.getText());
+        assertEquals(
+                View.GONE, thingsToConsider.findViewById(R.id.info_item_summary_2).getVisibility());
+    }
+
+    @Test
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testAutofillAiToggleDisabledWhenUsingThirdPartyProvider() {
         doReturn(true).when(mMockEntityDataManager).isEligibleToAutofillAi();
@@ -962,7 +1190,7 @@ public class AutofillOptionsTest {
                 new SpanApplier.SpanInfo(
                         "<link>",
                         "</link>",
-                        new ChromeClickableSpan(mFragment.getContext(), unusedView -> fail())));
+                        new ChromeClickableSpan(mFragment.getContext(), _ -> fail())));
     }
 
     private void verifyOptionReflectedInView(
@@ -975,7 +1203,7 @@ public class AutofillOptionsTest {
         assertEquals(getRadioButtonComponent().getOptInButton().isChecked(), usesThirdParty);
     }
 
-    /** {@see verifyAndDismissDialogManager(@Nullable Integer buttonToClick)} */
+    /** {@link verifyAndDismissDialogManager(@Nullable Integer buttonToClick)} */
     private void verifyAndDismissDialogManager() {
         verifyAndDismissDialogManager(null);
     }
@@ -1015,5 +1243,17 @@ public class AutofillOptionsTest {
         assertTrue(hint.isShown());
         assertNotNull(hint.getSummary());
         assertEquals(message.toString(), hint.getSummary().toString());
+    }
+
+    @Test
+    @DisableFeatures({ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA})
+    public void testSearchIndexWhenAutofillAiDisabled() {
+        AutofillOptionsFragment.SEARCH_INDEX_DATA_PROVIDER.updateDynamicPreferences(
+                RuntimeEnvironment.getApplication(), mSearchIndexDataMock, mProfile);
+
+        verify(mSearchIndexDataMock)
+                .removeEntry(
+                        AutofillOptionsFragment.SEARCH_INDEX_DATA_PROVIDER.getUniqueId(
+                                AutofillOptionsFragment.PREF_AUTOFILL_AI_SWITCH));
     }
 }

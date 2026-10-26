@@ -19,6 +19,7 @@
 #include "components/reporting/metrics/sampler.h"
 #include "components/reporting/proto/synced/metric_data.pb.h"
 #include "components/services/app_service/public/cpp/app_types.h"
+#include "components/services/app_service/public/protos/app_types.pb.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -97,7 +98,7 @@ void AppUsageTelemetrySampler::MaybeCollect(OptionalMetricCallback callback) {
 
 void AppUsageTelemetrySampler::ResetAppUsageDataInPrefStore(
     const AppUsageData* app_usage_data) {
-  DCHECK_CURRENTLY_ON(::content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(::content::BrowserThread::UI, base::NotFatalUntil::M160);
   CHECK(profile_);
   ScopedDictPrefUpdate usage_dict_pref(profile_->GetPrefs(),
                                        ::apps::kAppUsageTime);

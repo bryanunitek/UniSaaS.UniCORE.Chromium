@@ -5,10 +5,11 @@
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
@@ -25,12 +26,14 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/embedder_support/switches.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "third_party/blink/public/common/features.h"
 #include "ui/base/page_transition_types.h"
+#include "url/origin.h"
 
 namespace web_app {
 
@@ -57,12 +60,12 @@ class WebAppLaunchHandlerBrowserTest : public WebAppBrowserTestBase {
   }
 
  protected:
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   webapps::AppId InstallTestWebApp(const char* test_file_path,
                                    bool await_metric = true) {
     page_load_metrics::PageLoadMetricsTestWaiter metrics_waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     if (await_metric) {
       metrics_waiter.AddWebFeatureExpectation(
           blink::mojom::WebFeature::kWebAppManifestLaunchHandler);
@@ -90,38 +93,39 @@ class WebAppLaunchHandlerBrowserTest : public WebAppBrowserTestBase {
   void ExpectNavigateNewBehavior(const webapps::AppId& app_id) {
     std::string start_url = GetWebApp(app_id)->start_url().spec();
 
-    Browser* browser_1 = LaunchWebAppBrowserAndWait(app_id);
+    BrowserWindowInterface* browser_1 = LaunchWebAppBrowserAndWait(app_id);
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(browser_1), start_url);
 
-    Browser* browser_2 = LaunchWebAppBrowserAndWait(app_id);
+    BrowserWindowInterface* browser_2 = LaunchWebAppBrowserAndWait(app_id);
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(browser_2), start_url);
 
     EXPECT_NE(browser_1, browser_2);
   }
 
-  std::string AwaitNextLaunchParamsTargetUrl(Browser* browser) {
+  std::string AwaitNextLaunchParamsTargetUrl(BrowserWindowInterface* browser) {
     const char* script = R"(
       new Promise(resolve => {
         window.launchQueue.setConsumer(resolve);
       }).then(params => params.targetURL);
     )";
-    return EvalJs(browser->tab_strip_model()->GetActiveWebContents(), script)
+    return EvalJs(browser->GetTabStripModel()->GetActiveWebContents(), script)
         .ExtractString();
   }
 
-  bool SetUpNextLaunchParamsTargetUrlPromise(Browser* browser) {
+  bool SetUpNextLaunchParamsTargetUrlPromise(BrowserWindowInterface* browser) {
     const char* script = R"(
         window.nextLaunchParamsTargetURLPromise = new Promise(resolve => {
           window.launchQueue.setConsumer(resolve);
         }).then(params => params.targetURL);
         true;
       )";
-    return EvalJs(browser->tab_strip_model()->GetActiveWebContents(), script)
+    return EvalJs(browser->GetTabStripModel()->GetActiveWebContents(), script)
         .ExtractBool();
   }
 
-  std::string AwaitNextLaunchParamsTargetUrlPromise(Browser* browser) {
-    return EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+  std::string AwaitNextLaunchParamsTargetUrlPromise(
+      BrowserWindowInterface* browser) {
+    return EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                   "window.nextLaunchParamsTargetURLPromise")
         .ExtractString();
   }
@@ -185,9 +189,9 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
   EXPECT_TRUE(launch_handler->client_mode_valid_and_specified());
 
   // Create first web app browser window.
-  Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowserAndWait(app_id);
   content::WebContents* app_web_contents =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+      app_browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(app_web_contents->GetLastCommittedURL(), start_url);
   EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(app_browser), start_url.spec());
 
@@ -198,7 +202,7 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
     EXPECT_TRUE(ui_test_utils::NavigateToURL(app_browser, alt_url));
     EXPECT_EQ(app_web_contents->GetLastCommittedURL(), alt_url);
 
-    Browser* app_browser_2 = LaunchWebAppBrowserAndWait(app_id);
+    BrowserWindowInterface* app_browser_2 = LaunchWebAppBrowserAndWait(app_id);
     EXPECT_EQ(app_browser, app_browser_2);
     EXPECT_EQ(app_web_contents->GetLastCommittedURL(), start_url);
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(app_browser_2), start_url.spec());
@@ -211,10 +215,10 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
         app_web_contents, content::MessageLoopRunner::QuitMode::DEFERRED);
 
     chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
-    EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
+    EXPECT_EQ(browser()->GetTabStripModel()->count(), 2);
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), start_url));
     ReparentWebAppForActiveTab(browser());
-    EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
+    EXPECT_EQ(browser()->GetTabStripModel()->count(), 1);
 
     observer.WaitForNavigationFinished();
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(app_browser), start_url.spec());
@@ -240,9 +244,9 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
   EXPECT_EQ(ClientMode::kFocusExisting, launch_handler->parsed_client_mode());
   EXPECT_TRUE(launch_handler->client_mode_valid_and_specified());
 
-  Browser* browser_1 = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* browser_1 = LaunchWebAppBrowserAndWait(app_id);
   content::WebContents* web_contents =
-      browser_1->tab_strip_model()->GetActiveWebContents();
+      browser_1->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(web_contents->GetLastCommittedURL(), start_url);
   EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(browser_1), start_url.spec());
 
@@ -254,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
     EXPECT_EQ(web_contents->GetLastCommittedURL(), in_scope_url);
 
     ASSERT_TRUE(SetUpNextLaunchParamsTargetUrlPromise(browser_1));
-    Browser* browser_2 = LaunchWebAppBrowserAndWait(app_id);
+    BrowserWindowInterface* browser_2 = LaunchWebAppBrowserAndWait(app_id);
     EXPECT_EQ(browser_1, browser_2);
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrlPromise(browser_2),
               start_url.spec());
@@ -268,7 +272,7 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
     NavigateViaLinkClickToURLAndWait(browser_1, out_of_scope_url);
     EXPECT_EQ(web_contents->GetLastCommittedURL(), out_of_scope_url);
 
-    Browser* browser_2 = LaunchWebAppBrowserAndWait(app_id);
+    BrowserWindowInterface* browser_2 = LaunchWebAppBrowserAndWait(app_id);
     EXPECT_EQ(browser_1, browser_2);
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrl(browser_2), start_url.spec());
     EXPECT_EQ(web_contents->GetLastCommittedURL(), start_url);
@@ -287,7 +291,7 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
     EXPECT_EQ(web_contents->GetLastCommittedURL(), start_url);
 
     ASSERT_TRUE(SetUpNextLaunchParamsTargetUrlPromise(browser_1));
-    Browser* browser_2 = LaunchWebAppBrowserAndWait(app_id);
+    BrowserWindowInterface* browser_2 = LaunchWebAppBrowserAndWait(app_id);
     EXPECT_EQ(browser_1, browser_2);
     EXPECT_EQ(AwaitNextLaunchParamsTargetUrlPromise(browser_2),
               start_url.spec());
@@ -317,9 +321,9 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
           app_id));
 
   // Launch the app three times in quick succession.
-  Browser* browser_1 = LaunchWebAppBrowser(app_id);
-  Browser* browser_2 = LaunchWebAppBrowser(app_id);
-  Browser* browser_3 = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* browser_1 = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* browser_2 = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* browser_3 = LaunchWebAppBrowser(app_id);
   EXPECT_EQ(browser_1, browser_2);
   EXPECT_EQ(browser_2, browser_3);
 
@@ -331,7 +335,7 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
 
   // Check that all 3 LaunchParams got enqueued.
   content::WebContents* web_contents =
-      browser_1->tab_strip_model()->GetActiveWebContents();
+      browser_1->GetTabStripModel()->GetActiveWebContents();
   GURL start_url = embedded_test_server()->GetURL(
       "/web_apps/basic.html?client_mode=focus-existing");
   const char* script = R"(
@@ -366,15 +370,15 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
   EXPECT_TRUE(launch_handler->client_mode_valid_and_specified());
 
   // Launch the app three times in quick succession.
-  Browser* browser_1 = LaunchWebAppBrowserAndWait(app_id);
-  Browser* browser_2 = LaunchWebAppBrowserAndWait(app_id);
-  Browser* browser_3 = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* browser_1 = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* browser_2 = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* browser_3 = LaunchWebAppBrowserAndWait(app_id);
   EXPECT_EQ(browser_1, browser_2);
   EXPECT_EQ(browser_2, browser_3);
 
   // Check that only the last LaunchParams made it through.
   content::WebContents* web_contents =
-      browser_1->tab_strip_model()->GetActiveWebContents();
+      browser_1->GetTabStripModel()->GetActiveWebContents();
   GURL start_url = embedded_test_server()->GetURL(
       "/web_apps/basic.html?client_mode=navigate-existing");
   const char* script = R"(
@@ -407,11 +411,11 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
 
   // Launch the web app and immediately navigate it out of scope during its
   // initial navigation.
-  Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowserAndWait(app_id);
   GURL out_of_scope_url = embedded_test_server()->GetURL("/empty.html");
   NavigateViaLinkClickToURLAndWait(app_browser, out_of_scope_url);
   content::WebContents* web_contents =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+      app_browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(web_contents->GetLastCommittedURL(), out_of_scope_url);
 
   // Check that the launch params are not enqueued in the out of scope document.
@@ -438,9 +442,9 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest, GlobalLaunchQueue) {
   webapps::AppId app_id =
       InstallTestWebApp("/web_apps/basic.html", /*await_metric=*/false);
 
-  Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowserAndWait(app_id);
   content::WebContents* web_contents =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+      app_browser->GetTabStripModel()->GetActiveWebContents();
 
   EXPECT_TRUE(EvalJs(web_contents, "!!window.LaunchQueue").ExtractBool());
   EXPECT_TRUE(EvalJs(web_contents, "!!window.launchQueue").ExtractBool());
@@ -448,6 +452,50 @@ IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest, GlobalLaunchQueue) {
 
   histogram_tester.ExpectUniqueSample(kLaunchHandlerHistogram,
                                       ClientMode::kAuto, 1);
+}
+
+// Regression test for b/534356407: a document that committed an opaque origin
+// (e.g. via `Content-Security-Policy: sandbox`) is not an eligible target for
+// in-place `focus-existing`, even though its URL is inside the app's scope.
+// The launch must fall back to navigating to the real, same-origin launch URL
+// rather than being swallowed by the sandboxed document.
+IN_PROC_BROWSER_TEST_F(WebAppLaunchHandlerBrowserTest,
+                       ClientModeFocusExistingSkipsOpaqueOriginDocument) {
+  webapps::AppId app_id = InstallTestWebApp(
+      "/web_apps/get_manifest.html?"
+      "launch_handler_client_mode_focus_existing.json");
+  ASSERT_EQ(ClientMode::kFocusExisting,
+            GetLaunchHandler(app_id)->parsed_client_mode());
+
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowserAndWait(app_id);
+  content::WebContents* web_contents =
+      app_browser->GetTabStripModel()->GetActiveWebContents();
+
+  // Put the app window on an in-scope page that commits an opaque origin. The
+  // app's scope is /web_apps/, so this page is in scope.
+  const GURL sandboxed_url = embedded_test_server()->GetURL(
+      "/web_apps/simple_focus_existing/sandboxed.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents, sandboxed_url));
+  ASSERT_EQ(web_contents->GetLastCommittedURL(), sandboxed_url);
+  ASSERT_TRUE(
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin().opaque());
+
+  // Launching again must not reuse the opaque document in place.
+  const GURL launch_url =
+      WebAppProvider::GetForTest(profile())->registrar_unsafe().GetAppLaunchUrl(
+          app_id);
+  content::TestNavigationObserver navigation_observer(launch_url);
+  navigation_observer.WatchExistingWebContents();
+  BrowserWindowInterface* second_browser = LaunchWebAppBrowser(app_id);
+  navigation_observer.Wait();
+
+  EXPECT_EQ(second_browser, app_browser);
+  content::WebContents* launched_contents =
+      app_browser->GetTabStripModel()->GetActiveWebContents();
+  EXPECT_EQ(launched_contents->GetLastCommittedURL(), launch_url);
+  EXPECT_FALSE(launched_contents->GetPrimaryMainFrame()
+                   ->GetLastCommittedOrigin()
+                   .opaque());
 }
 
 }  // namespace web_app

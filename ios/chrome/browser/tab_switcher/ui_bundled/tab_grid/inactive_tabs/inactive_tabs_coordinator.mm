@@ -15,11 +15,12 @@
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
-#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
+#import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_browser_agent.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/regular/regular_grid_view_controller.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_constants.h"
@@ -136,7 +137,7 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
     NSLayoutConstraint* baseViewSnapshotHorizontalPosition;
 
 // Whether settings are currently presented.
-@property(nonatomic, getter=isPresetingSettings) BOOL presentingSettings;
+@property(nonatomic, getter=isPresentingSettings) BOOL presentingSettings;
 
 // The optional user education coordinator shown the first time Inactive Tabs
 // are displayed.
@@ -165,8 +166,7 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
                                   delegate:(id<InactiveTabsCoordinatorDelegate>)
                                                delegate {
   CHECK(delegate);
-  CHECK_EQ(browser->type(), Browser::Type::kInactive,
-           base::NotFatalUntil::M146);
+  CHECK_EQ(browser->type(), Browser::Type::kInactive);
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
     _delegate = delegate;
@@ -420,9 +420,11 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
 - (void)inactiveTabsUserEducationCoordinatorDidTapSettingsButton:
     (InactiveTabsUserEducationCoordinator*)
         inactiveTabsUserEducationCoordinator {
-  [self.userEducationCoordinator stop];
+  __weak __typeof(self) weakSelf = self;
+  [self.userEducationCoordinator stopWithCompletion:^{
+    [weakSelf presentSettings];
+  }];
   self.userEducationCoordinator = nil;
-  [self presentSettings];
 }
 
 - (void)inactiveTabsUserEducationCoordinatorDidFinish:
@@ -441,7 +443,7 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
 
 - (void)inactiveTabsViewController:
             (InactiveTabsViewController*)inactiveTabsViewController
-    didTapCloseAllInactiveBarButtonItem:(UIBarButtonItem*)barButtonItem {
+    didTapCloseAllInactiveFromSourceView:(UIView*)sourceView {
   NSInteger numberOfTabs = [self.mediator numberOfItems];
   if (numberOfTabs <= 0) {
     return;
@@ -465,7 +467,8 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
                          browser:self.browser
                            title:title
                          message:message
-                   barButtonItem:barButtonItem];
+                            rect:sourceView.bounds
+                            view:sourceView];
 
   __weak __typeof(self) weakSelf = self;
   NSString* closeAllActionTitle = l10n_util::GetNSString(
@@ -655,10 +658,11 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
 
 // Called when the Inactive Tabs grid is shown, to start the user education
 // coordinator. If the user education screen was ever presented, this is a
-// no-op.
+// no-op, unless forced by experimental settings.
 - (void)startUserEducationIfNeeded {
   NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-  if ([defaults boolForKey:kInactiveTabsUserEducationShownOnceKey]) {
+  if ([defaults boolForKey:kInactiveTabsUserEducationShownOnceKey] &&
+      !experimental_flags::ShouldForceInactiveTabsUserEducation()) {
     return;
   }
 
@@ -689,6 +693,12 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
 // Presents the Inactive Tabs settings modally in their own navigation
 // controller.
 - (void)presentSettings {
+  if (self.presentingSettings || _settingsController ||
+      self.viewController.presentedViewController ||
+      self.baseViewController.presentedViewController) {
+    return;
+  }
+
   _settingsController = [SettingsNavigationController
       inactiveTabsControllerForBrowser:self.browser->GetActiveBrowser()
                               delegate:self];

@@ -2,23 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ash/file_manager/cloud_upload_prompt_prefs_handler.h"
-
 #include <algorithm>
 #include <tuple>
 
 #include "ash/constants/ash_pref_names.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
+#include "chrome/browser/ash/file_manager/cloud_upload_prompt_prefs_handler_factory.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync/test/test_sync_service.h"
 #include "content/public/test/browser_test.h"
@@ -54,12 +51,7 @@ using ash::cloud_upload::CloudProvider;
 
 class CloudUploadPromptPrefsHandlerTestBase : public InProcessBrowserTest {
  public:
-  CloudUploadPromptPrefsHandlerTestBase() {
-    feature_list_.InitWithFeatures(
-        {chromeos::features::kUploadOfficeToCloud,
-         chromeos::features::kUploadOfficeToCloudSync},
-        {});
-  }
+  CloudUploadPromptPrefsHandlerTestBase() = default;
   ~CloudUploadPromptPrefsHandlerTestBase() override = default;
 
   void SetUpOnMainThread() override {
@@ -80,7 +72,6 @@ class CloudUploadPromptPrefsHandlerTestBase : public InProcessBrowserTest {
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<TestingProfile> profile_;
 };
 

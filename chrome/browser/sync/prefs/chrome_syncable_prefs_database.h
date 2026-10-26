@@ -11,14 +11,12 @@
 #include "components/sync_preferences/common_syncable_prefs_database.h"
 #include "components/sync_preferences/syncable_prefs_database.h"
 
-namespace browser_sync {
-
 class ChromeSyncablePrefsDatabase
     : public sync_preferences::SyncablePrefsDatabase {
  public:
   // Returns the metadata associated to the pref or null if `pref_name` is not
   // syncable.
-  std::optional<sync_preferences::SyncablePrefMetadata> GetSyncablePrefMetadata(
+  const sync_preferences::SyncablePrefMetadata* GetSyncablePrefMetadata(
       std::string_view pref_name) const override;
 
   std::map<std::string_view, sync_preferences::SyncablePrefMetadata>
@@ -29,7 +27,5 @@ class ChromeSyncablePrefsDatabase
   // platforms.
   sync_preferences::CommonSyncablePrefsDatabase common_syncable_prefs_database_;
 };
-
-}  // namespace browser_sync
 
 #endif  // CHROME_BROWSER_SYNC_PREFS_CHROME_SYNCABLE_PREFS_DATABASE_H_

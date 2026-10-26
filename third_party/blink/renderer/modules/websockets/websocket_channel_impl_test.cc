@@ -17,7 +17,6 @@
 #include "base/test/mock_callback.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
-#include "net/storage_access_api/status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/websockets/websocket_connector.mojom-blink.h"
@@ -217,11 +216,10 @@ class WebSocketChannelImplTest : public WebSocketChannelImplTestBase {
         const KURL& url,
         const Vector<String>& requested_protocols,
         const String& user_agent,
-        net::StorageAccessApiStatus storage_access_api_status,
         mojo::PendingRemote<network::mojom::blink::WebSocketHandshakeClient>
             handshake_client,
-        const std::optional<base::UnguessableToken>& throttling_profile_id)
-        override {
+        const std::optional<base::UnguessableToken>& throttling_profile_id,
+        network::mojom::blink::IPAddressSpace target_address_space) override {
       connect_args_.push_back(ConnectArgs(url, requested_protocols, user_agent,
                                           std::move(handshake_client)));
     }
@@ -349,7 +347,8 @@ class WebSocketChannelImplTest : public WebSocketChannelImplTestBase {
       mojo::ScopedDataPipeProducerHandle* writable,
       mojo::ScopedDataPipeConsumerHandle* readable,
       mojo::Remote<network::mojom::blink::WebSocketClient>* client) {
-    if (!Channel()->Connect(KURL("ws://localhost/"), "")) {
+    if (!Channel()->Connect(KURL("ws://localhost/"), "",
+                            network::mojom::blink::IPAddressSpace::kUnknown)) {
       ADD_FAILURE() << "WebSocketChannelImpl::Connect returns false.";
       return nullptr;
     }
@@ -429,7 +428,9 @@ TEST_F(WebSocketChannelImplTest, ConnectSuccess) {
   EXPECT_TRUE(net::SiteForCookies::FromUrl(GURL("http://example.com/"))
                   .IsEquivalent(GetDocument().SiteForCookies()));
 
-  ASSERT_TRUE(Channel()->Connect(KURL("ws://localhost/"), "x"));
+  ASSERT_TRUE(
+      Channel()->Connect(KURL("ws://localhost/"), "x",
+                         network::mojom::blink::IPAddressSpace::kUnknown));
   EXPECT_TRUE(connector_.GetConnectArgs().empty());
 
   test::RunPendingTasks();
@@ -477,7 +478,9 @@ TEST_F(WebSocketChannelImplTest, MojoConnectionErrorDuringHandshake) {
                  WebSocketChannel::kCloseEventCodeAbnormalClosure, String()));
   }
 
-  ASSERT_TRUE(Channel()->Connect(KURL("ws://localhost/"), "x"));
+  ASSERT_TRUE(
+      Channel()->Connect(KURL("ws://localhost/"), "x",
+                         network::mojom::blink::IPAddressSpace::kUnknown));
   EXPECT_TRUE(connector_.GetConnectArgs().empty());
 
   test::RunPendingTasks();
@@ -1456,7 +1459,8 @@ TEST_F(WebSocketChannelImplHandshakeThrottleTest, ThrottleSucceedsFirst) {
     EXPECT_CALL(*ChannelClient(), DidConnect(_, _));
   }
 
-  ASSERT_TRUE(Channel()->Connect(url(), ""));
+  ASSERT_TRUE(Channel()->Connect(
+      url(), "", network::mojom::blink::IPAddressSpace::kUnknown));
   test::RunPendingTasks();
 
   auto connect_args = connector_.TakeConnectArgs();
@@ -1524,7 +1528,8 @@ TEST_F(WebSocketChannelImplHandshakeThrottleTest, FailDuringThrottle) {
     EXPECT_CALL(checkpoint, Call(2));
   }
 
-  Channel()->Connect(url(), "");
+  Channel()->Connect(url(), "",
+                     network::mojom::blink::IPAddressSpace::kUnknown);
   Channel()->Fail(
       "close during handshake", mojom::ConsoleMessageLevel::kWarning,
       MakeGarbageCollected<SourceLocation>(String(), String(), 0, 0, nullptr));
@@ -1575,7 +1580,8 @@ TEST_F(WebSocketChannelImplHandshakeThrottleTest, DisconnectDuringThrottle) {
     EXPECT_CALL(disconnect_handler, Run());
   }
 
-  Channel()->Connect(url(), "");
+  Channel()->Connect(url(), "",
+                     network::mojom::blink::IPAddressSpace::kUnknown);
   test::RunPendingTasks();
 
   Channel()->Disconnect();
@@ -1636,7 +1642,8 @@ TEST_F(WebSocketChannelImplHandshakeThrottleTest,
     EXPECT_CALL(checkpoint, Call(3));
   }
 
-  Channel()->Connect(url(), "");
+  Channel()->Connect(url(), "",
+                     network::mojom::blink::IPAddressSpace::kUnknown);
 
   test::RunPendingTasks();
   checkpoint.Call(1);
@@ -1683,7 +1690,8 @@ TEST_F(WebSocketChannelImplHandshakeThrottleTest, ConnectFailBeforeThrottle) {
     EXPECT_CALL(*raw_handshake_throttle_, Destructor());
   }
 
-  ASSERT_TRUE(Channel()->Connect(url(), ""));
+  ASSERT_TRUE(Channel()->Connect(
+      url(), "", network::mojom::blink::IPAddressSpace::kUnknown));
   test::RunPendingTasks();
 
   auto connect_args = connector_.TakeConnectArgs();
@@ -1732,9 +1740,9 @@ class MockWebSocketConnector : public mojom::blink::WebSocketConnector {
       (const KURL&,
        const Vector<String>&,
        const String&,
-       net::StorageAccessApiStatus,
        mojo::PendingRemote<network::mojom::blink::WebSocketHandshakeClient>,
-       const std::optional<base::UnguessableToken>&));
+       const std::optional<base::UnguessableToken>&,
+       network::mojom::blink::IPAddressSpace));
 };
 
 // This can't use WebSocketChannelImplTest because it requires multiple
@@ -1768,9 +1776,10 @@ TEST_F(WebSocketChannelImplMultipleTest, ConnectionLimit) {
       handshake_clients;
   auto handshake_client_add_action =
       [&handshake_clients](
-          Unused, Unused, Unused, Unused,
+          Unused, Unused, Unused,
           mojo::PendingRemote<network::mojom::blink::WebSocketHandshakeClient>
               handshake_client,
+          Unused,
           Unused) { handshake_clients.Add(std::move(handshake_client)); };
 
   auto failure_handshake_throttle =
@@ -1821,7 +1830,7 @@ TEST_F(WebSocketChannelImplMultipleTest, ConnectionLimit) {
     channel = WebSocketChannelImpl::CreateForTesting(
         GetFrame().DomWindow(), channel_client, CaptureSourceLocation(),
         std::move(handshake_throttle));
-    channel->Connect(url, "");
+    channel->Connect(url, "", network::mojom::blink::IPAddressSpace::kUnknown);
   }
 
   // Connect() is called via mojo and so asynchronously.
@@ -1830,7 +1839,8 @@ TEST_F(WebSocketChannelImplMultipleTest, ConnectionLimit) {
   auto* failing_channel = WebSocketChannelImpl::CreateForTesting(
       GetFrame().DomWindow(), failure_channel_client, CaptureSourceLocation(),
       std::move(failure_handshake_throttle));
-  failing_channel->Connect(url, "");
+  failing_channel->Connect(url, "",
+                           network::mojom::blink::IPAddressSpace::kUnknown);
 
   checkpoint.Call(1);
 
@@ -1847,7 +1857,8 @@ TEST_F(WebSocketChannelImplMultipleTest, ConnectionLimit) {
   auto* successful_channel = WebSocketChannelImpl::CreateForTesting(
       GetFrame().DomWindow(), successful_channel_client,
       CaptureSourceLocation(), std::move(successful_handshake_throttle));
-  successful_channel->Connect(url, "");
+  successful_channel->Connect(url, "",
+                              network::mojom::blink::IPAddressSpace::kUnknown);
 
   // Let the connect be passed through mojo.
   test::RunPendingTasks();

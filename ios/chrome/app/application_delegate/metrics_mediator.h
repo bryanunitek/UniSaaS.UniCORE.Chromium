@@ -29,7 +29,7 @@ extern NSString* const kAppDidFinishLaunchingConsecutiveCallsKey;
 // histograms fired in extensions.
 struct HistogramNameCountPair {
   NSString* name;
-  int buckets;
+  int bucket_count = 0;
 };
 
 // Send histograms reporting the usage of widget metrics. Uses the provided list
@@ -49,6 +49,9 @@ void RecordWidgetUsage(base::span<const HistogramNameCountPair> histograms);
 // called both on initialization and after user triggered preference change.
 // `isUserTriggered` is used to distinguish between those cases.
 - (void)updateMetricsStateBasedOnPrefsUserTriggered:(BOOL)isUserTriggered;
+// Registers the MetricKit subscriber if metrics reporting is enabled. This is
+// invoked as part of low priority startup tasks when registration is deferred.
+- (void)registerMetricKitSubscriberIfNeeded;
 // Logs the duration of the cold start startup. Does nothing if there isn't a
 // cold start.
 + (void)logStartupDuration:(id<StartupInformation>)startupInformation;

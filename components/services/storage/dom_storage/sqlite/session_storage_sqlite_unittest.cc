@@ -160,13 +160,32 @@ void SessionStorageSqliteTest::InitializeMetadata(
 }
 
 TEST_F(SessionStorageSqliteTest, OpenInMemory) {
+  base::HistogramTester histograms;
+
   std::unique_ptr<SessionStorageSqlite> database;
   ASSERT_NO_FATAL_FAILURE(OpenInMemory(&database));
+
+  // Vacuum histograms are only recorded for on-disk databases.
+  histograms.ExpectTotalCount("Storage.SessionStorage.Sqlite.FreelistBytes",
+                              /*expected_count=*/0);
+  histograms.ExpectTotalCount(
+      "Storage.SessionStorage.Sqlite.FreelistPercentage",
+      /*expected_count=*/0);
 }
 
 TEST_F(SessionStorageSqliteTest, OpenThenDestroyOnDisk) {
+  base::HistogramTester histograms;
+
   std::unique_ptr<SessionStorageSqlite> database;
   ASSERT_NO_FATAL_FAILURE(OpenOnDisk(&database));
+
+  // Vacuum histograms are recorded once when an on-disk database is opened.
+  histograms.ExpectTotalCount("Storage.SessionStorage.Sqlite.FreelistBytes",
+                              /*expected_count=*/1);
+  histograms.ExpectTotalCount(
+      "Storage.SessionStorage.Sqlite.FreelistPercentage",
+      /*expected_count=*/1);
+
   database.reset();
 
   base::FilePath database_path;
@@ -294,6 +313,36 @@ TEST_F(SessionStorageSqliteTest, MetadataPersistence) {
     ExpectEqualsMapMetadataSpan(read_metadata.map_metadata,
                                 expected_map_metadata);
   }
+}
+
+TEST_F(SessionStorageSqliteTest, ReadAllMetadataWithInvalidSessionId) {
+  ASSERT_NO_FATAL_FAILURE(WriteDefaultMetadataToDisk());
+
+  // Insert an invalid session ID directly, keeping the other fields valid.
+  {
+    base::FilePath database_path;
+    ASSERT_NO_FATAL_FAILURE(GetDatabasePath(&database_path));
+
+    sql::Database database(sql::test::kTestTag);
+    ASSERT_TRUE(database.Open(database_path));
+
+    constexpr char kInsertInvalidSessionId[] =
+        "INSERT INTO session_metadata (session_id, storage_key, map_id) "
+        "VALUES (?, ?, ?)";
+    sql::Statement statement(
+        database.GetUniqueStatement(kInsertInvalidSessionId));
+    statement.BindString(0, "ce8c7dc5$73b4_4320_a506_ce1f4fd3356f");
+    statement.BindBlob(1, kSecondStorageKey.Serialize());
+    statement.BindInt64(2, kSecondMapId);
+    ASSERT_TRUE(statement.Run());
+  }
+
+  std::unique_ptr<SessionStorageSqlite> database;
+  ASSERT_NO_FATAL_FAILURE(OpenOnDisk(&database));
+
+  StatusOr<DomStorageDatabase::Metadata> result = database->ReadAllMetadata();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_TRUE(result.error().IsCorruption());
 }
 
 // Verifies that `ReadAllMetadata()` returns a corruption error when the

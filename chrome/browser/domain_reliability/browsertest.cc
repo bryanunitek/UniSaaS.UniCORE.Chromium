@@ -15,7 +15,6 @@
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -90,7 +89,7 @@ class DomainReliabilityBrowserTest : public InProcessBrowserTest {
 
   network::mojom::NetworkContext* GetNetworkContext() {
     return browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
@@ -332,7 +331,8 @@ IN_PROC_BROWSER_TEST_F(DomainReliabilityBrowserTest, RequestAtShutdown) {
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   auto simple_loader = network::SimpleURLLoader::Create(
       std::move(resource_request), TRAFFIC_ANNOTATION_FOR_TESTS);
-  auto* storage_partition = browser()->profile()->GetDefaultStoragePartition();
+  auto* storage_partition =
+      browser()->GetProfile()->GetDefaultStoragePartition();
   simple_loader->DownloadHeadersOnly(
       storage_partition->GetURLLoaderFactoryForBrowserProcess().get(),
       base::DoNothing());

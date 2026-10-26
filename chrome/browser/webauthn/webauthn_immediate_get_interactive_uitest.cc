@@ -10,6 +10,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/views/webauthn/authenticator_gpm_pin_sheet_view.h"
 #include "chrome/browser/ui/views/webauthn/combined_selector_sheet_view.h"
@@ -18,10 +19,12 @@
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "content/public/test/browser_test.h"
@@ -31,6 +34,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/views_switches.h"
 #include "ui/views/window/dialog_client_view.h"
 
 // These tests are disabled under MSAN. The enclave subprocess is written in
@@ -71,6 +75,12 @@ class WebAuthnImmediateGetTest : public Fixture {
 
   ~WebAuthnImmediateGetTest() override = default;
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    Fixture::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        views::switches::kDisableInputEventActivationProtectionForTesting);
+  }
+
  protected:
   GURL GetHttpsURL(const std::string& hostname = kHostname,
                    const std::string& relative_url = kPagePath) {
@@ -108,14 +118,15 @@ class WebAuthnImmediateGetTest : public Fixture {
   void AddPassword(const std::string& username, const std::string& password) {
     password_manager::PasswordForm form;
     form.username_value = base::ASCIIToUTF16(username);
-    form.password_value = base::ASCIIToUTF16(password);
+    form.password_value =
+        password_manager::PasswordString(base::ASCIIToUTF16(password));
     form.signon_realm = GetHttpsURL().DeprecatedGetOriginAsURL().spec();
     form.url = GetHttpsURL().DeprecatedGetOriginAsURL();
-    form.match_type = password_manager::PasswordForm::MatchType::kExact;
+    form.match_type = affiliations::MatchType::kExact;
 
     scoped_refptr<password_manager::PasswordStoreInterface> password_store =
         ProfilePasswordStoreFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS);
     password_store->AddLogin(password_manager::FromPasswordForm(form));
   }
 
@@ -128,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthnImmediateGetTest,
 
 IN_PROC_BROWSER_TEST_F(WebAuthnImmediateGetTest,
                        ImmediateMediationNotAllowedIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ui_test_utils::BrowserActivationWaiter(incognito_browser).WaitForActivation();
   RunTestSequenceInContext(
       BrowserElements::From(incognito_browser)->GetContext(),

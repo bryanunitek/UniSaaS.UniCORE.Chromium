@@ -6,9 +6,10 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/strings/sys_string_conversions.h"
-#import "components/send_tab_to_self/target_device_info.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/sync_device_info/device_info.h"
+#import "components/sync_device_info/remote_device_info.h"
+#import "ios/chrome/browser/send_tab_to_self/ui/send_tab_to_self_constants.h"
 #import "ios/chrome/browser/send_tab_to_self/ui/send_tab_to_self_modal_delegate.h"
 #import "ios/chrome/browser/shared/ui/bottom_sheet/table_view_bottom_sheet_view_controller+subclassing.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -23,12 +24,6 @@
 
 namespace {
 constexpr CGFloat kSymbolSize = 22;
-NSString* const kSendTabToSelfModalSendButton =
-    @"kSendTabToSelfModalSendButton";
-NSString* const kSendTabToSelfModalCancelButton =
-    @"kSendTabToSelfModalCancelButton";
-NSString* const kSendTabToSelfModalMenuButton =
-    @"kSendTabToSelfModalMenuButton";
 }  // namespace
 
 @interface SendTabToSelfBottomSheetViewController () <
@@ -37,14 +32,13 @@ NSString* const kSendTabToSelfModalMenuButton =
 @end
 
 @implementation SendTabToSelfBottomSheetViewController {
-  std::vector<send_tab_to_self::TargetDeviceInfo> _targetDeviceList;
+  std::vector<syncer::RemoteDeviceInfo> _targetDeviceList;
   NSString* _accountEmail;
   __weak id<SendTabToSelfModalDelegate> _delegate;
 }
 
 - (instancetype)initWithDeviceList:
-                    (std::vector<send_tab_to_self::TargetDeviceInfo>)
-                        targetDeviceList
+                    (std::vector<syncer::RemoteDeviceInfo>)targetDeviceList
                       accountEmail:(NSString*)accountEmail
                           delegate:(id<SendTabToSelfModalDelegate>)delegate {
   ButtonStackConfiguration* configuration =
@@ -97,18 +91,17 @@ NSString* const kSendTabToSelfModalMenuButton =
   // Set up the menu button ("...") and close button ("X") in the navigation
   // bar.
   __weak id<SendTabToSelfModalDelegate> weakDelegate = _delegate;
-  UIAction* manageDevicesAction =
-      [UIAction actionWithTitle:l10n_util::GetNSString(
-                                    IDS_IOS_SEND_TAB_TO_SELF_MANAGE_DEVICES)
-                          image:DefaultSymbolWithPointSize(kExternalLinkSymbol,
-                                                           kSymbolSize)
-                     identifier:nil
-                        handler:^(UIAction* action) {
-                          [weakDelegate openManageDevicesTab];
-                        }];
+  UIAction* manageDevicesAction = [UIAction
+      actionWithTitle:l10n_util::GetNSString(
+                          IDS_IOS_SEND_TAB_TO_SELF_MANAGE_DEVICES)
+                image:SymbolWithPointSize(SymbolExternalLink, kSymbolSize)
+           identifier:nil
+              handler:^(UIAction* action) {
+                [weakDelegate openManageDevicesTab];
+              }];
   UIMenu* menu = [UIMenu menuWithTitle:@"" children:@[ manageDevicesAction ]];
 
-  UIImage* menuImage = DefaultSymbolWithPointSize(kEllipsisSymbol, kSymbolSize);
+  UIImage* menuImage = SymbolWithPointSize(SymbolEllipsis, kSymbolSize);
   UIBarButtonItem* menuButton = [[UIBarButtonItem alloc] initWithImage:menuImage
                                                                   menu:menu];
   menuButton.accessibilityIdentifier = kSendTabToSelfModalMenuButton;
@@ -118,7 +111,7 @@ NSString* const kSendTabToSelfModalMenuButton =
   // If there are no target devices, there's a big blue "Close" button, so no
   // need for the "x".
   if (!_targetDeviceList.empty()) {
-    UIImage* closeImage = DefaultSymbolWithPointSize(kXMarkSymbol, kSymbolSize);
+    UIImage* closeImage = SymbolWithPointSize(SymbolXMark, kSymbolSize);
     UIBarButtonItem* closeButton =
         [[UIBarButtonItem alloc] initWithImage:closeImage
                                          style:UIBarButtonItemStylePlain
@@ -164,14 +157,18 @@ NSString* const kSendTabToSelfModalMenuButton =
   }
 
   NSInteger index = [self selectedRow];
-  if (index >= 0 && index < static_cast<NSInteger>(_targetDeviceList.size())) {
-    const send_tab_to_self::TargetDeviceInfo& device = _targetDeviceList[index];
-
-    NSString* deviceName = base::SysUTF8ToNSString(device.device_name);
-    [_delegate sendTabToTargetDeviceCacheGUID:base::SysUTF8ToNSString(
-                                                  device.cache_guid)
-                             targetDeviceName:deviceName];
+  if (index < 0 || index >= static_cast<NSInteger>(_targetDeviceList.size())) {
+    return;
   }
+
+  const syncer::RemoteDeviceInfo& device = _targetDeviceList[index];
+
+  [self showLoadingState];
+
+  [_delegate
+      sendTabToTargetDeviceCacheGUID:base::SysUTF8ToNSString(device.cache_guid)
+                    targetDeviceName:base::SysUTF8ToNSString(
+                                         device.device_name)];
 }
 
 #pragma mark - TableViewBottomSheetViewController
@@ -201,6 +198,14 @@ NSString* const kSendTabToSelfModalMenuButton =
 
 #pragma mark - Private
 
+// Transitions the primary action button to a loading spinner state and
+// disables user interaction on the sheet while sending is pending.
+- (void)showLoadingState {
+  [self setLoading:YES];
+  self.modalInPresentation = YES;
+  self.view.userInteractionEnabled = NO;
+}
+
 - (void)closeButtonTapped {
   [_delegate dismissViewControllerAnimated];
 }
@@ -208,8 +213,7 @@ NSString* const kSendTabToSelfModalMenuButton =
 - (UITableViewCell*)layoutCell:(UITableViewCell*)cell
              forTableViewWidth:(CGFloat)tableViewWidth
                    atIndexPath:(NSIndexPath*)indexPath {
-  const send_tab_to_self::TargetDeviceInfo& device =
-      _targetDeviceList[indexPath.row];
+  const syncer::RemoteDeviceInfo& device = _targetDeviceList[indexPath.row];
 
   TableViewCellContentConfiguration* configuration =
       [[TableViewCellContentConfiguration alloc] init];
@@ -224,16 +228,16 @@ NSString* const kSendTabToSelfModalMenuButton =
   UIImage* deviceImage;
   switch (device.form_factor) {
     case syncer::DeviceInfo::FormFactor::kDesktop:
-      deviceImage = MakeSymbolMonochrome(
-          DefaultSymbolWithPointSize(kLaptopSymbol, kSymbolSize));
+      deviceImage =
+          MakeSymbolMonochrome(SymbolWithPointSize(SymbolLaptop, kSymbolSize));
       break;
     case syncer::DeviceInfo::FormFactor::kPhone:
-      deviceImage = MakeSymbolMonochrome(
-          DefaultSymbolWithPointSize(kIPhoneSymbol, kSymbolSize));
+      deviceImage =
+          MakeSymbolMonochrome(SymbolWithPointSize(SymbolIPhone, kSymbolSize));
       break;
     case syncer::DeviceInfo::FormFactor::kTablet:
-      deviceImage = MakeSymbolMonochrome(
-          DefaultSymbolWithPointSize(kIPadSymbol, kSymbolSize));
+      deviceImage =
+          MakeSymbolMonochrome(SymbolWithPointSize(SymbolIPad, kSymbolSize));
       break;
     case syncer::DeviceInfo::FormFactor::kUnknown:
     case syncer::DeviceInfo::FormFactor::kAutomotive:
@@ -242,8 +246,8 @@ NSString* const kSendTabToSelfModalMenuButton =
       // These form factors don't have a dedicated icon (but very likely these
       // devices don't support SendTabToSelf anyway). Fall back to the generic
       // laptop icon.
-      deviceImage = MakeSymbolMonochrome(
-          DefaultSymbolWithPointSize(kLaptopSymbol, kSymbolSize));
+      deviceImage =
+          MakeSymbolMonochrome(SymbolWithPointSize(SymbolLaptop, kSymbolSize));
       break;
   }
 

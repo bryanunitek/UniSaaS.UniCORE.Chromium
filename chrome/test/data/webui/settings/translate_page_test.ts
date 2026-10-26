@@ -4,100 +4,74 @@
 
 // clang-format off
 import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
-import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {CrIconButtonElement, LanguageHelper, SettingsAddLanguagesDialogElement, SettingsTranslatePageElement} from 'chrome://settings/lazy_load.js';
-import {LanguagesBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
-import {CrSettingsPrefs} from 'chrome://settings/settings.js';
+import {LanguageHelperImpl, LanguagesBrowserProxyImpl, getLanguageHelperInstance} from 'chrome://settings/lazy_load.js';
+import {PrefsBrowserProxy, PrefService} from 'chrome://settings/settings.js';
 import {assertDeepEquals, assertEquals, assertTrue, assertFalse} from 'chrome://webui-test/chai_assert.js';
-import {FakeSettingsPrivate} from 'chrome://webui-test/fake_settings_private.js';
-import {eventToPromise} from 'chrome://webui-test/test_util.js';
-import {fakeDataBind} from 'chrome://webui-test/polymer_test_util.js';
+import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import type {FakeLanguageSettingsPrivate} from './fake_language_settings_private.js';
 import {getFakeLanguagePrefs} from './fake_language_settings_private.js';
 import {TestLanguagesBrowserProxy} from './test_languages_browser_proxy.js';
+import {TestPrefsBrowserProxy} from './test_prefs_browser_proxy.js';
 // clang-format on
 
 suite('TranslatePage', function() {
   let languageHelper: LanguageHelper;
   let translatePage: SettingsTranslatePageElement;
   let browserProxy: TestLanguagesBrowserProxy;
+  let prefService: PrefService;
 
   const translateTarget = 'translate_recent_target';
   // Always Translate language pref name for the platform.
   const alwaysTranslatePref = 'translate_allowlists';
   const neverTranslatePref = 'translate_blocked_languages';
 
-  suiteSetup(function() {
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    CrSettingsPrefs.deferInitialization = true;
-  });
-
   setup(async function() {
-    const settingsPrefs = document.createElement('settings-prefs');
-    const settingsPrivate = new FakeSettingsPrivate(getFakeLanguagePrefs());
-    settingsPrefs.initialize(settingsPrivate);
-    document.body.appendChild(settingsPrefs);
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getFakeLanguagePrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    prefService = PrefService.getInstance();
+    await prefService.whenInitialized();
 
-    await CrSettingsPrefs.initialized;
     // Set up test browser proxy.
     browserProxy = new TestLanguagesBrowserProxy();
     LanguagesBrowserProxyImpl.setInstance(browserProxy);
 
-    // Set up fake languageSettingsPrivate API.
-    const languageSettingsPrivate = browserProxy.getLanguageSettingsPrivate() as
-        unknown as FakeLanguageSettingsPrivate;
-    languageSettingsPrivate.setSettingsPrefs(settingsPrefs);
-
-    const settingsLanguages = document.createElement('settings-languages');
-    settingsLanguages.prefs = settingsPrefs.prefs!;
-    fakeDataBind(settingsPrefs, settingsLanguages, 'prefs');
-    document.body.appendChild(settingsLanguages);
-    languageHelper = settingsLanguages;
+    LanguageHelperImpl.resetInstanceForTesting();
+    languageHelper = getLanguageHelperInstance();
+    await languageHelper.whenReady();
 
     translatePage = document.createElement('settings-translate-page');
-
-    translatePage.prefs = settingsPrefs.prefs!;
-    fakeDataBind(settingsPrefs, translatePage, 'prefs');
-
-    translatePage.languages = settingsLanguages.languages;
-    fakeDataBind(settingsLanguages, translatePage, 'languages');
-
     document.body.appendChild(translatePage);
-    flush();
-
-    return settingsLanguages.whenReady();
-  });
-
-  teardown(function() {
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    await microtasksFinished();
   });
 
   suite('TranslateSettings', function() {
     test('change target language', function() {
       const targetLanguageSelector =
-          translatePage.shadowRoot!.querySelector<HTMLSelectElement>(
+          translatePage.shadowRoot.querySelector<HTMLSelectElement>(
               '#targetLanguage');
       assertTrue(!!targetLanguageSelector);
 
       assertEquals(
           targetLanguageSelector.value,
-          translatePage.getPref(translateTarget).value);
+          prefService.getPref(translateTarget).value);
 
       targetLanguageSelector.value = 'sw';
       targetLanguageSelector.dispatchEvent(new CustomEvent('change'));
 
-      assertEquals(translatePage.getPref(translateTarget).value, 'sw');
+      assertEquals(prefService.getPref(translateTarget).value, 'sw');
     });
 
-    test('never translate display', function() {
+    test('never translate display', async function() {
       // Disable a language not in fake_language_settings_private. The language
       // should not be shown in the never translate list.
       languageHelper.disableTranslateLanguage('eo');
-      flush();
+      await microtasksFinished();
 
       const neverTranslateDiv =
-          translatePage.shadowRoot!.querySelector<HTMLElement>(
+          translatePage.shadowRoot.querySelector<HTMLElement>(
               '#neverTranslateList');
       assertTrue(!!neverTranslateDiv);
 
@@ -108,12 +82,12 @@ suite('TranslatePage', function() {
 
       // But two should be in the preference (since en-US is the default).
       assertDeepEquals(
-          ['en-US', 'eo'], translatePage.getPref(neverTranslatePref).value);
+          ['en-US', 'eo'], prefService.getPref(neverTranslatePref).value);
 
       // Disable a language that is in fake_language_settings_private. The
       // language should be shown in the never translate list.
       languageHelper.disableTranslateLanguage('nb');
-      flush();
+      await microtasksFinished();
 
       // Two items should now be shown.
       listItems = neverTranslateDiv.querySelectorAll<HTMLElement>('.list-item');
@@ -121,18 +95,17 @@ suite('TranslatePage', function() {
 
       // But three should be on the never translate list
       assertDeepEquals(
-          ['en-US', 'eo', 'nb'],
-          translatePage.getPref(neverTranslatePref).value);
+          ['en-US', 'eo', 'nb'], prefService.getPref(neverTranslatePref).value);
     });
 
-    test('always translate display', function() {
+    test('always translate display', async function() {
       // Add a language not in fake_language_settings_private. The language
       // should not be shown in the always translate list.
       languageHelper.setLanguageAlwaysTranslateState('eo', true);
-      flush();
+      await microtasksFinished();
 
       const alwaysTranslateDiv =
-          translatePage.shadowRoot!.querySelector<HTMLElement>(
+          translatePage.shadowRoot.querySelector<HTMLElement>(
               '#alwaysTranslateList');
       assertTrue(!!alwaysTranslateDiv);
 
@@ -144,14 +117,14 @@ suite('TranslatePage', function() {
       // But one should be on the always translate list
       assertDeepEquals(
           ['eo'],
-          Object.keys(translatePage
-                          .getPref<Record<string, unknown>>(alwaysTranslatePref)
-                          .value));
+          Object.keys(
+              prefService.getPref<Record<string, unknown>>(alwaysTranslatePref)
+                  .value));
 
       // Add a language that is in fake_language_settings_private. The
       // language should be shown in the always translate list.
       languageHelper.setLanguageAlwaysTranslateState('nb', true);
-      flush();
+      await microtasksFinished();
 
       // // There should now be only one item shown.
       listItems =
@@ -161,16 +134,16 @@ suite('TranslatePage', function() {
       // But two should be on the always translate list
       assertDeepEquals(
           ['eo', 'nb'],
-          Object.keys(translatePage
-                          .getPref<Record<string, unknown>>(alwaysTranslatePref)
-                          .value));
+          Object.keys(
+              prefService.getPref<Record<string, unknown>>(alwaysTranslatePref)
+                  .value));
     });
 
-    test('never translate remove icon enabled state', function() {
+    test('never translate remove icon enabled state', async function() {
       // The icon should be disabled if there is only one element on the list
       // and enabled if there are more than one.
       const neverTranslateDiv =
-          translatePage.shadowRoot!.querySelector<HTMLElement>(
+          translatePage.shadowRoot.querySelector<HTMLElement>(
               '#neverTranslateList');
       assertTrue(!!neverTranslateDiv);
 
@@ -182,7 +155,7 @@ suite('TranslatePage', function() {
 
       // Add another language to never translate.
       languageHelper.disableTranslateLanguage('sw');
-      flush();
+      await microtasksFinished();
 
       // All icons should be enabled now.
       deleteIcons = neverTranslateDiv.querySelectorAll<CrIconButtonElement>(
@@ -194,7 +167,7 @@ suite('TranslatePage', function() {
 
       // Remove language and icon should be disabled again.
       languageHelper.enableTranslateLanguage('sw');
-      flush();
+      await microtasksFinished();
 
       // All icons should be enabled now.
       deleteIcons = neverTranslateDiv.querySelectorAll<CrIconButtonElement>(
@@ -205,20 +178,19 @@ suite('TranslatePage', function() {
 
     test('translate.enable toggle', function() {
       const settingsToggle =
-          translatePage.shadowRoot!.querySelector<HTMLElement>(
+          translatePage.shadowRoot.querySelector<HTMLElement>(
               '#offerTranslateOtherLanguages');
       assertTrue(!!settingsToggle);
 
       // Clicking on the toggle switches it to false.
       settingsToggle.click();
       let newToggleValue =
-          translatePage.getPref<boolean>('translate.enabled').value;
+          prefService.getPref<boolean>('translate.enabled').value;
       assertFalse(newToggleValue);
 
       // Clicking on the toggle switches it to true again.
       settingsToggle.click();
-      newToggleValue =
-          translatePage.getPref<boolean>('translate.enabled').value;
+      newToggleValue = prefService.getPref<boolean>('translate.enabled').value;
       assertTrue(newToggleValue);
     });
   });
@@ -241,7 +213,7 @@ suite('TranslatePage', function() {
         // Sanity check: the dialog should no longer be in the DOM.
         assertEquals(
             null,
-            translatePage.shadowRoot!.querySelector(
+            translatePage.shadowRoot.querySelector(
                 'settings-add-languages-dialog'));
         observer.disconnect();
         assertTrue(!!dialogClosedResolver);
@@ -251,7 +223,7 @@ suite('TranslatePage', function() {
 
     setup(async function() {
       const addLanguagesButton =
-          translatePage.shadowRoot!.querySelector<HTMLElement>(
+          translatePage.shadowRoot.querySelector<HTMLElement>(
               '#addAlwaysTranslate');
       const whenDialogOpen = eventToPromise('cr-dialog-open', translatePage);
       assertTrue(!!addLanguagesButton);
@@ -262,7 +234,7 @@ suite('TranslatePage', function() {
       // task.
       await whenDialogOpen;
 
-      dialog = translatePage.shadowRoot!.querySelector(
+      dialog = translatePage.shadowRoot.querySelector(
           'settings-add-languages-dialog')!;
       assertTrue(!!dialog);
       assertEquals(dialog.id, 'alwaysTranslateDialog');
@@ -272,27 +244,26 @@ suite('TranslatePage', function() {
       dialogClosedResolver = new PromiseResolver();
       dialogClosedObserver = new MutationObserver(onMutation);
       dialogClosedObserver.observe(
-          translatePage.shadowRoot!.querySelector('settings-section')!,
+          translatePage.shadowRoot.querySelector('settings-section')!,
           {childList: true});
 
-      flush();
+      await microtasksFinished();
     });
 
     teardown(function() {
       dialogClosedObserver.disconnect();
     });
 
-    test('add languages and confirm', function() {
+    test('add languages and confirm', async function() {
       dialog.dispatchEvent(
           new CustomEvent('languages-added', {detail: ['en', 'no']}));
       dialog.$.dialog.close();
+      await dialogClosedResolver.promise;
       assertDeepEquals(
           ['en', 'no'],
-          Object.keys(translatePage
-                          .getPref<Record<string, unknown>>(alwaysTranslatePref)
-                          .value));
-
-      return dialogClosedResolver.promise;
+          Object.keys(
+              prefService.getPref<Record<string, unknown>>(alwaysTranslatePref)
+                  .value));
     });
   });
 
@@ -314,7 +285,7 @@ suite('TranslatePage', function() {
         // Sanity check: the dialog should no longer be in the DOM.
         assertEquals(
             null,
-            translatePage.shadowRoot!.querySelector(
+            translatePage.shadowRoot.querySelector(
                 'settings-add-languages-dialog'));
         observer.disconnect();
         assertTrue(!!dialogClosedResolver);
@@ -324,7 +295,7 @@ suite('TranslatePage', function() {
 
     setup(async function() {
       const addLanguagesButton =
-          translatePage.shadowRoot!.querySelector<HTMLElement>(
+          translatePage.shadowRoot.querySelector<HTMLElement>(
               '#addNeverTranslate');
       const whenDialogOpen = eventToPromise('cr-dialog-open', translatePage);
       assertTrue(!!addLanguagesButton);
@@ -335,7 +306,7 @@ suite('TranslatePage', function() {
       // task.
       await whenDialogOpen;
 
-      dialog = translatePage.shadowRoot!.querySelector(
+      dialog = translatePage.shadowRoot.querySelector(
           'settings-add-languages-dialog')!;
       assertTrue(!!dialog);
       assertEquals(dialog.id, 'neverTranslateDialog');
@@ -345,25 +316,23 @@ suite('TranslatePage', function() {
       dialogClosedResolver = new PromiseResolver();
       dialogClosedObserver = new MutationObserver(onMutation);
       dialogClosedObserver.observe(
-          translatePage.shadowRoot!.querySelector('settings-section')!,
+          translatePage.shadowRoot.querySelector('settings-section')!,
           {childList: true});
 
-      flush();
+      await microtasksFinished();
     });
 
     teardown(function() {
       dialogClosedObserver.disconnect();
     });
 
-    test('add languages and confirm', function() {
+    test('add languages and confirm', async function() {
       dialog.dispatchEvent(
           new CustomEvent('languages-added', {detail: ['sw', 'no']}));
       dialog.$.dialog.close();
+      await dialogClosedResolver.promise;
       assertDeepEquals(
-          ['en-US', 'sw', 'no'],
-          translatePage.getPref(neverTranslatePref).value);
-
-      return dialogClosedResolver.promise;
+          ['en-US', 'sw', 'no'], prefService.getPref(neverTranslatePref).value);
     });
   });
 });

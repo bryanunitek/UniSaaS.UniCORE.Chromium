@@ -20,9 +20,24 @@
 #include "extensions/buildflags/buildflags.h"
 #include "ui/base/base_window.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(ENABLE_PLATFORM_APPS)
 #include "chrome/browser/apps/platform_apps/audio_focus_web_contents_observer.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
+#include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+#include "chrome/browser/extensions/tab_helper.h"
+#include "chrome/browser/history/history_tab_helper.h"
+#include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
+#include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
+#include "chrome/browser/subresource_filter/chrome_content_subresource_filter_web_contents_helper_factory.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
+#include "extensions/browser/view_type_utils.h"
+#include "extensions/common/mojom/view_type.mojom.h"
 #endif
 
 // This file contains code shared between Android and non-Android platforms.
@@ -60,6 +75,32 @@ void ChromeExtensionHostDelegate::CreateTab(
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   CHECK(profile);
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, tab creation is asynchronous, but `CreateNewWindow()`
+  // immediately starts navigation. Attach early helpers synchronously so
+  // observers like `RequestDesktopSiteWebContentsObserverAndroid` are present
+  // for the initial load. This matches
+  // `TabWebContentsDelegateAndroid::AddNewContents()`.
+  // TODO(crbug.com/499200457): Add instrumentation test.
+  CreateSubresourceFilterWebContentsHelper(web_contents.get());
+  content_settings::PageSpecificContentSettings::CreateForWebContents(
+      web_contents.get(), std::make_unique<PageSpecificContentSettingsDelegate>(
+                              web_contents.get()));
+  if (!profile->IsOffTheRecord()) {
+    HistoryTabHelper::GetOrCreateForWebContents(web_contents.get());
+  }
+  if (optimization_guide::features::IsOptimizationHintsEnabled()) {
+    OptimizationGuideWebContentsObserver::CreateForWebContents(
+        web_contents.get());
+  }
+  InitializePageLoadMetricsForWebContents(web_contents.get());
+  RequestDesktopSiteWebContentsObserverAndroid::CreateForWebContents(
+      web_contents.get());
+  if (GetViewType(web_contents.get()) == mojom::ViewType::kInvalid) {
+    SetViewType(web_contents.get(), mojom::ViewType::kTabContents);
+  }
+  TabHelper::CreateForWebContents(web_contents.get());
+#endif
   BrowserWindowInterface* browser =
       browser_window_util::GetLastActiveNormalBrowserWithProfile(
           *profile, /*include_incognito_or_parent=*/false);
@@ -117,8 +158,8 @@ void ChromeExtensionHostDelegate::NavigateBrowser(
   // supported. See browser_navigator_android.cc or http://crbug.com/441594986.
   auto params =
       std::make_unique<NavigateParams>(browser, /*contents_to_insert=*/nullptr);
-  if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-      disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) {
+  if (disposition == WindowOpenDisposition::kNewForegroundTab ||
+      disposition == WindowOpenDisposition::kNewBackgroundTab) {
     params->contents_to_insert = std::move(web_contents);
   } else {
     params->url = std::move(target_url);
@@ -133,7 +174,7 @@ void ChromeExtensionHostDelegate::NavigateBrowser(
   // among other things, whether the location bar gets displayed.
   // TODO(mpcomplete): This seems wrong. What if the extension content is
   // hosted in a tab?
-  if (disposition == WindowOpenDisposition::NEW_POPUP) {
+  if (disposition == WindowOpenDisposition::kNewPopup) {
     params->app_id = extension_id;
   }
 

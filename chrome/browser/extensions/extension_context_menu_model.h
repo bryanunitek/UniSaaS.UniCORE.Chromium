@@ -29,10 +29,7 @@ namespace extensions {
 class ContextMenuMatcher;
 class Extension;
 class ExtensionAction;
-
-#if !BUILDFLAG(IS_ANDROID)
 class SidePanelService;
-#endif
 
 // The context menu model for extension icons.
 class ExtensionContextMenuModel : public ui::SimpleMenuModel,
@@ -64,6 +61,7 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     VIEW_WEB_PERMISSIONS,
     POLICY_INSTALLED,
     TOGGLE_SIDE_PANEL_VISIBILITY,
+    RATE_EXTENSION,
     // NOTE: If you update this, you probably need to update the
     // ContextMenuAction enum below.
   };
@@ -92,7 +90,8 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     kViewWebPermissions = 13,
     kPolicyInstalled = 14,
     kToggleSidePanelVisibility = 15,
-    kMaxValue = kToggleSidePanelVisibility,
+    kRateExtension = 16,
+    kMaxValue = kRateExtension,
     // NOTE: Please update ExtensionContextMenuAction in enums.xml if you modify
     // this enum.
   };
@@ -101,6 +100,18 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.extensions
   enum class ContextMenuSource { kToolbarAction = 0, kMenuItem = 1 };
 
+  // Outcome of the "Rate it" menu item for a menu session in which it was
+  // shown, logged to UMA when the menu closes.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(ExtensionContextMenuRateExtensionOutcome)
+  enum class RateExtensionOutcome {
+    kNotClicked = 0,
+    kClicked = 1,
+    kMaxValue = kClicked,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/extensions/enums.xml:ExtensionContextMenuRateExtensionOutcome)
+
   // Delegate to handle showing an ExtensionAction popup.
   class PopupDelegate {
    public:
@@ -108,6 +119,10 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     // popup be shown and inspected.
     // The delegate should know which popup to display.
     virtual void InspectPopup() = 0;
+
+    // Returns the active WebContents for the context that owns this menu, or
+    // nullptr to fall back to the browser's active tab.
+    virtual content::WebContents* GetCurrentWebContents() const;
 
    protected:
     virtual ~PopupDelegate() = default;
@@ -169,18 +184,14 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   content::WebContents* GetActiveWebContents() const;
 
   // Returns the side panel service for the current profile.
-#if !BUILDFLAG(IS_ANDROID)
   SidePanelService* GetSidePanelService() const;
-#endif
 
   // Appends the extension's context menu items.
   void AppendExtensionItems();
 
-#if !BUILDFLAG(IS_ANDROID)
   // Appends the side panel menu item to the context menu if `extension` has one
   // it can open.
   void AddSidePanelEntryIfPresent(const Extension& extension);
-#endif
 
   // A copy of the extension's id.
   ExtensionId extension_id_;

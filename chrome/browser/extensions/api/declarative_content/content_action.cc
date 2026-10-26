@@ -18,11 +18,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/invalidate_type.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_manager.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_user_script_loader.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/extension_web_contents_observer.h"
 #include "extensions/browser/icon_util.h"
 #include "extensions/browser/script_injection_tracker.h"
@@ -355,7 +357,7 @@ void RequestContentScript::InitScript(const mojom::HostID& host_id,
 }
 
 void RequestContentScript::AddScript() {
-  DCHECK(script_loader_);
+  CHECK(script_loader_, base::NotFatalUntil::M161);
   UserScriptList scripts;
   scripts.push_back(UserScript::CopyMetadataFrom(script_));
   script_loader_->AddScripts(std::move(scripts),
@@ -375,33 +377,42 @@ void RequestContentScript::Revert(const ApplyInfo& apply_info) const {}
 void RequestContentScript::InstructRenderProcessToInject(
     content::WebContents* contents,
     const Extension* extension) const {
-  // Verify that the extension has permission to access the page before
-  // granting trust for script injection. This prevents a compromised renderer
-  // from fully bypassing permission checks (for example: a spoofed
-  // `extensions::mojom::LocalFrameHost::WatchedPageChange` IPC bypassing the
-  // check we have for an invalid selector and getting here).
+  // Bail out if the extension cannot access the page at all. This prevents a
+  // compromised renderer from fully bypassing permission checks (for example: a
+  // spoofed `extensions::mojom::LocalFrameHost::WatchedPageChange` IPC
+  // bypassing the check we have for an invalid selector and getting here).
+  // When access is withheld, the script is still sent to the renderer, which
+  // defers the injection and requests permission from the browser. Trust is
+  // only granted to the renderer process below when access is allowed.
   std::string error;
-  if (!extension->permissions_data()->CanAccessPage(
-          contents->GetLastCommittedURL(), ExtensionTabUtil::GetTabId(contents),
-          &error)) {
+  content::RenderFrameHost* main_frame = contents->GetPrimaryMainFrame();
+  const GURL& url = util::GetURLForExtensionPermissionCheck(main_frame);
+  PermissionsData::PageAccess page_access =
+      extension->permissions_data()->GetPageAccess(
+          url, ExtensionTabUtil::GetTabId(contents), &error);
+  if (page_access == PermissionsData::PageAccess::kDenied) {
     return;
   }
 
-  ScriptInjectionTracker::WillExecuteCode(base::PassKey<RequestContentScript>(),
-                                          contents->GetPrimaryMainFrame(),
-                                          *extension);
-
   mojom::LocalFrame* local_frame =
       ExtensionWebContentsObserver::GetForWebContents(contents)->GetLocalFrame(
-          contents->GetPrimaryMainFrame());
+          main_frame);
   if (!local_frame) {
     // TODO(crbug.com/40763607): Need to review when this method is
     // called with non-live frame.
     return;
   }
+
+  // When access is withheld, `ScriptInjectionTracker` is instead updated by
+  // `ExtensionActionRunner` if the user later grants access and the deferred
+  // script is permitted to run.
+  if (page_access == PermissionsData::PageAccess::kAllowed) {
+    ScriptInjectionTracker::WillExecuteCode(
+        base::PassKey<RequestContentScript>(), main_frame, *extension);
+  }
   local_frame->ExecuteDeclarativeScript(
       sessions::SessionTabHelper::IdForTab(contents).id(), extension->id(),
-      script_.id(), contents->GetLastCommittedURL());
+      script_.id(), url);
 }
 
 void RequestContentScript::OnScriptsLoaded(
@@ -410,7 +421,7 @@ void RequestContentScript::OnScriptsLoaded(
 
 void RequestContentScript::OnUserScriptLoaderDestroyed(
     UserScriptLoader* loader) {
-  DCHECK_EQ(script_loader_, loader);
+  CHECK_EQ(script_loader_, loader, base::NotFatalUntil::M161);
   scoped_observation_.Reset();
   script_loader_ = nullptr;
 }

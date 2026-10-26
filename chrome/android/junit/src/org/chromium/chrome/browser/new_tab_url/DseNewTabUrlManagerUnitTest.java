@@ -11,7 +11,6 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -21,7 +20,6 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -31,9 +29,7 @@ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.regional_capabilities.RegionalCapabilitiesServiceFactory;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
-import org.chromium.components.regional_capabilities.RegionalCapabilitiesService;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.search_engines.TemplateUrlService.TemplateUrlServiceObserver;
@@ -41,7 +37,6 @@ import org.chromium.url.JUnitTestGURLs;
 
 /** Tests for {@link DseNewTabUrlManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DseNewTabUrlManagerUnitTest {
     private static final String SEARCH_URL = JUnitTestGURLs.SEARCH_URL.getSpec();
     private static final String NEW_TAB_URL = JUnitTestGURLs.NTP_URL.getSpec();
@@ -49,7 +44,6 @@ public class DseNewTabUrlManagerUnitTest {
     @Mock private Profile mProfile;
     private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
             ObservableSuppliers.createMonotonic();
-    @Mock private RegionalCapabilitiesService mRegionalCapabilities;
     @Mock private TemplateUrlService mTemplateUrlService;
     @Mock private TemplateUrl mTemplateUrl;
 
@@ -70,29 +64,11 @@ public class DseNewTabUrlManagerUnitTest {
         ProfileManager.setLastUsedProfileForTesting(mProfile);
         TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
 
-        RegionalCapabilitiesServiceFactory.setInstanceForTesting(mRegionalCapabilities);
-
         mDseNewTabUrlManager = new DseNewTabUrlManager(mProfileSupplier);
-    }
-
-    @After
-    public void tearDown() {
-        ChromeSharedPreferences.getInstance().removeKey(ChromePreferenceKeys.IS_EEA_CHOICE_COUNTRY);
     }
 
     @Test
     public void testIsNewTabSearchEngineUrlAndroidEnabled() {
-        DseNewTabUrlManager.setIsEeaChoiceCountryForTesting(true);
-        assertTrue(DseNewTabUrlManager.isNewTabSearchEngineUrlAndroidEnabled());
-    }
-
-    @Test
-    public void testIsNewTabSearchEngineUrlAndroidEnabledForEeaCountry() {
-        DseNewTabUrlManager.setIsEeaChoiceCountryForTesting(true);
-        assertTrue(
-                ChromeSharedPreferences.getInstance()
-                        .readBoolean(ChromePreferenceKeys.IS_EEA_CHOICE_COUNTRY, false));
-
         assertTrue(DseNewTabUrlManager.isNewTabSearchEngineUrlAndroidEnabled());
     }
 
@@ -121,16 +97,12 @@ public class DseNewTabUrlManagerUnitTest {
 
         // Sets the DSE is Google.
         doReturn(true).when(mTemplateUrlService).isDefaultSearchEngineGoogle();
-        doReturn(true).when(mRegionalCapabilities).isInEeaCountry();
         mProfileSupplier.set(mProfile);
 
         // Verifies that the SharedPreference is updated once the TemplateUrlService is ready.
         assertEquals(mTemplateUrlService, mDseNewTabUrlManager.getTemplateUrlServiceForTesting());
         assertTrue(mSharedPreferenceManager.readBoolean(ChromePreferenceKeys.IS_DSE_GOOGLE, false));
         assertFalse(mSharedPreferenceManager.contains(ChromePreferenceKeys.DSE_NEW_TAB_URL));
-        assertTrue(
-                mSharedPreferenceManager.readBoolean(
-                        ChromePreferenceKeys.IS_EEA_CHOICE_COUNTRY, false));
     }
 
     @Test
@@ -149,12 +121,8 @@ public class DseNewTabUrlManagerUnitTest {
 
         // Verifies that the SharedPreference is updated when the DSE is changed.
         doReturn(true).when(mTemplateUrlService).isDefaultSearchEngineGoogle();
-        doReturn(true).when(mRegionalCapabilities).isInEeaCountry();
         mTemplateUrlServiceObserverCaptor.getValue().onTemplateURLServiceChanged();
         assertTrue(mSharedPreferenceManager.readBoolean(ChromePreferenceKeys.IS_DSE_GOOGLE, false));
-        assertTrue(
-                mSharedPreferenceManager.readBoolean(
-                        ChromePreferenceKeys.IS_EEA_CHOICE_COUNTRY, false));
         assertFalse(mSharedPreferenceManager.contains(ChromePreferenceKeys.DSE_NEW_TAB_URL));
 
         mDseNewTabUrlManager.destroy();

@@ -19,7 +19,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.ObserverList.RewindableIterator;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
@@ -51,7 +50,6 @@ public class TabModelSelectorTabObserverTest {
             new TabModelSelectorObserverTestRule();
 
     @Mock private TabDelegateFactory mTabDelegateFactory;
-    private int mTabId;
     private Profile mProfile;
     private Profile mIncognitoProfile;
 
@@ -148,11 +146,6 @@ public class TabModelSelectorTabObserverTest {
                             return new TabModelSelectorBase(null, false) {
                                 @Override
                                 public void requestToShowTab(Tab tab, int type) {}
-
-                                @Override
-                                public boolean isTabModelRestored() {
-                                    return true;
-                                }
 
                                 @Override
                                 public Tab openNewTab(
@@ -297,11 +290,10 @@ public class TabModelSelectorTabObserverTest {
     private static boolean tabHasObserver(Tab tab, TestTabModelSelectorTabObserver observer) {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    RewindableIterator<TabObserver> tabObservers =
-                            TabTestUtils.getTabObservers(tab);
-                    tabObservers.rewind();
                     boolean found = false;
-                    while (tabObservers.hasNext()) found |= observer.equals(tabObservers.next());
+                    for (TabObserver tabObserver : TabTestUtils.getTabObservers(tab)) {
+                        found |= observer.equals(tabObserver);
+                    }
                     return found;
                 });
     }

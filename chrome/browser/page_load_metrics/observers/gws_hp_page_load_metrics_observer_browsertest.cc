@@ -11,13 +11,15 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/page_load_metrics/integration_tests/metric_integration_test.h"
 #include "chrome/browser/page_load_metrics/observers/histogram_suffixes.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "components/page_load_metrics/common/test/page_load_metrics_test_util.h"
 #include "components/page_load_metrics/google/browser/histogram_suffixes.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -58,7 +60,7 @@ class GWSHpPageLoadMetricsObserverBrowserTest : public MetricIntegrationTest {
  protected:
   std::unique_ptr<PageLoadMetricsTestWaiter> CreatePageLoadMetricsTestWaiter() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     return std::make_unique<PageLoadMetricsTestWaiter>(web_contents);
   }
 
@@ -69,7 +71,9 @@ class GWSHpPageLoadMetricsObserverBrowserTest : public MetricIntegrationTest {
     Start();
 
     // Ensure startup monitoring has started (idempotent for testing).
-    AfterStartupTaskUtils::BeginMonitoringStartupCompletionForTesting();
+    ASSERT_TRUE(performance_manager::PerformanceManager::IsAvailable());
+    AfterStartupTaskUtils::BeginMonitoringStartupCompletionForTesting(
+        performance_manager::PerformanceManager::GetGraph());
   }
 };
 

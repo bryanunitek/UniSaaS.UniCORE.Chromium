@@ -729,7 +729,7 @@ void ExtensionTelemetryService::AddSignalHelper(
     ExtensionStore& store,
     SignalSubscribers& subscribers) {
   ExtensionSignalType signal_type = signal.GetType();
-  DCHECK(subscribers.contains(signal_type));
+  CHECK(subscribers.contains(signal_type), base::NotFatalUntil::M162);
 
   if (!store.contains(signal.extension_id())) {
     // This is the first signal triggered by this extension since the last
@@ -775,10 +775,11 @@ ExtensionTelemetryService::CreateReportWithCommonFieldsPopulated() {
     }
   }
 
-  // Only collect if `is_shutdown_` is false, since BrowserContextHelper can be
-  // destroyed already and cause a crash on ChromeOS.
-  // TODO(crbug.com/367327319): Investigate keyed service dependency order to
-  // guarantee BrowserContextHelper lifetime during shutdown.
+  // Only collect if `is_shutdown_` is false, since BrowserContextHelper and
+  // UserManager are ChromeOS platform-level singletons destroyed during
+  // PostMainMessageLoopRun prior to ProfileManager teardown. KeyedService
+  // dependency ordering between ProfileKeyedServiceFactory instances cannot
+  // prevent their destruction before service shutdown.
   if (base::FeatureList::IsEnabled(kExtensionTelemetryIncludePolicyData) &&
       !is_shutdown_) {
     // The highest level of ManagementAuthorityTrustworthiness of either
@@ -872,7 +873,7 @@ void ExtensionTelemetryService::OnUploadComplete(
 }
 
 void ExtensionTelemetryService::UploadPersistedFile(std::string report) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (!report.empty()) {
     auto upload_data = std::make_unique<std::string>(report);
     // Ensure that `upload_data` is a properly formatted protobuf. If it
@@ -1007,7 +1008,7 @@ ExtensionTelemetryService::CreateReport() {
     reports_pb->AddAllocated(report_entry_pb.release());
   }
 
-  DCHECK(!reports_pb->empty());
+  CHECK(!reports_pb->empty(), base::NotFatalUntil::M162);
 
   // Clear out the extension store data to ensure that:
   // - extension info is refreshed for every telemetry report.
@@ -1055,7 +1056,7 @@ ExtensionTelemetryService::CreateReportForEnterprise() {
     reports_pb->AddAllocated(report_entry_pb.release());
   }
 
-  DCHECK(!reports_pb->empty());
+  CHECK(!reports_pb->empty(), base::NotFatalUntil::M162);
 
   // Clear out the enterprise extension store data.
   enterprise_extension_store_.clear();
@@ -1065,8 +1066,9 @@ ExtensionTelemetryService::CreateReportForEnterprise() {
 
 std::unique_ptr<SafeBrowsingTokenFetcher>
 ExtensionTelemetryService::GetTokenFetcher() {
-  DCHECK(!profile_->IsOffTheRecord() &&
-         IsEnhancedProtectionEnabled(*profile_->GetPrefs()));
+  CHECK(!profile_->IsOffTheRecord() &&
+            IsEnhancedProtectionEnabled(*profile_->GetPrefs()),
+        base::NotFatalUntil::M162);
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile_);
   if (identity_manager &&

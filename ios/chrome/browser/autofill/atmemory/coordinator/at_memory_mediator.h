@@ -7,13 +7,36 @@
 
 #import <Foundation/Foundation.h>
 
-@protocol AtMemoryConsumer;
+#import "components/autofill/core/common/unique_ids.h"
+#import "ios/chrome/browser/autofill/atmemory/public/at_memory_fill_commands.h"
 
-// Mediator for AtMemory.
-@interface AtMemoryMediator : NSObject
+@protocol AtMemoryCommands;
 
-// The consumer for this mediator.
-@property(nonatomic, weak) id<AtMemoryConsumer> consumer;
+namespace autofill {
+class AtMemoryManager;
+class BrowserAutofillManager;
+}  // namespace autofill
+
+// Mediator for AtMemory, serving as a mutator for fill operations.
+@interface AtMemoryMediator : NSObject <AtMemoryFillCommands>
+
+// Handler for AtMemory commands.
+@property(nonatomic, weak) id<AtMemoryCommands> atMemoryHandler;
+
+// The designated initializer. `atMemoryManager` provides access to the
+// AtMemory manager. `autofillManager` provides the primary main frame autofill
+// manager. `fieldId` is the identifier of the field that initiated the AtMemory
+// flow.
+- (instancetype)
+    initWithAtMemoryManager:(autofill::AtMemoryManager*)atMemoryManager
+            autofillManager:(autofill::BrowserAutofillManager*)autofillManager
+                    fieldId:(autofill::FieldGlobalId)fieldId
+    NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)init NS_UNAVAILABLE;
+
+// Disconnects the mediator and clears its references.
+- (void)disconnect;
 
 @end
 

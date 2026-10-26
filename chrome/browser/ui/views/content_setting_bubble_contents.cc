@@ -16,6 +16,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
+#include "chrome/browser/ui/content_settings/primary_page_deactivation_helper.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/content_setting_site_row_view.h"
@@ -42,6 +43,7 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/button/radio_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -227,7 +229,7 @@ void ContentSettingBubbleContents::ListItemContainer::AddItem(
         [](const std::vector<Row>* items, const views::Link* link,
            ContentSettingBubbleContents* parent, const ui::Event& event) {
           const auto it = std::ranges::find(*items, link, &Row::second);
-          DCHECK(it != items->cend());
+          CHECK(it != items->cend(), base::NotFatalUntil::M162);
           parent->LinkClicked(std::distance(items->cbegin(), it), event);
         },
         base::Unretained(&list_item_views_), base::Unretained(link.get()),
@@ -312,7 +314,7 @@ ContentSettingBubbleContents::ListItemContainer::AddNewRowToLayout(NewRow row) {
 void ContentSettingBubbleContents::ListItemContainer::UpdateScrollHeight(
     const Row& row) {
   auto* scroll_view = views::ScrollView::GetScrollViewForContents(this);
-  DCHECK(scroll_view);
+  CHECK(scroll_view, base::NotFatalUntil::M162);
   if (!scroll_view->is_bounded()) {
     // Display a maximum of 4 visible items in a list before scrolling.
     static constexpr int kMaxVisibleListItems = 4;
@@ -341,12 +343,19 @@ ContentSettingBubbleContents::ContentSettingBubbleContents(
                                arrow,
                                views::BubbleBorder::DIALOG_SHADOW,
                                true),
-      content_setting_bubble_model_(std::move(content_setting_bubble_model)) {
+      content_setting_bubble_model_(std::move(content_setting_bubble_model)),
+      weak_factory_(this) {
   // Although other code in this class treats content_setting_bubble_model_ as
   // though it's optional, in fact it can only become null if
   // WebContentsDestroyed() is called, which can't happen until the constructor
   // has run - so it is never null here.
-  DCHECK(content_setting_bubble_model_);
+  CHECK(content_setting_bubble_model_, base::NotFatalUntil::M162);
+
+  chrome::RegisterPrimaryPageDeactivationCallback(
+      web_contents->GetPrimaryPage(),
+      base::BindOnce(&ContentSettingBubbleContents::ResetBubbleModelAndClose,
+                     weak_factory_.GetWeakPtr()));
+
   const std::u16string& done_text =
       GetDoneButtonText(content_setting_bubble_model_->bubble_content());
   const std::u16string& cancel_text =
@@ -390,12 +399,12 @@ void ContentSettingBubbleContents::WindowClosing() {
 
 void ContentSettingBubbleContents::OnListItemAdded(
     const ContentSettingBubbleModel::ListItem& item) {
-  DCHECK(list_item_container_);
+  CHECK(list_item_container_, base::NotFatalUntil::M162);
   list_item_container_->AddItem(item);
 }
 
 void ContentSettingBubbleContents::OnListItemRemovedAt(int index) {
-  DCHECK(list_item_container_);
+  CHECK(list_item_container_, base::NotFatalUntil::M162);
   list_item_container_->RemoveRowAtIndex(index);
 }
 
@@ -407,6 +416,12 @@ int ContentSettingBubbleContents::GetSelectedRadioOption() {
     }
   }
   NOTREACHED();
+}
+
+void ContentSettingBubbleContents::CloseBubble() {
+  if (GetWidget()) {
+    GetWidget()->Close();
+  }
 }
 
 std::u16string ContentSettingBubbleContents::GetWindowTitle() const {
@@ -421,7 +436,7 @@ bool ContentSettingBubbleContents::ShouldShowCloseButton() const {
 }
 
 void ContentSettingBubbleContents::Init() {
-  DCHECK(content_setting_bubble_model_);
+  CHECK(content_setting_bubble_model_, base::NotFatalUntil::M162);
   const ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
   int vertical_spacing =
       provider->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_VERTICAL);
@@ -479,7 +494,7 @@ void ContentSettingBubbleContents::Init() {
       radio_group_.push_back(radio.get());
       rows.push_back({std::move(radio), LayoutRowType::INDENTED});
     }
-    DCHECK(!radio_group_.empty());
+    CHECK(!radio_group_.empty(), base::NotFatalUntil::M162);
     // Now that the buttons have been added to the view hierarchy, it's safe
     // to call SetChecked() on them.
     radio_group_[radio_group.default_item]->SetChecked(true);
@@ -597,7 +612,7 @@ void ContentSettingBubbleContents::Init() {
 
 std::unique_ptr<views::View>
 ContentSettingBubbleContents::CreateHelpAndManageView() {
-  DCHECK(content_setting_bubble_model_);
+  CHECK(content_setting_bubble_model_, base::NotFatalUntil::M162);
   const auto& bubble_content = content_setting_bubble_model_->bubble_content();
   const auto* layout = ChromeLayoutProvider::Get();
   std::vector<std::unique_ptr<views::View>> extra_views;
@@ -656,20 +671,14 @@ ContentSettingBubbleContents::CreateHelpAndManageView() {
 
 void ContentSettingBubbleContents::LinkClicked(int row,
                                                const ui::Event& event) {
-  DCHECK(content_setting_bubble_model_);
-  DCHECK_NE(row, -1);
+  CHECK(content_setting_bubble_model_, base::NotFatalUntil::M162);
+  CHECK_NE(row, -1, base::NotFatalUntil::M162);
   content_setting_bubble_model_->OnListItemClicked(row, event);
 }
 
 void ContentSettingBubbleContents::CustomLinkClicked() {
-  DCHECK(content_setting_bubble_model_);
+  CHECK(content_setting_bubble_model_, base::NotFatalUntil::M162);
   content_setting_bubble_model_->OnCustomLinkClicked();
-  GetWidget()->Close();
-}
-
-void ContentSettingBubbleContents::PrimaryPageChanged(content::Page& page) {
-  // Content settings are based on the main frame, so if it switches then
-  // close up shop.
   GetWidget()->Close();
 }
 
@@ -680,15 +689,9 @@ void ContentSettingBubbleContents::OnVisibilityChanged(
   }
 }
 
-void ContentSettingBubbleContents::WebContentsDestroyed() {
-  // Destroy the bubble model to ensure that the underlying WebContents outlives
-  // it.
-  content_setting_bubble_model_->CommitChanges();
+void ContentSettingBubbleContents::ResetBubbleModelAndClose() {
+  // Destroy the bubble model to ensure that the underlying Page outlives it.
   content_setting_bubble_model_.reset();
-
-  // Closing the widget should synchronously hide it (and post a task to delete
-  // it). Subsequent event listener methods should not be invoked on hidden
-  // widgets.
   GetWidget()->Close();
 }
 

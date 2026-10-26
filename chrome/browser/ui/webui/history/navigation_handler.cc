@@ -10,6 +10,7 @@
 #include "base/values.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 
@@ -40,11 +41,11 @@ void NavigationHandler::HandleNavigateToUrl(const base::ListValue& list) {
 
   WindowOpenDisposition disposition = ui::DispositionFromClick(
       middle_button, alt_key, ctrl_key, meta_key, shift_key,
-      (target_string == "_blank") ? WindowOpenDisposition::NEW_FOREGROUND_TAB
-                                  : WindowOpenDisposition::CURRENT_TAB);
+      (target_string == "_blank") ? WindowOpenDisposition::kNewForegroundTab
+                                  : WindowOpenDisposition::kCurrentTab);
   web_ui()->GetWebContents()->OpenURL(
-      content::OpenURLParams(GURL(url_string), content::Referrer(), disposition,
-                             ui::PAGE_TRANSITION_LINK, false),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(url_string), disposition, ui::PAGE_TRANSITION_LINK),
       /*navigation_handle_callback=*/{});
 
   // This may delete us!

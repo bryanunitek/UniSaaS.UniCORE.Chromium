@@ -26,6 +26,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/stack_allocated.h"
 #include "base/notimplemented.h"
 #include "base/numerics/safe_math.h"
@@ -91,13 +92,13 @@ using gpu::gles2::GLES2Util;
 namespace gpu {
 namespace raster {
 
-namespace {
-
 // TODO(crbug.com/40058879): Disable this work-around, once call-sites are
 // handling failures correctly.
 BASE_FEATURE(kDisableErrorHandlingForReadback,
              "kDisableErrorHandlingForReadback",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+namespace {
 
 const uint32_t kMaxTransferCacheEntrySizeForTransferBuffer = 1024;
 const size_t kMaxImmediateDeletedPaintCachePaths = 1024;
@@ -108,7 +109,7 @@ constexpr size_t kMaxImmediateDeletedPaintCacheEffects = 10u;
   if (ids.size() <= IMMEDIATE_SIZE_CONSTANT) {                           \
     helper_->IMMEDIATE_FUNCTION(ids.size(), ids.data());                 \
   } else {                                                               \
-    size_t data_size = ids.size() * sizeof(GLuint);                      \
+    size_t data_size = ids.size() * sizeof(cc::PaintCacheId);            \
     ScopedSharedMemoryPtr dest(data_size, transfer_buffer_,              \
                                mapped_memory_.get(), helper());          \
     if (dest.valid()) {                                                  \
@@ -412,14 +413,16 @@ RasterImplementation::SingleThreadChecker::~SingleThreadChecker() {
 }
 
 struct RasterImplementation::AsyncARGBReadbackRequest {
-  AsyncARGBReadbackRequest(void* dst_pixels,
-                           GLuint dst_size,
+  AsyncARGBReadbackRequest(base::span<uint8_t> dst_pixels,
+                           const SkImageInfo& shm_info,
+                           GLuint dst_row_bytes,
                            GLuint pixels_offset,
                            GLuint finished_query,
                            std::unique_ptr<ScopedMappedMemoryPtr> shared_memory,
                            base::OnceCallback<void(bool)> callback)
       : dst_pixels(dst_pixels),
-        dst_size(dst_size),
+        shm_info(shm_info),
+        dst_row_bytes(dst_row_bytes),
         pixels_offset(pixels_offset),
         shared_memory(std::move(shared_memory)),
         callback(std::move(callback)),
@@ -427,13 +430,14 @@ struct RasterImplementation::AsyncARGBReadbackRequest {
         done(false),
         readback_successful(false) {}
   ~AsyncARGBReadbackRequest() {
-    // Sometimes `callback` owns `dst_pixels`, this prevents dangling raw ptr
-    dst_pixels = nullptr;
+    // Sometimes `callback` owns `dst_pixels`, this prevents dangling raw_span
+    dst_pixels = {};
     std::move(callback).Run(readback_successful);
   }
 
-  raw_ptr<void> dst_pixels;
-  GLuint dst_size;
+  base::raw_span<uint8_t> dst_pixels;
+  SkImageInfo shm_info;
+  GLuint dst_row_bytes;
   GLuint pixels_offset;
   std::unique_ptr<ScopedMappedMemoryPtr> shared_memory;
   base::OnceCallback<void(bool)> callback;
@@ -489,14 +493,14 @@ struct RasterImplementation::AsyncYUVReadbackRequest {
       return;
     }
 
-    CopyYUVPlane(output_rect.height(), y_plane_stride, y_plane_offset,
-                 shm_address, y_plane_data);
+    CopyYUVPlane(output_rect.width(), output_rect.height(), y_plane_stride,
+                 y_plane_offset, shm_address, y_plane_data);
 
     // U and V planes are half the size of the Y plane.
-    CopyYUVPlane(output_rect.height() / 2, u_plane_stride, u_plane_offset,
-                 shm_address, u_plane_data);
-    CopyYUVPlane(output_rect.height() / 2, v_plane_stride, v_plane_offset,
-                 shm_address, v_plane_data);
+    CopyYUVPlane(output_rect.width() / 2, output_rect.height() / 2,
+                 u_plane_stride, u_plane_offset, shm_address, u_plane_data);
+    CopyYUVPlane(output_rect.width() / 2, output_rect.height() / 2,
+                 v_plane_stride, v_plane_offset, shm_address, v_plane_data);
 
     readback_successful = true;
   }
@@ -524,20 +528,22 @@ struct RasterImplementation::AsyncYUVReadbackRequest {
   bool readback_successful = false;
 
  private:
-  void CopyYUVPlane(GLuint plane_height,
+  void CopyYUVPlane(GLuint plane_width,
+                    GLuint plane_height,
                     int plane_stride,
                     GLuint plane_offset,
                     void* in_buffer,
                     uint8_t* out_buffer) {
     // RasterDecoder writes the pixels into |in_buffer| with the requested
     // stride so we can copy the whole block here.
-    // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
-    // into memory observed by JS at the same time.
     size_t plane_size = plane_height * plane_stride;
     auto dst = UNSAFE_TODO(base::span(out_buffer, plane_size));
     auto src = UNSAFE_TODO(base::span(
         static_cast<uint8_t*>(in_buffer) + plane_offset, plane_size));
-    base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
+    RelaxedAtomicWriteMemcpyImageRowsSkippingPadding(
+        /*dst=*/dst, /*src=*/src, /*row_bytes=*/plane_width,
+        /*height=*/plane_height, /*dst_stride=*/plane_stride,
+        /*src_stride=*/plane_stride);
   }
 };
 
@@ -1138,6 +1144,10 @@ void RasterImplementation::UnmapRasterCHROMIUM(uint32_t raster_written_size,
 // instead of having to edit some template or the code generator.
 #include "gpu/command_buffer/client/raster_implementation_impl_autogen.h"
 
+const Capabilities& RasterImplementation::GetCapabilities() const {
+  return capabilities();
+}
+
 void RasterImplementation::CopySharedImage(const gpu::Mailbox& source_mailbox,
                                            const gpu::Mailbox& dest_mailbox,
                                            GLint xoffset,
@@ -1324,7 +1334,6 @@ void RasterImplementation::BeginRasterCHROMIUM(
     GLuint msaa_sample_count,
     MsaaMode msaa_mode,
     GLboolean can_use_lcd_text,
-    GLboolean visible,
     const gfx::ColorSpace& color_space,
     float hdr_headroom,
     const GLbyte* mailbox) {
@@ -1332,8 +1341,8 @@ void RasterImplementation::BeginRasterCHROMIUM(
 
   helper_->BeginRasterCHROMIUMImmediate(
       sk_color_4f.fR, sk_color_4f.fG, sk_color_4f.fB, sk_color_4f.fA,
-      needs_clear, msaa_sample_count, msaa_mode, can_use_lcd_text, visible,
-      hdr_headroom, mailbox);
+      needs_clear, msaa_sample_count, msaa_mode, can_use_lcd_text, hdr_headroom,
+      mailbox);
 
   raster_properties_.emplace(sk_color_4f, can_use_lcd_text,
                              color_space.ToSkColorSpace());
@@ -1429,14 +1438,32 @@ void RasterImplementation::EndRasterCHROMIUM() {
 
 bool RasterImplementation::ReadbackImagePixelsINTERNAL(
     const gpu::Mailbox& source_mailbox,
+    const gfx::Size& source_size,
     const SkImageInfo& dst_info,
     GLuint dst_row_bytes,
     int src_x,
     int src_y,
     int plane_index,
     base::OnceCallback<void(bool)> readback_done,
-    void* dst_pixels) {
+    base::span<uint8_t> dst_pixels) {
   DCHECK_GE(dst_row_bytes, dst_info.minRowBytes());
+
+  // Clip the read bounds to the actual image size. Anything outside wouldn't be
+  // fill by the GPU process.
+  gfx::Rect src_rect(src_x, src_y, dst_info.width(), dst_info.height());
+  src_rect.Intersect(gfx::Rect(source_size));
+  if (src_rect.IsEmpty()) {
+    // Note, this runs callback out of order.
+    if (readback_done) {
+      std::move(readback_done).Run(/*success=*/false);
+    }
+    return false;
+  }
+
+  // Compute the shared memory info needed to transfer pixels from GPU process.
+  SkImageInfo shm_info = dst_info.makeWH(src_rect.width(), src_rect.height());
+  GLuint shm_row_bytes = shm_info.minRowBytes();
+  GLuint shm_size = shm_info.computeByteSize(shm_row_bytes);
 
   // We can't use GetResultAs<>() to store our result because it uses
   // TransferBuffer under the hood and this function is potentially
@@ -1448,16 +1475,15 @@ bool RasterImplementation::ReadbackImagePixelsINTERNAL(
 
   // Add the size of the SkColorSpace while maintaining 8-byte alignment.
   GLuint pixels_offset = color_space_offset;
-  if (dst_info.colorSpace()) {
+  if (shm_info.colorSpace()) {
     pixels_offset = base::bits::AlignUp(
-        color_space_offset + dst_info.colorSpace()->writeToMemory(nullptr),
+        color_space_offset + shm_info.colorSpace()->writeToMemory(nullptr),
         sizeof(uint64_t));
   }
 
-  GLuint dst_size = dst_info.computeByteSize(dst_row_bytes);
   GLuint total_size =
       pixels_offset +
-      base::bits::AlignUp(dst_size, static_cast<GLuint>(sizeof(uint64_t)));
+      base::bits::AlignUp(shm_size, static_cast<GLuint>(sizeof(uint64_t)));
 
   std::unique_ptr<ScopedMappedMemoryPtr> scoped_shared_memory =
       std::make_unique<ScopedMappedMemoryPtr>(total_size, helper(),
@@ -1482,9 +1508,11 @@ bool RasterImplementation::ReadbackImagePixelsINTERNAL(
           shm_address);
   *readback_result = 0;
 
-  if (dst_info.colorSpace()) {
-    size_t bytes_written = dst_info.colorSpace()->writeToMemory(
-        UNSAFE_TODO(static_cast<uint8_t*>(shm_address) + color_space_offset));
+  if (shm_info.colorSpace()) {
+    size_t bytes_written = shm_info.colorSpace()->writeToMemory(
+        scoped_shared_memory->as_byte_span()
+            .subspan(color_space_offset)
+            .data());
     DCHECK_LE(bytes_written + color_space_offset, pixels_offset);
   }
 
@@ -1501,15 +1529,23 @@ bool RasterImplementation::ReadbackImagePixelsINTERNAL(
   }
 
   helper_->ReadbackARGBImagePixelsINTERNALImmediate(
-      src_x, src_y, plane_index, dst_info.width(), dst_info.height(),
-      dst_row_bytes, dst_info.colorType(), dst_info.alphaType(), shm_id,
-      shm_offset, color_space_offset, pixels_offset, source_mailbox.name);
+      src_rect.x(), src_rect.y(), plane_index, shm_info.width(),
+      shm_info.height(), shm_row_bytes, shm_info.colorType(),
+      shm_info.alphaType(), shm_id, shm_offset, color_space_offset,
+      pixels_offset, source_mailbox.name);
+
+  // Compute the clipped destination span into which pixels should be copied.
+  size_t dst_x = src_rect.x() - src_x;
+  size_t dst_y = src_rect.y() - src_y;
+  base::span<uint8_t> clipped_dst_pixels =
+      dst_pixels.subspan(dst_info.computeOffset(dst_x, dst_y, dst_row_bytes),
+                         shm_info.computeByteSize(dst_row_bytes));
 
   if (is_async) {
     EndQueryEXT(GL_COMMANDS_ISSUED_CHROMIUM);
 
     auto request = std::make_unique<AsyncARGBReadbackRequest>(
-        dst_pixels, dst_size, pixels_offset, query,
+        clipped_dst_pixels, shm_info, dst_row_bytes, pixels_offset, query,
         std::move(scoped_shared_memory), std::move(readback_done));
     auto* request_ptr = request.get();
     argb_request_queue_.push(std::move(request));
@@ -1522,13 +1558,12 @@ bool RasterImplementation::ReadbackImagePixelsINTERNAL(
     if (!*readback_result) {
       return false;
     }
-    // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
-    // into memory observed by JS at the same time.
-    auto dst = UNSAFE_TODO(
-        base::span<uint8_t>(static_cast<uint8_t*>(dst_pixels), dst_size));
-    auto src = UNSAFE_TODO(base::span<uint8_t>(
-        static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size));
-    base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
+    base::span<uint8_t> src =
+        scoped_shared_memory->as_byte_span().subspan(pixels_offset, shm_size);
+    RelaxedAtomicWriteMemcpyImageRowsSkippingPadding(
+        /*dst=*/clipped_dst_pixels, /*src=*/src, /*row_bytes=*/shm_row_bytes,
+        /*height=*/shm_info.height(), /*dst_stride=*/dst_row_bytes,
+        /*src_stride=*/shm_row_bytes);
   }
 
   return true;
@@ -1553,16 +1588,17 @@ void RasterImplementation::OnAsyncARGBReadbackDone(
         static_cast<cmds::ReadbackARGBImagePixelsINTERNALImmediate::Result*>(
             request->shared_memory->address());
     if (*result) {
-      // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
-      // into memory observed by JS at the same time.
-      size_t plane_size = request->dst_size;
-      auto dst = UNSAFE_TODO(base::span<uint8_t>(
-          static_cast<uint8_t*>(request->dst_pixels.get()), plane_size));
-      auto src = UNSAFE_TODO(base::span<uint8_t>(
-          static_cast<uint8_t*>(request->shared_memory->address()) +
-              request->pixels_offset,
-          plane_size));
-      base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
+      size_t shm_row_bytes = request->shm_info.minRowBytes();
+      size_t shm_size = request->shm_info.computeByteSize(shm_row_bytes);
+      auto src = request->shared_memory->as_byte_span().subspan(
+          request->pixels_offset, shm_size);
+      RelaxedAtomicWriteMemcpyImageRowsSkippingPadding(
+          /*dst=*/request->dst_pixels,
+          /*src=*/src,
+          /*row_bytes=*/shm_row_bytes,
+          /*height=*/request->shm_info.height(),
+          /*dst_stride=*/request->dst_row_bytes,
+          /*src_stride=*/shm_row_bytes);
       request->readback_successful = true;
     }
 
@@ -1615,14 +1651,15 @@ void RasterImplementation::ReadbackARGBPixelsAsync(
     return;
   }
 
-  ReadbackImagePixelsINTERNAL(source_mailbox, dst_info, dst_row_bytes,
-                              source_starting_point.x(),
+  ReadbackImagePixelsINTERNAL(source_mailbox, source_size, dst_info,
+                              dst_row_bytes, source_starting_point.x(),
                               source_starting_point.y(), /*plane_index=*/0,
-                              std::move(readback_done), out.data());
+                              std::move(readback_done), out);
 }
 
 bool RasterImplementation::ReadbackImagePixels(
     const gpu::Mailbox& source_mailbox,
+    const gfx::Size& source_size,
     const SkImageInfo& dst_info,
     GLuint dst_row_bytes,
     int src_x,
@@ -1630,9 +1667,12 @@ bool RasterImplementation::ReadbackImagePixels(
     int plane_index,
     void* dst_pixels) {
   TRACE_EVENT0("gpu", "RasterImplementation::ReadbackImagePixels");
+  size_t dst_size = dst_info.computeByteSize(dst_row_bytes);
+  base::span<uint8_t> dst_span =
+      UNSAFE_TODO(base::span(static_cast<uint8_t*>(dst_pixels), dst_size));
   return ReadbackImagePixelsINTERNAL(
-             source_mailbox, dst_info, dst_row_bytes, src_x, src_y, plane_index,
-             base::OnceCallback<void(bool)>(), dst_pixels) ||
+             source_mailbox, source_size, dst_info, dst_row_bytes, src_x, src_y,
+             plane_index, base::OnceCallback<void(bool)>(), dst_span) ||
          base::FeatureList::IsEnabled(kDisableErrorHandlingForReadback);
 }
 
@@ -1848,7 +1888,7 @@ void RasterImplementation::FlushPaintCachePurgedEntries() {
   paint_cache_->Purge(&temp_paint_cache_purged_data_);
   for (uint32_t i = static_cast<uint32_t>(cc::PaintCacheDataType::kPath);
        i < cc::PaintCacheDataTypeCount; ++i) {
-    auto& ids = UNSAFE_TODO(temp_paint_cache_purged_data_[i]);
+    auto& ids = temp_paint_cache_purged_data_[i];
     if (ids.empty()) {
       continue;
     }

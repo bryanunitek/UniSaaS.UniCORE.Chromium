@@ -4,26 +4,16 @@
 
 # This file contains common system config stuff for the Android build.
 
-# Some arguments that are needed across all builds that import this file, for
-# example by is_robolectric.
-declare_args() {
-  # Build incremental targets whenever possible.
-  # See //build/android/incremental_install/README.md for more details.
-  incremental_install = false
-}
-
 declare_args() {
   # Java debug on Android. Having this on enables multidexing, and turning it
   # off will enable proguard.
-  is_java_debug = is_debug || incremental_install
+  is_java_debug = is_debug
 }
 
-# These two combinations could theoretically be made to work, but they are
+# This combination could theoretically be made to work, but it is
 # not useful and so not worth the effort.
 assert(!(is_java_debug && is_official_build),
        "Cannot have is_official_build && is_java_debug")
-assert(!(incremental_install && !is_java_debug),
-       "Cannot have incremental_install without is_java_debug")
 
 # Toolchain used to create native libraries for robolectric_binary() targets.
 robolectric_toolchain = "//build/toolchain/android:robolectric_$host_cpu"
@@ -73,7 +63,7 @@ if (is_android) {
     if (is_cronet_build) {
       # Cronet's min sdk version support policy is different from the rest of
       # Chromium; Cronet explicitly supports older devices.
-      default_min_sdk_version = 23
+      default_min_sdk_version = 24
     }
 
     # Static analysis can be either "on" or "off" or "build_server". This
@@ -131,7 +121,10 @@ if (is_android) {
   }
 
   # Our build system no longer supports legacy multidex.
+  # LINT.IfChange(min_supported_sdk_version)
   min_supported_sdk_version = 23
+
+  # LINT.ThenChange(//third_party/r8/3pp/3pp.py:min_supported_sdk_version)
 
   # ASAN requires O MR1.
   # https://github.com/google/sanitizers/wiki/AddressSanitizerOnAndroid/01f8df1ac1a447a8475cdfcb03e8b13140042dbd#running-with-wrapsh-recommended
@@ -151,6 +144,7 @@ if (is_android) {
     import("//clank/config.gni")
   } else {
     import("//build/config/android/sdk.gni")
+
     declare_args() {
       # Which Android SDK to use.
       android_sdk_release = default_android_sdk_release
@@ -160,9 +154,9 @@ if (is_android) {
   android_ndk_root = "//third_party/android_toolchain/ndk"
 
   public_android_sdk_root = "//third_party/android_sdk/public"
-  public_android_sdk_platform_version = "37.0"
+  public_android_sdk_platform_version = "37.2"
   public_android_sdk_build_tools_version = "37.0.0"
-  if (android_sdk_release == "b") {
+  if (android_sdk_release == "public") {
     default_android_sdk_root = public_android_sdk_root
     default_android_sdk_platform_version = public_android_sdk_platform_version
     default_android_sdk_build_tools_version =
@@ -233,9 +227,9 @@ if (is_android) {
   declare_args() {
     android_ndk_api_level = default_min_sdk_version
 
-    if (current_cpu == "riscv64" && default_min_sdk_version < 36) {
-      # Android did not support RISC-V64 before API 36.
-      android_ndk_api_level = 36
+    if (current_cpu == "riscv64" && default_min_sdk_version < 37) {
+      # The Android NDK sysroot only provides RISC-V 64 libraries for API 37+.
+      android_ndk_api_level = 37
     }
 
     android_sdk_root = default_android_sdk_root
@@ -252,7 +246,13 @@ if (is_android) {
     android_default_version_code = "1"
 
     # Android versionName for android_apk()s that don't explicitly set one.
-    android_default_version_name = "Developer Build"
+    # This must parse as a base::Version, since native code reads the version
+    # from the APK manifest at runtime. It is faked far into the future so that
+    # APKs without a real version (test APKs, sample apps) are never treated as
+    # being older than some minimum supported version. This matches the
+    # sentinel used by //base/version_info/android for non-chromium builds.
+    # The minor component is zero to match Chrome's MAJOR.0.BUILD.PATCH scheme.
+    android_default_version_name = "9999.0.9999.9999"
 
     # Forced Android versionCode
     android_override_version_code = ""
@@ -298,6 +298,9 @@ if (is_android) {
     # Enables all resource optimizations (shrinking, shortening paths, stripping
     # names).
     optimize_android_resources = !is_java_debug
+
+    # Converts PNG resources (except 9-patch files) to lossless WebP.
+    png_to_webp = !is_java_debug && build_with_chromium && !is_cronet_build
 
     # Controls whether specifying |art_profile_path| automatically adds a binary
     # baseline profile to the APK/AAB.
@@ -384,8 +387,6 @@ if (is_android) {
     tiered_dex_partitions = read_file(tiered_dex_partitions_file, "json")
   }
 
-  assert(!incremental_install || is_java_debug,
-         "incremental_install=true && is_java_debug=false is not supported.")
   assert(!tiered_dex_assembly || is_java_debug,
          "tiered_dex_assembly=true && is_java_debug=false is not supported.")
 
@@ -504,10 +505,14 @@ if (is_android) {
 
   javac_paths_for_inputs =
       [ "//third_party/jdk/current/bin/javac" ] + _common_inputs_for_jre_jdk
+  if (host_os == "linux" && host_cpu == "x64") {
+    javac_paths_for_inputs += [ "//third_party/jdk/current/bin/javac-graalvm" ]
+  }
 
   kotlinc_paths_for_inputs = [
     "//third_party/kotlinc",
     "//third_party/kotlinc/current/bin/kotlinc",
+    "//third_party/kotlinc/current/bin/kotlinc-graalvm",
     "//third_party/kotlinc/current/lib/jvm-abi-gen.jar",
     "//third_party/kotlinc/current/lib/annotations-13.0.jar",
     "//third_party/kotlinc/current/lib/kotlin-compiler.jar",

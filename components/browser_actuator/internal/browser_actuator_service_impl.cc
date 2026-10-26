@@ -11,6 +11,7 @@ BrowserActuatorServiceImpl::BrowserActuatorServiceImpl() = default;
 BrowserActuatorServiceImpl::~BrowserActuatorServiceImpl() = default;
 
 bool BrowserActuatorServiceImpl::IsInitialized() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return true;
 }
 

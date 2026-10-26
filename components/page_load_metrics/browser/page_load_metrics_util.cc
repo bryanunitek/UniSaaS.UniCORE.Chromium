@@ -10,6 +10,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "components/page_load_metrics/browser/features.h"
+#include "components/page_load_metrics/browser/soft_navigation_data.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "components/page_load_metrics/common/page_visit_final_status.h"
 #include "net/base/url_util.h"
@@ -143,6 +144,21 @@ bool WasStartedInForegroundOptionalEventInForeground(
           event.value() <= delegate.GetTimeToFirstBackground().value());
 }
 
+bool WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+    const std::optional<base::TimeDelta>& event,
+    const SoftNavigationData& soft_navigation_data) {
+  if (!event || !soft_navigation_data.metrics ||
+      !soft_navigation_data.metrics->commit) {
+    return false;
+  }
+  if (!soft_navigation_data.first_background_time) {
+    return true;
+  }
+  base::TimeDelta start_time = soft_navigation_data.metrics->commit->start_time;
+  return soft_navigation_data.first_background_time.value() > start_time &&
+         event.value() <= soft_navigation_data.first_background_time.value();
+}
+
 // There is a copy of this function in prerender_page_load_metrics_observer.cc.
 // Please keep this consistent with the function.
 bool WasActivatedInForegroundOptionalEventInForeground(
@@ -212,16 +228,6 @@ bool EventOccurredBeforeNonPrerenderingBackgroundStart(
   return event < bg_start;
 }
 
-// Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
-// We'll left the old version for a while.
-// TODO(crbug.com/40222513): Use the above version and delete this.
-bool EventOccurredBeforeNonPrerenderingBackgroundStart(
-    const PageLoadMetricsObserverDelegate& delegate,
-    const page_load_metrics::mojom::PageLoadTiming& timing,
-    const base::TimeDelta& event) {
-  return EventOccurredBeforeNonPrerenderingBackgroundStart(delegate, event);
-}
-
 base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
     const PageLoadMetricsObserverDelegate& delegate,
     const base::TimeDelta& event) {
@@ -239,16 +245,6 @@ base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
       return std::max(corrected, zero);
     }
   }
-}
-
-// Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
-// We'll left the old version for a while.
-// TODO(crbug.com/40222513): Use the above version and delete this.
-base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
-    const PageLoadMetricsObserverDelegate& delegate,
-    const page_load_metrics::mojom::PageLoadTiming& timing,
-    const base::TimeDelta& event) {
-  return CorrectEventAsNavigationOrActivationOrigined(delegate, event);
 }
 
 PageAbortInfo GetPageAbortInfo(

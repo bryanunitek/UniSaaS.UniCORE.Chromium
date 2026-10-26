@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.glic;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
@@ -38,9 +39,11 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.actor.ActorKeyedService;
 import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
@@ -54,6 +57,8 @@ import org.chromium.chrome.browser.actor.ui.ControlOwnership;
 import org.chromium.chrome.browser.actor.ui.TabIndicatorStatus;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.glic.toolbar_button.GlicButtonStateController;
+import org.chromium.chrome.browser.glic.toolbar_button.GlicToolbarButtonController;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonController;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
@@ -61,20 +66,24 @@ import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarPrefs;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
 import org.chromium.chrome.test.util.ChromeTabUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.Collections;
+import java.util.Set;
 
 /** UI Integration tests for Glic Android native components. */
 @DoNotBatch(reason = "Overrides global mock factories and starts activity.")
 @RunWith(ChromeJUnit4ClassRunner.class)
+@Restriction({DeviceFormFactor.PHONE})
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@EnableFeatures({
-    ChromeFeatureList.GLIC,
-    ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2,
-    ChromeFeatureList.TAB_BOTTOM_SHEET
+@EnableFeatures({ChromeFeatureList.GLIC, ChromeFeatureList.TAB_BOTTOM_SHEET})
+@DisableFeatures({
+    ChromeFeatureList.ENABLE_ANDROID_SIDE_PANEL,
+    ChromeFeatureList.ANDROID_BOTTOM_BAR
 })
-@DisableFeatures(ChromeFeatureList.ENABLE_ANDROID_SIDE_PANEL)
 public class GlicAndroidUiIntegrationTest {
+    private static final int TEST_TASK_ID = 1;
+
     @Rule
     public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
 
@@ -105,6 +114,29 @@ public class GlicAndroidUiIntegrationTest {
         mActivityTestRule.startMainActivityOnBlankPage();
         mTab = mActivityTestRule.getActivityTab();
         ChromeTabUtils.waitForTabPageLoaded(mTab, (String) null);
+
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    var rootUiCoordinator =
+                            mActivityTestRule.getActivity().getRootUiCoordinatorForTesting();
+                    Criteria.checkThat(rootUiCoordinator, Matchers.notNullValue());
+                    var adaptiveToolbarUiCoordinator =
+                            rootUiCoordinator.getAdaptiveToolbarUiCoordinatorForTesting();
+                    Criteria.checkThat(adaptiveToolbarUiCoordinator, Matchers.notNullValue());
+                    AdaptiveToolbarButtonController buttonController =
+                            adaptiveToolbarUiCoordinator
+                                    .getAdaptiveToolbarButtonControllerForTesting();
+                    Criteria.checkThat(buttonController, Matchers.notNullValue());
+                    buttonController.recomputeUiState();
+                    Criteria.checkThat(
+                            buttonController.getSingleProviderForTesting(),
+                            Matchers.instanceOf(GlicToolbarButtonController.class));
+                });
+        String defaultDesc =
+                mActivityTestRule
+                        .getActivity()
+                        .getString(R.string.glic_button_entrypoint_ask_gemini_label);
+        waitForButtonContentDescription(defaultDesc);
     }
 
     @After
@@ -112,6 +144,11 @@ public class GlicAndroidUiIntegrationTest {
         ActorKeyedServiceFactory.setForTesting(null);
         GlicKeyedServiceFactory.setForTesting(null);
         GlicEnabling.setEnabledForTesting(false, false);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    AdaptiveToolbarPrefs.saveToolbarButtonManualOverride(
+                            AdaptiveToolbarButtonVariant.AUTO);
+                });
     }
 
     private void waitForButtonContentDescription(String expectedDesc) {
@@ -132,17 +169,6 @@ public class GlicAndroidUiIntegrationTest {
     @Test
     @LargeTest
     public void testButtonStateTransitions() {
-        // Find the button controller to capture the observer registration.
-        AdaptiveToolbarButtonController buttonController =
-                mActivityTestRule
-                        .getActivity()
-                        .getRootUiCoordinatorForTesting()
-                        .getAdaptiveToolbarUiCoordinatorForTesting()
-                        .getAdaptiveToolbarButtonControllerForTesting();
-
-        GlicToolbarButtonController glicController =
-                (GlicToolbarButtonController) buttonController.getSingleProviderForTesting();
-
         // Capture the registered observer on the mock service.
         verify(mActorService, Mockito.atLeastOnce()).addObserver(mActorObserverCaptor.capture());
         ActorKeyedService.Observer observerTemp = null;
@@ -170,7 +196,7 @@ public class GlicAndroidUiIntegrationTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    observer.onTaskStateChanged(1, ActorTaskState.ACTING);
+                    observer.onTaskStateChanged(TEST_TASK_ID, ActorTaskState.ACTING);
                 });
 
         String workingDesc =
@@ -183,7 +209,7 @@ public class GlicAndroidUiIntegrationTest {
         when(mActorTask.getState()).thenReturn(ActorTaskState.WAITING_ON_USER);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    observer.onTaskStateChanged(1, ActorTaskState.WAITING_ON_USER);
+                    observer.onTaskStateChanged(TEST_TASK_ID, ActorTaskState.WAITING_ON_USER);
                 });
 
         String reviewDesc =
@@ -198,7 +224,7 @@ public class GlicAndroidUiIntegrationTest {
         when(mActorTask.getState()).thenReturn(ActorTaskState.FINISHED);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    observer.onTaskStateChanged(1, ActorTaskState.FINISHED);
+                    observer.onTaskStateChanged(TEST_TASK_ID, ActorTaskState.FINISHED);
                 });
 
         String doneDesc =
@@ -219,19 +245,21 @@ public class GlicAndroidUiIntegrationTest {
 
         // Verify that toggleUI was called on GlicKeyedService.
         verify(mGlicService, Mockito.timeout(5000))
-                .toggleUI(Mockito.anyLong(), Mockito.eq(false), Mockito.any(), Mockito.anyInt());
+                .toggleUI(Mockito.any(), Mockito.eq(false), Mockito.any(), Mockito.anyInt());
     }
 
     @Test
     @LargeTest
+    // TODO(crbug.com/570554196): Re-enable.
+    @DisableIf.Build(supported_abis_includes = "x86_64", message = "https://crbug.com/570554196")
     public void testButtonClickShowsTaskMenuWhenTaskOnOtherTab() {
         // Set up active task on a different tab.
         int otherTabId = mTab.getId() + 1;
-        when(mActorTask.getId()).thenReturn(1);
+        when(mActorTask.getId()).thenReturn(TEST_TASK_ID);
         when(mActorTask.getTitle()).thenReturn("Background filling task");
         when(mActorTask.getState()).thenReturn(ActorTaskState.ACTING);
 
-        java.util.Set<Integer> tabSet = Collections.singleton(otherTabId);
+        Set<Integer> tabSet = Collections.singleton(otherTabId);
         when(mActorTask.getTabs()).thenReturn(tabSet);
         when(mActorTask.getLastActedTabs()).thenReturn(tabSet);
 
@@ -254,9 +282,8 @@ public class GlicAndroidUiIntegrationTest {
         onView(withId(R.id.optional_toolbar_button)).check(matches(isDisplayed()));
 
         // Capture GlicKeyedService AllowedChangedObserver registration.
-        verify(mGlicService).addAllowedChangedObserver(mAllowedChangedObserverCaptor.capture());
-        final GlicKeyedService.AllowedChangedObserver observer =
-                mAllowedChangedObserverCaptor.getValue();
+        verify(mGlicService, Mockito.atLeastOnce())
+                .addAllowedChangedObserver(mAllowedChangedObserverCaptor.capture());
 
         // Change Glic setting to false.
         GlicEnabling.setEnabledForTesting(false, /* forwardToNative= */ false);
@@ -264,7 +291,10 @@ public class GlicAndroidUiIntegrationTest {
         // Notify that the allowed state changed.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    observer.onAllowedStateChanged();
+                    for (GlicKeyedService.AllowedChangedObserver obs :
+                            mAllowedChangedObserverCaptor.getAllValues()) {
+                        obs.onAllowedStateChanged();
+                    }
                 });
 
         // Glic button should now be hidden/replaced (the optional button no longer shows Glic).
@@ -279,8 +309,8 @@ public class GlicAndroidUiIntegrationTest {
     @Test
     @LargeTest
     public void testActorOverlayViewAndTakeOver() {
-        // Initially, the overlay view should not be visible.
-        onView(withId(R.id.actor_overlay)).check(matches(not(isDisplayed())));
+        // Initially, the overlay view should not be inflated/present in the hierarchy.
+        onView(withId(R.id.actor_overlay)).check(doesNotExist());
 
         // 1. Simulate Actor UI Tab state update on the tab -> overlay active, border glow visible,
         // handoff button active.
@@ -307,8 +337,8 @@ public class GlicAndroidUiIntegrationTest {
         onView(withId(R.id.take_over_task_button)).check(matches(isDisplayed()));
 
         // 4. Mock the task lookup for takeOverTask action.
-        when(mActorService.getActiveTaskIdOnTab(mTab.getId())).thenReturn(1);
-        when(mActorService.getTask(1)).thenReturn(mActorTask);
+        when(mActorService.getActiveTaskIdOnTab(mTab.getId())).thenReturn(TEST_TASK_ID);
+        when(mActorService.getTask(TEST_TASK_ID)).thenReturn(mActorTask);
 
         // 5. Click the Take Over button.
         onView(withId(R.id.take_over_task_button)).perform(click());

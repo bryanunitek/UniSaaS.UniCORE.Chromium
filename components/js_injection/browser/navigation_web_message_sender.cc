@@ -4,6 +4,8 @@
 
 #include "components/js_injection/browser/navigation_web_message_sender.h"
 
+#include <optional>
+
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/json/json_writer.h"
@@ -171,6 +173,9 @@ class EmptyReplyProxy : public WebMessageReplyProxy {
 
   content::Page& GetPage() override { return *page_; }
 
+  // There is no document to post messages to, so there is nothing to report.
+  std::optional<bool> IsCrossOriginIsolated() override { return std::nullopt; }
+
  private:
   raw_ptr<content::Page> page_;
 };
@@ -276,7 +281,8 @@ void NavigationWebMessageSender::DidFinishLoad(
   PostMessageWithType(kPageLoadEndMessage);
 }
 
-void NavigationWebMessageSender::OnFirstContentfulPaintInPrimaryMainFrame() {
+void NavigationWebMessageSender::OnFirstContentfulPaintInPrimaryMainFrame(
+    base::TimeTicks presentation_time) {
   if (!page().IsPrimary()) {
     return;
   }

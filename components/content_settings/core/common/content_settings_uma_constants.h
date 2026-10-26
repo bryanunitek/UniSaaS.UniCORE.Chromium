@@ -146,10 +146,12 @@ inline constexpr auto kContentSettingsTypeToHistogramValue =
         // Removed TOP_LEVEL_TPCD_ORIGIN_TRIAL in M143.
         {ContentSettingsType::DISPLAY_MEDIA_SYSTEM_AUDIO, 125},
         {ContentSettingsType::JAVASCRIPT_OPTIMIZER, 126},
-        {ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL, 127},
+        // Removed STORAGE_ACCESS_HEADER_ORIGIN_TRIAL in M156.
         {ContentSettingsType::HAND_TRACKING, 128},
         {ContentSettingsType::WEB_APP_INSTALLATION, 129},
-        {ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS, 130},
+        // DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS deprecated in M151.
+        {ContentSettingsType::DEPRECATED_DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+         130},
         {ContentSettingsType::LEGACY_COOKIE_SCOPE, 131},
         {ContentSettingsType::ARE_SUSPICIOUS_NOTIFICATIONS_ALLOWLISTED_BY_USER,
          132},
@@ -168,6 +170,7 @@ inline constexpr auto kContentSettingsTypeToHistogramValue =
         {ContentSettingsType::LOOPBACK_NETWORK, 144},
         {ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS, 145},
         {ContentSettingsType::INLINE_CUE_MENU, 146},
+        {ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA, 147},
 
         // As mentioned at the top, please don't forget to update ContentType in
         // enums.xml when you add entries here!

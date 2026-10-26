@@ -59,7 +59,7 @@ class CaretBoundsChangedWaiter : public ui::InputMethodObserver {
 // If this is used in the test SetUp, ensure the lifecycle lasts past
 // the scope of the SetUp method, perhaps by using a member var, e.g.
 // console_observer_ = std::make_unique<ExtensionConsoleErrorObserver>(
-//        browser()->profile(), extension_misc::kSelectToSpeakExtensionId);
+//        browser()->GetProfile(), extension_misc::kSelectToSpeakExtensionId);
 class ExtensionConsoleErrorObserver : public ErrorConsole::Observer {
  public:
   static constexpr char16_t kErrorBrowserIsShuttingDown[] =
@@ -87,6 +87,8 @@ class ExtensionConsoleErrorObserver : public ErrorConsole::Observer {
   void AddAllowedError(const std::u16string& allowed);
 
  private:
+  bool IsShuttingDown() const;
+
   std::vector<std::u16string> errors_;
   raw_ptr<ErrorConsole> error_console_;
   std::set<std::u16string> allowed_errors_;

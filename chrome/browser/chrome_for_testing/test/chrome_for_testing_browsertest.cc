@@ -16,6 +16,7 @@
 #include "components/headless/clipboard/headless_clipboard.h"
 #include "components/regional_capabilities/regional_capabilities_switches.h"
 #include "components/search_engines/search_engines_switches.h"
+#include "content/public/test/browser_test.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/clipboard_non_backed.h"
@@ -104,7 +105,7 @@ class ChromeForTestingSearchEngineChoiceDialogBrowserTest
   }
 
   bool IsSearchEngineChoiceDialogEnabled() {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     return !!SearchEngineChoiceDialogServiceFactory::GetForProfile(profile);
   }
 };
@@ -152,7 +153,7 @@ IN_PROC_BROWSER_TEST_P(ChromeForTestingUserEducationUIBrowserTest,
                        UserEducationUIOption) {
   EXPECT_EQ(EnableUserEducationUI(), IsEnableUserEducationUI());
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ASSERT_FALSE(profile->IsIncognitoProfile());
   ASSERT_FALSE(profile->IsGuestSession());
   ASSERT_FALSE(profiles::IsDemoSession());

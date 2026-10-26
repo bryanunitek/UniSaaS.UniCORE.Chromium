@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "third_party/blink/renderer/core/animation/css/compositor_keyframe_value.h"
+#include "third_party/blink/renderer/core/animation/css_interpolation_environment.h"
 #include "third_party/blink/renderer/core/animation/typed_interpolation_value.h"
 
 namespace blink {
@@ -50,12 +51,13 @@ TransitionInterpolation::CurrentNonInterpolableValue() const {
 void TransitionInterpolation::Apply(
     CSSInterpolationEnvironment& environment) const {
   type_->Apply(CurrentInterpolableValue(), CurrentNonInterpolableValue(),
-               environment);
+               environment, is_attr_tainted_);
 }
 
 TypedInterpolationValue* TransitionInterpolation::GetInterpolatedValue() const {
   return MakeGarbageCollected<TypedInterpolationValue>(
-      type_, CurrentInterpolableValue().Clone(), CurrentNonInterpolableValue());
+      type_, CurrentInterpolableValue().Clone(), CurrentNonInterpolableValue(),
+      is_attr_tainted_);
 }
 
 }  // namespace blink

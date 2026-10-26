@@ -46,6 +46,7 @@ enum class GoogleSearchMode {
 };
 
 extern const char kGoogleHomepageURL[];
+extern const char kGoogleSearchPrewarmPath[];
 
 // True iff |str| contains a "q=" or "as_q=" query parameter with a non-empty
 // value. |str| should be a query or a hash fragment, without the ? or # (as
@@ -73,6 +74,11 @@ GURL GetGoogleSearchURL(const GURL& google_homepage_url);
 // This performs some fixup and sanity-checking to ensure that the resulting URL
 // is valid and has no query or ref.
 const GURL& CommandLineGoogleBaseURL();
+
+// Returns the Google base suggestion URL specified on the command line, if it
+// exists. This performs some fixup and sanity-checking to ensure that the
+// resulting URL is valid and has no query or ref.
+const GURL& CommandLineGoogleBaseSuggestionURL();
 
 // Returns true if a Google base URL was specified on the command line and |url|
 // begins with that base URL.  This uses a simple string equality check.
@@ -115,9 +121,9 @@ bool IsGoogleDomainUrl(const GURL& url,
 // function should only be used in cases when the input is just a hostname, such
 // as a search engine keyword.
 //
-// If the Google base URL has been overridden on the command line, this function
-// will also return true for any URL whose hostname exactly matches the hostname
-// of the URL specified on the command line.  In this case,
+// If the Google base URL or suggestion URL has been overridden on the command
+// line, this function will also return true for any URL whose hostname exactly
+// matches the hostname of the URL specified on the command line.  In this case,
 // |subdomain_permission| is ignored.
 bool IsGoogleHostname(std::string_view host,
                       SubdomainPermission subdomain_permission);
@@ -127,6 +133,9 @@ bool IsGoogleHomePageUrl(const GURL& url);
 
 // True if |url| represents a valid Google search URL.
 bool IsGoogleSearchUrl(const GURL& url);
+
+// True if |url| represents a valid Google Search prewarm URL.
+bool IsGoogleSearchPrewarmUrl(const GURL& url);
 
 // True if |url| is a valid youtube.<TLD> URL.  If |port_permission| is
 // DISALLOW_NON_STANDARD_PORTS, this also requires |url| to use the standard

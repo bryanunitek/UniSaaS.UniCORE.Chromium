@@ -10,10 +10,10 @@
 #include <sstream>
 
 #include "google/protobuf/compiler/code_generator.h"
-#include "google/protobuf/descriptor.h"
 #include "google/protobuf/compiler/csharp/csharp_doc_comment.h"
 #include "google/protobuf/compiler/csharp/csharp_helpers.h"
 #include "google/protobuf/compiler/csharp/csharp_options.h"
+#include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 
@@ -35,19 +35,17 @@ MessageFieldGenerator::MessageFieldGenerator(const FieldDescriptor* descriptor,
 MessageFieldGenerator::~MessageFieldGenerator() = default;
 
 void MessageFieldGenerator::GenerateMembers(io::Printer* printer) {
-  printer->Print(
-    variables_,
-    "private $type_name$ $name$_;\n");
+  printer->Print(variables_, "private $type_name$$nrt_annotation$ $name$_;\n");
   WritePropertyDocComment(printer, options(), descriptor_);
   AddPublicMemberAttributes(printer);
   printer->Print(
-    variables_,
-    "$access_level$ $type_name$ $property_name$ {\n"
-    "  get { return $name$_; }\n"
-    "  set {\n"
-    "    $name$_ = value;\n"
-    "  }\n"
-    "}\n");
+      variables_,
+      "$access_level$ $type_name$$nrt_annotation$ $property_name$ {\n"
+      "  get { return $name$_; }\n"
+      "  set {\n"
+      "    $name$_ = value;\n"
+      "  }\n"
+      "}\n");
   if (SupportsPresenceApi(descriptor_)) {
     printer->Print(
       variables_,
@@ -189,14 +187,17 @@ void MessageOneofFieldGenerator::GenerateMembers(io::Printer* printer) {
   WritePropertyDocComment(printer, options(), descriptor_);
   AddPublicMemberAttributes(printer);
   printer->Print(
-    variables_,
-    "$access_level$ $type_name$ $property_name$ {\n"
-    "  get { return $has_property_check$ ? ($type_name$) $oneof_name$_ : null; }\n"
-    "  set {\n"
-    "    $oneof_name$_ = value;\n"
-    "    $oneof_name$Case_ = value == null ? $oneof_property_name$OneofCase.None : $oneof_property_name$OneofCase.$oneof_case_name$;\n"
-    "  }\n"
-    "}\n");
+      variables_,
+      "$access_level$ $type_name$$nrt_annotation$ $property_name$ {\n"
+      "  get { return $has_property_check$ ? ($type_name$) $oneof_name$_ : "
+      "null; }\n"
+      "  set {\n"
+      "    $oneof_name$_ = value;\n"
+      "    $oneof_name$Case_ = value == null ? "
+      "$oneof_property_name$OneofCase.None : "
+      "$oneof_property_name$OneofCase.$oneof_case_name$;\n"
+      "  }\n"
+      "}\n");
   if (SupportsPresenceApi(descriptor_)) {
     printer->Print(
       variables_,

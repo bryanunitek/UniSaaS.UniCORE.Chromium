@@ -21,7 +21,6 @@ import android.os.Build;
 import android.view.View;
 
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.espresso.contrib.RecyclerViewActions;
 import androidx.test.filters.MediumTest;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -71,7 +70,6 @@ import org.chromium.content_public.browser.test.util.TestTouchUtils;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.content_public.browser.test.util.WebContentsUtils;
 import org.chromium.net.NetworkChangeNotifier;
-import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.io.IOException;
@@ -89,6 +87,8 @@ import java.util.concurrent.TimeoutException;
 @Restriction({DeviceFormFactor.PHONE_OR_TABLET})
 @CommandLineFlags.Add({
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    // Disable minimum show duration to allow controls to hide immediately on scroll.
+    ChromeSwitches.DISABLE_MINIMUM_SHOW_DURATION,
     "disable-features=IPH_FeedHeaderMenu"
 })
 public class FeedV2NewTabPageTest {
@@ -106,12 +106,11 @@ public class FeedV2NewTabPageTest {
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(
                             ChromeRenderTestRule.Component.UI_BROWSER_CONTENT_SUGGESTIONS_FEED)
-                    .setRevision(4)
+                    .setRevision(5)
                     .build();
 
     private Tab mTab;
     private NewTabPage mNtp;
-    private EmbeddedTestServer mTestServer;
     private List<SiteSuggestion> mSiteSuggestions;
     private TestFeedServer mFeedServer;
 
@@ -130,11 +129,8 @@ public class FeedV2NewTabPageTest {
                 });
 
         mFeedServer = new TestFeedServer();
-        mTestServer =
-                EmbeddedTestServer.createAndStartServer(
-                        ApplicationProvider.getApplicationContext());
 
-        mSiteSuggestions = NewTabPageTestUtils.createFakeSiteSuggestions(mTestServer);
+        mSiteSuggestions = NewTabPageTestUtils.createFakeSiteSuggestions();
         FakeMostVisitedSites mostVisitedSites = new FakeMostVisitedSites();
         mostVisitedSites.setTileSuggestions(mSiteSuggestions);
         mSuggestionsDeps.getFactory().mostVisitedSites = mostVisitedSites;
@@ -143,7 +139,7 @@ public class FeedV2NewTabPageTest {
 
     @After
     public void tearDown() {
-        if (mTestServer != null) {
+        if (mFeedServer != null) {
             mFeedServer.shutdown();
         }
     }
@@ -213,7 +209,8 @@ public class FeedV2NewTabPageTest {
         onView(withId(R.id.feed_stream_recycler_view))
                 .perform(RecyclerViewActions.scrollToPosition(MIN_ITEMS_AFTER_LOAD));
 
-        mActivityTestRule.loadUrl(mTestServer.getURL("/chrome/test/data/android/blue.html"));
+        mActivityTestRule.loadUrl(
+                mActivityTestRule.getTestServer().getURL("/chrome/test/data/android/blue.html"));
 
         WebContentsUtils.waitForCopyableViewInWebContents(webContents);
 
@@ -250,23 +247,25 @@ public class FeedV2NewTabPageTest {
                         new AnimatorListenerAdapter() {
                             @Override
                             public void onAnimationEnd(Animator animation) {
-                                Assert.assertEquals(
-                                        "Feed has been scrolled to target position when NTP"
-                                                + " finished faded out",
-                                        RecyclerView.SCROLL_STATE_IDLE,
-                                        getRecyclerView().getScrollState());
-                                Assert.assertEquals(
-                                        "Feed has been scrolled to target position when NTP"
-                                                + " finished faded out",
-                                        Integer.valueOf(
-                                                FeedSurfaceProvider.RestoringState.RESTORED),
-                                        ntp.getCoordinatorForTesting()
-                                                .getRestoringStateSupplier()
-                                                .get());
                                 callbackHelper.notifyCalled();
                             }
                         });
         callbackHelper.waitForNext();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            "Feed has been scrolled to target position when NTP finished"
+                                    + " faded out",
+                            getRecyclerView().getScrollState(),
+                            Matchers.is(RecyclerView.SCROLL_STATE_IDLE));
+                    Criteria.checkThat(
+                            "Feed has been scrolled to target position when NTP finished"
+                                    + " faded out",
+                            ntp.getCoordinatorForTesting()
+                                    .getRestoringStateSupplier()
+                                    .get(),
+                            Matchers.is(FeedSurfaceProvider.RestoringState.RESTORED));
+                });
     }
 
     @Test
@@ -298,7 +297,23 @@ public class FeedV2NewTabPageTest {
         RecyclerView recyclerView = getRecyclerView();
         FeedV2TestHelper.waitForRecyclerItems(MIN_ITEMS_AFTER_LOAD, recyclerView);
 
-        mRenderTestRule.render(recyclerView, "feedContent_landscape_with_scrollable_mvt_v5");
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    // Scroll down so the logo is at the top of the viewport.
+                    // This removes the variable top padding from the screenshot,
+                    // making the render test compatible with both bottom bar enabled and disabled
+                    // while ensuring the MVTs are fully visible in the smaller viewport.
+                    View logo = mNtp.getView().findViewById(R.id.search_provider_logo);
+                    if (logo != null) {
+                        int[] logoLocation = new int[2];
+                        logo.getLocationInWindow(logoLocation);
+                        int[] rvLocation = new int[2];
+                        recyclerView.getLocationInWindow(rvLocation);
+                        recyclerView.scrollBy(0, logoLocation[1] - rvLocation[1]);
+                    }
+                });
+
+        mRenderTestRule.render(recyclerView, "feedContent_landscape_with_scrollable_mvt_v9");
     }
 
     @Test

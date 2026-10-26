@@ -16,7 +16,6 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/json/values_util.h"
 #include "base/logging.h"
@@ -31,6 +30,7 @@
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/glic/public/features.h"
+#include "chrome/browser/glic/selection/inline_cue_blocklist_utils.h"
 #include "chrome/browser/hid/hid_chooser_context.h"
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -241,9 +241,8 @@ constexpr auto kContentSettingsTypeGroupNames = std::to_array<
     {ContentSettingsType::DIRECT_SOCKETS, nullptr},
     {ContentSettingsType::REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS, nullptr},
     {ContentSettingsType::DISPLAY_MEDIA_SYSTEM_AUDIO, nullptr},
-    {ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL, nullptr},
-    // TODO(crbug.com/368266658): Implement the UI for Direct Sockets PNA.
-    {ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS, nullptr},
+    {ContentSettingsType::DEPRECATED_DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS,
+     nullptr},
     {ContentSettingsType::LEGACY_COOKIE_SCOPE, nullptr},
     {ContentSettingsType::ARE_SUSPICIOUS_NOTIFICATIONS_ALLOWLISTED_BY_USER,
      nullptr},
@@ -262,6 +261,7 @@ constexpr auto kContentSettingsTypeGroupNames = std::to_array<
     {ContentSettingsType::SUSPICIOUS_NOTIFICATION_SHOW_ORIGINAL, nullptr},
     {ContentSettingsType::LOCAL_NETWORK_ACCESS, nullptr},
     {ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS, nullptr},
+    {ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA, nullptr},
 });
 
 static_assert(
@@ -349,7 +349,7 @@ SiteSettingSource CalculateSiteSettingSource(
     }
   }
 
-  DCHECK_NE(SettingSource::kNone, info.source);
+  CHECK_NE(SettingSource::kNone, info.source, base::NotFatalUntil::M162);
   if (info.source == SettingSource::kUser) {
     if (result.source == content::PermissionStatusSource::MULTIPLE_DISMISSALS ||
         result.source == content::PermissionStatusSource::MULTIPLE_IGNORES) {
@@ -394,8 +394,9 @@ void GetPolicyAllowedUrls(ContentSettingsType type,
                           std::vector<base::DictValue>* exceptions,
                           content::WebUI* web_ui,
                           bool incognito) {
-  DCHECK(type == ContentSettingsType::MEDIASTREAM_MIC ||
-         type == ContentSettingsType::MEDIASTREAM_CAMERA);
+  CHECK(type == ContentSettingsType::MEDIASTREAM_MIC ||
+            type == ContentSettingsType::MEDIASTREAM_CAMERA,
+        base::NotFatalUntil::M162);
 
   Profile* profile = Profile::FromWebUI(web_ui);
   PrefService* prefs = profile->GetPrefs();
@@ -455,8 +456,9 @@ SiteSettingSource GetSourceForChooserException(Profile* profile,
   // is used.
   SiteSettingSource calculated_source = CalculateSiteSettingSource(
       profile, content_type, /*origin=*/GURL(), info, permission_result);
-  DCHECK(calculated_source == SiteSettingSource::kPolicy ||
-         calculated_source == SiteSettingSource::kPreference);
+  CHECK(calculated_source == SiteSettingSource::kPolicy ||
+            calculated_source == SiteSettingSource::kPreference,
+        base::NotFatalUntil::M162);
   return calculated_source;
 }
 
@@ -615,11 +617,6 @@ std::vector<ContentSettingsType> GetVisiblePermissionCategories(
   if (!initialized) {
     // The permission categories in this block are only shown when running with
     // certain flags/switches.
-    if (base::FeatureList::IsEnabled(features::kGlicSelectionPrompt) &&
-        features::kGlicSelectionEnableSiteSettings.Get()) {
-      base_types->push_back(ContentSettingsType::INLINE_CUE_MENU);
-    }
-
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(
             ::switches::kEnableExperimentalWebPlatformFeatures)) {
       base_types->push_back(ContentSettingsType::BLUETOOTH_SCANNING);
@@ -786,7 +783,7 @@ void AddExceptionForHostedApp(const std::string& url_pattern,
 
   std::string setting_string =
       content_settings::ContentSettingToString(CONTENT_SETTING_ALLOW);
-  DCHECK(!setting_string.empty());
+  CHECK(!setting_string.empty(), base::NotFatalUntil::M162);
 
   exception.Set(kSetting, setting_string);
   exception.Set(kOrigin, url_pattern);
@@ -817,7 +814,7 @@ base::DictValue GetFileSystemExceptionForPage(ContentSettingsType content_type,
   exception.Set(kDisplayName, file_path.LossyDisplayName());
   std::string setting_string =
       content_settings::ContentSettingToString(setting);
-  DCHECK(!setting_string.empty());
+  CHECK(!setting_string.empty(), base::NotFatalUntil::M162);
   exception.Set(kSetting, setting_string);
 
   exception.Set(kSource, SiteSettingSourceToString(source));
@@ -866,7 +863,7 @@ base::DictValue GetExceptionForPage(
 
   std::string setting_string =
       content_settings::ContentSettingToString(setting);
-  DCHECK(!setting_string.empty());
+  CHECK(!setting_string.empty(), base::NotFatalUntil::M162);
   exception.Set(kSetting, setting_string);
 
   // Cookie exception types may have an expiration that should be shown.
@@ -929,7 +926,7 @@ base::DictValue GetStorageAccessExceptionForPage(
   exception.Set(kDisplayName, display_name);
   std::string setting_string =
       content_settings::ContentSettingToString(setting);
-  DCHECK(!setting_string.empty());
+  CHECK(!setting_string.empty(), base::NotFatalUntil::M162);
   exception.Set(kSetting, setting_string);
 
   // If there is only one exception and that exception applies everywhere,
@@ -1052,9 +1049,7 @@ void GetRawExceptionsForContentSettingsType(
     }
 
     // Don't add auto-granted permissions for storage access exceptions.
-    if (setting.metadata.decided_by_related_website_sets() &&
-        !base::FeatureList::IsEnabled(
-            permissions::features::kShowRelatedWebsiteSetsPermissionGrants)) {
+    if (setting.metadata.decided_by_related_website_sets()) {
       continue;
     }
 
@@ -1144,7 +1139,7 @@ void GetExceptionsForContentType(ContentSettingsType type,
       type == ContentSettingsType::MEDIASTREAM_CAMERA) {
     auto& policy_exceptions =
         all_provider_exceptions[ProviderType::kPolicyProvider];
-    DCHECK(policy_exceptions.empty());
+    CHECK(policy_exceptions.empty(), base::NotFatalUntil::M162);
     GetPolicyAllowedUrls(type, &policy_exceptions, web_ui, incognito);
   }
 
@@ -1157,6 +1152,22 @@ void GetExceptionsForContentType(ContentSettingsType type,
     auto& urls_with_granted_entries =
         all_provider_exceptions[ProviderType::kDefaultProvider];
     GetFileSystemGrantedEntries(&urls_with_granted_entries, profile, incognito);
+  }
+
+  // Display default blocked sites for the inline cue in the
+  // settings so users can see and manage those sites.
+  if (type == ContentSettingsType::INLINE_CUE_MENU) {
+    auto& pref_exceptions =
+        all_provider_exceptions[ProviderType::kPrefProvider];
+    std::vector<std::string> blocked_sites =
+        glic::GetActiveDefaultBlockedSitePatternsForInlineCue(profile);
+    for (const std::string& site : blocked_sites) {
+      ContentSettingsPattern pattern = ContentSettingsPattern::FromString(site);
+      pref_exceptions.push_back(GetExceptionForPage(
+          type, profile, pattern, ContentSettingsPattern::Wildcard(),
+          GetDisplayNameForPattern(profile, pattern), CONTENT_SETTING_BLOCK,
+          SiteSettingSource::kPreference, base::Time(), incognito));
+    }
   }
 
   for (auto& one_provider_exceptions : all_provider_exceptions) {
@@ -1223,7 +1234,7 @@ void GetContentCategorySetting(const HostContentSettingsMap* map,
   auto provider = ProviderType::kDefaultProvider;
   std::string setting = content_settings::ContentSettingToString(
       map->GetDefaultContentSetting(content_type, &provider));
-  DCHECK(!setting.empty());
+  CHECK(!setting.empty(), base::NotFatalUntil::M162);
 
   object->Set(kSetting, setting);
   if (provider != ProviderType::kDefaultProvider) {
@@ -1276,9 +1287,10 @@ ContentSetting GetContentSettingForOrigin(Profile* profile,
 
   if (info.metadata.session_model() ==
       content_settings::mojom::SessionModel::ONE_TIME) {
-    DCHECK(
-        permissions::PermissionUtil::DoesSupportTemporaryGrants(content_type));
-    DCHECK_EQ(result.status, PermissionStatus::GRANTED);
+    CHECK(permissions::PermissionUtil::DoesSupportTemporaryGrants(content_type),
+          base::NotFatalUntil::M162);
+    CHECK_EQ(result.status, PermissionStatus::GRANTED,
+             base::NotFatalUntil::M162);
     return CONTENT_SETTING_DEFAULT;
   }
   return permissions::PermissionUtil::PermissionStatusToContentSetting(
@@ -1350,7 +1362,7 @@ base::DictValue CreateChooserExceptionObject(
 
   std::string setting_string =
       content_settings::ContentSettingToString(CONTENT_SETTING_DEFAULT);
-  DCHECK(!setting_string.empty());
+  CHECK(!setting_string.empty(), base::NotFatalUntil::M162);
 
   exception.Set(kDisplayName, display_name);
   exception.Set(kObject, object.Clone());
@@ -1395,7 +1407,8 @@ base::ListValue GetChooserExceptionListFromProfile(
   base::ListValue exceptions;
   ContentSettingsType content_type =
       ContentSettingsTypeFromGroupName(chooser_type.name);
-  DCHECK(content_type != ContentSettingsType::DEFAULT);
+  CHECK(content_type != ContentSettingsType::DEFAULT,
+        base::NotFatalUntil::M162);
 
   // The BluetoothChooserContext is only available when the
   // WebBluetoothNewPermissionsBackend flag is enabled.
@@ -1434,7 +1447,8 @@ base::ListValue GetChooserExceptionListFromProfile(
       continue;
     }
 
-    std::u16string name = chooser_context->GetObjectDisplayName(object->value);
+    std::u16string name =
+        chooser_context->GetObjectDisplayNameForUI(object->value);
     auto& chooser_exception_details = all_chooser_objects[std::make_pair(
         name, base::Value(object->value.Clone()))];
 

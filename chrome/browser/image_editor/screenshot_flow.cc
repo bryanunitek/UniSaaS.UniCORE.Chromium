@@ -17,6 +17,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/cursor/cursor.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/events/event_target.h"
 #include "ui/gfx/canvas.h"
@@ -110,9 +111,8 @@ void ScreenshotFlow::CreateAndAddUIOverlay() {
     return;
   web_contents_observer_ = std::make_unique<UnderlyingWebContentsObserver>(
       web_contents_.get(), this);
-  screen_capture_layer_ =
-      std::make_unique<ui::Layer>(ui::LayerType::LAYER_TEXTURED);
-  screen_capture_layer_->SetName("ScreenshotRegionSelectionLayer");
+  screen_capture_layer_ = std::make_unique<ui::LayerTextured>();
+  screen_capture_layer_->SetName("ScreenshotFlow:RegionSelection");
   screen_capture_layer_->SetFillsBoundsOpaquely(false);
   screen_capture_layer_->set_delegate(this);
 #if BUILDFLAG(IS_MAC)

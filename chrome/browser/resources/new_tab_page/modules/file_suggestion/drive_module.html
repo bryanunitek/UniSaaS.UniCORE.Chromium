@@ -6,7 +6,6 @@
                                   'modulesMoreActions',
                                   'modulesDriveSentence')}"
     @disable-button-click="${this.onDisableButtonClick_}"
-    @dismiss-button-click="${this.onDismissButtonClick_}"
     @info-button-click="${this.onInfoButtonClick_}">
 </ntp-module-header>
 <ntp-file-suggestion id="fileSuggestion"
@@ -14,6 +13,7 @@
     see-more-url="${this.showDriveModuleSeeMoreLink_ ?
         'https://drive.google.com' : ''}"
     see-more-text="$i18n{modulesDriveSeeMore}"
+    see-more-aria-label="$i18n{modulesDriveSeeMoreAcc}"
     .files="${this.files}">
 </ntp-file-suggestion>
 ${this.showInfoDialog_ ? html`

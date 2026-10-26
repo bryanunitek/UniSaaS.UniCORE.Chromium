@@ -41,16 +41,14 @@
 #import "ios/chrome/browser/policy/model/management_state.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
-#import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_sign_in_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -72,16 +70,27 @@
 #import "services/network/public/cpp/shared_url_loader_factory.h"
 #import "ui/base/l10n/l10n_util.h"
 
+@interface AuthenticationFlowPerformerBase ()
+
+// Called when the profile switching succeeded.
+- (void)didSwitchToProfileWithNewProfileBrowser:(Browser*)newProfileBrowser
+                                     completion:(base::OnceClosure)completion;
+
+@end
+
 namespace {
 const int64_t kAuthenticationFlowTimeoutSeconds = 10;
 
 // The change profile continuation for the authentication flow.
 void AuthenticationFlowContinuationImpl(
-    id<AuthenticationFlowPerformerBaseDelegate> delegate,
+    AuthenticationFlowPerformerBase* performer,
     SceneState* scene_state,
     base::OnceClosure closure) {
-  CHECK(delegate);
-  [delegate
+  // Once the profile switch has started, the authentication flow cannot be
+  // interrupted and retains itself (and `performer`) until the switch
+  // completes.
+  CHECK(performer, base::NotFatalUntil::M160);
+  [performer
       didSwitchToProfileWithNewProfileBrowser:scene_state
                                                   .browserProviderInterface
                                                   .mainBrowserProvider.browser
@@ -98,7 +107,7 @@ void HandleSignoutForSnackbar(
     return;
   }
   // The regular browser should be used to execute the signout.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
 
   base::RecordAction(
       base::UserMetricsAction("Mobile.Signin.SnackbarUndoTapped"));
@@ -162,9 +171,9 @@ void MaybeShowHistorySyncScreenAfterProfileSwitch(
     view_controller = view_controller.presentedViewController;
   }
 
-  id<SceneCommands> sceneHandler =
-      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
-  [sceneHandler showSignin:command baseViewController:view_controller];
+  id<SceneSignInCommands> sceneSignInHandler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneSignInCommands);
+  [sceneSignInHandler showSignin:command baseViewController:view_controller];
 }
 
 void CompletePostSignInActionsContinuationImpl(
@@ -194,9 +203,9 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
                                id<SystemIdentity> identity,
                                Browser* browser,
                                signin_metrics::AccessPoint access_point) {
-  CHECK(browser, base::NotFatalUntil::M145);
+  CHECK(browser);
   // Sign-in related work should be done on regular browser.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   ProfileIOS* profile = browser->GetProfile()->GetOriginalProfile();
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile);
@@ -285,7 +294,6 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
               postSignInActions:(PostSignInActionSet)postSignInActions
                    withIdentity:(id<SystemIdentity>)identity
                     accessPoint:(signin_metrics::AccessPoint)accessPoint {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
   ChangeProfileContinuation postSignInContinuation =
       CompletePostSigninActionsContinuation(postSignInActions, identity,
                                             accessPoint);
@@ -308,9 +316,9 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
                  withCompletion:(ProceduralBlock)callback
                  viewController:(UIViewController*)viewController
                         browser:(Browser*)browser {
-  CHECK(browser, base::NotFatalUntil::M150);
+  CHECK(browser);
   // Sign-in related work should be done on regular browser.
-  CHECK_EQ(browser->type(), Browser::Type::kRegular, base::NotFatalUntil::M145);
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   [self checkNoDialog];
 
   base::RecordAction(base::UserMetricsAction(
@@ -339,12 +347,22 @@ void CompletePostSignInActions(PostSignInActionSet post_signin_actions,
 
 #pragma mark - Private
 
-// The change profile continuation for the authentication flow.
-- (ChangeProfileContinuation)authenticationFlowContinuation {
-  return base::BindOnce(&AuthenticationFlowContinuationImpl, _delegate);
+- (void)didSwitchToProfileWithNewProfileBrowser:(Browser*)newProfileBrowser
+                                     completion:(base::OnceClosure)completion {
+  if (!_delegate) {
+    std::move(completion).Run();
+    return;
+  }
+  [_delegate authenticationFlowPerformerBase:self
+      didSwitchToProfileWithNewProfileBrowser:newProfileBrowser
+                                   completion:std::move(completion)];
 }
 
-#pragma mark - Private
+// The change profile continuation for the authentication flow.
+- (ChangeProfileContinuation)authenticationFlowContinuation {
+  __weak __typeof(self) weakSelf = self;
+  return base::BindOnce(&AuthenticationFlowContinuationImpl, weakSelf);
+}
 
 // Callback for when the alert is dismissed.
 - (void)alertControllerDidDisappear:(ChromeCoordinator*)coordinator {

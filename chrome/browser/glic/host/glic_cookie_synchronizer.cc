@@ -19,7 +19,10 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/glic/host/auth_controller.h"
+#include "chrome/browser/glic/host/guest_util.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/webui_url_constants.h"
@@ -111,8 +114,11 @@ class GlicCookieSynchronizer::SyncCookiesForDevelopmentTask {
     cookie_options.set_do_not_update_access_time();
     // Cookies we need to set are HttpOnly.
     cookie_options.set_include_httponly();
-    for (const GURL& url : {GURL("https://login.corp.google.com"),
-                            GURL("https://googleplex.com")}) {
+    for (const GURL& url :
+         {GURL("https://login.corp.google.com"), GURL("https://googleplex.com"),
+          GURL("https://corp.google.com"),
+          GURL("https://sslproxy.corp.google.com"),
+          GURL("https://proxy.googleprod.com")}) {
       ++get_cookie_list_request_count_;
       cookie_manager->GetCookieList(
           url, cookie_options, {},
@@ -204,13 +210,9 @@ class GlicCookieSynchronizer::SyncCookiesForDevelopmentTask {
 GlicCookieSynchronizer::GlicCookieSynchronizer(
     content::BrowserContext* context,
     signin::IdentityManager* identity_manager)
-    : GlicCookieSynchronizer(
-          context,
-          identity_manager,
-          content::StoragePartitionConfig::Create(context,
-                                                  chrome::kChromeUIGlicHost,
-                                                  /*partition_name=*/"glicpart",
-                                                  /*in_memory=*/false)) {}
+    : GlicCookieSynchronizer(context,
+                             identity_manager,
+                             GetGlicStoragePartitionConfig(context)) {}
 
 GlicCookieSynchronizer::GlicCookieSynchronizer(
     content::BrowserContext* context,
@@ -262,6 +264,8 @@ GlicCookieSynchronizer::GetDeviceBoundSessionManagerForPartition() {
 
 void GlicCookieSynchronizer::CopyCookiesToWebviewStoragePartition(
     OnWebviewAuth callback) {
+  TRACE_EVENT("glic",
+              "GlicCookieSynchronizer::CopyCookiesToWebviewStoragePartition");
   CHECK(!callback.is_null());
   callbacks_.push_back(std::move(callback));
 
@@ -325,6 +329,7 @@ void GlicCookieSynchronizer::SyncCookiesForDevelopmentComplete(bool success) {
 }
 
 void GlicCookieSynchronizer::BeginCookieSync() {
+  TRACE_EVENT("glic", "GlicCookieSynchronizer::BeginCookieSync");
   // We only need primary account authentication in the webview.
   CoreAccountId primary_account_id =
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
@@ -334,7 +339,9 @@ void GlicCookieSynchronizer::BeginCookieSync() {
     return;
   }
   signin::MultiloginParameters parameters = {
-      gaia::MultiloginMode::MULTILOGIN_UPDATE_COOKIE_ACCOUNTS_ORDER,
+      base::FeatureList::IsEnabled(features::kGlicReuseCookies)
+          ? gaia::MultiloginMode::MULTILOGIN_PRESERVE_COOKIE_ACCOUNTS_ORDER
+          : gaia::MultiloginMode::MULTILOGIN_UPDATE_COOKIE_ACCOUNTS_ORDER,
       {primary_account_id}};
   if (base::FeatureList::IsEnabled(features::kGlicIgnoreOfflineState)) {
     parameters.wait_on_connectivity = false;
@@ -350,6 +357,7 @@ void GlicCookieSynchronizer::BeginCookieSync() {
 
 void GlicCookieSynchronizer::OnAuthFinished(
     signin::SetAccountsInCookieResult cookie_result) {
+  TRACE_EVENT("glic", "GlicCookieSynchronizer::OnAuthFinished");
   switch (cookie_result) {
     case signin::SetAccountsInCookieResult::kSuccess:
       CompleteAuth(GlicCookieSyncResult::kSuccess);

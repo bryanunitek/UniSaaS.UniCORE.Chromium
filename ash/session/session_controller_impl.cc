@@ -299,11 +299,6 @@ void SessionControllerImpl::LockScreen() {
     client_->RequestLockScreen();
 }
 
-void SessionControllerImpl::HideLockScreen() {
-  if (client_)
-    client_->RequestHideLockScreen();
-}
-
 void SessionControllerImpl::RequestSignOut() {
   if (client_) {
     client_->RequestSignOut();
@@ -425,6 +420,8 @@ void SessionControllerImpl::SetSessionInfo(const SessionInfo& info) {
     // shutdown.
     bool known_transition_during_shutdown =
         (state_ == SessionState::OOBE &&
+         info.state == SessionState::LOGGED_IN_NOT_ACTIVE) ||
+        (state_ == SessionState::LOGIN_PRIMARY &&
          info.state == SessionState::LOGGED_IN_NOT_ACTIVE) ||
         (state_ == SessionState::LOGGED_IN_NOT_ACTIVE &&
          info.state == SessionState::ACTIVE) ||

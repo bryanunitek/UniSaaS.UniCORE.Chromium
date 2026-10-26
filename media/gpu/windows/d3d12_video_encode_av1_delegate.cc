@@ -9,10 +9,13 @@
 #include <optional>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/span.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "media/base/video_color_space.h"
 #include "media/base/video_encoder.h"
 #include "media/gpu/windows/d3d12_video_helpers.h"
 #include "media/gpu/windows/format_utils.h"
@@ -24,6 +27,9 @@ namespace {
 
 constexpr uint32_t kDefaultOrderHintBitsMinus1 = 7;
 constexpr uint32_t kPrimaryRefNone = 7;
+
+// `MAX_LOOP_FILTER` in libaom, see AV1 spec 5.9.11.
+constexpr int kMaxLoopFilterLevel = 63;
 
 // Default value from
 // //third_party/webrtc/modules/video_coding/codecs/av1/libaom_av1_encoder.cc,
@@ -45,8 +51,19 @@ constexpr auto kVideoCodecProfileToD3D12Profile =
          {AV1PROFILE_PROFILE_PRO,
           D3D12_VIDEO_ENCODER_AV1_PROFILE_PROFESSIONAL}});
 
-// See AV1 spec 7.12 for details.
-constexpr std::array<int16_t, 256> kAcQuantizerLookup = {
+// Input formats probed per profile in GetSupportedProfiles().
+constexpr std::array<std::pair<VideoPixelFormat, DXGI_FORMAT>, 2>
+    kHighProfileFormatsToProbe = {{{PIXEL_FORMAT_P410LE, DXGI_FORMAT_Y410},
+                                   {PIXEL_FORMAT_ABGR, DXGI_FORMAT_AYUV}}};
+constexpr std::array<std::pair<VideoPixelFormat, DXGI_FORMAT>, 2>
+    kMainProfileFormatsToProbe = {{{PIXEL_FORMAT_NV12, DXGI_FORMAT_NV12},
+                                   {PIXEL_FORMAT_P010LE, DXGI_FORMAT_P010}}};
+
+// See AV1 spec 7.12 for details. The quantizer is bit depth dependent, so the
+// 8 and 10 bit lookups are kept separate, matching `ac_qlookup_QTX` and
+// `ac_qlookup_10_QTX` in
+// //third_party/libaom/source/libaom/av1/common/quant_common.c.
+constexpr std::array<int16_t, 256> kAcQuantizerLookup8Bit = {
     4,    8,    9,    10,   11,   12,   13,   14,   15,   16,   17,   18,
     19,   20,   21,   22,   23,   24,   25,   26,   27,   28,   29,   30,
     31,   32,   33,   34,   35,   36,   37,   38,   39,   40,   41,   42,
@@ -71,15 +88,80 @@ constexpr std::array<int16_t, 256> kAcQuantizerLookup = {
     1725, 1759, 1793, 1828,
 };
 
+constexpr std::array<int16_t, 256> kAcQuantizerLookup10Bit = {
+    4,    9,    11,   13,   16,   18,   21,   24,   27,   30,   33,   37,
+    40,   44,   48,   51,   55,   59,   63,   67,   71,   75,   79,   83,
+    88,   92,   96,   100,  105,  109,  114,  118,  122,  127,  131,  136,
+    140,  145,  149,  154,  158,  163,  168,  172,  177,  181,  186,  190,
+    195,  199,  204,  208,  213,  217,  222,  226,  231,  235,  240,  244,
+    249,  253,  258,  262,  267,  271,  275,  280,  284,  289,  293,  297,
+    302,  306,  311,  315,  319,  324,  328,  332,  337,  341,  345,  349,
+    354,  358,  362,  367,  371,  375,  379,  384,  388,  392,  396,  401,
+    409,  417,  425,  433,  441,  449,  458,  466,  474,  482,  490,  498,
+    506,  514,  523,  531,  539,  547,  555,  563,  571,  579,  588,  596,
+    604,  616,  628,  640,  652,  664,  676,  688,  700,  713,  725,  737,
+    749,  761,  773,  785,  797,  809,  825,  841,  857,  873,  889,  905,
+    922,  938,  954,  970,  986,  1002, 1018, 1038, 1058, 1078, 1098, 1118,
+    1138, 1158, 1178, 1198, 1218, 1242, 1266, 1290, 1314, 1338, 1362, 1386,
+    1411, 1435, 1463, 1491, 1519, 1547, 1575, 1603, 1631, 1663, 1695, 1727,
+    1759, 1791, 1823, 1859, 1895, 1931, 1967, 2003, 2039, 2079, 2119, 2159,
+    2199, 2239, 2283, 2327, 2371, 2415, 2459, 2507, 2555, 2603, 2651, 2703,
+    2755, 2807, 2859, 2915, 2971, 3027, 3083, 3143, 3203, 3263, 3327, 3391,
+    3455, 3523, 3591, 3659, 3731, 3803, 3876, 3952, 4028, 4104, 4184, 4264,
+    4348, 4432, 4516, 4604, 4692, 4784, 4876, 4972, 5068, 5168, 5268, 5372,
+    5476, 5584, 5692, 5804, 5916, 6032, 6148, 6268, 6388, 6512, 6640, 6768,
+    6900, 7036, 7172, 7312,
+};
+
+// Estimate the loop filter level from the quantizer index, mirroring the
+// `LPF_PICK_FROM_Q` path of `av1_pick_filter_level()` in
+// //third_party/libaom/source/libaom/av1/encoder/picklpf.c. libaom fits the
+// searched level separately for each bit depth, over a quantizer taken from
+// the matching lookup:
+//   8 bit,  keyframes:    filt_guess = q * 0.06699 - 1.60817
+//   8 bit,  other frames: filt_guess = q * inter_frame_multiplier + 2.48225
+//   10 bit, all frames:   filt_guess = q * 0.01976 + 3.87252
+int EstimateLoopFilterLevel(uint8_t bit_depth,
+                            int base_q_idx,
+                            bool is_keyframe,
+                            int inter_frame_multiplier) {
+  int filter_level = 0;
+  switch (bit_depth) {
+    case 8: {
+      // In 18 bit fixed point: 0.06699 ≈ 17563/262144,
+      // -1.60817 ≈ -421574/262144, 2.48225 ≈ 650707/262144.
+      const int q = kAcQuantizerLookup8Bit[base_q_idx];
+      if (is_keyframe) {
+        filter_level = (q * 17563 - 421574 + (1 << 17)) >> 18;
+      } else {
+        filter_level = (q * inter_frame_multiplier + 650707 + (1 << 17)) >> 18;
+      }
+      break;
+    }
+    case 10: {
+      // In 20 bit fixed point: 0.01976 ≈ 20723/1048576,
+      // 3.87252 ≈ 4060632/1048576.
+      const int q = kAcQuantizerLookup10Bit[base_q_idx];
+      filter_level = (q * 20723 + 4060632 + (1 << 19)) >> 20;
+      break;
+    }
+    default:
+      NOTREACHED();
+  }
+  return std::clamp(filter_level, 0, kMaxLoopFilterLevel);
+}
+
 AV1BitstreamBuilder::SequenceHeader FillAV1BuilderSequenceHeader(
     uint8_t num_temporal_layers,
     D3D12_VIDEO_ENCODER_AV1_PROFILE profile,
+    uint8_t bit_depth,
     const D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC& input_size,
     const D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS& tier_level,
     const D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS& enabled_features) {
   AV1BitstreamBuilder::SequenceHeader sequence_header{};
 
   sequence_header.profile = profile;
+  sequence_header.bit_depth = bit_depth;
   sequence_header.operating_points_cnt_minus_1 = num_temporal_layers - 1;
   for (uint8_t i = 0; i <= sequence_header.operating_points_cnt_minus_1; i++) {
     sequence_header.level[i] = tier_level.Level;
@@ -358,7 +440,8 @@ aom::AV1RateControlRtcConfig ConvertToRateControlConfig(
     const VideoBitrateAllocation& bitrate_allocation,
     const D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC& resolution,
     uint32_t frame_rate,
-    int num_temporal_layers) {
+    int num_temporal_layers,
+    uint8_t bit_depth) {
   aom::AV1RateControlRtcConfig rc_config{};
   // Default value from
   // //third_party/webrtc/modules/video_coding/codecs/av1/libaom_av1_encoder.cc.
@@ -373,6 +456,7 @@ aom::AV1RateControlRtcConfig ConvertToRateControlConfig(
 
   rc_config.width = resolution.Width;
   rc_config.height = resolution.Height;
+  rc_config.bit_depth = bit_depth;
   rc_config.target_bandwidth = bitrate_allocation.GetSumBps() / 1000.;
   rc_config.framerate = frame_rate;
   rc_config.max_quantizer = kAV1MaxQuantizer;
@@ -395,16 +479,17 @@ aom::AV1RateControlRtcConfig ConvertToRateControlConfig(
   return rc_config;
 }
 
-EncoderStatus::Or<D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS> GetEnabledAV1Features(
-    bool is_screen,
-    const D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION_SUPPORT&
-        config_support_limit) {
+base::expected<D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS, EncoderStatus>
+GetEnabledAV1Features(bool is_screen,
+                      const D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION_SUPPORT&
+                          config_support_limit) {
   const auto& supported_features = config_support_limit.SupportedFeatureFlags;
   const auto& required_features = config_support_limit.RequiredFeatureFlags;
   if ((supported_features & required_features) != required_features) {
-    return {EncoderStatus::Codes::kEncoderHardwareDriverError,
-            base::StringPrintf(" d3d12 driver doesn't support %x .",
-                               required_features)};
+    return base::unexpected(
+        EncoderStatus{EncoderStatus::Codes::kEncoderHardwareDriverError,
+                      base::StringPrintf(" d3d12 driver doesn't support %x .",
+                                         required_features)});
   }
   const std::array<D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS, 2> expected_flgs = {
       D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_CDEF_FILTERING,
@@ -413,9 +498,9 @@ EncoderStatus::Or<D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS> GetEnabledAV1Features(
   auto enabled_features = required_features;
   for (const auto feature : expected_flgs) {
     if (!(supported_features & feature)) {
-      return {
+      return base::unexpected(EncoderStatus{
           EncoderStatus::Codes::kEncoderHardwareDriverError,
-          base::StringPrintf(" d3d12 driver doesn't support %x .", feature)};
+          base::StringPrintf(" d3d12 driver doesn't support %x .", feature)});
     }
     enabled_features |= feature;
   }
@@ -473,7 +558,8 @@ SelectBestRestoration(
                         D3D12_VIDEO_ENCODER_AV1_RESTORATION_TILESIZE_DISABLED);
 }
 
-EncoderStatus::Or<D3D12VideoEncodeAV1Delegate::D3D12EncodingCapabilities>
+base::expected<D3D12VideoEncodeAV1Delegate::D3D12EncodingCapabilities,
+               EncoderStatus>
 GetAV1EncodingCapabilities(
     const D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS enabled_features,
     const D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION_SUPPORT&
@@ -494,8 +580,9 @@ GetAV1EncodingCapabilities(
                (1u << filter);
       });
   if (interpolation_filter_it == kInterpolationFilters.end()) {
-    return {EncoderStatus::Codes::kEncoderInitializationError,
-            "No interpolation filters available."};
+    return base::unexpected(
+        EncoderStatus{EncoderStatus::Codes::kEncoderInitializationError,
+                      "No interpolation filters available."});
   }
   encoding_caps.interpolation_filter = *interpolation_filter_it;
 
@@ -547,6 +634,94 @@ GetAV1EncodingCapabilities(
   return encoding_caps;
 }
 
+// Convert the content light level metadata from `gfx::HDRMetadata` into the
+// metadata OBU representation. This is the inverse of `ToSkHdrCLLI()` in
+// //media/gpu/av1_decoder.cc.
+std::optional<Libgav1ObuMetadataHdrCll> ToHdrCll(
+    const gfx::HDRMetadata& hdr_metadata) {
+  if (!hdr_metadata.HasCLLI()) {
+    return std::nullopt;
+  }
+  const skhdr::ContentLightLevelInformation& clli = hdr_metadata.GetCLLI();
+  return Libgav1ObuMetadataHdrCll{
+      .max_cll = clli.getUint16MaxCLL(),
+      .max_fall = clli.getUint16MaxFALL(),
+  };
+}
+
+// Convert the mastering display colour volume metadata from `gfx::HDRMetadata`
+// into the metadata OBU representation. Note that the chroma/luma scales differ
+// from the H.265, so we cannot reuse H.265 impl.
+std::optional<Libgav1ObuMetadataHdrMdcv> ToHdrMdcv(
+    const gfx::HDRMetadata& hdr_metadata) {
+  if (!hdr_metadata.HasMDCV()) {
+    return std::nullopt;
+  }
+  // AV1 spec 6.7.4
+  constexpr float kChromaScale = 65536.0f;   // 2^16, for 0.16 fixed point.
+  constexpr float kLumaMaxScale = 256.0f;    // 2^8, for 24.8 fixed point.
+  constexpr float kLumaMinScale = 16384.0f;  // 2^14, for 18.14 fixed point.
+  const skhdr::MasteringDisplayColorVolume& mdcv = hdr_metadata.GetMDCV();
+  const SkColorSpacePrimaries& primaries = mdcv.fDisplayPrimaries;
+  auto to_chroma = [](float v) {
+    return base::ClampRound<uint16_t>(v * kChromaScale);
+  };
+  Libgav1ObuMetadataHdrMdcv hdr_mdcv{
+      .white_point_chromaticity_x = to_chroma(primaries.fWX),
+      .white_point_chromaticity_y = to_chroma(primaries.fWY),
+      .luminance_max = base::ClampRound<uint32_t>(
+          mdcv.fMaximumDisplayMasteringLuminance * kLumaMaxScale),
+      .luminance_min = base::ClampRound<uint32_t>(
+          mdcv.fMinimumDisplayMasteringLuminance * kLumaMinScale),
+  };
+  base::span chromaticity_x = hdr_mdcv.primary_chromaticity_x;
+  base::span chromaticity_y = hdr_mdcv.primary_chromaticity_y;
+  chromaticity_x[0] = to_chroma(primaries.fRX);
+  chromaticity_y[0] = to_chroma(primaries.fRY);
+  chromaticity_x[1] = to_chroma(primaries.fGX);
+  chromaticity_y[1] = to_chroma(primaries.fGY);
+  chromaticity_x[2] = to_chroma(primaries.fBX);
+  chromaticity_y[2] = to_chroma(primaries.fBY);
+  return hdr_mdcv;
+}
+
+// Fills the sequence header colour description from `input_color_space`.
+// Anything the conversion cannot represent is left unspecified rather than
+// written out as a reserved code point.
+void FillSequenceHeaderColorDescription(
+    const gfx::ColorSpace& input_color_space,
+    AV1BitstreamBuilder::SequenceHeader& sequence_header) {
+  const VideoColorSpace color_space =
+      VideoColorSpace::FromGfxColorSpace(input_color_space);
+
+  Libgav1ColorPrimary color_primaries = kLibgav1ColorPrimaryUnspecified;
+  if (color_space.primaries() != VideoColorSpace::PrimaryID::INVALID) {
+    color_primaries = static_cast<Libgav1ColorPrimary>(color_space.primaries());
+  }
+  Libgav1TransferCharacteristics transfer_characteristics =
+      kLibgav1TransferCharacteristicsUnspecified;
+  if (color_space.transfer() != VideoColorSpace::TransferID::INVALID) {
+    transfer_characteristics =
+        static_cast<Libgav1TransferCharacteristics>(color_space.transfer());
+  }
+
+  Libgav1MatrixCoefficients matrix_coefficients =
+      kLibgav1MatrixCoefficientsUnspecified;
+  if (color_space.matrix() != VideoColorSpace::MatrixID::INVALID &&
+      color_space.matrix() != VideoColorSpace::MatrixID::RGB) {
+    matrix_coefficients =
+        static_cast<Libgav1MatrixCoefficients>(color_space.matrix());
+  }
+
+  sequence_header.color_primaries = color_primaries;
+  sequence_header.transfer_characteristics = transfer_characteristics;
+  sequence_header.matrix_coefficients = matrix_coefficients;
+  sequence_header.color_description_present_flag =
+      color_primaries != kLibgav1ColorPrimaryUnspecified ||
+      transfer_characteristics != kLibgav1TransferCharacteristicsUnspecified ||
+      matrix_coefficients != kLibgav1MatrixCoefficientsUnspecified;
+}
+
 D3D12VideoEncodeAV1Delegate::PictureControlFlags GetAV1PictureControl(
     bool is_keyframe,
     const D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS enabled_features) {
@@ -585,8 +760,8 @@ D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(
       continue;
     }
 
-    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS min_level;
-    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS max_level;
+    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS min_level{};
+    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS max_level{};
     D3D12_FEATURE_DATA_VIDEO_ENCODER_PROFILE_LEVEL profile_level = {
         .Codec = D3D12_VIDEO_ENCODER_CODEC_AV1,
         .Profile = {.DataSize = sizeof(av1_profile),
@@ -600,23 +775,30 @@ D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(
              .is_ok()) {
       continue;
     }
+    // Although D3D12 encoder spec for AV1 section 3.1.3 mentions that high
+    // profile "also" allows AYUV and Y410 input formats, which might be
+    // interpretted as if NV12 and P010 may be supported as input format for
+    // the high profile, which they are actually not supported.
+    base::span<const std::pair<VideoPixelFormat, DXGI_FORMAT>>
+        formats_to_probe = codec_profile == AV1PROFILE_PROFILE_HIGH
+                               ? base::span(kHighProfileFormatsToProbe)
+                               : base::span(kMainProfileFormatsToProbe);
     std::vector<VideoPixelFormat> formats;
-    for (VideoPixelFormat format :
-         {PIXEL_FORMAT_NV12, PIXEL_FORMAT_P010LE, PIXEL_FORMAT_ABGR}) {
+    for (auto [format, dxgi_format] : formats_to_probe) {
       D3D12_FEATURE_DATA_VIDEO_ENCODER_INPUT_FORMAT input_format{
           .Codec = D3D12_VIDEO_ENCODER_CODEC_AV1,
           .Profile = profile_level.Profile,
-          // It makes no sense to encode at Y:U:V 444 if input UV is already
-          // subsampled. So only allow profile 1 encoding when input is RGBA
-          // frame, and converts to AYUV which is the only DXGI format supported
-          // by drivers at 8b profile 1.
-          .Format = (format == PIXEL_FORMAT_ABGR)
-                        ? DXGI_FORMAT_AYUV
-                        : VideoPixelFormatToDxgiFormat(format),
+          .Format = dxgi_format,
       };
       if (CheckD3D12VideoEncoderInputFormat(video_device, &input_format)
               .is_ok()) {
-        formats.push_back(format);
+        // Explicity advertise the supported input formats for the high profile.
+        if (codec_profile == AV1PROFILE_PROFILE_HIGH) {
+          profiles.emplace_back(codec_profile,
+                                std::vector<VideoPixelFormat>{format});
+        } else {
+          formats.push_back(format);
+        }
       }
     }
     if (!formats.empty()) {
@@ -730,11 +912,12 @@ EncoderStatus D3D12VideoEncodeAV1Delegate::InitializeVideoEncoder(
       .FeatureFlags = enabled_features_,
       .OrderHintBitsMinus1 = kDefaultOrderHintBitsMinus1};
 
+  const uint8_t bit_depth = GetDxgiFormatBitDepth(input_format_);
   if (config.bitrate.mode() == Bitrate::Mode::kConstant ||
       config.bitrate.mode() == Bitrate::Mode::kVariable) {
-    software_brc_ = aom::AV1RateControlRTC::Create(
-        ConvertToRateControlConfig(is_screen_, bitrate_allocation_, input_size_,
-                                   config.framerate, GetNumTemporalLayers()));
+    software_brc_ = aom::AV1RateControlRTC::Create(ConvertToRateControlConfig(
+        is_screen_, bitrate_allocation_, input_size_, config.framerate,
+        GetNumTemporalLayers(), bit_depth));
     rate_control_ = D3D12VideoEncoderRateControl::CreateCqp(
         26 /*i_frame_qp*/, 30 /*p_frame_qp*/, 30 /*b_frame_qp*/);
   }
@@ -743,9 +926,9 @@ EncoderStatus D3D12VideoEncodeAV1Delegate::InitializeVideoEncoder(
   gop_sequence_ = {.IntraDistance = 0,
                    .InterFramePeriod = config.gop_length.value()};
 
-  D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS tier_level;
+  D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS tier_level{};
   D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOLUTION_SUPPORT_LIMITS
-  resolution_limits[1];
+  resolution_limits[1] = {};
   D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT1 support{
       .Codec = D3D12_VIDEO_ENCODER_CODEC_AV1,
       .InputFormat = input_format_,
@@ -797,9 +980,14 @@ EncoderStatus D3D12VideoEncodeAV1Delegate::InitializeVideoEncoder(
       input_format_,
       {.DataSize = sizeof(codec_config), .pAV1Config = &codec_config},
       input_size_);
+  if (!video_encoder_wrapper_) {
+    return {EncoderStatus::Codes::kEncoderInitializationError,
+            "Failed to create D3D12VideoEncoderWrapper."};
+  }
 
   // We use full frame mode so the number of subregions is always 1.
-  if (!video_encoder_wrapper_->Initialize(/*max_subregions_number=*/1)) {
+  if (!video_encoder_wrapper_->Initialize(/*max_subregions_number=*/1,
+                                          min_bitstream_buffer_size_)) {
     return {EncoderStatus::Codes::kEncoderInitializationError,
             " Failed to initialize D3D12VideoEncoderWrapper."};
   }
@@ -807,15 +995,17 @@ EncoderStatus D3D12VideoEncodeAV1Delegate::InitializeVideoEncoder(
   bool use_texture_array =
       support.SupportFlags &
       D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS;
-  if (!dpb_.InitializeTextureResources(device_.Get(), config.input_visible_size,
+  gfx::Size reference_texture_size =
+      GetAdjustedReferenceTextureSize(config.input_visible_size);
+  if (!dpb_.InitializeTextureResources(device_.Get(), reference_texture_size,
                                        input_format_, max_num_ref_frames_,
                                        use_texture_array)) {
     return {EncoderStatus::Codes::kEncoderInitializationError,
             "Failed to initialize DPB."};
   }
   sequence_header_ =
-      FillAV1BuilderSequenceHeader(GetNumTemporalLayers(), profile, input_size_,
-                                   tier_level, enabled_features_);
+      FillAV1BuilderSequenceHeader(GetNumTemporalLayers(), profile, bit_depth,
+                                   input_size_, tier_level, enabled_features_);
   picture_id_ = -1;
   current_rate_control_ = rate_control_;
 
@@ -844,7 +1034,7 @@ bool D3D12VideoEncodeAV1Delegate::UpdateRateControl(
   if (bitrate_allocation != bitrate_allocation_ || framerate != framerate_) {
     if (!software_brc_->UpdateRateControl(ConvertToRateControlConfig(
             is_screen_, bitrate_allocation, input_size_, framerate,
-            GetNumTemporalLayers()))) {
+            GetNumTemporalLayers(), sequence_header_.bit_depth))) {
       LOG(ERROR) << "Failed to update rate control parameters";
       return false;
     }
@@ -969,24 +1159,13 @@ void D3D12VideoEncodeAV1Delegate::FillPictureControlParams(
       picture_params_.LoopFilter.LoopFilterLevelU = lf.filter_level_u;
       picture_params_.LoopFilter.LoopFilterLevelV = lf.filter_level_v;
     } else {
-      // Calculate loop filter levels based on libaom's approach from
-      // //third_party/libaom/source/libaom/av1/encoder/picklpf.c.
-      // These values were determined by linear fitting the result of the
-      // searched level for 8 bit depth:
-      // Keyframes: filt_guess = q * 0.06699 - 1.60817
-      // Other frames: filt_guess = q * inter_frame_multiplier + 2.48225
-      int filter_level = 0;
-      const int q = kAcQuantizerLookup[base_q_idx];
-      int inter_frame_multiplier =
+      // libaom boosts the strength for anything above CIF, see the
+      // `inter_frame_multiplier` computation in picklpf.c.
+      const int inter_frame_multiplier =
           input_size_.Width * input_size_.Height > 352 * 288 ? 12034 : 6017;
-      // Convert to fixed point: 0.06699 ≈ 17563/262144, -1.60817 ≈
-      // -421574/262144, 2.48225 ≈ 650707/26214.
-      if (request_keyframe) {
-        filter_level = (q * 17563 - 421574 + (1 << 17)) >> 18;
-      } else {
-        filter_level = (q * inter_frame_multiplier + 650707 + (1 << 17)) >> 18;
-      }
-      filter_level = std::clamp(filter_level, 0, 63);
+      const int filter_level =
+          EstimateLoopFilterLevel(sequence_header_.bit_depth, base_q_idx,
+                                  request_keyframe, inter_frame_multiplier);
       picture_params_.LoopFilter.LoopFilterLevel[0] = filter_level;
       picture_params_.LoopFilter.LoopFilterLevel[1] = filter_level;
       if (filter_level > 0) {
@@ -1011,7 +1190,8 @@ EncoderStatus D3D12VideoEncodeAV1Delegate::EncodeImpl(
     ID3D12Resource* input_frame,
     UINT input_frame_subresource,
     const VideoEncoder::EncodeOptions& options,
-    const gfx::ColorSpace& input_color_space) {
+    const gfx::ColorSpace& input_color_space,
+    const gfx::HDRMetadata& input_hdr_metadata) {
   input_arguments_.SequenceControlDesc.Flags =
       D3D12_VIDEO_ENCODER_SEQUENCE_CONTROL_FLAG_NONE;
   input_arguments_.SequenceControlDesc.RateControl =
@@ -1047,32 +1227,28 @@ EncoderStatus D3D12VideoEncodeAV1Delegate::EncodeImpl(
     return result;
   }
 
-  // For now we only update sequence header for Rec.601 and Rec.709 on key
-  // frames.
+  // The sequence header OBU is only emitted on key frames, so that is also
+  // where the colour description and the HDR metadata are refreshed.
   if (IsKeyFrame()) {
     sequence_header_.color_range =
         input_color_space.GetRangeID() == gfx::ColorSpace::RangeID::FULL
             ? kLibgav1ColorRangeFull
             : kLibgav1ColorRangeStudio;
-    if (IsRec601(input_color_space)) {
-      sequence_header_.color_primaries = kLibgav1ColorPrimaryBt601;
-      sequence_header_.transfer_characteristics =
-          kLibgav1TransferCharacteristicsBt601;
-      sequence_header_.matrix_coefficients = kLibgav1MatrixCoefficientsBt601;
-      sequence_header_.color_description_present_flag = true;
-    } else if (IsRec709(input_color_space)) {
-      sequence_header_.color_primaries = kLibgav1ColorPrimaryBt709;
-      sequence_header_.transfer_characteristics =
-          kLibgav1TransferCharacteristicsBt709;
-      sequence_header_.matrix_coefficients = kLibgav1MatrixCoefficientsBt709;
-      sequence_header_.color_description_present_flag = true;
+    FillSequenceHeaderColorDescription(input_color_space, sequence_header_);
+
+    if (sequence_header_.bit_depth == 10 && input_color_space.IsHDR()) {
+      hdr_cll_ = ToHdrCll(input_hdr_metadata);
+      hdr_mdcv_ = ToHdrMdcv(input_hdr_metadata);
+    } else {
+      hdr_cll_.reset();
+      hdr_mdcv_.reset();
     }
   }
 
   return EncoderStatus::Codes::kOk;
 }
 
-EncoderStatus::Or<size_t>
+base::expected<size_t, EncoderStatus>
 D3D12VideoEncodeAV1Delegate::GetEncodedBitstreamWrittenBytesCount(
     const ScopedD3D12ResourceMap& metadata) {
   if (metadata.data().size() <
@@ -1081,7 +1257,7 @@ D3D12VideoEncodeAV1Delegate::GetEncodedBitstreamWrittenBytesCount(
           sizeof(
               D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_SUBREGIONS_LAYOUT_DATA_TILES) +
           sizeof(D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES)) {
-    return EncoderStatus::Codes::kEncoderHardwareDriverError;
+    return base::unexpected(EncoderStatus::Codes::kEncoderHardwareDriverError);
   }
 
   size_t compressed_size =
@@ -1096,8 +1272,9 @@ D3D12VideoEncodeAV1Delegate::GetEncodedBitstreamWrittenBytesCount(
   // We always enable full frame encoding, so there should be only one
   // subregion.
   if (subregions != 1) {
-    return {EncoderStatus::Codes::kEncoderHardwareDriverError,
-            "D3D12VideoEncodeAV1Delegate: unexpected number of subregions."};
+    return base::unexpected(EncoderStatus{
+        EncoderStatus::Codes::kEncoderHardwareDriverError,
+        "D3D12VideoEncodeAV1Delegate: unexpected number of subregions."});
   }
 
   size_t suregion_size =
@@ -1165,6 +1342,24 @@ size_t D3D12VideoEncodeAV1Delegate::PackAV1BitstreamHeader(
     CHECK_EQ(seq_obu.OutstandingBits() % 8, 0ull);
     pack_header.WriteValueInLeb128(seq_obu.OutstandingBits() / 8);
     pack_header.AppendBitstreamBuffer(std::move(seq_obu));
+
+    // Pack the HDR static metadata OBUs, see section 5.8 of the AV1
+    // specification. They must precede the frame OBU they apply to.
+    auto pack_metadata_obu = [&pack_header](AV1BitstreamBuilder metadata_obu) {
+      pack_header.WriteOBUHeader(/*type=*/libgav1::kObuMetadata,
+                                 /*has_size=*/true);
+      CHECK_EQ(metadata_obu.OutstandingBits() % 8, 0ull);
+      pack_header.WriteValueInLeb128(metadata_obu.OutstandingBits() / 8);
+      pack_header.AppendBitstreamBuffer(std::move(metadata_obu));
+    };
+    if (hdr_cll_.has_value()) {
+      pack_metadata_obu(
+          AV1BitstreamBuilder::BuildHDRCLLMetadataOBU(hdr_cll_.value()));
+    }
+    if (hdr_mdcv_.has_value()) {
+      pack_metadata_obu(
+          AV1BitstreamBuilder::BuildHDRMDCVMetadataOBU(hdr_mdcv_.value()));
+    }
   }
   // Pack Frame OBU, see section 5.9 of the AV1 specification.
   pack_header.WriteOBUHeader(/*type=*/libgav1::kObuFrame, /*has_size=*/true,
@@ -1184,16 +1379,17 @@ size_t D3D12VideoEncodeAV1Delegate::PackAV1BitstreamHeader(
   return packed_header_size;
 }
 
-EncoderStatus::Or<size_t> D3D12VideoEncodeAV1Delegate::ReadbackBitstream(
+base::expected<size_t, EncoderStatus>
+D3D12VideoEncodeAV1Delegate::ReadbackBitstream(
     base::span<uint8_t> bitstream_buffer) {
   auto metadata_or_error = video_encoder_wrapper_->GetEncoderOutputMetadata();
   if (!metadata_or_error.has_value()) {
-    return std::move(metadata_or_error).error();
+    return base::unexpected(std::move(metadata_or_error).error());
   }
   ScopedD3D12ResourceMap metadata = std::move(metadata_or_error).value();
   auto compressed_size_or_size = GetEncodedBitstreamWrittenBytesCount(metadata);
   if (!compressed_size_or_size.has_value()) {
-    return std::move(compressed_size_or_size).error();
+    return base::unexpected(std::move(compressed_size_or_size).error());
   }
   size_t compressed_size = std::move(compressed_size_or_size).value();
   DVLOG(4) << base::StringPrintf("%s: compressed_size = %lu", __func__,
@@ -1208,8 +1404,9 @@ EncoderStatus::Or<size_t> D3D12VideoEncodeAV1Delegate::ReadbackBitstream(
   if (metadata.data().size() <
       post_encode_values_offset +
           sizeof(D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES)) {
-    return {EncoderStatus::Codes::kEncoderHardwareDriverError,
-            "D3D12VideoEncodeAV1Delegate: metadata buffer is too small."};
+    return base::unexpected(EncoderStatus{
+        EncoderStatus::Codes::kEncoderHardwareDriverError,
+        "D3D12VideoEncodeAV1Delegate: metadata buffer is too small."});
   }
 
   // SAFETY: The post_encode_values is guaranteed by above check to be within
@@ -1224,15 +1421,17 @@ EncoderStatus::Or<size_t> D3D12VideoEncodeAV1Delegate::ReadbackBitstream(
   auto frame_header_or_error = FillAV1BuilderFrameHeader(
       picture_ctrl_, picture_params_, sequence_header_);
   if (!frame_header_or_error.has_value()) {
-    return {EncoderStatus::Codes::kEncoderHardwareDriverError,
-            "D3D12VideoEncodeAV1Delegate: invalid restoration tile size."};
+    return base::unexpected(EncoderStatus{
+        EncoderStatus::Codes::kEncoderHardwareDriverError,
+        "D3D12VideoEncodeAV1Delegate: invalid restoration tile size."});
   }
   AV1BitstreamBuilder::FrameHeader frame_header =
       std::move(frame_header_or_error).value();
   if (!UpdateFrameHeaderPostEncode(enc_caps_.post_value_flags,
                                    post_encode_values, frame_header)) {
-    return {EncoderStatus::Codes::kEncoderHardwareDriverError,
-            "D3D12VideoEncodeAV1Delegate: invalid post encode values."};
+    return base::unexpected(EncoderStatus{
+        EncoderStatus::Codes::kEncoderHardwareDriverError,
+        "D3D12VideoEncodeAV1Delegate: invalid post encode values."});
   }
 
   D3D12_RANGE written_range{};
@@ -1243,7 +1442,7 @@ EncoderStatus::Or<size_t> D3D12VideoEncodeAV1Delegate::ReadbackBitstream(
   auto size_or_error = D3D12VideoEncodeDelegate::ReadbackBitstream(
       bitstream_buffer.subspan(packed_header_size));
   if (!size_or_error.has_value()) {
-    return std::move(size_or_error).error();
+    return base::unexpected(std::move(size_or_error).error());
   }
 
   // Notify SW BRC about recent encoded frame size.

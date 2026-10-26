@@ -8,7 +8,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_test_base.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -41,8 +41,7 @@ class VirtualCardStandaloneCvcMetricsTest : public AutofillMetricsBaseTest,
     // Set four_digit_combinations_in_dom_ to simulate the list of last four
     // digits detected from the origin webpage.
     test_api(autofill_manager()).SetFourDigitCombinationsInDOM({"1234"});
-    // Set up the form data. Reset form action to skip the IsFormMixedContent
-    // check.
+    // Set up the form data.
     form_ = GetAndAddSeenForm(
         {.description_for_logging = "StandaloneCvc",
          .fields = {{.role = CREDIT_CARD_STANDALONE_VERIFICATION_CODE}},
@@ -113,6 +112,7 @@ TEST_F(VirtualCardStandaloneCvcMetricsTest, LogSelectedMetrics) {
       mojom::ActionPersistence::kFill, form().global_id(),
       form().fields().front().global_id(),
       paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
 
   EXPECT_THAT(
@@ -135,6 +135,7 @@ TEST_F(VirtualCardStandaloneCvcMetricsTest, LogSelectedMetrics) {
       mojom::ActionPersistence::kFill, form().global_id(),
       form().fields().front().global_id(),
       paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
 
   EXPECT_THAT(
@@ -162,11 +163,12 @@ TEST_F(VirtualCardStandaloneCvcMetricsTest, LogFilledMetrics) {
   autofill_manager().OnAskForValuesToFillTest(
       form(), form().fields().front().global_id());
   EXPECT_CALL(credit_card_access_manager(), FetchCreditCard)
-      .WillOnce(base::test::RunOnceCallback<1>(card()));
+      .WillOnce(base::test::RunOnceCallback<2>(card()));
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form().global_id(),
       form().fields().front().global_id(),
       paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
 
   EXPECT_THAT(
@@ -186,11 +188,12 @@ TEST_F(VirtualCardStandaloneCvcMetricsTest, LogFilledMetrics) {
 
   // Fill the suggestion again.
   EXPECT_CALL(credit_card_access_manager(), FetchCreditCard)
-      .WillOnce(base::test::RunOnceCallback<1>(card()));
+      .WillOnce(base::test::RunOnceCallback<2>(card()));
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form().global_id(),
       form().fields().front().global_id(),
       paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
   EXPECT_THAT(
       histogram_tester.GetAllSamples(
@@ -217,11 +220,12 @@ TEST_F(VirtualCardStandaloneCvcMetricsTest, LogSubmitMetrics) {
   autofill_manager().OnAskForValuesToFillTest(
       form(), form().fields().front().global_id());
   EXPECT_CALL(credit_card_access_manager(), FetchCreditCard)
-      .WillOnce(base::test::RunOnceCallback<1>(card()));
+      .WillOnce(base::test::RunOnceCallback<2>(card()));
   autofill_manager().FillOrPreviewForm(
       mojom::ActionPersistence::kFill, form().global_id(),
       form().fields().front().global_id(),
       paydm().GetCreditCardByGUID(kCardGuid), AutofillTriggerSource::kPopup,
+      /*require_user_confirmation=*/false,
       /*blocked_fields=*/{});
   SubmitForm(form());
 

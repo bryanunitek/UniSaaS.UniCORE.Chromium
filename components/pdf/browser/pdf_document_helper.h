@@ -11,6 +11,7 @@
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/render_frame_host_receiver_set.h"
 #include "content/public/browser/render_widget_host_observer.h"
@@ -50,7 +51,7 @@ class PDFDocumentHelper
   // for `web_contents`. This should only be called if a `PDFDocumentHelper`
   // does not already exist for `web_contents`.
   static base::CallbackListSubscription RegisterForCreate(
-      content::WebContents* web_contents,
+      content::WebContents& web_contents,
       base::OnceClosure callback);
 
   PDFDocumentHelper(const PDFDocumentHelper&) = delete;
@@ -63,8 +64,18 @@ class PDFDocumentHelper
       content::RenderFrameHost* rfh,
       std::unique_ptr<PDFDocumentHelperClient> client);
 
+  // Returns the PDFDocumentHelper associated with any frame in `contents`.
+  // WARNING: This searches across all frames, including subframes/iframes. If
+  // the caller only intends to operate on top-level full-page PDF documents,
+  // use `MaybeGetForFullPagePdf()` instead to avoid cross-origin data leaks.
   static PDFDocumentHelper* MaybeGetForWebContents(
-      content::WebContents* contents);
+      content::WebContents& contents);
+
+  // Returns the PDFDocumentHelper associated with `contents` for a full-page
+  // PDF. Returns nullptr if the top-level document is not a PDF, or if no
+  // PDFDocumentHelper exists.
+  static PDFDocumentHelper* MaybeGetForFullPagePdf(
+      content::WebContents& contents);
 
   // content::RenderWidgetHostObserver:
   void RenderWidgetHostDestroyed(
@@ -97,6 +108,7 @@ class PDFDocumentHelper
   // pdf::mojom::PdfHost:
   void SetListener(mojo::PendingRemote<mojom::PdfListener> listener) override;
   void OnDocumentLoadComplete() override;
+  void OnPdfFirstContentPainted(base::TimeTicks paint_time) override;
   void SavePdf() override;
   void UpdateContentRestrictions(int32_t content_restrictions) override;
   void SelectionChanged(const gfx::PointF& left,
@@ -189,6 +201,10 @@ class PDFDocumentHelper
   bool has_selection_ = false;
 
   bool is_document_load_complete_ = false;
+
+  // Whether the plugin has already reported its first content paint. A
+  // renderer sending the report more than once is killed as compromised.
+  bool did_report_first_content_paint_ = false;
 
   // Callbacks to invoke when document load is completed.
   std::vector<base::OnceClosure> document_load_complete_callbacks_;

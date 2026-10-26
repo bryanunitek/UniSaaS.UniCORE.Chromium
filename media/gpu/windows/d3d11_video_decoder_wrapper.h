@@ -8,8 +8,8 @@
 #include <memory>
 
 #include "media/base/video_decoder_config.h"
-#include "media/gpu/windows/d3d11_decoder_configurator.h"
 #include "media/gpu/windows/d3d_com_defs.h"
+#include "media/gpu/windows/d3d_decoder_configurator.h"
 #include "media/gpu/windows/d3d_video_decoder_wrapper.h"
 
 namespace media {
@@ -19,10 +19,9 @@ class D3D11VideoDecoderWrapper : public D3DVideoDecoderWrapper {
  public:
   static std::unique_ptr<D3D11VideoDecoderWrapper> Create(
       MediaLog* media_log,
-      ComD3D11VideoDevice video_device,
-      ComD3D11VideoContext video_context,
-      const D3D11DecoderConfigurator* decoder_configurator,
-      D3D_FEATURE_LEVEL supported_d3d11_version,
+      ComD3D11VideoDevice1 video_device,
+      ComD3D11VideoContext1 video_context,
+      const D3DDecoderConfigurator* decoder_configurator,
       VideoDecoderConfig config);
   ~D3D11VideoDecoderWrapper() override;
 

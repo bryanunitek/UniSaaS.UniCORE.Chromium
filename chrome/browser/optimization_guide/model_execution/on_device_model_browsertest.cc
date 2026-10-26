@@ -10,21 +10,23 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/component_updater/optimization_guide_on_device_model_installer.h"
 #include "chrome/browser/optimization_guide/model_execution/optimization_guide_global_state.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
-#include "components/optimization_guide/core/model_execution/manifest_broker/test/manifest_builder.h"
+#include "components/optimization_guide/core/model_execution/configs/manifest_builder.h"
+#include "components/optimization_guide/core/model_execution/manifest_broker/test/manifest_component_directory.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
+#include "components/optimization_guide/core/model_execution/on_device_features.h"
 #include "components/optimization_guide/core/model_execution/performance_class.h"
 #include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
+#include "components/optimization_guide/core/model_execution/usage_tracker.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/proto/manifest.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
 #include "components/prefs/pref_service.h"
@@ -70,7 +72,7 @@ class OnDeviceAssets {
                 proto::BaseModelRecipe::PERFORMANCE_HINT_UNSPECIFIED, {}, 0)));
     builder.Add(
         "test_solution",
-        SolutionRecipe("base_model_recipe", "",
+        SolutionRecipe("base_model_recipe",
                        FileReference("manifest", "test_config.binarypb")),
         {
             DeviceUseCase{DeviceCategory::kCpu, "test"},
@@ -85,22 +87,13 @@ class OnDeviceAssets {
   ManifestOverrideFile manifest_override_;
 };
 
-class OnDeviceModelExecutionDisabledBrowserTest : public InProcessBrowserTest {
+class OnDeviceModelBrowserTestBase : public InProcessBrowserTest {
  public:
-  void SetUp() override {
-    scoped_feature_list_.InitWithFeatureStates({
-        {features::kOptimizationGuideModelExecution, true},
-        {features::kOptimizationGuideOnDeviceModel, false},
-        {kOptimizationGuideManifestBroker, true},
-    });
-    InProcessBrowserTest::SetUp();
-  }
-
   void SetUpCommandLine(base::CommandLine* cmd) override {
     // This test depends on the disk information being available in a timely
     // manner (see crbug.com/346579988). Use this flag to have the information
     // retrieved with higher priority which reduces the chances of flakiness.
-    cmd->AppendSwitch(switches::kGetFreeDiskSpaceWithUserVisiblePriorityTask);
+    cmd->AppendSwitch(kGetFreeDiskSpaceWithUserVisiblePriorityTaskSwitch);
     cmd->AppendSwitchPath("optimization-guide-manifest-override",
                           assets_.manifest_override().path());
   }
@@ -116,38 +109,14 @@ class OnDeviceModelExecutionDisabledBrowserTest : public InProcessBrowserTest {
   OnDeviceAssets assets_;
 };
 
-IN_PROC_BROWSER_TEST_F(OnDeviceModelExecutionDisabledBrowserTest,
-                       GetOnDeviceModelEligibilityExecutionDisabled) {
-  // With kOptimizationGuideOnDeviceModel disabled, should not be eligible.
-  EXPECT_EQ(GetOnDeviceModelEligibility(mojom::OnDeviceFeature::kTest),
-            OnDeviceModelEligibilityReason::kFeatureNotEnabled);
-}
-
-IN_PROC_BROWSER_TEST_F(OnDeviceModelExecutionDisabledBrowserTest,
-                       PerformanceClassNotComputed) {
-  auto* service = OptimizationGuideKeyedServiceFactory::GetForProfile(
-      browser()->GetProfile());
-  base::HistogramTester histogram_tester;
-  base::RunLoop loop;
-  // The call should exit early because the service is not enabled.
-  service->GetOnDeviceModelEligibilityAsync(
-      mojom::OnDeviceFeature::kTest,
-      /*capabilities=*/{},
-      base::IgnoreArgs<OnDeviceModelEligibilityReason>(loop.QuitClosure()));
-  loop.Run();
-  histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.ModelExecution.OnDeviceModelPerformanceClass", 0);
-}
-
 #if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
 
 class OnDeviceModelExecutionEnabledBrowserTest
-    : public OnDeviceModelExecutionDisabledBrowserTest {
+    : public OnDeviceModelBrowserTestBase {
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatureStates({
         {features::kOptimizationGuideModelExecution, true},
-        {features::kOptimizationGuideOnDeviceModel, true},
         {kOptimizationGuideManifestBroker, true},
         {features::kLogOnDeviceMetricsOnStartup, false},
     });
@@ -155,8 +124,9 @@ class OnDeviceModelExecutionEnabledBrowserTest
   }
 
   void SetUpLocalStatePrefService(PrefService* local_state) override {
-    model_execution::prefs::RecordFeatureUsage(local_state,
-                                               mojom::OnDeviceFeature::kTest);
+    UsageTracker(local_state)
+        .RaisePriority(ToUseCaseName(mojom::OnDeviceFeature::kTest),
+                       UsageTracker::Priority::kBestEffort);
     UpdatePerformanceClassPref(local_state,
                                OnDeviceModelPerformanceClass::kVeryHigh);
   }
@@ -172,12 +142,11 @@ IN_PROC_BROWSER_TEST_F(OnDeviceModelExecutionEnabledBrowserTest,
 }
 
 class LogOnDeviceMetricsOnStartupEnabledBrowserTest
-    : public OnDeviceModelExecutionDisabledBrowserTest {
+    : public OnDeviceModelBrowserTestBase {
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatureStates({
         {features::kOptimizationGuideModelExecution, true},
-        {features::kOptimizationGuideOnDeviceModel, true},
         {kOptimizationGuideManifestBroker, true},
         {features::kLogOnDeviceMetricsOnStartup, true},
     });
@@ -192,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(LogOnDeviceMetricsOnStartupEnabledBrowserTest,
   base::HistogramTester histogram_tester;
 
   base::RunLoop loop;
-  // The call should exit early because the service is not enabled.
+  // Verify that startup metric logging computes the performance class.
   service->GetOnDeviceModelEligibilityAsync(
       mojom::OnDeviceFeature::kTest,
       /*capabilities=*/{},

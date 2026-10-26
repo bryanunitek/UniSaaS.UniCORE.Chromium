@@ -59,18 +59,6 @@ BASE_FEATURE(kAVFoundationOverlays,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_MAC)
-BASE_FEATURE(kAllowCallbackWithoutPostTask, base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Allows running completion callbacks and presnetation callbacks directly
-// without posting tasks first.
-bool AllowCallbackWithoutPostTask() {
-  static bool allows_no_post_task =
-      base::FeatureList::IsEnabled(kAllowCallbackWithoutPostTask) &&
-      (ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser() ||
-       base::FeatureList::IsEnabled(features::kEnableDrDc));
-  return allows_no_post_task;
-}
-
 // Record the delay from the system CVDisplayLink or CADisplaylink source to
 // CrGpuMain OnVSyncPresentation().
 void RecordVSyncCallbackDelay(base::TimeDelta delay) {
@@ -133,15 +121,9 @@ ImageTransportSurfaceOverlayMacEGL::ImageTransportSurfaceOverlayMacEGL(
       base::BindRepeating(&SharedContextState::MakeCurrent, context_state,
                           /*surface=*/nullptr, /*needs_gl=*/true);
 
-  bool no_post_task_for_callback = false;
-#if BUILDFLAG(IS_MAC)
-  no_post_task_for_callback = AllowCallbackWithoutPostTask();
-#endif
-
   ca_layer_tree_coordinator_ = std::make_unique<ui::CALayerTreeCoordinator>(
       !av_disabled_at_command_line, std::move(buffer_presented_callback),
-      std::move(gl_make_current_callback), GetMTLDevice(context_state),
-      no_post_task_for_callback);
+      std::move(gl_make_current_callback), GetMTLDevice(context_state));
 
 #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
   // The BELayerHierarchy needs to be created on a thread that supports

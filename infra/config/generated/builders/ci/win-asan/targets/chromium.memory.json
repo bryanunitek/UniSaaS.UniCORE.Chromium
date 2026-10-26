@@ -205,7 +205,8 @@
       },
       {
         "args": [
-          "--test-launcher-jobs=3"
+          "--test-launcher-jobs=3",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -218,7 +219,7 @@
             "os": "Windows-10-19045"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 120
+          "shards": 140
         },
         "test": "browser_tests",
         "test_id_prefix": "ninja://chrome/test:browser_tests/"
@@ -780,7 +781,8 @@
       },
       {
         "args": [
-          "--test-launcher-jobs=3"
+          "--test-launcher-jobs=3",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -793,7 +795,7 @@
             "os": "Windows-10-19045"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com",
-          "shards": 18
+          "shards": 24
         },
         "test": "interactive_ui_tests",
         "test_id_prefix": "ninja://chrome/test:interactive_ui_tests/"
@@ -1093,6 +1095,22 @@
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
+        "module_name": "//rlz:rlz_unittests",
+        "module_scheme": "gtest",
+        "name": "rlz_unittests",
+        "swarming": {
+          "dimensions": {
+            "os": "Windows-10-19045"
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "rlz_unittests",
+        "test_id_prefix": "ninja://rlz:rlz_unittests/"
+      },
+      {
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
         "module_name": "//sandbox/win:sbox_integration_tests",
         "module_scheme": "gtest",
         "name": "sbox_integration_tests",
@@ -1253,7 +1271,8 @@
       },
       {
         "args": [
-          "--test-launcher-jobs=3"
+          "--test-launcher-jobs=3",
+          "--disable-features=WebUIOmniboxPopup,WebUIOmniboxAimPopup"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"

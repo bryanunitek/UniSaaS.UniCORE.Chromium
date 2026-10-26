@@ -58,7 +58,8 @@
 
 namespace blink {
 
-static HTMLElement* FindActiveUnboundedAncestor(const PaintLayer& layer) {
+static const LayoutObject* FindActiveUnboundedAncestor(
+    const PaintLayer& layer) {
   if (!RuntimeEnabledFeatures::UnboundedElementEnabled()) {
     return nullptr;
   }
@@ -66,10 +67,14 @@ static HTMLElement* FindActiveUnboundedAncestor(const PaintLayer& layer) {
     return nullptr;
   }
   for (const PaintLayer* curr = &layer; curr; curr = curr->Parent()) {
-    auto* element = DynamicTo<Element>(curr->GetLayoutObject().GetNode());
-    if (auto* html_element = DynamicTo<HTMLElement>(element);
-        html_element && html_element->IsUnboundedElementActive()) {
-      return html_element;
+    if (curr->GetLayoutObject().Style().IsUnboundedElementActive()) {
+      DCHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
+      auto* html_element =
+          DynamicTo<HTMLElement>(curr->GetLayoutObject().GetNode());
+      DCHECK(!html_element ||
+             curr->GetLayoutObject().Style().IsUnboundedElementActive() ==
+                 html_element->IsUnboundedElementActive());
+      return &curr->GetLayoutObject();
     }
   }
   NOTREACHED();
@@ -98,7 +103,7 @@ void PaintLayerClipper::CalculateRects(const ClipRectsContext& context,
     return;
   }
 
-  layer_offset = context.sub_pixel_accumulation;
+  layer_offset = PhysicalOffset();
   if (layer_ == context.root_layer) {
     DCHECK_EQ(&fragment_data, context.root_fragment);
   } else {
@@ -117,13 +122,13 @@ void PaintLayerClipper::CalculateRects(const ClipRectsContext& context,
   foreground_rect.Reset();
 
   if (ShouldClipOverflowAlongEitherAxis(context)) {
-    LayoutBoxModelObject& layout_object = layer_->GetLayoutObject();
+    auto& layout_object = To<LayoutBox>(layer_->GetLayoutObject());
     foreground_rect =
-        To<LayoutBox>(layout_object)
-            .OverflowClipRect(layer_offset,
-                              context.overlay_scrollbar_clip_behavior);
-    if (layout_object.StyleRef().HasBorderRadius())
+        layout_object.OverflowClipRect(context.overlay_scrollbar_clip_behavior);
+    foreground_rect.Move(layer_offset);
+    if (layout_object.Style().HasBorderRadius()) {
       foreground_rect.SetHasRadius(true);
+    }
     foreground_rect.Intersect(background_rect);
   } else {
     foreground_rect = background_rect;
@@ -152,15 +157,14 @@ void PaintLayerClipper::CalculateBackgroundClipRectInternal(
         context.root_fragment->ContentsClip());
   }
 
-  if (auto* unbounded_ancestor = FindActiveUnboundedAncestor(*layer_)) {
+  if (const auto* unbounded_ancestor = FindActiveUnboundedAncestor(*layer_)) {
     // For unbounded elements, we calculate the background clip rect relative to
     // the active unbounded ancestor's state, so these elements escape ancestor
     // clips.
     DCHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
-    const auto& unbounded_fragment =
-        unbounded_ancestor->GetLayoutObject()->FirstFragment();
-    destination_property_tree_state =
-        unbounded_fragment.LocalBorderBoxProperties();
+    const auto& unbounded_fragment = unbounded_ancestor->FirstFragment();
+    destination_property_tree_state.SetClip(
+        unbounded_fragment.LocalBorderBoxProperties().Clip());
   }
 
   // The background rect applies all clips *above* m_layer, but not the overflow
@@ -169,12 +173,6 @@ void PaintLayerClipper::CalculateBackgroundClipRectInternal(
   // paint outside of those bounds.
   // The total painting bounds includes any visual overflow (such as shadow) and
   // filter bounds.
-  //
-  // TODO(chrishtr): sourceToDestinationVisualRect and
-  // sourceToDestinationClipRect may not compute tight results in the presence
-  // of transforms. Tight results are required for most use cases of these
-  // rects, so we should add methods to GeometryMapper that guarantee there
-  // are tight results, or else signal an error.
   if ((should_apply_self_overflow_clip == kRespectOverflowClip) &&
       HasNonVisibleOverflow(*layer_)) {
     // Implement the following special case: if computing clip rects with
@@ -203,9 +201,7 @@ void PaintLayerClipper::CalculateBackgroundClipRectInternal(
   }
 
   if (!output.IsInfinite()) {
-    // TODO(chrishtr): generalize to multiple fragments.
     output.Move(-context.root_fragment->PaintOffset());
-    output.Move(context.sub_pixel_accumulation);
   }
 }
 
@@ -245,7 +241,7 @@ bool PaintLayerClipper::ShouldClipOverflowAlongEitherAxis(
   // phases.
   return HasNonVisibleOverflow(*layer_) ||
          (layer_->GetLayoutObject().IsLayoutEmbeddedContent() &&
-          layer_->GetLayoutObject().StyleRef().HasBorderRadius());
+          layer_->GetLayoutObject().Style().HasBorderRadius());
 }
 
 }  // namespace blink

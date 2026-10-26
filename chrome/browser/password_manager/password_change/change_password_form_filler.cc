@@ -12,7 +12,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/password_manager/password_change/change_password_form_waiter.h"
 #include "chrome/browser/password_manager/password_change/model_quality_logs_uploader.h"
 #include "chrome/browser/password_manager/password_change/password_change_logging_util.h"
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
@@ -20,6 +19,7 @@
 #include "components/password_manager/core/browser/password_manager.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "content/public/browser/web_contents.h"
 
 namespace {
@@ -43,13 +43,17 @@ ChangePasswordFormFiller::ChangePasswordFormFiller(
       client_(client),
       logs_uploader_(logs_uploader) {}
 
-ChangePasswordFormFiller::~ChangePasswordFormFiller() = default;
+ChangePasswordFormFiller::~ChangePasswordFormFiller() {
+  if (form_waiter_ && logs_uploader_) {
+    logs_uploader_->RecordDiscardedForms(form_waiter_->GetDiscardedForms());
+  }
+}
 
 void ChangePasswordFormFiller::FillForm(
     password_manager::PasswordFormManager* form_manager,
     const std::u16string& username,
-    const std::u16string& login_password,
-    const std::u16string& generated_password,
+    const password_manager::PasswordString& login_password,
+    const password_manager::PasswordString& generated_password,
     base::OnceCallback<void(FillingResult)> callback) {
   CHECK(form_manager);
   CHECK(form_manager->GetParsedObservedForm());
@@ -110,8 +114,9 @@ void ChangePasswordFormFiller::TriggerFilling(
           &password_manager::PasswordManagerDriver::FillChangePasswordForm,
           driver, form.password_element_renderer_id,
           form.new_password_element_renderer_id,
-          form.confirmation_password_element_renderer_id, login_password_,
-          generated_password_, std::move(filling_callback)));
+          form.confirmation_password_element_renderer_id,
+          login_password_.value(), generated_password_.value(),
+          std::move(filling_callback)));
 
   password_manager::PasswordForm form_to_save(form);
   form_to_save.username_value = username_;
@@ -147,18 +152,15 @@ void ChangePasswordFormFiller::ChangePasswordFormFilled(
             web_contents_, client_,
             base::BindOnce(&ChangePasswordFormFiller::OnChangePasswordFormFound,
                            weak_ptr_factory_.GetWeakPtr()))
-            .SetTimeoutCallback(
-                base::BindOnce(&ChangePasswordFormFiller::OnFormFillingFailed,
-                               weak_ptr_factory_.GetWeakPtr()))
+            .EnableTimeout()
             .SetFieldsToIgnore(observed_fields_)
-            .SetLogsUploader(logs_uploader_)
             .Build();
     return;
   }
 
-  CHECK_EQ(form_manager_->GetPendingCredentials().password_value,
-           generated_password_);
-  form_manager_->UpdateBackupPassword(stored_password_);
+  CHECK(form_manager_->GetPendingCredentials().password_value ==
+        generated_password_);
+  form_manager_->UpdateBackupPassword(stored_password_.value());
 
   std::move(callback_).Run(std::move(form_manager_));
 }
@@ -175,10 +177,17 @@ void ChangePasswordFormFiller::OnFormFillingFailed() {
 }
 
 void ChangePasswordFormFiller::OnChangePasswordFormFound(
-    password_manager::PasswordFormManager* form_manager) {
+    ChangePasswordFormWaiter::Result result) {
   form_waiter_.reset();
-  CHECK(form_manager);
+  if (logs_uploader_) {
+    logs_uploader_->RecordDiscardedForms(result.discarded_forms);
+  }
+  if (!result.form_manager) {
+    OnFormFillingFailed();
+    return;
+  }
 
+  password_manager::PasswordFormManager* form_manager = result.form_manager;
   CHECK(form_manager->GetParsedObservedForm());
   CHECK(form_manager->GetDriver());
 

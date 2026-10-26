@@ -58,7 +58,7 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public Presenter {
 
   bool ScheduleOverlayPlane(
       OverlayImage image,
-      std::unique_ptr<gfx::GpuFence> gpu_fence,
+      gfx::GpuFenceHandle gpu_fence,
       const gfx::OverlayPlaneData& overlay_plane_data) override;
   void PreserveChildSurfaceControls() override;
 
@@ -70,6 +70,12 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public Presenter {
   void SetFrameRate(gfx::SurfaceControlFrameRate frame_rate) override;
   void SetChoreographerVsyncIdForNextFrame(
       std::optional<int64_t> choreographer_vsync_id) override;
+
+  // Exposed for unit testing. Computes the surface source crop.
+  static gfx::Rect CalculateSourceCrop(const gfx::RectF& scaled_rect,
+                                       const gfx::Size& buffer_size,
+                                       uint32_t hardware_buffer_format,
+                                       bool is_yuv_alignment_enabled);
 
  private:
   GLSurfaceEGLSurfaceControl(
@@ -94,6 +100,9 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public Presenter {
     bool opaque = true;
     gfx::ColorSpace color_space;
     gfx::HDRMetadata hdr_metadata;
+    float desired_brightness_ratio = 1.f;
+    gfx::Rect damage_rect;
+    bool is_root_overlay = false;
 
     // Indicates whether the |surface| will be visible or hidden.
     bool visibility = true;
@@ -280,6 +289,7 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public Presenter {
   // after previous transaction is ack-ed.
   const bool use_target_deadline_;
   const bool using_on_commit_callback_;
+  const bool is_yuv_alignment_enabled_;
 
   std::optional<int64_t> choreographer_vsync_id_for_next_frame_;
 

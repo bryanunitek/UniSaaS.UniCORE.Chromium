@@ -20,10 +20,8 @@
 #include "chrome/browser/ash/accessibility/select_to_speak_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/view_ids.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -152,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(StickyKeysBrowserTest, OpenNewTabs) {
 // Flaky. https://crbug.com/331433886.
 IN_PROC_BROWSER_TEST_F(StickyKeysBrowserTest, DISABLED_CtrlClickHomeButton) {
   // Show home page button.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton, true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton, true);
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
   int tab_count = 1;
   EXPECT_EQ(tab_count, tab_strip_model->count());

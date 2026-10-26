@@ -6,9 +6,11 @@
 #define CONTENT_PUBLIC_BROWSER_DEVTOOLS_AGENT_HOST_CLIENT_H_
 
 #include <optional>
+#include <string>
 
 #include "base/containers/span.h"
 #include "content/common/content_export.h"
+#include "net/base/ip_endpoint.h"
 #include "url/origin.h"
 
 class GURL;
@@ -21,7 +23,17 @@ class RenderFrameHost;
 // debugging it.
 class CONTENT_EXPORT DevToolsAgentHostClient {
  public:
-  virtual ~DevToolsAgentHostClient() {}
+  struct CONTENT_EXPORT PeerMetadata {
+    enum class TransportType {
+      kUnknown,
+      kPipe,
+      kWebSocket,
+    };
+    TransportType transport_type = TransportType::kUnknown;
+    std::optional<net::IPEndPoint> peer_address;
+  };
+
+  virtual ~DevToolsAgentHostClient() = default;
 
   // Dispatches given protocol message on the client.
   virtual void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
@@ -44,12 +56,6 @@ class CONTENT_EXPORT DevToolsAgentHostClient {
   // client is allowed to discover other DevTools targets and generally
   // manipulate browser altogether.
   virtual bool IsTrusted();
-
-  // Returns true if the client has unrestricted access to all cookies
-  // (i.e., MayAttachToURL() returns true for all possible cookie domains).
-  // When true, cookie operations like clearBrowserCookies can use a more
-  // efficient atomic deletion path instead of per-cookie filtering.
-  virtual bool MayAccessAllCookies();
 
   // Returns true if the client is allowed to read local files over the
   // protocol. Example would be exposing file content to the page under debug.
@@ -78,6 +84,10 @@ class CONTENT_EXPORT DevToolsAgentHostClient {
   // Returns "DevTools" | "Extension" | "RemoteDebugger" | "Other", which is
   // used to emit to the correct UMA histogram.
   virtual std::string GetTypeForMetrics();
+
+  // Returns transport type and peer endpoint metadata for remote debugging
+  // clients.
+  virtual PeerMetadata GetPeerMetadata();
 };
 
 }  // namespace content

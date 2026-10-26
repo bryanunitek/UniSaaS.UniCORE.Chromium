@@ -16,6 +16,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -31,6 +32,8 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/account_id/account_id.h"
 #include "components/cloud_devices/common/printer_description.h"
+#include "components/download/public/common/download_file_utils.h"
+#include "components/pdf/common/constants.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -181,7 +184,7 @@ base::DictValue GetPdfCapabilities(
 // Callback that stores a PDF file on disk.
 void PrintToPdfCallback(scoped_refptr<base::RefCountedMemory> data,
                         const base::FilePath& path) {
-  base::WriteFile(path, *data);
+  download::WriteFileAtomicallyWithPermissions(path, *data);
 }
 
 // Callback that runs after `PrintToPdfCallback()` returns.
@@ -225,7 +228,7 @@ void ConstructCapabilitiesAndCompleteCallback(
     const std::string& destination_id,
     PdfPrinterHandler::GetCapabilityCallback callback,
     PrinterSemanticCapsAndDefaults::Papers custom_papers) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   base::DictValue printer_info;
   printer_info.Set(kSettingDeviceName, destination_id);
@@ -263,7 +266,7 @@ void PdfPrinterHandler::StartGetPrinters(
 
 void PdfPrinterHandler::StartGetCapability(const std::string& destination_id,
                                            GetCapabilityCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
 #if BUILDFLAG(IS_MAC)
   // Read the Mac custom paper sizes on a separate thread.
@@ -299,7 +302,7 @@ void PdfPrinterHandler::StartPrint(
     return;
   }
 
-  DCHECK(!print_callback_);
+  CHECK(!print_callback_, base::NotFatalUntil::M162);
   print_callback_ = std::move(callback);
 
   auto* dialog_controller = PrintPreviewDialogController::GetInstance();
@@ -311,7 +314,8 @@ void PdfPrinterHandler::StartPrint(
   bool is_savable = false;
   if (initiator) {
     initiator_url = initiator->GetLastCommittedURL();
-    is_savable = initiator->IsSavable();
+    is_savable = initiator->IsSavable() ||
+                 initiator->GetContentsMimeType() == pdf::kPDFMimeType;
   }
   base::FilePath path = GetFileName(initiator_url, job_title, is_savable);
 
@@ -353,7 +357,7 @@ void PdfPrinterHandler::SetPrintToPdfPathForTesting(
 // static
 base::FilePath PdfPrinterHandler::GetFileNameForPrintJobTitle(
     const std::u16string& job_title) {
-  DCHECK(!job_title.empty());
+  CHECK(!job_title.empty(), base::NotFatalUntil::M162);
 #if BUILDFLAG(IS_WIN)
   base::FilePath::StringType print_job_title(base::AsWString(job_title));
 #elif BUILDFLAG(IS_POSIX)
@@ -374,7 +378,7 @@ base::FilePath PdfPrinterHandler::GetFileNameForPrintJobTitle(
 
 // static
 base::FilePath PdfPrinterHandler::GetFileNameForURL(const GURL& url) {
-  DCHECK(url.is_valid());
+  CHECK(url.is_valid(), base::NotFatalUntil::M162);
 
   // TODO(thestig): This code is based on similar code in SavePackage in
   // content/ that is not exposed via the public content API. Consider looking
@@ -389,11 +393,11 @@ base::FilePath PdfPrinterHandler::GetFileNameForURL(const GURL& url) {
                             std::string(), std::string());
 
   // If host is used as file name, try to decode punycode.
-  if (name.AsUTF8Unsafe() == url.GetHost()) {
+  if (name.AsUTF8Unsafe() == url.host()) {
     name = base::FilePath::FromUTF16Unsafe(
-        url_formatter::IDNToUnicode(url.GetHost()));
+        url_formatter::IDNToUnicode(url.host()));
   }
-  if (name.AsUTF8Unsafe() == url.GetHost()) {
+  if (name.AsUTF8Unsafe() == url.host()) {
     return name.AddExtension(kPdfExtension);
   }
   return name.ReplaceExtension(kPdfExtension);
@@ -457,19 +461,27 @@ void PdfPrinterHandler::OnSaveLocationReady(
   }
 
   // Get default download directory. This will be used as a fallback if the
-  // save directory does not exist.
+  // save directory does not exist. Use USER_BLOCKING priority because this
+  // blocks the appearance of the save dialog, which is a direct user
+  // interaction.
   DownloadPrefs* download_prefs = DownloadPrefs::FromBrowserContext(profile_);
   base::FilePath default_path = download_prefs->DownloadPath();
   base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(&SelectSaveDirectory, path, default_path),
       base::BindOnce(&PdfPrinterHandler::OnDirectorySelected,
                      weak_ptr_factory_.GetWeakPtr(), default_filename));
 }
 
 void PdfPrinterHandler::PostPrintToPdfTask() {
+  // USER_VISIBLE instead of USER_BLOCKING because this generates an output file
+  // (equivalent to "Downloading a file requested by the user", an example of
+  // USER_VISIBLE priority in base/task/task_traits.h).
+  const base::TaskPriority task_priority =
+      SilentPrintingEnabled() ? base::TaskPriority::BEST_EFFORT
+                              : base::TaskPriority::USER_VISIBLE;
   base::ThreadPool::PostTaskAndReply(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      FROM_HERE, {base::MayBlock(), task_priority},
       base::BindOnce(&PrintToPdfCallback, print_data_, print_to_pdf_path_),
       base::BindOnce(&OnPdfPrintedCallback, GetAccountId(profile_),
                      print_to_pdf_path_, std::move(pdf_file_saved_closure_)));

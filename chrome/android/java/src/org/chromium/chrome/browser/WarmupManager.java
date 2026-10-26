@@ -9,7 +9,9 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.AssetManager;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.content.res.Resources.Theme;
 import android.net.Uri;
 import android.os.Build;
@@ -48,11 +50,11 @@ import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
 import org.chromium.chrome.browser.customtabs.CustomTabDelegateFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabBuilder;
 import org.chromium.chrome.browser.tab.TabDelegateFactory;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.toolbar.ControlContainer;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -85,7 +87,7 @@ public class WarmupManager {
     private static final String TAG = "WarmupManager";
 
     /** Records stats, observes crashes, and cleans up spareTab object. */
-    private class HiddenTabObserver extends EmptyTabObserver {
+    private class HiddenTabObserver implements TabObserver {
         // This WindowAndroid is "owned" by the Tab and should be destroyed when it is no longer
         // needed by the Tab or when the Tab is destroyed.
         private WindowAndroid mOwnedWindowAndroid;
@@ -135,6 +137,23 @@ public class WarmupManager {
             // https://crbug.com/334755104
             Context target = mActivityContext != null ? mActivityContext : getBaseContext();
             target.startActivity(intent, options);
+        }
+
+        @Override
+        public AssetManager getAssets() {
+            return mActivityContext != null ? mActivityContext.getAssets() : super.getAssets();
+        }
+
+        @Override
+        public Resources getResources() {
+            return mActivityContext != null
+                    ? mActivityContext.getResources()
+                    : super.getResources();
+        }
+
+        @Override
+        public Theme getTheme() {
+            return mActivityContext != null ? mActivityContext.getTheme() : super.getTheme();
         }
     }
 
@@ -449,7 +468,7 @@ public class WarmupManager {
 
     /**
      * Transfers all the children in the local view hierarchy {@link #mMainView} to the given
-     * ViewGroup {@param contentView} as child.
+     * ViewGroup {@code contentView} as child.
      *
      * @param contentView The parent ViewGroup to use for the transfer.
      */

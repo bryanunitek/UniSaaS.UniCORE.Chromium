@@ -4,12 +4,14 @@
 
 #include "chrome/enterprise_companion/icu_util.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
 
 #if ENTERPRISE_COMPANION_USE_ICU_DATA_FILE
 #include <array>
-#include <cstdint>
 #include <optional>
 
 #include "base/containers/heap_array.h"
@@ -54,7 +56,7 @@ std::optional<std::string> HashFile(const base::FilePath& path) {
     SHA256_Update(&ctx, buffer.data(), *bytes_read);
   }
 
-  std::array<uint8_t, SHA256_DIGEST_LENGTH> hash;
+  std::array<uint8_t, SHA256_DIGEST_LENGTH> hash = {};
   SHA256_Final(hash.data(), &ctx);
   return base::HexEncode(hash);
 }

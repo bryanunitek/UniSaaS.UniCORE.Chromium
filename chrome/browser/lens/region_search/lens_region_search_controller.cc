@@ -41,7 +41,7 @@ views::Widget* OpenLensRegionSearchInstructions(
   CHECK(browser_view);
   // Our anchor should be the browser view's top container view. This makes sure
   // that we account for side panel width and the top container view.
-  views::View* anchor = browser_view->contents_web_view();
+  views::View* anchor = browser_view->GetContentsView();
 
   ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
   lens::LensRegionSearchInstructionsView::LayoutParams layout_params{
@@ -68,7 +68,17 @@ views::Widget* OpenLensRegionSearchInstructions(
 
 namespace lens {
 
-LensRegionSearchController::LensRegionSearchController() {
+DEFINE_USER_DATA(LensRegionSearchController);
+
+// static
+LensRegionSearchController* LensRegionSearchController::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
+LensRegionSearchController::LensRegionSearchController(
+    ui::UnownedUserDataHost& host)
+    : scoped_unowned_user_data_(host, *this) {
   weak_this_ = weak_factory_.GetWeakPtr();
 }
 

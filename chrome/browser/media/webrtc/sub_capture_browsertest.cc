@@ -3,8 +3,6 @@
 // found in the LICENSE file.
 
 #include <array>
-
-
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,8 +17,9 @@
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -142,7 +141,7 @@ struct TabInfo {
 
   void StartCapture() {
     // Bring the tab into focus. This avoids getDisplayMedia rejection.
-    browser->tab_strip_model()->ActivateTabAt(tab_strip_index);
+    browser->GetTabStripModel()->ActivateTabAt(tab_strip_index);
 
     EXPECT_EQ(
         content::EvalJs(web_contents->GetPrimaryMainFrame(), "startCapture();"),
@@ -151,7 +150,7 @@ struct TabInfo {
 
   void StartCaptureFromEmbeddedFrame() {
     // Bring the tab into focus. This avoids getDisplayMedia rejection.
-    browser->tab_strip_model()->ActivateTabAt(tab_strip_index);
+    browser->GetTabStripModel()->ActivateTabAt(tab_strip_index);
 
     EXPECT_EQ(content::EvalJs(web_contents->GetPrimaryMainFrame(),
                               "startCaptureFromEmbeddedFrame();"),
@@ -160,7 +159,7 @@ struct TabInfo {
 
   bool StartSecondCapture(Frame frame) {
     // Bring the tab into focus. This avoids getDisplayMedia rejection.
-    browser->tab_strip_model()->ActivateTabAt(tab_strip_index);
+    browser->GetTabStripModel()->ActivateTabAt(tab_strip_index);
 
     return content::EvalJs(
                web_contents->GetPrimaryMainFrame(),
@@ -211,7 +210,7 @@ struct TabInfo {
                             ToString(frame), ToString(track)))
             .ExtractString();
 
-    EXPECT_EQ(0u, script_result.rfind(ToString(frame), 0)) << script_result;
+    EXPECT_TRUE(script_result.starts_with(ToString(frame))) << script_result;
     return script_result == base::StringPrintf("%s-%s-success", ToString(frame),
                                                ToString(sub_capture_type));
   }
@@ -255,11 +254,11 @@ struct TabInfo {
             .ExtractString();
 
     if (frame == Frame::kEmbeddedFrame) {
-      EXPECT_EQ(0u, script_result.rfind("embedded-", 0)) << script_result;
+      EXPECT_TRUE(script_result.starts_with("embedded-")) << script_result;
       return script_result == "embedded-new-element-success";
     }
     DCHECK(frame == Frame::kTopLevelDocument);
-    EXPECT_EQ(0u, script_result.rfind("top-level-", 0)) << script_result;
+    EXPECT_TRUE(script_result.starts_with("top-level-")) << script_result;
     return script_result == "top-level-new-element-success";
   }
 
@@ -267,7 +266,7 @@ struct TabInfo {
     return CreateNewElement(frame, "div", id);
   }
 
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> browser;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> browser;
   raw_ptr<WebContents, AcrossTasksDanglingUntriaged> web_contents;
   int tab_strip_index;
 };
@@ -332,13 +331,13 @@ class SubCaptureBrowserTestBase : public WebRtcTestBase {
         top_level_document_server->GetURL(top_level_document_document)));
 
     WebContents* const web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     permissions::PermissionRequestManager::FromWebContents(web_contents)
         ->set_auto_response_for_test(
             permissions::PermissionRequestManager::ACCEPT_ALL);
 
     *tab_info = {browser(), web_contents,
-                 browser()->tab_strip_model()->active_index()};
+                 browser()->GetTabStripModel()->active_index()};
     tab_info->StartEmbeddingFrame(
         embedded_iframe_server->GetURL(embedded_iframe_document));
 
@@ -449,7 +448,7 @@ INSTANTIATE_TEST_SUITE_P(
                    "form",
                    "h1",
                    "header",
-                   "hr"
+                   "hr",
                    "iframe",
                    "img",
                    "input",
@@ -778,78 +777,102 @@ IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
   EXPECT_TRUE(CloneTrack());
 }
 
-// Restrictions on cloned tracks 1/3.
+// Sub-capture on cloned tracks 1/3.
 IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
-                       CannotApplySubCaptureOnClones) {
+                       CanApplySubCaptureOnClones) {
   ManualSetUp(type_);
 
   ASSERT_TRUE(CloneTrack());
 
-  EXPECT_FALSE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
-                                     Track::kClone));
+  // Region Capture (cropTo) supports cloned tracks.
+  // Element Capture (restrictTo) disallows changing targets when clones exist.
+  EXPECT_EQ(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
+                                  Track::kClone),
+            type_ == SubCaptureTargetType::kCropTarget);
 }
 
-// Restrictions on cloned tracks 2/3.
+// Sub-capture on cloned tracks 2/3.
 IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
-                       CannotReapplySubCaptureOnClones) {
+                       CanReapplySubCaptureOnClones) {
   ManualSetUp(type_);
 
   ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
                                     Track::kOriginal));
   ASSERT_TRUE(CloneTrack());
 
-  EXPECT_FALSE(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
-                                     Track::kClone));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
+                                  Track::kClone),
+            type_ == SubCaptureTargetType::kCropTarget);
 }
 
-// Restrictions on cloned tracks 3/3.
-IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
-                       CannotUndoSubCaptureOnClones) {
+// Sub-capture on cloned tracks 3/3.
+IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest, CanUndoSubCaptureOnClones) {
   ManualSetUp(type_);
 
   ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
                                     Track::kOriginal));
   ASSERT_TRUE(CloneTrack());
 
-  EXPECT_FALSE(ApplySubCaptureTarget(type_, "undefined",
-                                     Frame::kTopLevelDocument, Track::kClone));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, "undefined", Frame::kTopLevelDocument,
+                                  Track::kClone),
+            type_ == SubCaptureTargetType::kCropTarget);
 }
 
-// Restrictions on original track that has a clone 1/3.
+// Sub-capture on original track that has a clone 1/3.
 IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
-                       CannotApplySubCaptureOnTracksThatHaveClones) {
+                       CanApplySubCaptureOnTracksThatHaveClones) {
   ManualSetUp(type_);
 
   ASSERT_TRUE(CloneTrack());
 
-  EXPECT_FALSE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
-                                     Track::kOriginal));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
+                                  Track::kOriginal),
+            type_ == SubCaptureTargetType::kCropTarget);
 }
 
-// Restrictions on original track that has a clone 2/3.
+// Sub-capture on original track that has a clone 2/3.
 IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
-                       CannotReapplySubCaptureOnTracksThatHaveClones) {
-  ManualSetUp(type_);
-
-  ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
-                                    Track::kOriginal));
-  ASSERT_TRUE(CloneTrack());
-
-  EXPECT_FALSE(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
-                                     Track::kOriginal));
-}
-
-// Restrictions on original track that has a clone 3/3.
-IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
-                       CannotUndoSubCaptureOnTracksThatHaveClones) {
+                       CanReapplySubCaptureOnTracksThatHaveClones) {
   ManualSetUp(type_);
 
   ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
                                     Track::kOriginal));
   ASSERT_TRUE(CloneTrack());
 
-  EXPECT_FALSE(ApplySubCaptureTarget(
-      type_, "undefined", Frame::kTopLevelDocument, Track::kOriginal));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
+                                  Track::kOriginal),
+            type_ == SubCaptureTargetType::kCropTarget);
+}
+
+// Sub-capture on original track that has a clone 3/3.
+IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
+                       CanUndoSubCaptureOnTracksThatHaveClones) {
+  ManualSetUp(type_);
+
+  ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
+                                    Track::kOriginal));
+  ASSERT_TRUE(CloneTrack());
+
+  EXPECT_EQ(ApplySubCaptureTarget(type_, "undefined", Frame::kTopLevelDocument,
+                                  Track::kOriginal),
+            type_ == SubCaptureTargetType::kCropTarget);
+}
+
+IN_PROC_BROWSER_TEST_P(SubCaptureClonesBrowserTest,
+                       CanApplyDifferentSubCaptureTargetsOnOriginalAndClone) {
+  ManualSetUp(type_);
+
+  ASSERT_TRUE(CloneTrack());
+
+  if (type_ == SubCaptureTargetType::kCropTarget) {
+    EXPECT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
+                                      Track::kOriginal));
+    EXPECT_TRUE(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
+                                      Track::kClone));
+  } else {
+    EXPECT_FALSE(ApplySubCaptureTarget(
+        type_, kTarget0, Frame::kTopLevelDocument, Track::kOriginal));
+  }
 }
 
 // Original track becomes unblocked for sub-capture after clone is GCed 1/3.
@@ -864,8 +887,9 @@ IN_PROC_BROWSER_TEST_P(
   ManualSetUp(type_);
 
   ASSERT_TRUE(CloneTrack());
-  ASSERT_FALSE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
-                                     Track::kOriginal));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
+                                  Track::kOriginal),
+            type_ == SubCaptureTargetType::kCropTarget);
   ASSERT_TRUE(Deallocate(Track::kClone));
 
   EXPECT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
@@ -883,8 +907,9 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
                                     Track::kOriginal));
   ASSERT_TRUE(CloneTrack());
-  ASSERT_FALSE(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
-                                     Track::kOriginal));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
+                                  Track::kOriginal),
+            type_ == SubCaptureTargetType::kCropTarget);
   ASSERT_TRUE(Deallocate(Track::kClone));
 
   EXPECT_TRUE(ApplySubCaptureTarget(type_, kTarget1, Frame::kTopLevelDocument,
@@ -902,8 +927,9 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(ApplySubCaptureTarget(type_, kTarget0, Frame::kTopLevelDocument,
                                     Track::kOriginal));
   ASSERT_TRUE(CloneTrack());
-  ASSERT_FALSE(ApplySubCaptureTarget(
-      type_, "undefined", Frame::kTopLevelDocument, Track::kOriginal));
+  EXPECT_EQ(ApplySubCaptureTarget(type_, "undefined", Frame::kTopLevelDocument,
+                                  Track::kOriginal),
+            type_ == SubCaptureTargetType::kCropTarget);
   ASSERT_TRUE(Deallocate(Track::kClone));
 
   EXPECT_TRUE(ApplySubCaptureTarget(

@@ -21,6 +21,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "crypto/scoped_nss_types.h"
 #include "crypto/scoped_test_nss_db.h"
 #include "net/base/features.h"
@@ -367,6 +368,40 @@ TEST_F(CertDatabaseNSSTest, ImportFromPKCS12NullPassword) {
   EXPECT_EQ(1U, ListCerts().size());
 }
 
+TEST_F(CertDatabaseNSSTest, ImportFromPKCS12WithIntermediates) {
+  // client_1.p12 contains a leaf, intermediate, and root certificate.
+  std::string pkcs12_data = ReadTestFile("client_1.p12");
+  EXPECT_EQ(OK,
+            cert_db_->ImportFromPKCS12(GetPublicSlot(), pkcs12_data, u"chrome",
+                                       true,  // is_extractable
+                                       nullptr));
+  std::vector<std::string> nicknames;
+  for (const auto& cert : ListCerts()) {
+    nicknames.emplace_back(cert->nickname);
+  }
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  // All certificates should have been imported and assigned nicknames. Check
+  // for prefixes because NSS will add suffixes like " #2" if other certificates
+  // with these nicknames are already in the store. In particular, dev or CI
+  // machines may have copies of some of these certs either due to
+  // https://crbug.com/546859830, or from local testing.
+  EXPECT_THAT(nicknames, testing::UnorderedElementsAre(
+                             testing::StartsWith("Test DB:Client Cert A"),
+                             testing::StartsWith("Test DB:B CA"),
+                             testing::StartsWith("Test DB:C Root CA")));
+#else
+  // On ChromeOS, only the leaf certificate gets imported. See the comment in
+  // NSSCertDatabase::ImportFromPKCS12.
+  EXPECT_THAT(nicknames, testing::UnorderedElementsAre(
+                             testing::StartsWith("Test DB:Client Cert A")));
+#endif
+
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, observer_->client_cert_store_changes());
+  EXPECT_EQ(0, observer_->trust_store_changes());
+}
+
 TEST_F(CertDatabaseNSSTest, ImportCACert_SSLTrust) {
   ScopedCERTCertificateList certs = CreateCERTCertificateListFromFile(
       GetTestCertsDirectory(), "root_ca_cert.pem",
@@ -667,6 +702,14 @@ TEST_F(CertDatabaseNSSTest, ImportCACertNotHierarchy) {
   ASSERT_EQ(1U, cert_list.size());
   EXPECT_EQ("Test Root CA", GetSubjectCN(cert_list[0].get()));
 }
+
+// The tests in this ifdef block all test the interaction of using
+// NSSCertDatabase to import certificates with trust settings and then trying
+// to verify relevant certificate chains. This depends on the verifier using
+// TrustStoreNSS to load certificate trust settings from NSS.
+// TODO(crbug.com/390333881): I think the server & CA cert management parts of
+// CertDatabaseNSS are only used by tests now. Try removing them entirely.
+#if BUILDFLAG(USE_NSS_SERVER_CERTS)
 
 // Test importing a server cert + chain to the NSS DB with default trust. After
 // importing, all the certs should be found in the DB and should have default
@@ -1204,6 +1247,8 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa4) {
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result2.cert_status);
 }
+
+#endif  // BUILDFLAG(USE_NSS_SERVER_CERTS)
 
 // Importing two certificates with the same issuer and subject common name,
 // but overall distinct subject names, should succeed and generate a unique

@@ -85,7 +85,7 @@ severity of high and could potentially be reduced by other mitigating factors.
   GPU or network process on a [platform where they're not sandboxed](../../docs/security/process-sandboxes-by-platform.md)),
   that can only be triggered from a compromised renderer,
   leading to a sandbox escape ([1393177](https://crbug.com/1393177),
-  [1421268](crbug.com/1421268)).
+  [1421268](https://crbug.com/1421268)).
 * Controlled read of 16 or more bytes of data from the browser, gpu or network
   process by a compromised renderer.
 * Memory corruption in the browser or another high privileged process (e.g.
@@ -100,6 +100,13 @@ severity of high and could potentially be reduced by other mitigating factors.
 * A bug that allows full circumvention of the same origin policy. Universal XSS
 bugs fall into this category, as they allow script execution in the context of
 an arbitrary origin ([534923](https://crbug.com/534923)).
+  * A universal XSS bypass is either a universal CSP bypass, a universal Strict
+    CSP bypass or a universal TrustedTypes bypass.
+  * A universal XSS bypass means that it allows arbitrary script execution: i.e.
+    from arbitrary URLS, or from any HTTP/HTTPS URL, or from any data:/ URL, or
+    any inline script.
+  * A universal bypass does not require pre-conditions beyond the attacker have
+    the ability to parser-insert elements or iframes (threat model for CSP).
 * Site Isolation bypasses:
   * Cross-site execution contexts unexpectedly sharing a renderer process
       ([863069](https://crbug.com/863069), [886976](https://crbug.com/886976)).
@@ -142,6 +149,13 @@ should be marked as medium severity.
   ([540949](https://crbug.com/540949)).
 * A bug that allows an attacker to reliably read or infer complete browsing history
   ([381808](https://crbug.com/381808)).
+* An XSS bypass that has one the following mitigating factors that makes it less
+  severe than a universal XSS bypass:
+  * The policy being bypassed is more lax than strict CSP, but does still
+    provide some amount of mitigation (i.e. it does not use * or unsafe-inline).
+  * The attacker script being allowed to execute is not arbitrary.
+  * The bypass requires uncommon preconditions to happen beyond the threat model
+    of CSP (i.e. more than the ability to parser insert elements).
 
 ### Other
 
@@ -182,7 +196,10 @@ scope.
 * A bug that reduces the effectiveness of the sandbox
   ([338538](https://crbug.com/338538)).
 * Bypass requirement for a user gesture ([256057](https://crbug.com/256057)).
-* Partial CSP bypass ([534570](https://crbug.com/534570)).
+* Partial CSP bypass. This is either:
+  * The bypass of an extremely lax CSP ([534570](https://crbug.com/534570)).
+  * or a CSP bypass that is very limited in scope (requires pre-conditions and
+    does not allow arbitrary script execution).
 * A limited extension permission bypass ([169632](https://crbug.com/169632)).
 * An omnibox spoof where only certain URLs can be displayed, or with other
   mitigating factors ([265221](https://crbug.com/265221)).
@@ -190,6 +207,7 @@ scope.
   ([421690383](https://issues.chromium.org/issues/421690383))
 * A bug that allows an attacker to reliably read or infer limited browsing
   history.
+* A bug that allows local network access without the LNA permission.
 * Spoofs that hide important warnings under other obvious UI elements.
 * Split-view dialog confusion.
 * Clickjacking and enterjacking bugs of any kind (rapid clicks, holding

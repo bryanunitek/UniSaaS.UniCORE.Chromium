@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ui/webui/settings/settings_secure_dns_handler.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "base/feature_list.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/dns_probe_test_util.h"
 #include "chrome/browser/net/secure_dns_config.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/country_codes/country_codes.h"
@@ -19,6 +20,7 @@
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_web_ui.h"
 #include "net/dns/public/resolve_error_info.h"
@@ -37,7 +39,7 @@
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -59,7 +61,6 @@ constexpr char kWebUiFunctionName[] = "webUiCallbackName";
 
 net::DohProviderEntry::List GetDohProviderListForTesting() {
   static BASE_FEATURE(kDohProviderFeatureForProvider_Global1,
-                      "DohProviderFeatureForProvider_Global1",
                       base::FEATURE_ENABLED_BY_DEFAULT);
   static const auto global1 = net::DohProviderEntry::ConstructForTesting(
       "Provider_Global1", &kDohProviderFeatureForProvider_Global1,
@@ -69,7 +70,6 @@ net::DohProviderEntry::List GetDohProviderListForTesting() {
       "https://global1.provider/privacy_policy/" /* privacy_policy */,
       true /* display_globally */, {} /* display_countries */);
   static BASE_FEATURE(kDohProviderFeatureForProvider_NoDisplay,
-                      "DohProviderFeatureForProvider_NoDisplay",
                       base::FEATURE_ENABLED_BY_DEFAULT);
   static const auto no_display = net::DohProviderEntry::ConstructForTesting(
       "Provider_NoDisplay", &kDohProviderFeatureForProvider_NoDisplay,
@@ -79,7 +79,6 @@ net::DohProviderEntry::List GetDohProviderListForTesting() {
       "https://nodisplay.provider/privacy_policy/" /* privacy_policy */,
       false /* display_globally */, {} /* display_countries */);
   static BASE_FEATURE(kDohProviderFeatureForProvider_EE_FR,
-                      "DohProviderFeatureForProvider_EE_FR",
                       base::FEATURE_ENABLED_BY_DEFAULT);
   static const auto ee_fr = net::DohProviderEntry::ConstructForTesting(
       "Provider_EE_FR", &kDohProviderFeatureForProvider_EE_FR, {} /*ip_strs */,
@@ -88,7 +87,6 @@ net::DohProviderEntry::List GetDohProviderListForTesting() {
       "https://ee.fr.provider/privacy_policy/" /* privacy_policy */,
       false /* display_globally */, {"EE", "FR"} /* display_countries */);
   static BASE_FEATURE(kDohProviderFeatureForProvider_FR,
-                      "DohProviderFeatureForProvider_FR",
                       base::FEATURE_ENABLED_BY_DEFAULT);
   static const auto fr = net::DohProviderEntry::ConstructForTesting(
       "Provider_FR", &kDohProviderFeatureForProvider_FR, {} /*ip_strs */,
@@ -97,7 +95,6 @@ net::DohProviderEntry::List GetDohProviderListForTesting() {
       "https://fr.provider/privacy_policy/" /* privacy_policy */,
       false /* display_globally */, {"FR"} /* display_countries */);
   static BASE_FEATURE(kDohProviderFeatureForProvider_Global2,
-                      "DohProviderFeatureForProvider_Global2",
                       base::FEATURE_ENABLED_BY_DEFAULT);
   static const auto global2 = net::DohProviderEntry::ConstructForTesting(
       "Provider_Global2", &kDohProviderFeatureForProvider_Global2,
@@ -155,8 +152,7 @@ class SecureDnsHandlerTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     handler_ = std::make_unique<TestSecureDnsHandler>();
-    web_ui_.set_web_contents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+    web_ui_.set_web_contents(browser()->GetActiveTabInterface()->GetContents());
     handler_->set_web_ui(&web_ui_);
     handler_->RegisterMessages();
     handler_->AllowJavascriptForTesting();
@@ -171,7 +167,7 @@ class SecureDnsHandlerTest : public InProcessBrowserTest {
                                      std::string* out_doh_config,
                                      int* out_management_mode) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       if (data->function_name() != "cr.webUIListenerCallback" ||
           !data->arg1()->is_string() ||
           data->arg1()->GetString() != "secure-dns-setting-changed") {
@@ -217,7 +213,7 @@ class SecureDnsHandlerTest : public InProcessBrowserTest {
       bool* out_doh_with_identifiers_active,
       std::string* out_doh_config_for_display) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       if (data->function_name() != "cr.webUIListenerCallback" ||
           !data->arg1()->is_string() ||
           data->arg1()->GetString() != "secure-dns-setting-changed") {
@@ -279,7 +275,7 @@ IN_PROC_BROWSER_TEST_F(SecureDnsHandlerTest, SecureDnsModes) {
 #if BUILDFLAG(IS_CHROMEOS)
   // On Chrome OS, the local_state is shared between all users so the user-set
   // pref is stored in the profile's pref service.
-  pref_service_for_user_settings = browser()->profile()->GetPrefs();
+  pref_service_for_user_settings = browser()->GetProfile()->GetPrefs();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   pref_service_for_user_settings->SetString(prefs::kDnsOverHttpsMode,
@@ -312,8 +308,9 @@ IN_PROC_BROWSER_TEST_F(SecureDnsHandlerTest, SecureDnsPolicy) {
   // On Chrome OS, the local_state is only used on managed profiles.
   g_browser_process->platform_part()
       ->secure_dns_manager()
-      ->SetPrimaryProfilePropertiesForTesting(browser()->profile()->GetPrefs(),
-                                              /*is_profile_managed=*/true);
+      ->SetPrimaryProfilePropertiesForTesting(
+          browser()->GetProfile()->GetPrefs(),
+          /*is_profile_managed=*/true);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   policy::PolicyMap policy_map;
@@ -339,8 +336,9 @@ IN_PROC_BROWSER_TEST_F(SecureDnsHandlerTest, SecureDnsPolicyChange) {
   // On Chrome OS, the local_state is only used on managed profiles.
   g_browser_process->platform_part()
       ->secure_dns_manager()
-      ->SetPrimaryProfilePropertiesForTesting(browser()->profile()->GetPrefs(),
-                                              /*is_profile_managed=*/true);
+      ->SetPrimaryProfilePropertiesForTesting(
+          browser()->GetProfile()->GetPrefs(),
+          /*is_profile_managed=*/true);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   policy::PolicyMap policy_map;
@@ -434,7 +432,7 @@ IN_PROC_BROWSER_TEST_F(SecureDnsHandlerTest, SecureDnsTemplates) {
 #if BUILDFLAG(IS_CHROMEOS)
   // On Chrome OS, the local_state is shared between all users so the user-set
   // pref is stored in the profile's pref service.
-  pref_service_for_user_settings = browser()->profile()->GetPrefs();
+  pref_service_for_user_settings = browser()->GetProfile()->GetPrefs();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   pref_service_for_user_settings->SetString(prefs::kDnsOverHttpsMode,
@@ -480,8 +478,9 @@ IN_PROC_BROWSER_TEST_F(SecureDnsHandlerTest,
 
   g_browser_process->platform_part()
       ->secure_dns_manager()
-      ->SetPrimaryProfilePropertiesForTesting(browser()->profile()->GetPrefs(),
-                                              /*is_profile_managed=*/true);
+      ->SetPrimaryProfilePropertiesForTesting(
+          browser()->GetProfile()->GetPrefs(),
+          /*is_profile_managed=*/true);
 
   std::string secure_dns_mode;
   std::string doh_config, doh_config_for_display;
@@ -524,7 +523,7 @@ IN_PROC_BROWSER_TEST_F(SecureDnsHandlerTest,
   const char kTemplatesAlt[] = "https://test2/dns-query{?dns}";
 
   PrefService* local_state = g_browser_process->local_state();
-  PrefService* profile_prefs = browser()->profile()->GetPrefs();
+  PrefService* profile_prefs = browser()->GetProfile()->GetPrefs();
 
   local_state->SetString(prefs::kDnsOverHttpsMode,
                          SecureDnsConfig::kModeSecure);

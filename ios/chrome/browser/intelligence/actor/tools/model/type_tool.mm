@@ -9,11 +9,12 @@
 
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
+#import "base/strings/stringprintf.h"
 #import "base/types/expected.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/action_target.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/type_tool_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
-#import "ios/chrome/browser/intelligence/actor/tools/utils/profile_context_resolver.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
@@ -24,51 +25,28 @@ namespace actor {
 TypeTool::~TypeTool() = default;
 
 // static
-base::expected<std::unique_ptr<TypeTool>, ToolExecutionResult> TypeTool::Create(
-    const optimization_guide::proto::TypeAction& action,
-    const ProfileContextResolver& profile_context_resolver) {
-  if (!action.has_tab_id()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-
-  base::expected<ProfileContextResolver::TabResolutionResult,
-                 ToolExecutionResult>
-      resolution_result = profile_context_resolver.ResolveTab(action.tab_id());
-  if (!resolution_result.has_value()) {
-    return base::unexpected(resolution_result.error());
-  }
-
-  if (!action.has_text() || !action.has_mode()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-
-  if (!action.has_target()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-
-  const optimization_guide::proto::ActionTarget& target = action.target();
-  // Callers must either target by coordinate or (document_identifier, node_id).
-  if (target.has_content_node_id() && !target.has_document_identifier()) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-  bool can_target_by_coordinate = target.has_coordinate();
-  bool can_target_by_node_id =
-      target.has_content_node_id() && target.has_document_identifier();
-  if (!can_target_by_coordinate && !can_target_by_node_id) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-  if (can_target_by_coordinate && can_target_by_node_id) {
-    return base::unexpected(
-        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
-  }
-
+std::unique_ptr<TypeTool> TypeTool::Create(
+    base::WeakPtr<web::WebState> web_state,
+    const optimization_guide::proto::TypeAction& action) {
+  ActionTarget target = ActionTarget::FromProto(action.target());
   return std::unique_ptr<TypeTool>(
-      new TypeTool(action, resolution_result.value().web_state));
+      new TypeTool(web_state, action, std::move(target)));
+}
+
+void TypeTool::Validate(ToolExecutionCallback callback) {
+  if (!action_.has_text() || !action_.has_mode()) {
+    std::move(callback).Run(
+        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
+    return;
+  }
+
+  if (!target_.is_valid()) {
+    std::move(callback).Run(
+        ToolExecutionResult(mojom::ActionResultCode::kArgumentsInvalid));
+    return;
+  }
+
+  std::move(callback).Run(ToolExecutionResult::Ok());
 }
 
 void TypeTool::Execute(ToolExecutionCallback callback) {
@@ -85,11 +63,10 @@ void TypeTool::Execute(ToolExecutionCallback callback) {
     return;
   }
 
-  ResolveTargetFrame(web_state_, frames_manager->GetMainWebFrame()->AsWeakPtr(),
-                     action_.target(),
-                     base::BindOnce(&TypeTool::OnTargetFrameResolved,
-                                    weak_ptr_factory_.GetWeakPtr(), action_,
-                                    std::move(callback)));
+  ResolveTargetFrame(
+      web_state_, frames_manager->GetMainWebFrame()->AsWeakPtr(), target_,
+      base::BindOnce(&TypeTool::OnTargetFrameResolved,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 base::WeakPtr<web::WebState> TypeTool::GetTargetWebState() const {
@@ -100,14 +77,24 @@ ToolType TypeTool::GetToolType() const {
   return ToolType::kType;
 }
 
-TypeTool::TypeTool(const optimization_guide::proto::TypeAction& action,
-                   base::WeakPtr<web::WebState> web_state)
+std::string TypeTool::DebugString() const {
+  return base::StringPrintf(
+      "TypeTool[%s;text(%s);mode(%s);FollowByEnter(%s)]",
+      target_.DebugString().c_str(), action_.text().c_str(),
+      optimization_guide::proto::TypeAction::TypeMode_Name(action_.mode())
+          .c_str(),
+      action_.follow_by_enter() ? "true" : "false");
+}
+
+TypeTool::TypeTool(base::WeakPtr<web::WebState> web_state,
+                   const optimization_guide::proto::TypeAction& action,
+                   ActionTarget target)
     : action_(action),
+      target_(std::move(target)),
       web_state_(web_state),
       js_feature_(TypeToolJavaScriptFeature::GetInstance()) {}
 
 void TypeTool::OnTargetFrameResolved(
-    optimization_guide::proto::TypeAction action,
     ToolExecutionCallback callback,
     base::expected<ActionTargetJavaScriptFeature::TargetFrameResult,
                    ToolExecutionResult> result) {
@@ -127,11 +114,9 @@ void TypeTool::OnTargetFrameResolved(
 
   target_frame_ = target_web_frame->AsWeakPtr();
 
-  // Update the target with the potentially translated coordinates relative
-  // to the target frame.
-  *action.mutable_target() = target_frame.target;
-
-  js_feature_->Type(target_web_frame->AsWeakPtr(), action, std::move(callback));
+  js_feature_->Type(target_web_frame->AsWeakPtr(), target_frame.target,
+                    action_.text(), action_.mode(), action_.follow_by_enter(),
+                    std::move(callback));
 }
 
 }  // namespace actor

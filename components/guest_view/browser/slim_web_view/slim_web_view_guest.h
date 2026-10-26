@@ -52,9 +52,14 @@ class SlimWebViewGuest : public GuestView<SlimWebViewGuest> {
 
   void Navigate(const GURL& url);
   void SetUserAgentOverride(const std::string& user_agent_override);
+  void SetZoom(double zoom_factor);
+  double GetZoom() const;
 
   // Returns true if an origin allowlist was provided at creation time.
   bool HasAllowedOrigins() const;
+  // Returns true if an origin allowlist was provided at creation time for the
+  // specified resource type.
+  bool HasAllowedOrigins(RequestResourceType resource_type) const;
 
   // Returns an error message if the URL is not allowed, based on scheme and
   // allowed origins.
@@ -87,7 +92,7 @@ class SlimWebViewGuest : public GuestView<SlimWebViewGuest> {
       WindowOpenDisposition disposition,
       const blink::mojom::WindowFeatures& window_features,
       const content::StoragePartitionConfig& partition_config,
-      content::SessionStorageNamespace* session_storage_namespace) final;
+      content::SessionStorageNamespaceHandle* session_storage_namespace) final;
   void RendererUnresponsive(
       content::WebContents* source,
       content::RenderWidgetHost* render_widget_host,
@@ -122,6 +127,7 @@ class SlimWebViewGuest : public GuestView<SlimWebViewGuest> {
                        const base::DictValue& create_params,
                        GuestPageCreatedCallback callback) final;
   void GuestViewDidStopLoading() final;
+  void GuestZoomChanged(double old_zoom_level, double new_zoom_level) final;
 
   void LoadAbort(bool is_top_level, const GURL& url, net::Error error_code);
 

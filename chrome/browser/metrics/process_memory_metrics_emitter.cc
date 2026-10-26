@@ -354,6 +354,8 @@ const Metric kAllocatorDumpNamesForMetrics[] = {
     {"gpu/transfer_cache", "ServiceTransferCache.AvgImageSize",
      MetricSize::kCustom, "average_size", EmitTo::kSizeInUmaOnly, nullptr,
      ImageSizeMetricRange},
+    {"gpu/viz_buffer_queue", "VizBufferQueue", MetricSize::kLarge, kSize,
+     EmitTo::kSizeInUmaOnly, nullptr},
     // For the Vulkan Memory Allocator, "allocated_size" is the amount of GPU
     // memory used by the allocator except lazily allocated memory; "used_size"
     // is the amount allocated by clients except lazily used memory.
@@ -386,6 +388,8 @@ const Metric kAllocatorDumpNamesForMetrics[] = {
      "nonpurgeable_size", EmitTo::kSizeInUmaOnly, nullptr},
     {"ioaccelerator", "IOAccelerator.Purgeable", MetricSize::kLarge,
      "purgeable_size", EmitTo::kSizeInUmaOnly, nullptr},
+    {"gpu/angle/metal", "ANGLEMetal", MetricSize::kLarge, kSize,
+     EmitTo::kSizeInUmaOnly, nullptr},
 #endif
     {"java_heap", "JavaHeap", MetricSize::kLarge, kEffectiveSize,
      EmitTo::kSizeInUkmAndUma, &Memory_Experimental::SetJavaHeap},
@@ -405,6 +409,9 @@ const Metric kAllocatorDumpNamesForMetrics[] = {
     {"malloc/partitions/aligned", "Malloc.Aligned.ObjectCount",
      MetricSize::kTiny, MemoryAllocatorDump::kNameObjectCount,
      EmitTo::kSizeInUmaOnly, nullptr},
+    {"malloc/partitions/allocator", "Malloc.AlignedAlloc.WastedKiB",
+     MetricSize::kSmall, "aligned_alloc_wasted_size", EmitTo::kSizeInUmaOnly,
+     nullptr},
     {"malloc/partitions/allocator", "Malloc.Allocator.ObjectCount",
      MetricSize::kTiny, MemoryAllocatorDump::kNameObjectCount,
      EmitTo::kSizeInUmaOnly, nullptr},
@@ -445,6 +452,13 @@ const Metric kAllocatorDumpNamesForMetrics[] = {
     {"malloc/partitions", "Malloc.BRPQuarantinedCountPerMinute",
      MetricSize::kTiny, "brp_quarantined_count_per_minute",
      EmitTo::kSizeInUmaOnly, nullptr},
+    {"malloc/partitions",
+     "Malloc.MaxBRPRefCount",
+     MetricSize::kCustom,
+     "max_brp_ref_count",
+     EmitTo::kSizeInUmaOnly,
+     nullptr,
+     {1 << 12, 1 << 28}},
 #if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
     {"malloc/extreme_lud/large_objects", "Malloc.ExtremeLUD.LargeObjects.Count",
      MetricSize::kTiny, "count", EmitTo::kSizeInUmaOnly, nullptr},
@@ -914,7 +928,7 @@ void EmitProcessUma(HistogramProcessType process_type,
   if (std::string_view(item.uma_name) == "CommandBuffer") {
     uma_name =
         EXPERIMENTAL_UMA_PREFIX "Gpu" VERSION_SUFFIX_NORMAL "CommandBuffer";
-    DCHECK(item.metric_size == MetricSize::kLarge);
+    CHECK(item.metric_size == MetricSize::kLarge, base::NotFatalUntil::M161);
   } else {
     uma_name = base::StrCat(
         {EXPERIMENTAL_UMA_PREFIX, HistogramProcessTypeToString(process_type),
@@ -1818,7 +1832,7 @@ namespace {
 // Returns true iff the given |process| is responsible for hosting the
 // main-frame of the given |page|.
 bool HostsMainFrame(const ProcessNode* process, const PageNode* page) {
-  const FrameNode* main_frame = page->GetMainFrameNode();
+  const FrameNode* main_frame = page->GetPrimaryMainFrameNode();
   if (main_frame == nullptr) {
     // |process| can't host a frame that doesn't exist.
     return false;

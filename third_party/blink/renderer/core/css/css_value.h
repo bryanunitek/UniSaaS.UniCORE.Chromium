@@ -35,6 +35,7 @@ namespace blink {
 
 class Document;
 class Length;
+class ResourceFetcher;
 class TreeScope;
 
 class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
@@ -43,6 +44,8 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
   static CSSValue* Create(const Length& value, float zoom);
 
   String CssText() const;
+  // Returns value->CssText() if value is non-null, or String() otherwise.
+  static String CssTextOrEmptyString(const CSSValue* value);
   unsigned Hash() const;
 
   bool IsNumericLiteralValue() const {
@@ -56,7 +59,11 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
   bool IsScopedKeywordValue() const {
     return class_type_ == kScopedKeywordClass;
   }
-  bool IsValuePair() const { return class_type_ == kValuePairClass; }
+  bool IsValuePair() const {
+    return class_type_ >= kValuePairClass &&
+           class_type_ <= kParamValuePairClass;
+  }
+  bool IsBaseValuePair() const { return class_type_ == kValuePairClass; }
   bool IsValueList() const { return class_type_ >= kValueListClass; }
 
   bool IsBaseValueList() const { return class_type_ == kValueListClass; }
@@ -170,6 +177,7 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
   bool IsShadowValue() const { return class_type_ == kShadowClass; }
   bool IsStringValue() const { return class_type_ == kStringClass; }
   bool IsSuperellipseValue() const { return class_type_ == kSuperellipseClass; }
+  bool IsSymbolsValue() const { return class_type_ == kSymbolsClass; }
   bool IsURIValue() const { return class_type_ == kURIClass; }
   bool IsURLPatternValue() const { return class_type_ == kURLPatternClass; }
   bool IsLinearTimingFunctionValue() const {
@@ -247,7 +255,7 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
 
   bool IsRepeatValue() const { return class_type_ == kRepeatClass; }
 
-  bool HasFailedOrCanceledSubresources() const;
+  bool HasFailedOrCanceledSubresources(ResourceFetcher*) const;
   bool MayContainUrl() const;
   void ReResolveUrl(const Document&) const;
 
@@ -274,6 +282,10 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
   // Checks if a CSS random() function is present in the value.
   bool HasRandomFunctions() const;
 
+  // Whether the value can be converted to a computed value without depending
+  // on another property value.
+  bool IsComputationallyIndependent() const;
+
   void TraceAfterDispatch(blink::Visitor* visitor) const {}
   void Trace(Visitor*) const;
 
@@ -298,9 +310,14 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
     kStringClass,
     kURIClass,
     kURLPatternClass,
+
+    // Value pair classes. These must remain contiguous (and
+    // kParamValuePairClass must stay at the end of the run), as
+    // IsValuePair() tests them with a range check.
     kValuePairClass,
     kLightDarkValuePairClass,
     kParamValuePairClass,
+
     kScrollClass,
     kViewClass,
     kRatioClass,
@@ -382,6 +399,8 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
 
     kSuperellipseClass,
 
+    kSymbolsClass,
+
     kTriggerAttachmentClass,
 
     kRepeatClass,
@@ -424,7 +443,7 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
   uint8_t value_list_separator_ = kSpaceSeparator;
 
   // CSSMathFunctionValue:
-  uint8_t allows_negative_percentage_reference_ : 1;  // NOLINT
+  uint8_t allows_negative_percentage_reference_ : 1;
 
   // Any CSS value that defines/references a global name should be tree-scoped.
   // However, to allow sharing StyleSheetContents, we don't directly populate
@@ -432,7 +451,7 @@ class CORE_EXPORT CSSValue : public GarbageCollected<CSSValue> {
   // element's style.
   // The flag is true if the value contains such references but hasn't been
   // populated with a tree scope.
-  uint8_t needs_tree_scope_population_ : 1;  // NOLINT
+  uint8_t needs_tree_scope_population_ : 1;
 
   // Whether this value originally came from a quirksmode-specific declaration.
   // Used for use counting of such situations (to see if we can try to remove

@@ -8,10 +8,14 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_API_DEBUGGER_DEBUGGER_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_DEBUGGER_DEBUGGER_API_H_
 
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
+#include "base/timer/timer.h"
 #include "chrome/common/extensions/api/debugger.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "extensions/browser/extension_function.h"
@@ -22,10 +26,51 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 using extensions::api::debugger::Debuggee;
 using extensions::api::debugger::DebuggerSession;
 
+struct MessageSubstitution;
+
 // Base debugger function.
 
 namespace extensions {
 class ExtensionDevToolsClientHost;
+
+// Returns `extension_name` prepared for the warning shown while the extension
+// is debugging the browser: truncated to a maximum length, with any directional
+// formatting left open by the truncation terminated so that the name can't
+// visually reorder the rest of the warning. See https://crbug.com/514078071.
+std::u16string GetExtensionNameForDevToolsWarning(
+    std::u16string_view extension_name);
+
+// Android uses messages instead of desktop infobars, so the desktop infobar
+// controller is skipped on Android.
+#if !BUILDFLAG(IS_ANDROID)
+class ExtensionDevToolsInfoBarController {
+ public:
+  static ExtensionDevToolsInfoBarController* GetInstance();
+
+  // Returns the message substitution containing the active extension's name for
+  // the Extension DevTools infobar message template.
+  static std::vector<MessageSubstitution> GetMessageSubstitutions();
+
+  // Called when the user clicks Cancel or dismisses the infobar. Detaches all
+  // active client hosts to terminate active debugging sessions.
+  static void OnInfoBarAction();
+
+  void OnClientHostAttached(ExtensionDevToolsClientHost* host,
+                            const std::string& extension_name);
+  void OnClientHostDetached(ExtensionDevToolsClientHost* host);
+
+ private:
+  friend class base::NoDestructor<ExtensionDevToolsInfoBarController>;
+  ExtensionDevToolsInfoBarController();
+  ~ExtensionDevToolsInfoBarController();
+
+  void OnInfoBarActionInternal();
+
+  std::set<raw_ptr<ExtensionDevToolsClientHost, SetExperimental>> active_hosts_;
+  std::u16string last_extension_name_;
+  base::OneShotTimer autoclose_timer_;
+};
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 class DebuggerFunction : public ExtensionFunction {
  protected:

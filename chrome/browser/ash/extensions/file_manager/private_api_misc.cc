@@ -29,7 +29,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/crostini/crostini_export_import.h"
 #include "chrome/browser/ash/crostini/crostini_export_import_factory.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
@@ -60,23 +59,21 @@
 #include "chrome/browser/download/download_dir_util.h"
 #include "chrome/browser/extensions/devtools_util.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
-#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_dialog.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
-#include "chrome/common/extensions/api/file_manager_private.h"
-#include "chrome/common/extensions/api/file_manager_private_internal.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/drivefs/drivefs_pinning_manager.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_manager_private.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_manager_private_internal.h"
 #include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/account_id/account_id.h"
 #include "components/drive/drive_pref_names.h"
@@ -121,7 +118,7 @@ AppWindow* GetCurrentAppWindow(ExtensionFunction* function) {
 }
 
 std::vector<ProfileInfo> GetLoggedInProfileInfoList() {
-  DCHECK(user_manager::UserManager::IsInitialized());
+  CHECK(user_manager::UserManager::IsInitialized(), base::NotFatalUntil::M160);
   const std::vector<Profile*>& profiles =
       g_browser_process->profile_manager()->GetLoadedProfiles();
   std::set<Profile*> original_profiles;
@@ -163,8 +160,8 @@ bool ConvertURLsToProvidedInfo(
     fsp::ProvidedFileSystemInterface** file_system,
     std::vector<base::FilePath>* paths,
     std::string* error) {
-  DCHECK(file_system);
-  DCHECK(error);
+  CHECK(file_system, base::NotFatalUntil::M160);
+  CHECK(error, base::NotFatalUntil::M160);
 
   if (urls.empty()) {
     *error = "At least one file must be specified.";
@@ -236,8 +233,9 @@ std::string Redact(const base::FilePath& path) {
 // Google Drive and OneDrive. If SkyVault is misconfigured, e.g. local files are
 // disabled but the download policy isn't set correctly defaults to MyFiles.
 api::file_manager_private::DefaultLocation GetDefaultLocation(
+    const PrefService& local_state,
     const std::string& pref) {
-  if (policy::local_user_files::LocalUserFilesAllowed()) {
+  if (policy::local_user_files::LocalUserFilesAllowed(local_state)) {
     // If local files are allowed, always default to MyFiles.
     return api::file_manager_private::DefaultLocation::kMyFiles;
   }
@@ -259,15 +257,15 @@ api::file_manager_private::DefaultLocation GetDefaultLocation(
 // api::file_manager_private::MigrationDestination. If SkyVault is
 // misconfigured, e.g. local files are enabled returns kNotSpecified, regardless
 // of the policy value.
-api::file_manager_private::MigrationDestination
-GetSkyVaultMigrationDestination() {
-  if (policy::local_user_files::LocalUserFilesAllowed()) {
+api::file_manager_private::MigrationDestination GetSkyVaultMigrationDestination(
+    const PrefService& local_state) {
+  if (policy::local_user_files::LocalUserFilesAllowed(local_state)) {
     // If local files are allowed, just return kNotSpecified.
     return api::file_manager_private::MigrationDestination::kNotSpecified;
   }
 
   const auto migration_destination =
-      policy::local_user_files::GetMigrationDestination();
+      policy::local_user_files::GetMigrationDestination(local_state);
   switch (migration_destination) {
     case policy::local_user_files::MigrationDestination::kNotSpecified:
       return api::file_manager_private::MigrationDestination::kNotSpecified;
@@ -282,13 +280,15 @@ GetSkyVaultMigrationDestination() {
 
 // Returns the SkyVault migration start time as a formatted string if the
 // policies are set to disable local storage and delete existing local files.
-std::optional<std::string> GetSkyVaultMigrationStartTime(Profile* profile) {
-  if (policy::local_user_files::LocalUserFilesAllowed()) {
+std::optional<std::string> GetSkyVaultMigrationStartTime(
+    const PrefService& local_state,
+    Profile* profile) {
+  if (policy::local_user_files::LocalUserFilesAllowed(local_state)) {
     return std::nullopt;
   }
 
   const auto migration_destination =
-      policy::local_user_files::GetMigrationDestination();
+      policy::local_user_files::GetMigrationDestination(local_state);
   if (migration_destination !=
       policy::local_user_files::MigrationDestination::kDelete) {
     return std::nullopt;
@@ -308,11 +308,15 @@ std::optional<std::string> GetSkyVaultMigrationStartTime(Profile* profile) {
 
 ExtensionFunction::ResponseAction
 FileManagerPrivateGetPreferencesFunction::Run() {
+  // TODO(crbug.com/404131876): Avoid using g_browser_process.
+  const PrefService& local_state =
+      CHECK_DEREF(g_browser_process->local_state());
+
   fmp::Preferences result;
   Profile* const profile = Profile::FromBrowserContext(browser_context());
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M160);
   const PrefService* const prefs = profile->GetPrefs();
-  DCHECK(prefs);
+  CHECK(prefs, base::NotFatalUntil::M160);
   drive::DriveIntegrationService* const service =
       drive::DriveIntegrationServiceFactory::FindForProfile(profile);
 
@@ -330,7 +334,8 @@ FileManagerPrivateGetPreferencesFunction::Run() {
   result.arc_enabled = prefs->GetBoolean(arc::prefs::kArcEnabled);
   result.arc_removable_media_access_enabled =
       prefs->GetBoolean(arc::prefs::kArcHasAccessToRemovableMedia);
-  result.trash_enabled = file_manager::trash::IsTrashEnabledForProfile(profile);
+  result.trash_enabled =
+      file_manager::trash::IsTrashEnabledForProfile(local_state, profile);
   std::vector<std::string> folder_shortcuts;
   const auto& value_list = prefs->GetList(ash::prefs::kFilesAppFolderShortcuts);
   for (const base::Value& value : value_list) {
@@ -344,12 +349,13 @@ FileManagerPrivateGetPreferencesFunction::Run() {
       prefs->GetTime(ash::prefs::kOfficeFileMovedToGoogleDrive)
           .InMillisecondsFSinceUnixEpoch();
   result.local_user_files_allowed =
-      policy::local_user_files::LocalUserFilesAllowed();
+      policy::local_user_files::LocalUserFilesAllowed(local_state);
   result.default_location = GetDefaultLocation(
-      prefs->GetString(ash::prefs::kFilesAppDefaultLocation));
-  result.sky_vault_migration_destination = GetSkyVaultMigrationDestination();
+      local_state, prefs->GetString(ash::prefs::kFilesAppDefaultLocation));
+  result.sky_vault_migration_destination =
+      GetSkyVaultMigrationDestination(local_state);
   result.sky_vault_migration_start_time =
-      GetSkyVaultMigrationStartTime(profile);
+      GetSkyVaultMigrationStartTime(local_state, profile);
 
   return RespondNow(WithArguments(result.ToValue()));
 }
@@ -641,7 +647,7 @@ FileManagerPrivateConfigureVolumeFunction::Run() {
   using file_manager::VolumeManager;
   VolumeManager* const volume_manager =
       VolumeManager::Get(Profile::FromBrowserContext(browser_context()));
-  DCHECK(volume_manager);
+  CHECK(volume_manager, base::NotFatalUntil::M160);
 
   std::string volume_id = params->volume_id;
   volume_manager->ConvertFuseBoxFSPVolumeIdToFSPIfNeeded(&volume_id);
@@ -661,7 +667,7 @@ FileManagerPrivateConfigureVolumeFunction::Run() {
     case file_manager::VOLUME_TYPE_PROVIDED: {
       using fsp::Service;
       Service* const service = Service::Get(browser_context());
-      DCHECK(service);
+      CHECK(service, base::NotFatalUntil::M160);
 
       using fsp::ProvidedFileSystemInterface;
       ProvidedFileSystemInterface* const file_system =
@@ -706,6 +712,8 @@ FileManagerPrivateMountCrostiniFunction::Run() {
   // files into Linux files should still work.
   Profile* profile =
       Profile::FromBrowserContext(browser_context())->GetOriginalProfile();
+  // TODO(crbug.com/568472035): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(crostini::CrostiniFeatures::Get()->IsEnabled(profile));
   crostini::CrostiniManager::GetForProfile(profile)->RestartCrostini(
       crostini::DefaultContainerId(),
@@ -725,7 +733,8 @@ void FileManagerPrivateMountCrostiniFunction::RestartCallback(
   // files into Linux files should still work.
   Profile* profile =
       Profile::FromBrowserContext(browser_context())->GetOriginalProfile();
-  DCHECK(crostini::CrostiniFeatures::Get()->IsEnabled(profile));
+  CHECK(crostini::CrostiniFeatures::Get()->IsEnabled(profile),
+        base::NotFatalUntil::M160);
   crostini::CrostiniManager::GetForProfile(profile)->MountCrostiniFiles(
       crostini::DefaultContainerId(),
       base::BindOnce(&FileManagerPrivateMountCrostiniFunction::MountCallback,
@@ -916,7 +925,7 @@ FileManagerPrivateInternalGetCustomActionsFunction::Run() {
     return RespondNow(Error(error));
   }
 
-  DCHECK(file_system);
+  CHECK(file_system, base::NotFatalUntil::M160);
   file_system->GetActions(
       paths,
       base::BindOnce(
@@ -967,7 +976,7 @@ FileManagerPrivateInternalExecuteCustomActionFunction::Run() {
     return RespondNow(Error(error));
   }
 
-  DCHECK(file_system);
+  CHECK(file_system, base::NotFatalUntil::M160);
   file_system->ExecuteAction(
       paths, params->action_id,
       base::BindOnce(
@@ -1083,7 +1092,7 @@ void FileManagerPrivateInternalGetRecentFilesFunction::
     OnConvertFileDefinitionListToEntryDefinitionList(
         std::unique_ptr<file_manager::util::EntryDefinitionList>
             entry_definition_list) {
-  DCHECK(entry_definition_list);
+  CHECK(entry_definition_list, base::NotFatalUntil::M160);
 
   // Remove all directories entries.
   std::erase_if(*entry_definition_list,

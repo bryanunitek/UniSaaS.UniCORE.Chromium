@@ -43,11 +43,6 @@ struct BLINK_COMMON_EXPORT
     return r.link_text;
   }
 
-  static const std::optional<blink::Impression>& impression(
-      const blink::UntrustworthyContextMenuParams& r) {
-    return r.impression;
-  }
-
   static const GURL& unfiltered_link_url(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.unfiltered_link_url;
@@ -60,6 +55,11 @@ struct BLINK_COMMON_EXPORT
   static bool has_image_contents(
       const blink::UntrustworthyContextMenuParams& r) {
     return r.has_image_contents;
+  }
+
+  static const std::optional<blink::FrameToken>& image_replacement_frame_token(
+      const blink::UntrustworthyContextMenuParams& r) {
+    return r.image_replacement_frame_token;
   }
 
   static bool is_image_media_plugin_document(

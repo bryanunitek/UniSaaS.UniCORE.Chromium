@@ -26,7 +26,7 @@ class ColorProvider;
 class TabStyle {
  public:
   // The different types of path GetPath() can return. Different paths are used
-  // in different situations, but most (excluding |kClip|) are roughly the same
+  // in different situations, but most (excluding `kClip`) are roughly the same
   // shape.
   enum class PathType {
     // File-folder tab outline. Extends halfway into the border so there are no
@@ -150,6 +150,9 @@ class TabStyle {
   // Returns the radius of the outer corners of the tab shape.
   int GetBottomCornerRadius() const;
 
+  // Returns the horizontal extent of the tab's bottom corner flare/extension.
+  int GetBottomExtensionWidth() const;
+
   std::tuple<float, float, float, SkColor> GetContrastRatioValues(
       bool frame_active,
       const ui::ColorProvider* color_provider) const;
@@ -161,9 +164,10 @@ class TabStyle {
       const bool frame_active,
       const ui::ColorProvider* color_provider) const;
 
-  // Returns the tab foreground color of the the text based on `active` and the
-  // activation state of the window.
+  // Returns the tab foreground color of the text based on `apparently_active`,
+  // `hovered`, and the activation state of the window.
   SkColor GetTabForegroundColor(const bool apparently_active,
+                                const bool hovered,
                                 const bool frame_active,
                                 const ui::ColorProvider* color_provider) const;
 
@@ -177,6 +181,12 @@ class TabStyle {
                                 const bool frame_active,
                                 const ui::ColorProvider* color_provider) const;
 
+  SkColor GetTabBackgroundColor(const TabSelectionState state,
+                                const bool hovered,
+                                const bool frame_active,
+                                const bool frame_glass,
+                                const ui::ColorProvider* color_provider) const;
+
   // Returns the background color of a tab with selection state `state` and
   // hover state `hovered`. If `hovered`, this blends the hovered and unhovered
   // background colors according to the `hover_animation_value`.
@@ -186,6 +196,7 @@ class TabStyle {
       const bool hovered,
       float hover_animation_value,
       const bool frame_active,
+      const bool frame_glass,
       const ui::ColorProvider* color_provider) const;
 
   // Opacity of the active tab background painted over inactive selected tabs.
@@ -202,9 +213,7 @@ class TabStyle {
 
   static constexpr float kDefaultSelectedTabOpacity = 0.75f;
 
-  // Thresholds where the tab strip may render without certain UI elements,
-  // such as separators and inactive tab close buttons.
-  static constexpr int kTabStripDeclutterMaxTabWidthForCloseHide = 100;
+  // Threshold where the tab strip may render without separators.
   static constexpr int kTabStripDeclutterMinTabsForSeparatorHide = 20;
 
   static const TabStyle* Get();

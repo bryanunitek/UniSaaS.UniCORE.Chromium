@@ -11,10 +11,12 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "net/base/features.h"
@@ -30,6 +32,8 @@
 #include "net/dns/public/dns_query_type.h"
 #include "net/dns/public/secure_dns_mode.h"
 #include "net/log/net_log_with_source.h"
+#include "net/ssl/test_ssl_config_service.h"
+#include "net/ssl/test_static_ech_mode_getter.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/url_request/url_request_context_builder.h"
@@ -41,6 +45,7 @@
 #if BUILDFLAG(IS_ANDROID)
 #include <android/multinetwork.h>
 
+#include "base/android/android_info.h"
 #include "net/dns/dns_platform_attempt_factory_android.h"
 #include "net/dns/mock_dns_platform_android_attempt_delegate.h"
 #endif
@@ -53,6 +58,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::Mock;
+using ::testing::Not;
 using ::testing::Pointee;
 using ::testing::Property;
 using ::testing::Return;
@@ -92,7 +98,7 @@ class MockHostResolverDnsTaskDelegate : public HostResolverDnsTask::Delegate {
                    single_transaction_results),
               (override));
   MOCK_METHOD(RequestPriority, priority, (), (const, override));
-  MOCK_METHOD(bool, IsHappyEyeballsV3Enabled, (), (const, override));
+  MOCK_METHOD(bool, ShouldSortTransactionsIndividually, (), (const, override));
   MOCK_METHOD(void,
               AddTransactionTimeQueued,
               (base::TimeDelta time_queued),
@@ -102,9 +108,16 @@ class MockHostResolverDnsTaskDelegate : public HostResolverDnsTask::Delegate {
 class HostResolverDnsTaskTest : public WithTaskEnvironment,
                                 public testing::Test {
  public:
-  HostResolverDnsTaskTest() = default;
+  explicit HostResolverDnsTaskTest(
+      base::test::TaskEnvironment::TimeSource time_source =
+          base::test::TaskEnvironment::TimeSource::DEFAULT)
+      : WithTaskEnvironment(time_source) {}
 
  protected:
+  virtual std::unique_ptr<SSLConfigService> CreateSSLConfigService() {
+    return nullptr;
+  }
+
   void SetUp() override {
     auto context_builder = CreateTestURLRequestContextBuilder();
 #if BUILDFLAG(IS_ANDROID)
@@ -112,17 +125,16 @@ class HostResolverDnsTaskTest : public WithTaskEnvironment,
         DnsPlatformAttemptFactoryAndroid::CreateForTesting(
             &mock_dns_platform_android_attempt_delegate_));
 #endif
+    if (auto ssl_config_service = CreateSSLConfigService()) {
+      context_builder->set_ssl_config_service(std::move(ssl_config_service));
+    }
     request_context_ = context_builder->Build();
     resolve_context_ = std::make_unique<ResolveContext>(
         request_context_.get(), /*enable_caching=*/false);
     dns_client_ = DnsClient::CreateClient(/*net_log=*/nullptr);
-    DnsConfig config;
-    // The IP address doesn't matter; it's only necessary for SetSystemConfig to
-    // have an effect.
-    config.nameservers.emplace_back(IPAddress(192, 168, 1, 5), 53);
-    CHECK(dns_client_->SetSystemConfig(config));
+    dns_client_->SetSystemConfig(DnsConfig());
     // Allow non-DnsTransactionFactory::AttemptMode::kHttp attempts to be made.
-    dns_client_->SetInsecureEnabled(/*enabled=*/true,
+    dns_client_->SetInsecureEnabled(InsecureDnsMode::kEnabledPlatform,
                                     /*additional_types_enabled=*/true);
   }
 
@@ -165,11 +177,11 @@ const std::vector<uint8_t> kSuccessfulDnsResponseAaaa = {
 #if BUILDFLAG(IS_ANDROID)
 TEST_F(HostResolverDnsTaskTest, PlatformAttemptSuccessIsParsedCorrectly) {
   if (__builtin_available(android 29, *)) {
-    base::ScopedFD fd =
+    auto [fd, write_fd] =
         MockAndroidDnsPlatformAttemptDelegate::CreateFdWithUnreadData();
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Query(NETWORK_UNSPECIFIED, StrEq("www.google.com"),
-                      dns_protocol::kTypeA))
+                      dns_protocol::kTypeA, 0))
         .WillOnce(Return(fd.get()));
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Result(fd.get(), _, _))
@@ -222,11 +234,11 @@ TEST_F(HostResolverDnsTaskTest, PlatformAttemptSuccessIsParsedCorrectly) {
 TEST_F(HostResolverDnsTaskTest, PlatformAttemptPropagatesTargetNetwork) {
   if (__builtin_available(android 29, *)) {
     constexpr handles::NetworkHandle kTargetNetwork = 123;
-    base::ScopedFD fd =
+    auto [fd, write_fd] =
         MockAndroidDnsPlatformAttemptDelegate::CreateFdWithUnreadData();
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Query(net_handle_t{kTargetNetwork}, StrEq("www.google.com"),
-                      dns_protocol::kTypeA))
+                      dns_protocol::kTypeA, 0))
         .WillOnce(Return(fd.get()));
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Result(fd.get(), _, _))
@@ -268,11 +280,11 @@ TEST_F(HostResolverDnsTaskTest, PlatformAttemptPropagatesTargetNetwork) {
 TEST_F(HostResolverDnsTaskTest,
        PlatformAttemptCorrectlyTranslatedDefaultNetworkHandle) {
   if (__builtin_available(android 29, *)) {
-    base::ScopedFD fd =
+    auto [fd, write_fd] =
         MockAndroidDnsPlatformAttemptDelegate::CreateFdWithUnreadData();
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Query(NETWORK_UNSPECIFIED, StrEq("www.google.com"),
-                      dns_protocol::kTypeA))
+                      dns_protocol::kTypeA, 0))
         .WillOnce(Return(fd.get()));
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Result(fd.get(), _, _))
@@ -314,11 +326,11 @@ TEST_F(HostResolverDnsTaskTest,
 
 TEST_F(HostResolverDnsTaskTest, PlatformAttemptCorruptResponseFailsParsing) {
   if (__builtin_available(android 29, *)) {
-    base::ScopedFD fd =
+    auto [fd, write_fd] =
         MockAndroidDnsPlatformAttemptDelegate::CreateFdWithUnreadData();
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Query(NETWORK_UNSPECIFIED, StrEq("www.google.com"),
-                      dns_protocol::kTypeA))
+                      dns_protocol::kTypeA, 0))
         .WillOnce(Return(fd.get()));
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Result(fd.get(), _, _))
@@ -372,18 +384,18 @@ TEST_F(HostResolverDnsTaskTest,
        PlatformAttemptMultipleQueriesResultsAreSorted) {
   if (__builtin_available(android 29, *)) {
     constexpr int64_t kTargetNetwork = 123;
-    base::ScopedFD fd_a =
+    auto [fd_a, write_fd_a] =
         MockAndroidDnsPlatformAttemptDelegate::CreateFdWithUnreadData();
-    base::ScopedFD fd_aaaa =
+    auto [fd_aaaa, write_fd_aaaa] =
         MockAndroidDnsPlatformAttemptDelegate::CreateFdWithUnreadData();
 
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Query(net_handle_t{kTargetNetwork}, StrEq("www.google.com"),
-                      dns_protocol::kTypeA))
+                      dns_protocol::kTypeA, 0))
         .WillOnce(Return(fd_a.get()));
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
                 Query(net_handle_t{kTargetNetwork}, StrEq("www.google.com"),
-                      dns_protocol::kTypeAAAA))
+                      dns_protocol::kTypeAAAA, 0))
         .WillOnce(Return(fd_aaaa.get()));
 
     EXPECT_CALL(mock_dns_platform_android_attempt_delegate_,
@@ -555,7 +567,7 @@ TEST_F(HostResolverDnsTaskTest, HandlesIndividualTransactionSort) {
                      MockDnsClientRule::Result(std::move(aaaa_response)),
                      /*delay=*/false);
   MockDnsClient mock_dns_client(CreateValidDnsConfig(), std::move(rules));
-  mock_dns_client.SetInsecureEnabled(/*enabled=*/true,
+  mock_dns_client.SetInsecureEnabled(InsecureDnsMode::kEnabledBuiltIn,
                                      /*additional_types_enabled=*/true);
 
   auto test_sorter = std::make_unique<DelayingAddressSorter>();
@@ -576,19 +588,98 @@ TEST_F(HostResolverDnsTaskTest, HandlesIndividualTransactionSort) {
       /*fallback_available=*/false, HostResolver::HttpsSvcbOptions());
   ASSERT_EQ(task.num_additional_transactions_needed(), 2);
 
-  // Expect sort to be called immediately on completion of first transaction.
+  // Expect sort to be called immediately on completion of first transaction
+  // (AAAA).
   task.StartNextTransaction();
   test_sorter_ptr->WaitForSortCall();
   ASSERT_EQ(task.num_additional_transactions_needed(), 1);
   ASSERT_EQ(task.num_transactions_in_progress(), 1);
   ASSERT_EQ(test_sorter_ptr->NumInProgress(), 1);
 
-  // Expect sort to be called immediately on completion of second transaction.
+  // Second transaction (A) has no IPv6 addresses, so it should complete
+  // without calling Sort().
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnIntermediateTransactionsComplete(_))
+      .WillOnce([&](auto) { run_loop.Quit(); });
+  task.StartNextTransaction();
+  run_loop.Run();
+  ASSERT_EQ(task.num_additional_transactions_needed(), 0);
+  ASSERT_EQ(task.num_transactions_in_progress(), 1);
+  ASSERT_EQ(test_sorter_ptr->NumInProgress(), 1);
+
+  Mock::VerifyAndClearExpectations(&mock_dns_task_delegate_);
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _));
+  test_sorter_ptr->FinishSorts();
+  EXPECT_EQ(task.num_transactions_in_progress(), 0);
+}
+
+TEST_F(HostResolverDnsTaskTest, HandlesIndividualTransactionSortViaDelegate) {
+  constexpr static std::string_view kHost = "foo.test";
+
+  ON_CALL(mock_dns_task_delegate_, ShouldSortTransactionsIndividually())
+      .WillByDefault(Return(true));
+
+  // Configure a mock DnsClient to respond to "foo.test" with 2 addresses per
+  // address family.
+  DnsResponse a_response = BuildTestDnsResponse(
+      std::string(kHost), dns_protocol::kTypeA,
+      {BuildTestAddressRecord(std::string(kHost), IPAddress(192, 0, 2, 31)),
+       BuildTestAddressRecord(std::string(kHost), IPAddress(192, 0, 2, 36))});
+  DnsResponse aaaa_response = BuildTestDnsResponse(
+      std::string(kHost), dns_protocol::kTypeAAAA,
+      {BuildTestAddressRecord(std::string(kHost),
+                              *IPAddress::FromIPLiteral("3fff:14::31")),
+       BuildTestAddressRecord(std::string(kHost),
+                              *IPAddress::FromIPLiteral("3fff:14::36"))});
+  MockDnsClientRuleList rules;
+  rules.emplace_back(std::string(kHost), dns_protocol::kTypeA,
+                     /*secure=*/false,
+                     MockDnsClientRule::Result(std::move(a_response)),
+                     /*delay=*/false);
+  rules.emplace_back(std::string(kHost), dns_protocol::kTypeAAAA,
+                     /*secure=*/false,
+                     MockDnsClientRule::Result(std::move(aaaa_response)),
+                     /*delay=*/false);
+  MockDnsClient mock_dns_client(CreateValidDnsConfig(), std::move(rules));
+  mock_dns_client.SetInsecureEnabled(InsecureDnsMode::kEnabledBuiltIn,
+                                     /*additional_types_enabled=*/true);
+
+  auto test_sorter = std::make_unique<DelayingAddressSorter>();
+  DelayingAddressSorter* test_sorter_ptr = test_sorter.get();
+  mock_dns_client.SetAddressSorterForTesting(std::move(test_sorter));
+
+  // Task should wait on sorting before completion.
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _)).Times(0);
+
+  base::SimpleTestTickClock clock;
+  HostResolverDnsTask task(
+      &mock_dns_client,
+      HostResolver::Host(url::SchemeHostPort("http", "foo.test", 80)),
+      NetworkAnonymizationKey(), {DnsQueryType::A, DnsQueryType::AAAA},
+      resolve_context_.get(), DnsTransactionFactory::AttemptMode::kClassic,
+      SecureDnsMode::kAutomatic, handles::kInvalidNetworkHandle,
+      &mock_dns_task_delegate_, NetLogWithSource(), &clock,
+      /*fallback_available=*/false, HostResolver::HttpsSvcbOptions());
+  ASSERT_EQ(task.num_additional_transactions_needed(), 2);
+
+  // Expect sort to be called immediately on completion of first transaction
+  // (AAAA).
   task.StartNextTransaction();
   test_sorter_ptr->WaitForSortCall();
+  ASSERT_EQ(task.num_additional_transactions_needed(), 1);
+  ASSERT_EQ(task.num_transactions_in_progress(), 1);
+  ASSERT_EQ(test_sorter_ptr->NumInProgress(), 1);
+
+  // Second transaction (A) has no IPv6 addresses, so it should complete
+  // without calling Sort().
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnIntermediateTransactionsComplete(_))
+      .WillOnce([&](auto) { run_loop.Quit(); });
+  task.StartNextTransaction();
+  run_loop.Run();
   ASSERT_EQ(task.num_additional_transactions_needed(), 0);
-  ASSERT_EQ(task.num_transactions_in_progress(), 2);
-  ASSERT_EQ(test_sorter_ptr->NumInProgress(), 2);
+  ASSERT_EQ(task.num_transactions_in_progress(), 1);
+  ASSERT_EQ(test_sorter_ptr->NumInProgress(), 1);
 
   Mock::VerifyAndClearExpectations(&mock_dns_task_delegate_);
   EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _));
@@ -623,7 +714,7 @@ TEST_F(HostResolverDnsTaskTest, CanCancelTransactionDuringSort) {
                      MockDnsClientRule::Result(std::move(aaaa_response)),
                      /*delay=*/false);
   MockDnsClient mock_dns_client(CreateValidDnsConfig(), std::move(rules));
-  mock_dns_client.SetInsecureEnabled(/*enabled=*/true,
+  mock_dns_client.SetInsecureEnabled(InsecureDnsMode::kEnabledBuiltIn,
                                      /*additional_types_enabled=*/true);
 
   auto test_sorter = std::make_unique<DelayingAddressSorter>();
@@ -660,6 +751,989 @@ TEST_F(HostResolverDnsTaskTest, CanCancelTransactionDuringSort) {
   EXPECT_EQ(task.num_additional_transactions_needed(), 1);
   EXPECT_EQ(task.num_transactions_in_progress(), 0);
   EXPECT_EQ(test_sorter_ptr->NumInProgress(), 0);
+}
+
+// Tests that with no SSLConfigService provided, a failed HTTPS transaction
+// gracefully falls back to A/AAAA results without crashing.
+TEST_F(HostResolverDnsTaskTest, FailedHttpsWillFallback) {
+  const char kName[] = "name.test";
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock,
+      /*fallback_available=*/false, HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+
+        EXPECT_EQ(result->domain_name(), "name.test");
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kData);
+        EXPECT_EQ(result->query_type(), DnsQueryType::UNSPECIFIED);
+
+        const std::vector<IPEndPoint>& endpoints = result->AsData().endpoints();
+        ASSERT_EQ(endpoints.size(), 2u);
+        EXPECT_EQ(endpoints[0], IPEndPoint(IPAddress::IPv6Localhost(), 0));
+        EXPECT_EQ(endpoints[1], IPEndPoint(IPAddress::IPv4Localhost(), 0));
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+// Fixture for testing HostResolverDnsTask behavior with an SSLConfigService.
+class HostResolverDnsTaskWithSSLConfigTest : public HostResolverDnsTaskTest {
+ public:
+  HostResolverDnsTaskWithSSLConfigTest()
+      : HostResolverDnsTaskTest(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+ protected:
+  std::unique_ptr<SSLConfigService> CreateSSLConfigService() override {
+    auto ssl_config_service =
+        std::make_unique<TestSSLConfigService>(SSLContextConfig());
+    test_ssl_config_service_ = ssl_config_service.get();
+    return ssl_config_service;
+  }
+
+  void SetEchMode(EchMode ech_mode, std::string_view expected_host) {
+    CHECK(test_ssl_config_service_);
+    test_ssl_config_service_->SetEchModeGetter(
+        std::make_unique<TestStaticEchModeGetter>(ech_mode, expected_host));
+  }
+
+  raw_ptr<TestSSLConfigService> test_ssl_config_service_ = nullptr;
+};
+
+// Tests that under Strict ECH, an HTTPS transaction failure is fatal.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest, StrictEchHttpsFailureIsFatal) {
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kStrict, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kError);
+        EXPECT_EQ(result->AsError().error(), ERR_DNS_SERVER_FAILURE);
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+// Tests that under Strict ECH, the task always waits for the HTTPS transaction
+// to complete.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest, StrictEchAlwaysWaitsForHttps) {
+  base::test::ScopedFeatureList features;
+  // Configure SVCB timeout feature parameters for testing.
+  features.InitAndEnableFeatureWithParameters(
+      features::kUseDnsHttpsSvcb,
+      {{"UseDnsHttpsSvcbInsecureExtraTimeMax", "10ms"},
+       {"UseDnsHttpsSvcbInsecureExtraTimeMin", "5ms"},
+       {"UseDnsHttpsSvcbSecureExtraTimeMax", "10ms"},
+       {"UseDnsHttpsSvcbSecureExtraTimeMin", "5ms"}});
+
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kStrict, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kOk,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps,
+                               {BuildTestHttpsServiceRecord(
+                                   kName, /*priority=*/1, /*service_name=*/".",
+                                   /*params=*/{})})),
+      /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+
+  // Assert that OnDnsTaskComplete is NOT called during time advancement.
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _)).Times(0);
+
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), GetMockTickClock(), /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions::FromFeatures());
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+
+  // Fast forward by 50ms (calculated timeout is 10ms with 20% extra time).
+  FastForwardBy(base::Milliseconds(50));
+
+  Mock::VerifyAndClearExpectations(&mock_dns_task_delegate_);
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 2u);
+        auto sorted_results =
+            base::ToVector(results, [](const auto& r) { return r.get(); });
+        std::ranges::sort(sorted_results, {},
+                          &HostResolverInternalResult::query_type);
+
+        EXPECT_EQ(sorted_results[0]->domain_name(), "name.test");
+        EXPECT_EQ(sorted_results[0]->type(),
+                  HostResolverInternalResult::Type::kData);
+        EXPECT_EQ(sorted_results[0]->query_type(), DnsQueryType::UNSPECIFIED);
+
+        const std::vector<IPEndPoint>& endpoints =
+            sorted_results[0]->AsData().endpoints();
+        ASSERT_EQ(endpoints.size(), 2u);
+        EXPECT_EQ(endpoints[0], IPEndPoint(IPAddress::IPv6Localhost(), 0));
+        EXPECT_EQ(endpoints[1], IPEndPoint(IPAddress::IPv4Localhost(), 0));
+
+        EXPECT_EQ(sorted_results[1]->domain_name(), "name.test");
+        EXPECT_EQ(sorted_results[1]->type(),
+                  HostResolverInternalResult::Type::kMetadata);
+        EXPECT_EQ(sorted_results[1]->query_type(), DnsQueryType::HTTPS);
+        EXPECT_THAT(sorted_results[1]->AsMetadata().metadatas(),
+                    Not(IsEmpty()));
+        run_loop.Quit();
+      });
+
+  client->CompleteDelayedTransactions();
+  run_loop.Run();
+}
+
+// Tests that under Opportunistic ECH, insecure DNS lookups succeed despite a
+// failed HTTPS transaction.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       InsecureDnsOpportunisticEchIgnoresFailedHttps) {
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kOpportunistic, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/false,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+  client->SetInsecureEnabled(InsecureDnsMode::kEnabledBuiltIn, true);
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kClassic, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+
+        EXPECT_EQ(result->domain_name(), "name.test");
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kData);
+        EXPECT_EQ(result->query_type(), DnsQueryType::UNSPECIFIED);
+
+        const std::vector<IPEndPoint>& endpoints = result->AsData().endpoints();
+        ASSERT_EQ(endpoints.size(), 2u);
+        EXPECT_EQ(endpoints[0], IPEndPoint(IPAddress::IPv6Localhost(), 0));
+        EXPECT_EQ(endpoints[1], IPEndPoint(IPAddress::IPv4Localhost(), 0));
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+// Tests that under Strict ECH, an HTTPS transaction failure over insecure DNS
+// is treated as a fatal error.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       InsecureDnsStrictEchFailureIsFatal) {
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kStrict, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/false,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+  client->SetInsecureEnabled(InsecureDnsMode::kEnabledBuiltIn, true);
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kClassic, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kError);
+        EXPECT_EQ(result->AsError().error(), ERR_DNS_SERVER_FAILURE);
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+#if BUILDFLAG(IS_ANDROID)
+// Tests that under Strict ECH, HTTPS queries are still issued even if insecure
+// DNS is disabled on the client (because EchMode::kStrict overrides it).
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       StrictEch_QueriesHttpsEvenIfInsecureDnsDisabled) {
+  if (base::android::android_info::sdk_int() <
+      base::android::android_info::SDK_VERSION_Q) {
+    GTEST_SKIP() << "Platform DNS APIs are only available from Q.";
+  }
+
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kStrict, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/false,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kOk,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps,
+                               {BuildTestHttpsServiceRecord(
+                                   kName, /*priority=*/1, /*service_name=*/".",
+                                   /*params=*/{})})),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+  client->SetInsecureEnabled(InsecureDnsMode::kDisabled,
+                             /*additional_types_enabled=*/false);
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kClassic, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  // EchMode::kStrict ensures HTTPS query is NOT stripped from
+  // transactions_needed_.
+  EXPECT_FALSE(task.https_disabled());
+  EXPECT_EQ(task.num_additional_transactions_needed(), 3u);
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        EXPECT_FALSE(results.empty());
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// Tests that without Strict ECH, HTTPS queries are dropped when insecure DNS
+// does not allow additional types.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       NonStrictEch_DropsHttpsWhenInsecureDnsDisabled) {
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kDisabled, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/false,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+  client->SetInsecureEnabled(InsecureDnsMode::kEnabledBuiltIn,
+                             /*additional_types_enabled=*/false);
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kClassic, SecureDnsMode::kOff,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  // Non-strict ECH drops HTTPS transaction when additional types are disabled.
+  EXPECT_TRUE(task.https_disabled());
+  EXPECT_EQ(task.num_additional_transactions_needed(), 1u);
+}
+
+// Tests that under Opportunistic ECH, a delayed HTTPS transaction triggers a
+// timeout and gracefully falls back to A/AAAA results.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       OpportunisticEchHttpsTimeoutWillFallback) {
+  base::test::ScopedFeatureList features;
+  // Configure SVCB timeout feature parameters for testing.
+  features.InitAndEnableFeatureWithParameters(
+      features::kUseDnsHttpsSvcb,
+      {{"UseDnsHttpsSvcbInsecureExtraTimeMax", "10ms"},
+       {"UseDnsHttpsSvcbInsecureExtraTimeMin", "5ms"},
+       {"UseDnsHttpsSvcbSecureExtraTimeMax", "10ms"},
+       {"UseDnsHttpsSvcbSecureExtraTimeMin", "5ms"}});
+
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kOpportunistic, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kTimeout),
+      /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), GetMockTickClock(), /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions::FromFeatures());
+
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+
+        EXPECT_EQ(result->domain_name(), "name.test");
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kData);
+        EXPECT_EQ(result->query_type(), DnsQueryType::UNSPECIFIED);
+
+        const std::vector<IPEndPoint>& endpoints = result->AsData().endpoints();
+        ASSERT_EQ(endpoints.size(), 2u);
+        EXPECT_EQ(endpoints[0], IPEndPoint(IPAddress::IPv6Localhost(), 0));
+        EXPECT_EQ(endpoints[1], IPEndPoint(IPAddress::IPv4Localhost(), 0));
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+
+  // Fast forward by 50ms to trigger the transaction timeout timer and the
+  // expected callback.
+  FastForwardBy(base::Milliseconds(50));
+}
+
+// Tests that under Opportunistic ECH, a failed HTTPS transaction gracefully
+// falls back to A/AAAA results.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       OpportunisticEchFailedHttpsWillFallback) {
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kOpportunistic, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+
+        EXPECT_EQ(result->domain_name(), "name.test");
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kData);
+        EXPECT_EQ(result->query_type(), DnsQueryType::UNSPECIFIED);
+
+        const std::vector<IPEndPoint>& endpoints = result->AsData().endpoints();
+        ASSERT_EQ(endpoints.size(), 2u);
+        EXPECT_EQ(endpoints[0], IPEndPoint(IPAddress::IPv6Localhost(), 0));
+        EXPECT_EQ(endpoints[1], IPEndPoint(IPAddress::IPv4Localhost(), 0));
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+// Tests that the kUseDnsHttpsSvcbEnforceSecureResponse flag enforces success
+// for HTTPS transactions even in Opportunistic ECH mode, making a failure
+// fatal.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       SecureResponseFlagEnforcesSuccessHttps) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeatureWithParameters(
+      features::kUseDnsHttpsSvcb,
+      {{"UseDnsHttpsSvcbEnforceSecureResponse", "true"}});
+
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kOpportunistic, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kError);
+        EXPECT_EQ(result->AsError().error(), ERR_DNS_SERVER_FAILURE);
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+// Tests that when ECH is Disabled, a failed HTTPS transaction gracefully falls
+// back to A/AAAA results.
+TEST_F(HostResolverDnsTaskWithSSLConfigTest,
+       DisabledEchFailedHttpsWillFallback) {
+  const char kName[] = "name.test";
+  SetEchMode(EchMode::kDisabled, kName);
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(
+      kName, dns_protocol::kTypeHttps, /*secure=*/true,
+      MockDnsClientRule::Result(
+          MockDnsClientRule::ResultType::kFail,
+          BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {}, {}, {},
+                               dns_protocol::kRcodeSERVFAIL),
+          ERR_DNS_SERVER_FAILURE),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/false);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) {
+        ASSERT_EQ(results.size(), 1u);
+        const HostResolverInternalResult* result = results.begin()->get();
+
+        EXPECT_EQ(result->domain_name(), "name.test");
+        EXPECT_EQ(result->type(), HostResolverInternalResult::Type::kData);
+        EXPECT_EQ(result->query_type(), DnsQueryType::UNSPECIFIED);
+
+        const std::vector<IPEndPoint>& endpoints = result->AsData().endpoints();
+        ASSERT_EQ(endpoints.size(), 2u);
+        EXPECT_EQ(endpoints[0], IPEndPoint(IPAddress::IPv6Localhost(), 0));
+        EXPECT_EQ(endpoints[1], IPEndPoint(IPAddress::IPv4Localhost(), 0));
+        run_loop.Quit();
+      });
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+  run_loop.Run();
+}
+
+TEST_F(HostResolverDnsTaskTest, HttpsBeforeAddressHistograms) {
+  base::HistogramTester histograms;
+  const char kName[] = "name.test";
+  DnsResourceRecord https_record = BuildTestHttpsServiceRecord(
+      kName, /*priority=*/1, /*service_name=*/".", /*params=*/{});
+  DnsResponse https_response =
+      BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {https_record});
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(kName, dns_protocol::kTypeHttps, /*secure=*/true,
+                     MockDnsClientRule::Result(std::move(https_response)),
+                     /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/true);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  // Initialize clock to some non-null time.
+  clock.Advance(base::Seconds(1));
+
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  // Start all transactions. They will be delayed.
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+
+  // Complete HTTPS first.
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::HTTPS));
+
+  // No histograms should be recorded yet.
+  histograms.ExpectTotalCount(
+      "Net.Dns.ResolveTimeDiff2.HTTPSBeforeFirstAddress", 0);
+  histograms.ExpectTotalCount("Net.Dns.ResolveTimeDiff2.HTTPSBeforeLastAddress",
+                              0);
+
+  // Advance clock and complete AAAA (first address).
+  clock.Advance(base::Milliseconds(100));
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::AAAA));
+
+  histograms.ExpectUniqueTimeSample(
+      "Net.Dns.ResolveTimeDiff2.HTTPSBeforeFirstAddress",
+      base::Milliseconds(100), 1);
+  histograms.ExpectTotalCount("Net.Dns.ResolveTimeDiff2.HTTPSBeforeLastAddress",
+                              0);
+
+  // Advance clock and complete A (last address).
+  clock.Advance(base::Milliseconds(200));
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) { run_loop.Quit(); });
+
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::A));
+  run_loop.Run();
+
+  histograms.ExpectUniqueTimeSample(
+      "Net.Dns.ResolveTimeDiff2.HTTPSBeforeFirstAddress",
+      base::Milliseconds(100), 1);
+  histograms.ExpectUniqueTimeSample(
+      "Net.Dns.ResolveTimeDiff2.HTTPSBeforeLastAddress",
+      base::Milliseconds(300), 1);  // 100ms + 200ms
+}
+
+TEST_F(HostResolverDnsTaskTest, AddressRecordBeforeHttps_BothAddresses) {
+  base::HistogramTester histograms;
+  const char kName[] = "name.test";
+
+  DnsResourceRecord https_record = BuildTestHttpsServiceRecord(
+      kName, /*priority=*/1, /*service_name=*/".", /*params=*/{});
+  DnsResponse https_response =
+      BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {https_record});
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(kName, dns_protocol::kTypeHttps, /*secure=*/true,
+                     MockDnsClientRule::Result(std::move(https_response)),
+                     /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/true);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  clock.Advance(base::Seconds(1));
+
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::AAAA,
+                           DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+
+  // AAAA resolves first at T=0
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::AAAA));
+
+  // A resolves next at T=100
+  clock.Advance(base::Milliseconds(100));
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::A));
+
+  // HTTPS resolves last at T=300
+  clock.Advance(base::Milliseconds(200));
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) { run_loop.Quit(); });
+
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::HTTPS));
+  run_loop.Run();
+
+  histograms.ExpectUniqueTimeSample(
+      "Net.Dns.ResolveTimeDiff2.AddressRecordBeforeHTTPS",
+      base::Milliseconds(300), 1);
+}
+
+TEST_F(HostResolverDnsTaskTest, AddressRecordBeforeHttps_OnlyAaaa) {
+  base::HistogramTester histograms;
+  const char kName[] = "name.test";
+
+  DnsResourceRecord https_record = BuildTestHttpsServiceRecord(
+      kName, /*priority=*/1, /*service_name=*/".", /*params=*/{});
+  DnsResponse https_response =
+      BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {https_record});
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(kName, dns_protocol::kTypeHttps, /*secure=*/true,
+                     MockDnsClientRule::Result(std::move(https_response)),
+                     /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeAAAA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/true);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  clock.Advance(base::Seconds(1));
+
+  DnsQueryTypeSet types = {DnsQueryType::AAAA, DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+
+  // AAAA resolves first at T=0
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::AAAA));
+
+  // HTTPS resolves last at T=150
+  clock.Advance(base::Milliseconds(150));
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) { run_loop.Quit(); });
+
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::HTTPS));
+  run_loop.Run();
+
+  histograms.ExpectUniqueTimeSample(
+      "Net.Dns.ResolveTimeDiff2.AddressRecordBeforeHTTPS",
+      base::Milliseconds(150), 1);
+}
+
+TEST_F(HostResolverDnsTaskTest, AddressRecordBeforeHttps_OnlyA) {
+  base::HistogramTester histograms;
+  const char kName[] = "name.test";
+
+  DnsResourceRecord https_record = BuildTestHttpsServiceRecord(
+      kName, /*priority=*/1, /*service_name=*/".", /*params=*/{});
+  DnsResponse https_response =
+      BuildTestDnsResponse(kName, dns_protocol::kTypeHttps, {https_record});
+
+  MockDnsClientRuleList rules;
+  rules.emplace_back(kName, dns_protocol::kTypeHttps, /*secure=*/true,
+                     MockDnsClientRule::Result(std::move(https_response)),
+                     /*delay=*/true);
+  rules.emplace_back(
+      kName, dns_protocol::kTypeA, /*secure=*/true,
+      MockDnsClientRule::Result(MockDnsClientRule::ResultType::kOk),
+      /*delay=*/true);
+
+  auto client =
+      std::make_unique<MockDnsClient>(CreateValidDnsConfig(), std::move(rules));
+
+  base::SimpleTestTickClock clock;
+  clock.Advance(base::Seconds(1));
+
+  DnsQueryTypeSet types = {DnsQueryType::A, DnsQueryType::HTTPS};
+  HostResolverDnsTask task(
+      client.get(),
+      HostResolver::Host(url::SchemeHostPort("https", "name.test", 443)),
+      NetworkAnonymizationKey(), types, resolve_context_.get(),
+      DnsTransactionFactory::AttemptMode::kHttp, SecureDnsMode::kAutomatic,
+      handles::kInvalidNetworkHandle, &mock_dns_task_delegate_,
+      NetLogWithSource(), &clock, /*fallback_available=*/false,
+      HostResolver::HttpsSvcbOptions());
+
+  while (task.num_additional_transactions_needed() > 0) {
+    task.StartNextTransaction();
+  }
+
+  // A resolves first at T=0
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::A));
+
+  // HTTPS resolves last at T=250
+  clock.Advance(base::Milliseconds(250));
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_dns_task_delegate_, OnDnsTaskComplete(_, _, _, _))
+      .WillOnce([&](base::TimeTicks, bool, HostResolverDnsTask::Results results,
+                    DnsTransactionFactory::AttemptMode) { run_loop.Quit(); });
+
+  ASSERT_TRUE(client->CompleteOneDelayedTransactionOfType(DnsQueryType::HTTPS));
+  run_loop.Run();
+
+  histograms.ExpectUniqueTimeSample(
+      "Net.Dns.ResolveTimeDiff2.AddressRecordBeforeHTTPS",
+      base::Milliseconds(250), 1);
 }
 
 }  // namespace net

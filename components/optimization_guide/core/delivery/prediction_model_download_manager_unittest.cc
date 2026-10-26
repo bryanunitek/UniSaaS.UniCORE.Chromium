@@ -22,9 +22,7 @@
 #include "components/download/public/background_service/test/mock_download_service.h"
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/delivery/prediction_model_download_observer.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/services/unzip/in_process_unzipper.h"
@@ -192,7 +190,7 @@ class PredictionModelDownloadManagerTest : public testing::Test {
 
   void TurnOffDownloadVerification() {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kDisableModelDownloadVerificationForTesting);
+        kDisableModelDownloadVerificationForTestingSwitch);
   }
 
   // Retries until the path has been deleted or until all handles to |path| have

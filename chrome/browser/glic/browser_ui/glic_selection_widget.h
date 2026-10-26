@@ -9,9 +9,9 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ref.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-
 
 namespace views {
 class Widget;
@@ -21,31 +21,25 @@ namespace glic {
 
 class GlicSelectionWidgetDelegate : public views::BubbleDialogDelegate {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAskGeminiButtonElementId);
+
   // Pure virtual interface implemented by the bridge to receive UI events.
   class ActionDelegate {
    public:
     virtual void OnAskGemini() = 0;
     virtual void OnCopy() = 0;
-    virtual void OnCopyLink() = 0;
-    virtual void OnPinToggled(bool is_pinned) = 0;
-    virtual void OnHideForThisSite() = 0;
+    virtual void OnHide() = 0;
     virtual void OnSettings() = 0;
     virtual void OnWidgetClose() = 0;
+    virtual gfx::Rect GetContainerBounds() = 0;
 
    protected:
     virtual ~ActionDelegate() = default;
   };
 
-  enum class MenuCommand {
-    kHideForSite = 1,
-    kSettings = 2,
-  };
-
   GlicSelectionWidgetDelegate(ActionDelegate& action_delegate,
                               const gfx::Rect& anchor_rect,
-                              const gfx::Rect& window_bounds,
-                              const std::u16string& selected_text,
-                              bool is_pinned);
+                              const std::u16string& selected_text);
   ~GlicSelectionWidgetDelegate() override;
 
   void ShowWidget();
@@ -54,25 +48,20 @@ class GlicSelectionWidgetDelegate : public views::BubbleDialogDelegate {
 
   ActionDelegate& action_delegate() const { return *action_delegate_; }
 
-  void TogglePinState();
   void UpdatePosition();
 
   views::ClientView* CreateClientView(views::Widget* widget) override;
 
+  gfx::Rect GetBubbleBounds() override;
+
   void OnBeforeBubbleWidgetInit(views::Widget::InitParams* params,
                                 views::Widget* widget) const override;
-
-  void UpdateCopyLinkButton(bool enabled);
 
  private:
   friend class GlicSelectionWidgetTest;
 
-  void TriggerMenuCommandForTesting(int command_id);
-
   const raw_ref<ActionDelegate> action_delegate_;
   gfx::Rect original_anchor_rect_;
-  gfx::Rect window_bounds_;
-  bool is_pinned_;
   std::unique_ptr<views::Widget> widget_;
   base::WeakPtrFactory<GlicSelectionWidgetDelegate> weak_ptr_factory_{this};
 };

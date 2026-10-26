@@ -9,6 +9,7 @@
 #import "base/apple/foundation_util.h"
 #import "base/check.h"
 #import "base/memory/raw_ptr.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
@@ -28,6 +29,9 @@
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/sync/service/sync_service.h"
+#import "components/universal_optout/features.h"
+#import "components/universal_optout/prefs.h"
+#import "components/universal_optout/universal_optout_service.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/incognito_interstitial/ui_bundled/incognito_interstitial_constants.h"
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_util.h"
@@ -60,12 +64,18 @@
 #import "ios/chrome/browser/supervised_user/model/supervised_user_capabilities.h"
 #import "ios/chrome/browser/sync/model/sync_observer_bridge.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/universal_optout/model/eligibility_utils.h"
+#import "ios/chrome/browser/universal_optout/model/universal_optout_service_factory.h"
+#import "ios/chrome/browser/web_extension/model/extension_service.h"
+#import "ios/chrome/browser/web_extension/model/extension_service_factory.h"
+#import "ios/chrome/browser/web_extension/model/extension_service_observer_bridge.h"
 #import "ios/chrome/common/string_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/components/security_interstitials/https_only_mode/feature.h"
+#import "ios/web/public/web_client.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "url/gurl.h"
@@ -77,6 +87,7 @@ typedef NS_ENUM(NSInteger, SectionIdentifier) {
   SectionIdentifierSafeBrowsing,
   SectionIdentifierHTTPSOnlyMode,
   SectionIdentifierPasswordLeakCheck,
+  SectionIdentifierSiteRequests,
   SectionIdentifierWebServices,
   SectionIdentifierIncognitoAuth,
   SectionIdentifierIncognitoInterstitial,
@@ -98,6 +109,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
   ItemTypeIncognitoInterstitial,
   ItemTypeIncognitoInterstitialDisabled,
   ItemTypeLockdownMode,
+  ItemTypeUniversalOptOut,
 };
 
 // Used to open the Sync and Google Services settings.
@@ -105,10 +117,19 @@ typedef NS_ENUM(NSInteger, ItemType) {
 const char kGoogleServicesSettingsURL[] = "settings://open_google_services";
 const char kSyncSettingsURL[] = "settings://open_sync";
 
+bool ShouldShowUniversalOptOutSettings(
+    PrefService* prefs,
+    universal_optout::UniversalOptOutService* universal_opt_out_service) {
+  return universal_optout::GetUniversalOptOutState(prefs,
+                                                   universal_opt_out_service) !=
+         web::UniversalOptOutState::kNotEligible;
+}
+
 }  // namespace
 
 @interface PrivacyTableViewController () <BooleanObserver,
                                           BrowserObserving,
+                                          ExtensionServiceObserving,
                                           PopoverLabelViewControllerDelegate,
                                           PrefObserverDelegate,
                                           SyncObserverModelBridge> {
@@ -120,6 +141,9 @@ const char kSyncSettingsURL[] = "settings://open_sync";
   std::unique_ptr<PrefObserverBridge> _prefObserverBridge;
   // Registrar for pref changes notifications.
   PrefChangeRegistrar _prefChangeRegistrar;
+  // Extension service observer bridge.
+  std::unique_ptr<ExtensionServiceObserverBridge>
+      _extensionServiceObserverBridge;
   // Sync Observer.
   std::unique_ptr<SyncObserverBridge> _syncObserver;
 
@@ -131,6 +155,8 @@ const char kSyncSettingsURL[] = "settings://open_sync";
   TableViewDetailIconItem* _incognitoLockItem;
   // Lockdown Mode item.
   TableViewDetailIconItem* _lockdownModeDetailItem;
+  // Universal Opt Out item.
+  TableViewDetailIconItem* _universalOptOutDetailItem;
 
   // Whether Settings have been dismissed.
   BOOL _settingsAreDismissed;
@@ -195,6 +221,22 @@ const char kSyncSettingsURL[] = "settings://open_sync";
     _prefObserverBridge.reset(new PrefObserverBridge(self));
     // Register to observe any changes on pref-backed values displayed by the
     // screen.
+    universal_optout::UniversalOptOutService* universalOptOutService =
+        universal_optout::UniversalOptOutServiceFactory::GetForProfile(
+            _profile);
+    if (ShouldShowUniversalOptOutSettings(prefService,
+                                          universalOptOutService)) {
+      _prefObserverBridge->ObserveChangesForPreference(
+          universal_optout::prefs::kUniversalOptOutEnabled,
+          &_prefChangeRegistrar);
+      ExtensionService* extensionService =
+          ExtensionServiceFactory::GetForProfile(_profile);
+      if (extensionService) {
+        _extensionServiceObserverBridge =
+            std::make_unique<ExtensionServiceObserverBridge>(extensionService,
+                                                             self);
+      }
+    }
     _prefObserverBridge->ObserveChangesForPreference(
         prefs::kIosHandoffToOtherDevices, &_prefChangeRegistrar);
     _prefObserverBridge->ObserveChangesForPreference(
@@ -289,6 +331,7 @@ const char kSyncSettingsURL[] = "settings://open_sync";
   // Remove observer bridges.
   _prefObserverBridge.reset();
   _browserObserverBridge.reset();
+  _extensionServiceObserverBridge.reset();
 
   // Remove sync observer.
   _syncObserver.reset();
@@ -318,6 +361,20 @@ const char kSyncSettingsURL[] = "settings://open_sync";
     [model addItem:self.passwordLeakCheckItem
         toSectionWithIdentifier:SectionIdentifierPasswordLeakCheck];
   }
+
+  universal_optout::UniversalOptOutService* universalOptOutService =
+      universal_optout::UniversalOptOutServiceFactory::GetForProfile(_profile);
+  const bool showUniversalOptOut = ShouldShowUniversalOptOutSettings(
+      _profile->GetPrefs(), universalOptOutService);
+  if (showUniversalOptOut) {
+    [model addSectionWithIdentifier:SectionIdentifierSiteRequests];
+    [model addItem:[self universalOptOutDetailItem]
+        toSectionWithIdentifier:SectionIdentifierSiteRequests];
+  }
+
+  base::UmaHistogramBoolean("Privacy.UniversalOptOut.SettingsVisibility",
+                            showUniversalOptOut);
+
   [model addSectionWithIdentifier:SectionIdentifierWebServices];
   [model addSectionWithIdentifier:SectionIdentifierIncognitoAuth];
   [model addSectionWithIdentifier:SectionIdentifierIncognitoInterstitial];
@@ -459,6 +516,40 @@ const char kSyncSettingsURL[] = "settings://open_sync";
       accessibilityIdentifier:kSettingsHandoffCellId];
 
   return _handoffDetailItem;
+}
+
+- (TableViewItem*)universalOptOutDetailItem {
+  _universalOptOutDetailItem =
+      [self detailItemWithType:ItemTypeUniversalOptOut
+                          titleId:IDS_IOS_OPTIONS_ENABLE_UNIVERSAL_OPT_OUT
+                       detailText:nil
+          accessibilityIdentifier:kSettingsUniversalOptOutCellId];
+  [self updateUniversalOptOutDetailItem];
+  return _universalOptOutDetailItem;
+}
+
+- (void)updateUniversalOptOutDetailItem {
+  if (!_universalOptOutDetailItem || !_profile) {
+    return;
+  }
+  if (!base::FeatureList::IsEnabled(
+          universal_optout::features::kUniversalOptOutSettings)) {
+    return;
+  }
+  ExtensionService* extensionService =
+      ExtensionServiceFactory::GetForProfile(_profile);
+  const bool hasError = extensionService && extensionService->HasGPCLoadError();
+  if (hasError) {
+    _universalOptOutDetailItem.detailText = nil;
+    _universalOptOutDetailItem.badgeType = BadgeType::kWarning;
+  } else {
+    _universalOptOutDetailItem.badgeType = BadgeType::kNone;
+    _universalOptOutDetailItem.detailText =
+        _profile->GetPrefs()->GetBoolean(
+            universal_optout::prefs::kUniversalOptOutEnabled)
+            ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
+            : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
+  }
 }
 
 // Creates TableViewHeaderFooterItem instance to show a link to open the Sync
@@ -638,6 +729,9 @@ const char kSyncSettingsURL[] = "settings://open_sync";
   [super tableView:tableView didSelectRowAtIndexPath:indexPath];
   NSInteger itemType = [self.tableViewModel itemTypeForIndexPath:indexPath];
   switch (itemType) {
+    case ItemTypeUniversalOptOut:
+      [self.handler showUniversalOptOut];
+      break;
     case ItemTypeOtherDevicesHandoff:
       [self.handler showHandoff];
       break;
@@ -694,6 +788,22 @@ const char kSyncSettingsURL[] = "settings://open_sync";
     _lockdownModeDetailItem.detailText = detailText;
     [self reconfigureCellsForItems:@[ _lockdownModeDetailItem ]];
     return;
+  }
+
+  if (preferenceName == universal_optout::prefs::kUniversalOptOutEnabled) {
+    [self updateUniversalOptOutDetailItem];
+    [self reconfigureCellsForItems:@[ _universalOptOutDetailItem ]];
+    return;
+  }
+}
+
+#pragma mark - ExtensionServiceObserving
+
+- (void)extensionService:(ExtensionService*)service
+    didChangeGPCLoadError:(bool)hasGPCLoadError {
+  [self updateUniversalOptOutDetailItem];
+  if ([self.tableViewModel hasItem:_universalOptOutDetailItem]) {
+    [self reconfigureCellsForItems:@[ _universalOptOutDetailItem ]];
   }
 }
 

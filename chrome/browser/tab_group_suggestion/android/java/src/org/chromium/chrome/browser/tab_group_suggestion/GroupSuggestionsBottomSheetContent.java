@@ -7,40 +7,37 @@ package org.chromium.chrome.browser.tab_group_suggestion;
 import android.content.Context;
 import android.view.View;
 
-import androidx.annotation.NonNull;
-
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
 import org.chromium.components.visited_url_ranking.url_grouping.GroupSuggestion;
 import org.chromium.components.visited_url_ranking.url_grouping.UserResponseMetadata;
 
 /** Bottom sheet content for a GroupSuggestions bottom sheet UI. */
 @NullMarked
 public class GroupSuggestionsBottomSheetContent implements BottomSheetContent {
+    private static final BottomSheetType BOTTOM_SHEET_TYPE =
+            new BottomSheetType.Builder().build();
 
-    private final @NonNull View mContentView;
-    private final @NonNull GroupSuggestion mGroupSuggestion;
-    private final @NonNull Callback<UserResponseMetadata> mCallback;
+    private final View mContentView;
+    private final GroupSuggestion mGroupSuggestion;
+    private final Callback<UserResponseMetadata> mCallback;
 
     public GroupSuggestionsBottomSheetContent(
-            @NonNull View contentView,
-            @NonNull GroupSuggestion suggestion,
-            @NonNull Callback<UserResponseMetadata> callback) {
+            View contentView, GroupSuggestion suggestion, Callback<UserResponseMetadata> callback) {
         mContentView = contentView;
         mGroupSuggestion = suggestion;
         mCallback = callback;
     }
 
     /** Get the {@link GroupSuggestion} showing in this sheet. */
-    @NonNull
     public GroupSuggestion getGroupSuggestion() {
         return mGroupSuggestion;
     }
 
     /** Get the {@link Callback} showing in this sheet. */
-    @NonNull
     public Callback<UserResponseMetadata> getUserResponseCallback() {
         return mCallback;
     }
@@ -62,6 +59,11 @@ public class GroupSuggestionsBottomSheetContent implements BottomSheetContent {
 
     @Override
     public void destroy() {}
+
+    @Override
+    public BottomSheetType getSheetType() {
+        return BOTTOM_SHEET_TYPE;
+    }
 
     @Override
     public int getPriority() {
@@ -100,5 +102,10 @@ public class GroupSuggestionsBottomSheetContent implements BottomSheetContent {
         // TODO(397221723): Placeholder string needed for bottom sheet to work. Replace with correct
         // string later.
         return R.string.commerce_bottom_sheet_content_closed;
+    }
+
+    @Override
+    public boolean showHandlebar() {
+        return true;
     }
 }

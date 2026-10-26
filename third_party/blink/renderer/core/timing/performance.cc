@@ -40,6 +40,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/permissions_policy/document_policy_feature.mojom-blink.h"
@@ -159,7 +160,6 @@ PerformanceEntry::EntryType kDroppableEntryTypes[] = {
     PerformanceEntry::kEvent,
     PerformanceEntry::kLayoutShift,
     PerformanceEntry::kLargestContentfulPaint,
-    PerformanceEntry::kPaint,
     PerformanceEntry::kBackForwardCacheRestoration,
     PerformanceEntry::kSoftNavigation,
     PerformanceEntry::kInteractionContentfulPaint,
@@ -264,11 +264,6 @@ constexpr size_t kDefaultLongTaskBufferSize = 200;
 constexpr size_t kDefaultLongAnimationFrameBufferSize = 200;
 constexpr size_t kDefaultBackForwardCacheRestorationBufferSize = 200;
 constexpr size_t kDefaultSoftNavigationBufferSize = 50;
-// Paint timing entries is more than twice as much as the soft navigation buffer
-// size, as there can be 2 paint entries for each soft navigation, plus 2
-// entries for the initial navigation.
-constexpr size_t kDefaultPaintEntriesBufferSize =
-    kDefaultSoftNavigationBufferSize * 2 + 2;
 
 Performance::Performance(
     base::TimeTicks time_origin,
@@ -374,19 +369,18 @@ PerformanceEntryVector Performance::GetEntriesForCurrentFrame(
     InsertEntryIntoSortedBuffer(entries, *navigation_timing_);
   }
 
-  if (paint_entries_timing_.size()) {
-    entries = MergePerformanceEntryVectors(entries, paint_entries_timing_,
-                                           maybe_name);
+  if (first_paint_timing_ && CheckName(first_paint_timing_, maybe_name)) {
+    InsertEntryIntoSortedBuffer(entries, *first_paint_timing_);
+  }
+  if (first_contentful_paint_timing_ &&
+      CheckName(first_contentful_paint_timing_, maybe_name)) {
+    InsertEntryIntoSortedBuffer(entries, *first_contentful_paint_timing_);
   }
 
-  if (RuntimeEnabledFeatures::NavigationIdEnabled(GetExecutionContext())) {
-    entries = MergePerformanceEntryVectors(
-        entries, back_forward_cache_restoration_buffer_, maybe_name);
-  }
+  entries = MergePerformanceEntryVectors(
+      entries, back_forward_cache_restoration_buffer_, maybe_name);
 
-  if (RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
-          GetExecutionContext()) &&
-      soft_navigation_buffer_.size()) {
+  if (soft_navigation_buffer_.size()) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kSoftNavigationHeuristics);
     entries = MergePerformanceEntryVectors(entries, soft_navigation_buffer_,
@@ -472,10 +466,14 @@ PerformanceEntryVector Performance::getEntriesByTypeInternal(
       break;
 
     case PerformanceEntry::kContainer:
+      UseCounter::Count(GetExecutionContext(),
+                        WebFeature::kContainerTimingExplicitlyRequested);
       entries = &container_timing_buffer_;
       break;
 
     case PerformanceEntry::kElement:
+      UseCounter::Count(GetExecutionContext(),
+                        WebFeature::kElementTimingExplicitlyRequested);
       entries = &element_timing_buffer_;
       break;
 
@@ -490,14 +488,16 @@ PerformanceEntryVector Performance::getEntriesByTypeInternal(
                         WebFeature::kEventTimingExplicitlyRequested);
       UseCounter::Count(GetExecutionContext(),
                         WebFeature::kEventTimingFirstInputExplicitlyRequested);
-      if (first_input_timing_)
+      if (first_input_timing_) {
         entries_storage = {first_input_timing_};
+      }
       break;
 
     case PerformanceEntry::kNavigation:
       UseCounter::Count(GetExecutionContext(), WebFeature::kNavigationTimingL2);
-      if (navigation_timing_)
+      if (navigation_timing_) {
         entries_storage = {navigation_timing_};
+      }
       break;
 
     case PerformanceEntry::kMark:
@@ -525,7 +525,15 @@ PerformanceEntryVector Performance::getEntriesByTypeInternal(
     case PerformanceEntry::kPaint: {
       UseCounter::Count(GetExecutionContext(),
                         WebFeature::kPaintTimingRequested);
-      entries = &paint_entries_timing_;
+      // TODO(crbug.com/576982828): Ensure FP and FCP presentation callbacks
+      // cannot produce FP.startTime > FCP.startTime, so that returning FP
+      // before FCP preserves startTime order.
+      if (first_paint_timing_) {
+        entries_storage.push_back(first_paint_timing_);
+      }
+      if (first_contentful_paint_timing_) {
+        entries_storage.push_back(first_contentful_paint_timing_);
+      }
       break;
     }
 
@@ -561,29 +569,28 @@ PerformanceEntryVector Performance::getEntriesByTypeInternal(
       break;
 
     case PerformanceEntry::kBackForwardCacheRestoration:
-      if (RuntimeEnabledFeatures::NavigationIdEnabled(GetExecutionContext()))
-        entries = &back_forward_cache_restoration_buffer_;
+      entries = &back_forward_cache_restoration_buffer_;
       break;
 
     case PerformanceEntry::kSoftNavigation:
-      if (RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
-              GetExecutionContext())) {
-        UseCounter::Count(GetExecutionContext(),
-                          WebFeature::kSoftNavigationHeuristics);
-        entries = &soft_navigation_buffer_;
-      }
+      UseCounter::Count(GetExecutionContext(),
+                        WebFeature::kSoftNavigationHeuristics);
+      UseCounter::Count(GetExecutionContext(),
+                        WebFeature::kSoftNavigationExplicitlyRequested);
+      entries = &soft_navigation_buffer_;
       break;
 
     case PerformanceEntry::kLongAnimationFrame:
-        UseCounter::Count(GetExecutionContext(),
-                          WebFeature::kLongAnimationFrameRequested);
-        entries = &long_animation_frame_buffer_;
+      UseCounter::Count(GetExecutionContext(),
+                        WebFeature::kLongAnimationFrameRequested);
+      entries = &long_animation_frame_buffer_;
       break;
 
     // Conditional user timing entries are included in other relevant
     // Performance entries. They are not retrievable through Performance
     // interface.
     case PerformanceEntry::kMarkConditional:
+    case PerformanceEntry::kMeasureConditional:
       break;
 
     case PerformanceEntry::kInvalid:
@@ -641,7 +648,8 @@ void Performance::AddResourceTiming(mojom::blink::ResourceTimingInfoPtr info,
   ExecutionContext* context = GetExecutionContext();
   auto* entry = MakeGarbageCollected<PerformanceResourceTiming>(
       std::move(info), initiator_type, time_origin_,
-      cross_origin_isolated_capability_, context, NavigationId());
+      cross_origin_isolated_capability_, context,
+      NavigationId().web_exposed_id);
   NotifyObserversOfEntry(*entry);
   // https://w3c.github.io/resource-timing/#dfn-add-a-performanceresourcetiming-entry
   if (CanAddResourceTimingEntry() &&
@@ -666,8 +674,9 @@ void Performance::AddResourceTiming(mojom::blink::ResourceTimingInfoPtr info,
 
 // Called after loadEventEnd happens.
 void Performance::NotifyNavigationTimingToObservers() {
-  if (navigation_timing_)
+  if (navigation_timing_) {
     NotifyObserversOfEntry(*navigation_timing_);
+  }
 }
 
 bool Performance::IsContainerTimingBufferFull() const {
@@ -772,6 +781,18 @@ void Performance::AddLargestContentfulPaint(LargestContentfulPaint* entry) {
            .find(PerformanceEntry::kLargestContentfulPaint)
            ->value);
   }
+
+  if (RuntimeEnabledFeatures::DeclarativePerformanceObserverEnabled(
+          GetExecutionContext()) &&
+      !is_declarative_performance_observer_disabled_for_document_) {
+    auto lcp_mojom_entry = mojom::blink::DeclarativePerformanceEntry::NewLcp(
+        mojom::blink::DeclarativeLargestContentfulPaint::New(
+            base::Milliseconds(entry->startTime()), entry->size(),
+            base::Milliseconds(entry->renderTime()),
+            base::Milliseconds(entry->loadTime()), entry->id(), entry->url(),
+            entry->element() ? entry->element()->tagName() : String()));
+    BufferPerformanceEntry(std::move(lcp_mojom_entry));
+  }
 }
 
 void Performance::AddInteractionContentfulPaint(
@@ -821,7 +842,8 @@ void Performance::AddLongTaskTiming(base::TimeTicks start_time,
       static_cast<int>(MonotonicTimeToDOMHighResTimeStamp(end_time) -
                        dom_high_res_start_time),
       name, container_type, container_src, container_id, container_name,
-      DynamicTo<LocalDOMWindow>(execution_context), NavigationId());
+      DynamicTo<LocalDOMWindow>(execution_context),
+      NavigationId().web_exposed_id);
   if (longtask_buffer_.size() < kDefaultLongTaskBufferSize) {
     InsertEntryIntoSortedBuffer(longtask_buffer_, *entry);
   } else {
@@ -844,7 +866,8 @@ void Performance::AddBackForwardCacheRestoration(
       MonotonicTimeToDOMHighResTimeStamp(start_time),
       MonotonicTimeToDOMHighResTimeStamp(pageshow_start_time),
       MonotonicTimeToDOMHighResTimeStamp(pageshow_end_time),
-      DynamicTo<LocalDOMWindow>(GetExecutionContext()), NavigationId());
+      DynamicTo<LocalDOMWindow>(GetExecutionContext()),
+      NavigationId().web_exposed_id);
   if (back_forward_cache_restoration_buffer_.size() <
       back_forward_cache_restoration_buffer_size_limit_) {
     InsertEntryIntoSortedBuffer(back_forward_cache_restoration_buffer_, *entry);
@@ -857,8 +880,9 @@ void Performance::AddBackForwardCacheRestoration(
 }
 
 UserTiming& Performance::GetUserTiming() {
-  if (!user_timing_)
+  if (!user_timing_) {
     user_timing_ = MakeGarbageCollected<UserTiming>(*this);
+  }
   return *user_timing_;
 }
 
@@ -951,10 +975,10 @@ PerformanceMark* Performance::mark(ScriptState* script_state,
           }
         }
       }
-      auto entry = mojom::blink::DeclarativePerformanceEntry::New();
-      entry->name = mark_name;
-      entry->start_time = base::Milliseconds(performance_mark->startTime());
-      entry->detail = std::move(detail_value);
+      auto entry = mojom::blink::DeclarativePerformanceEntry::NewMark(
+          mojom::blink::DeclarativePerformanceMark::New(
+              mark_name, base::Milliseconds(performance_mark->startTime()),
+              std::move(detail_value)));
       BufferPerformanceEntry(std::move(entry));
     }
 
@@ -1178,9 +1202,10 @@ PerformanceMeasure* Performance::MeasureWithDetail(
     ExceptionState& exception_state) {
   PerformanceMeasure* performance_measure = GetUserTiming().Measure(
       script_state, measure_name, start, duration, end, detail, exception_state,
-      LocalDOMWindow::From(script_state), NavigationId());
-  if (performance_measure)
+      LocalDOMWindow::From(script_state), NavigationId().web_exposed_id);
+  if (performance_measure) {
     NotifyObserversOfEntry(*performance_measure);
+  }
   return performance_measure;
 }
 
@@ -1190,6 +1215,11 @@ void Performance::clearMeasures(const AtomicString& measure_name) {
 
 void Performance::markConditional(ScriptState* script_state,
                                   const AtomicString& mark_name) {}
+
+void Performance::measureConditional(ScriptState* script_state,
+                                     const AtomicString& measure_name,
+                                     const AtomicString& start_mark,
+                                     const AtomicString& end_mark) {}
 
 void Performance::RegisterPerformanceObserver(PerformanceObserver& observer) {
   observer_filter_options_ |= observer.FilterOptions();
@@ -1210,6 +1240,7 @@ void Performance::UpdatePerformanceObserverFilterOptions() {
 }
 
 void Performance::NotifyObserversOfEntry(PerformanceEntry& entry) const {
+  CHECK(entry.IsReadyForReporting());
   bool observer_found = false;
   for (auto& observer : observers_) {
     if (observer->FilterOptions() & entry.EntryTypeEnum() &&
@@ -1218,8 +1249,9 @@ void Performance::NotifyObserversOfEntry(PerformanceEntry& entry) const {
       observer_found = true;
     }
   }
-  if (observer_found && entry.EntryTypeEnum() == PerformanceEntry::kPaint)
+  if (observer_found && entry.EntryTypeEnum() == PerformanceEntry::kPaint) {
     UseCounter::Count(GetExecutionContext(), WebFeature::kPaintTimingObserved);
+  }
 }
 
 void Performance::NotifyObserversOfContainerEntry(
@@ -1235,7 +1267,7 @@ void Performance::NotifyObserversOfContainerEntry(
   }
   if (observer_found) {
     UseCounter::Count(GetExecutionContext(),
-                      WebFeature::kContainerTimingObserverReportedEntries);
+                      WebFeature::kContainerTimingObserved);
   }
 }
 
@@ -1253,8 +1285,9 @@ bool Performance::HasObserverFor(
 }
 
 void Performance::ActivateObserver(PerformanceObserver& observer) {
-  if (active_observers_.empty())
+  if (active_observers_.empty()) {
     deliver_observations_timer_.StartOneShot(base::TimeDelta(), FROM_HERE);
+  }
 
   // erase() is a no-op when the observer isn't present, so no guard is needed.
   suspended_observers_.erase(&observer);
@@ -1262,10 +1295,13 @@ void Performance::ActivateObserver(PerformanceObserver& observer) {
 }
 
 void Performance::SuspendObserver(PerformanceObserver& observer) {
-  DCHECK(!suspended_observers_.Contains(&observer));
-  auto it = active_observers_.find(&observer);
-  if (it == active_observers_.end())
+  if (suspended_observers_.Contains(&observer)) {
     return;
+  }
+  auto it = active_observers_.find(&observer);
+  if (it == active_observers_.end()) {
+    return;
+  }
   active_observers_.erase(it);
   suspended_observers_.insert(&observer);
 }
@@ -1287,8 +1323,9 @@ void Performance::DeliverObservationsTimerFired(TimerBase*) {
 int Performance::GetDroppedEntriesForTypes(PerformanceEntryTypeMask types) {
   int dropped_count = 0;
   for (const auto type : kDroppableEntryTypes) {
-    if (types & type)
+    if (types & type) {
       dropped_count += dropped_entries_count_map_.at(type);
+    }
   }
   return dropped_count;
 }
@@ -1309,16 +1346,18 @@ DOMHighResTimeStamp Performance::MonotonicTimeToDOMHighResTimeStamp(
     bool allow_negative_value,
     bool cross_origin_isolated_capability) {
   // Avoid exposing raw platform timestamps.
-  if (monotonic_time.is_null() || time_origin.is_null())
+  if (monotonic_time.is_null() || time_origin.is_null()) {
     return 0.0;
+  }
 
   DOMHighResTimeStamp clamped_time =
       ClampTimeResolution(monotonic_time.since_origin(),
                           cross_origin_isolated_capability) -
       ClampTimeResolution(time_origin.since_origin(),
                           cross_origin_isolated_capability);
-  if (clamped_time < 0 && !allow_negative_value)
+  if (clamped_time < 0 && !allow_negative_value) {
     return 0.0;
+  }
   return clamped_time;
 }
 
@@ -1334,14 +1373,19 @@ DOMHighResTimeStamp Performance::now() const {
 }
 
 // static
-bool Performance::CanExposeNode(Node* node) {
-  if (!node || !node->isConnected() || node->IsInShadowTree())
+bool Performance::CanExposeNode(Node* node, const DOMWindow* source) {
+  if (!node || !node->isConnected() || node->IsInShadowTree() ||
+      node->IsPseudoElement()) {
     return false;
+  }
 
-  // Do not expose |node| when the document is not 'fully active'.
+  // Do not expose |node| when the document is not 'fully active', or when
+  // |node| does not belong to the source window's active document.
   const Document& document = node->GetDocument();
-  if (!document.IsActive() || !document.GetFrame())
+  if (!document.IsActive() || !document.GetFrame() ||
+      document.domWindow() != source) {
     return false;
+  }
 
   return true;
 }
@@ -1350,14 +1394,16 @@ void Performance::AddPaintTiming(PerformancePaintTiming::PaintType type,
                                  const DOMPaintTimingInfo& paint_timing_info) {
   PerformancePaintTiming* entry = MakeGarbageCollected<PerformancePaintTiming>(
       type, paint_timing_info, DynamicTo<LocalDOMWindow>(GetExecutionContext()),
-      NavigationId());
-  DCHECK((type == PerformancePaintTiming::PaintType::kFirstPaint) ||
-         (type == PerformancePaintTiming::PaintType::kFirstContentfulPaint));
-
-  if (paint_entries_timing_.size() < kDefaultPaintEntriesBufferSize) {
-    InsertEntryIntoSortedBuffer(paint_entries_timing_, *entry);
-  } else {
-    ++(dropped_entries_count_map_.find(PerformanceEntry::kPaint)->value);
+      NavigationId().web_exposed_id);
+  switch (type) {
+    case PerformancePaintTiming::PaintType::kFirstPaint:
+      CHECK(!first_paint_timing_);
+      first_paint_timing_ = entry;
+      break;
+    case PerformancePaintTiming::PaintType::kFirstContentfulPaint:
+      CHECK(!first_contentful_paint_timing_);
+      first_contentful_paint_timing_ = entry;
+      break;
   }
   NotifyObserversOfEntry(*entry);
 }
@@ -1378,6 +1424,7 @@ void Performance::BuildJSONValue(V8ObjectBuilder& builder) const {
 // the order of the StartTime, hence the sort beginning from the tail-end.
 void Performance::InsertEntryIntoSortedBuffer(PerformanceEntryVector& entries,
                                               PerformanceEntry& entry) {
+  CHECK(entry.IsReadyForReporting());
   entries.push_back(&entry);
 
   if (entries.size() > 1) {
@@ -1410,7 +1457,8 @@ void Performance::Trace(Visitor* visitor) const {
   visitor->Trace(long_animation_frame_buffer_);
   visitor->Trace(navigation_timing_);
   visitor->Trace(user_timing_);
-  visitor->Trace(paint_entries_timing_);
+  visitor->Trace(first_paint_timing_);
+  visitor->Trace(first_contentful_paint_timing_);
   visitor->Trace(first_input_timing_);
   visitor->Trace(observers_);
   visitor->Trace(active_observers_);

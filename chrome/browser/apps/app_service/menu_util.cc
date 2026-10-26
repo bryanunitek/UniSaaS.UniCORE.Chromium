@@ -27,6 +27,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -49,7 +50,7 @@ void PopulateRadioItemFromMenuItems(
     const std::vector<apps::MenuItemPtr>& menu_items,
     ui::SimpleMenuModel* model) {
   for (const auto& item : menu_items) {
-    DCHECK_EQ(apps::MenuItemType::kRadio, item->type);
+    CHECK_EQ(apps::MenuItemType::kRadio, item->type, base::NotFatalUntil::M161);
     model->AddRadioItem(item->command_id,
                         l10n_util::GetStringUTF16(item->string_id),
                         item->radio_group_id);
@@ -150,7 +151,7 @@ void PopulateLaunchNewItemFromMenuItem(const MenuItemPtr& menu_item,
                                        ui::SimpleMenuModel* model,
                                        ui::SimpleMenuModel* submenu,
                                        int* launch_new_string_id) {
-  DCHECK_EQ(menu_item->command_id, ash::LAUNCH_NEW);
+  CHECK_EQ(menu_item->command_id, ash::LAUNCH_NEW, base::NotFatalUntil::M161);
 
   if (launch_new_string_id) {
     *launch_new_string_id = menu_item->string_id;
@@ -221,11 +222,11 @@ MenuType MenuTypeFromString(std::string_view menu_type) {
 }
 
 MenuItems CreateBrowserMenuItems(const Profile* profile) {
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M161);
   MenuItems menu_items;
 
   // "Normal" windows are not allowed when incognito is enforced.
-  if (IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
+  if (IncognitoModePrefs::GetAvailability(profile) !=
       policy::IncognitoModeAvailability::kForced) {
     AddCommandItem(ash::APP_CONTEXT_MENU_NEW_WINDOW, IDS_APP_LIST_NEW_WINDOW,
                    menu_items);
@@ -233,7 +234,7 @@ MenuItems CreateBrowserMenuItems(const Profile* profile) {
 
   // Incognito windows are not allowed when incognito is disabled.
   if (!profile->IsOffTheRecord() &&
-      IncognitoModePrefs::GetAvailability(profile->GetPrefs()) !=
+      IncognitoModePrefs::GetAvailability(profile) !=
           policy::IncognitoModeAvailability::kDisabled) {
     AddCommandItem(ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW,
                    IDS_APP_LIST_NEW_INCOGNITO_WINDOW, menu_items);
@@ -254,8 +255,9 @@ ui::ColorId GetColorIdForMenuItemIcon() {
 }
 
 uint32_t StringIdForUseLaunchTypeCommand(uint32_t command_id) {
-  DCHECK(command_id >= ash::USE_LAUNCH_TYPE_COMMAND_START &&
-         command_id < ash::USE_LAUNCH_TYPE_COMMAND_END);
+  CHECK(command_id >= ash::USE_LAUNCH_TYPE_COMMAND_START &&
+            command_id < ash::USE_LAUNCH_TYPE_COMMAND_END,
+        base::NotFatalUntil::M161);
   switch (command_id) {
     case ash::USE_LAUNCH_TYPE_REGULAR:
       return IDS_APP_LIST_CONTEXT_MENU_NEW_TAB;

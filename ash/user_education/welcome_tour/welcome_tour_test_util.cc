@@ -23,7 +23,8 @@
 #include "ui/aura/window.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_provider.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
+#include "ui/compositor/layer_textured.h"
 
 namespace ash {
 namespace {
@@ -43,7 +44,7 @@ MATCHER_P(BackgroundBlur, matcher, "") {
 }
 
 MATCHER_P(BackgroundColor, matcher, "") {
-  return Matches(matcher)(arg->background_color());
+  return Matches(matcher)(arg->AsSolidColor()->background_color().toSkColor());
 }
 
 MATCHER_P(Bounds, matcher, "") {

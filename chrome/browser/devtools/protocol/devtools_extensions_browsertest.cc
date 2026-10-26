@@ -14,7 +14,6 @@
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window_deleter.h"
@@ -22,17 +21,20 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/search_engines/template_url_starter_pack_data.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/install_verifier.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
@@ -116,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
   ASSERT_EQ(extension->location(),
             extensions::mojom::ManifestLocation::kUnpacked);
   ASSERT_FALSE(extensions::util::IsIncognitoEnabled(*result->FindString("id"),
-                                                    browser()->profile()));
+                                                    browser()->GetProfile()));
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
@@ -135,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
             extensions::mojom::ManifestLocation::kUnpacked);
 
   ASSERT_TRUE(extensions::util::IsIncognitoEnabled(*result->FindString("id"),
-                                                   browser()->profile()));
+                                                   browser()->GetProfile()));
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest, ThrowsOnWrongPath) {
@@ -161,7 +163,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
   // Verify that the extension is not enabled in incognito, as `false` was
   // passed for `enable_in_incognito`.
   ASSERT_FALSE(extensions::util::IsIncognitoEnabled(*result->FindString("id"),
-                                                    browser()->profile()));
+                                                    browser()->GetProfile()));
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest, CanUninstallExtension) {
@@ -513,6 +515,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest, CanGetExtensions) {
   ASSERT_FALSE(id.empty());
 
   // Load packed extension
+  extensions::ScopedInstallVerifierBypassForTest install_verifier_bypass;
   extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
   loader.set_location(extensions::mojom::ManifestLocation::kInternal);
   loader.set_pack_extension(true);
@@ -567,7 +570,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
   EXPECT_FALSE(trigger_result->FindDict("error"));
   EXPECT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 
-  SidePanelUI* side_panel_ui = browser()->GetFeatures().side_panel_ui();
+  SidePanelUI* side_panel_ui = SidePanelUI::From(browser());
   ASSERT_TRUE(side_panel_ui);
   EXPECT_TRUE(side_panel_ui->IsSidePanelEntryShowing(
       SidePanelEntry::Key(SidePanelEntry::Id::kExtension, extension->id())));
@@ -627,5 +630,48 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
 
   EXPECT_FALSE(trigger_result->FindDict("error"));
   EXPECT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
+                       TriggerActionFailsForUnknownExtension) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  scoped_refptr<content::DevToolsAgentHost> page_host =
+      content::DevToolsAgentHost::GetOrCreateForTab(
+          browser()->tab_strip_model()->GetActiveWebContents());
+  base::DictValue trigger_extension_params;
+  trigger_extension_params.Set("id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  trigger_extension_params.Set("targetId", page_host->GetId());
+  const base::DictValue* trigger_result = SendCommandSync(
+      "Extensions.triggerAction", std::move(trigger_extension_params));
+
+  EXPECT_FALSE(trigger_result);
+  ASSERT_TRUE(error());
+  EXPECT_EQ(*error()->FindString("message"),
+            "No action found for the provided extension id.");
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsExtensionsProtocolTest,
+                       TriggerActionFailsForTabWithoutBrowser) {
+  scoped_refptr<const extensions::Extension> extension =
+      InstallExtensionFromPath("popup_action");
+  ASSERT_TRUE(extension);
+
+  // A WebContents that is not in any tab strip has no browser window.
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(browser()->GetProfile()));
+  scoped_refptr<content::DevToolsAgentHost> page_host =
+      content::DevToolsAgentHost::GetOrCreateForTab(web_contents.get());
+  base::DictValue trigger_extension_params;
+  trigger_extension_params.Set("id", extension->id());
+  trigger_extension_params.Set("targetId", page_host->GetId());
+  const base::DictValue* trigger_result = SendCommandSync(
+      "Extensions.triggerAction", std::move(trigger_extension_params));
+
+  EXPECT_FALSE(trigger_result);
+  ASSERT_TRUE(error());
+  EXPECT_EQ(*error()->FindString("message"),
+            "Tab target is not attached to a browser window.");
 }
 }  // namespace

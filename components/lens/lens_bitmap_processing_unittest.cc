@@ -10,6 +10,7 @@
 
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "components/lens/ref_counted_lens_overlay_client_logs.h"
@@ -44,10 +45,8 @@ class LensBitmapProcessingTest : public testing::Test {
 
   lens::ImageData DownscaleAndEncodeBitmap(
       SkBitmap bitmap,
-      scoped_refptr<lens::RefCountedLensOverlayClientLogs> ref_counted_logs,
-      bool enable_webp_encoding = true) {
+      scoped_refptr<lens::RefCountedLensOverlayClientLogs> ref_counted_logs) {
     ImageEncodingOptions image_options{
-        .enable_webp_encoding = enable_webp_encoding,
         .max_size = kImageMaxArea,
         .max_height = kImageMaxHeight,
         .max_width = kImageMaxWidth,
@@ -173,11 +172,14 @@ TEST_F(LensBitmapProcessingTest, EncodeImage_Opaque) {
   EXPECT_TRUE(success);
   EXPECT_EQ(expected_output,
             std::string(base::as_string_view(output->as_vector())));
-  ASSERT_EQ(359, ref_counted_logs->client_logs()
-                   .phase_latencies_metadata()
-                   .phase(0)
-                   .image_encode_data()
-                   .encoded_image_size_bytes());
+  // JPEG output size is encoder-dependent. Verify the logged size describes
+  // the bytes actually produced.
+  ASSERT_EQ(base::checked_cast<int64_t>(output->as_vector().size()),
+            ref_counted_logs->client_logs()
+                .phase_latencies_metadata()
+                .phase(0)
+                .image_encode_data()
+                .encoded_image_size_bytes());
 }
 
 TEST_F(LensBitmapProcessingTest, EncodeImage_Transparent) {
@@ -303,22 +305,5 @@ TEST_F(LensBitmapProcessingTest, DownscaleAndEncodeBitmapTransparent) {
   EXPECT_EQ(expected_output, image_data.payload().image_bytes());
 }
 
-TEST_F(LensBitmapProcessingTest,
-       DownscaleAndEncodeBitmapTransparentWebpDisabled) {
-  // Create a bitmap. Since it isn't marked with kOpaque_SkAlphaType the
-  // output should be WebP instead of JPEG.
-  SkBitmap bitmap;
-  bitmap.allocN32Pixels(/*width=*/100, /*height=*/100);
-  bitmap.eraseColor(SK_ColorGREEN);
-  scoped_refptr<lens::RefCountedLensOverlayClientLogs> ref_counted_logs =
-      base::MakeRefCounted<lens::RefCountedLensOverlayClientLogs>();
-  lens::ImageData image_data = DownscaleAndEncodeBitmap(
-      bitmap, ref_counted_logs, /*enable_webp_encoding=*/false);
-  std::string expected_output = GetJpegBytesForBitmap(bitmap);
-
-  EXPECT_EQ(bitmap.width(), image_data.image_metadata().width());
-  EXPECT_EQ(bitmap.height(), image_data.image_metadata().height());
-  EXPECT_EQ(expected_output, image_data.payload().image_bytes());
-}
 
 }  // namespace lens

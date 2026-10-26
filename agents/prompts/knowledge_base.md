@@ -61,6 +61,15 @@ orient yourself before diving into specific component code.
     `base::OnceCallback`, `base::RepeatingCallback`, `base::Bind`):**
     *   Consult `docs/callback.md`.
 
+### **Topic: Adding a Feature Flag (`base::Feature`)**
+
+*   **For questions or tasks involving adding a `base::Feature` or feature flag:**
+    *   Consult `docs/how_to_add_your_feature_flag.md` and
+        `docs/flag_guarding_guidelines.md`, and always use the 2-argument
+        `BASE_FEATURE(kMyFeature, ...)` macro (and 4-argument
+        `BASE_FEATURE_PARAM` / 5-argument `BASE_FEATURE_ENUM_PARAM` macros)
+        with the feature's descriptive comment in the `.cc` file.
+
 ### **Topic: Adding a User Preference (Pref)**
 
 *   **For questions about user preferences or settings (e.g., mentioning
@@ -86,6 +95,14 @@ orient yourself before diving into specific component code.
     'UkmRecorder'):**
     *   Consult `tools/metrics/ukm/README.md` for instructions on how to
         define and record new URL-Keyed Metrics.
+
+### **Topic: Adding or Modifying UI Strings (.grd/.grdp files)**
+
+*   **For questions about adding or modifying UI translation strings, or fixing
+    presubmit errors about missing screenshot `.sha1` hashes:**
+    *   Consult `tools/translation/README.md` for instructions on using
+        `tools/translation/upload_screenshots.py` to generate and upload screenshot
+        `.sha1` files (Note: uploading requires Google internal credentials).
 
 ### **Topic: Debugging**
 

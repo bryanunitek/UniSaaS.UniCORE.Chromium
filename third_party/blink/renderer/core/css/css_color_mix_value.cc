@@ -11,7 +11,7 @@
 
 namespace blink::cssvalue {
 
-bool CSSColorMixValue::NormalizePercentages(
+void CSSColorMixValue::NormalizePercentages(
     const CSSPrimitiveValue* percentage1,
     const CSSPrimitiveValue* percentage2,
     double& mix_amount,
@@ -36,27 +36,18 @@ bool CSSColorMixValue::NormalizePercentages(
     p1 = 1.0 - p2;
   }
 
-  if (p1 == 0.0 && p2 == 0.0) {
-    return false;
+  const double percentage_sum = p1 + p2;
+  // Use a progress percentage of 0.5 when the combined percentage is zero.
+  // https://www.w3.org/TR/css-color-5/#color-mix-result
+  // https://github.com/w3c/csswg-drafts/issues/14013
+  if (percentage_sum == 0.0) {
+    mix_amount = 0.5;
+    alpha_multiplier = 0.0;
+    return;
   }
 
-  alpha_multiplier = 1.0;
-
-  double scale = p1 + p2;
-  if (scale != 0.0) {
-    p1 /= scale;
-    p2 /= scale;
-    if (scale <= 1.0) {
-      alpha_multiplier = scale;
-    }
-  }
-
-  mix_amount = p2;
-  if (p1 == 0.0) {
-    mix_amount = 1.0;
-  }
-
-  return true;
+  mix_amount = p2 / percentage_sum;
+  alpha_multiplier = percentage_sum <= 1.0 ? percentage_sum : 1.0;
 }
 
 bool CSSColorMixValue::Equals(const CSSColorMixValue& other) const {
@@ -71,38 +62,29 @@ std::pair<const CSSPrimitiveValue*, const CSSPrimitiveValue*>
 CSSColorMixValue::PercentageValuesForSerialization(
     const CSSPrimitiveValue* p1,
     const CSSPrimitiveValue* p2) {
-  if (p1) {
-    if (auto* p1_literal = DynamicTo<CSSNumericLiteralValue>(*p1)) {
-      const double p1_literal_percent = p1_literal->ComputePercentage();
-      if (p2) {
-        if (auto* p2_literal = DynamicTo<CSSNumericLiteralValue>(*p2)) {
-          const double p2_literal_percent = p2_literal->ComputePercentage();
-          if (p1_literal_percent == 50.0 && p2_literal_percent == 50.0) {
-            return {nullptr, nullptr};
-          }
-          if (p1_literal_percent + p2_literal_percent == 100.0) {
-            return {p1, nullptr};
-          }
-        }
-      } else {
-        if (p1_literal_percent == 50.0) {
-          return {nullptr, nullptr};
-        }
-      }
-    }
-    return {p1, p2};
-  }
-  if (p2) {
-    if (auto* p2_literal = DynamicTo<CSSNumericLiteralValue>(*p2)) {
-      if (p2_literal->ComputePercentage() == 50.0) {
+  const auto* p1_literal = DynamicTo<CSSNumericLiteralValue>(p1);
+  const auto* p2_literal = DynamicTo<CSSNumericLiteralValue>(p2);
+
+  if (p1_literal) {
+    const double p1_percent = p1_literal->ComputePercentage();
+    if (p1_percent == 50.0) {
+      if (!p2 || (p2_literal && p2_literal->ComputePercentage() == 50.0)) {
         return {nullptr, nullptr};
       }
-      return {p2->SubtractFrom(100.0, CSSPrimitiveValue::UnitType::kPercentage),
-              nullptr};
+    } else if (!p2) {
+      return {p1, p1->SubtractFrom(100.0,
+                                   CSSPrimitiveValue::UnitType::kPercentage)};
     }
-    return {nullptr, p2};
+  } else if (!p1 && p2_literal) {
+    const double p2_percent = p2_literal->ComputePercentage();
+    if (p2_percent == 50.0) {
+      return {nullptr, nullptr};
+    }
+    return {p2->SubtractFrom(100.0, CSSPrimitiveValue::UnitType::kPercentage),
+            p2};
   }
-  return {nullptr, nullptr};
+
+  return {p1, p2};
 }
 
 String CSSColorMixValue::CustomCSSText() const {
@@ -146,6 +128,13 @@ bool CSSColorMixValue::HasRandomFunctions() const {
          (color2_ && color2_->HasRandomFunctions()) ||
          (percentage1_ && percentage1_->HasRandomFunctions()) ||
          (percentage2_ && percentage2_->HasRandomFunctions());
+}
+
+bool CSSColorMixValue::IsComputationallyIndependent() const {
+  return color1_->IsComputationallyIndependent() &&
+         color2_->IsComputationallyIndependent() &&
+         (!percentage1_ || percentage1_->IsComputationallyIndependent()) &&
+         (!percentage2_ || percentage2_->IsComputationallyIndependent());
 }
 
 void CSSColorMixValue::TraceAfterDispatch(blink::Visitor* visitor) const {

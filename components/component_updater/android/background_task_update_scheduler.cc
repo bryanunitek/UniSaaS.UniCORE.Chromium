@@ -4,6 +4,8 @@
 
 #include "components/component_updater/android/background_task_update_scheduler.h"
 
+#include <stdint.h>
+
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
@@ -17,7 +19,7 @@ namespace {
 
 // Delay of running component updates after the background task fires to give
 // enough time for async component registration.
-const base::TimeDelta kOnStartTaskDelay = base::Seconds(2);
+constexpr base::TimeDelta kOnStartTaskDelay = base::Seconds(2);
 
 }  // namespace
 

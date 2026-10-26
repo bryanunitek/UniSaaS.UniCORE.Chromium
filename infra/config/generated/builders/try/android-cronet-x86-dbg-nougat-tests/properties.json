@@ -92,6 +92,17 @@
       "targets_spec_directory": "infra/config/generated/builders/try/android-cronet-x86-dbg-nougat-tests/targets"
     }
   },
+  "$build/code_coverage": {
+    "coverage_test_types": [
+      "unit",
+      "overall"
+    ],
+    "use_clang_coverage": true,
+    "use_java_coverage": true
+  },
+  "$build/flakiness": {
+    "check_for_flakiness": true
+  },
   "$build/siso": {
     "configs": [
       "builder",
@@ -114,5 +125,6 @@
     ]
   },
   "builder_group": "tryserver.chromium.android",
+  "cq": "path-based",
   "recipe": "chromium_trybot"
 }

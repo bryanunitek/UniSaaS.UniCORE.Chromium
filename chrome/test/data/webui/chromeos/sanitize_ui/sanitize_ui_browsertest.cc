@@ -15,7 +15,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/background/ntp_custom_background_service.h"
 #include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/ash/settings/pref_names.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
@@ -23,6 +22,8 @@
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "components/spellcheck/browser/pref_names.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/test/browser_test.h"
@@ -76,7 +77,7 @@ class SanitizeUIBrowserTest : public WebUIMochaBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, PRE_SanitizeCheckPreferences) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
 
   // Ensure user preferences are set to proper test values before safety reset.
@@ -136,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, PRE_SanitizeCheckPreferences) {
 }
 
 IN_PROC_BROWSER_TEST_F(SanitizeUIBrowserTest, SanitizeCheckPreferences) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
 
   // Check for expected changes in user preferences.

@@ -15,6 +15,7 @@
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_navigation_initiator.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/new_tab_page_preload/new_tab_page_preload_pipeline_manager.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
@@ -25,8 +26,9 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
-#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
+#include "components/page_load_metrics/browser/navigation_initiator.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
@@ -41,6 +43,8 @@
 #include "net/test/embedded_test_server/expectation_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
@@ -103,20 +107,18 @@ class NewTabPagePreloadBrowserTest : public PlatformBrowserTest {
 
   NewTabPagePreloadPipelineManager* GetNewTabPagePreloadPipelineManager() {
     return browser()
-        ->tab_strip_model()
-        ->GetActiveTab()
+        ->GetActiveTabInterface()
         ->GetTabFeatures()
         ->new_tab_page_preload_pipeline_manager();
   }
 
   void SimulateNewTabNavigation(const GURL& url) {
     GetActiveWebContents()->OpenURL(
-        content::OpenURLParams(
-            url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
-            ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
-            /*is_renderer_initiated=*/false),
-        base::BindRepeating(&page_load_metrics::NavigationHandleUserData::
-                                AttachNewTabPageNavigationHandleUserData));
+        content::OpenURLParams::CreateBrowserInitiated(
+            url, WindowOpenDisposition::kCurrentTab,
+            ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK)),
+        page_load_metrics::NavigationInitiatorHolder::AttacherCallback(
+            chrome_navigation_initiator::kNewTabPage));
   }
 
  private:

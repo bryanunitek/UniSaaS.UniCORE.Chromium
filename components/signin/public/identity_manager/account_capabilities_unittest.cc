@@ -4,10 +4,8 @@
 
 #include "components/signin/public/identity_manager/account_capabilities.h"
 
-#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "components/signin/internal/identity_manager/account_capabilities_constants.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -29,32 +27,6 @@ TEST_F(AccountCapabilitiesTest, GetSupportedAccountCapabilityNames) {
   // Check one of the existing expected account capabilities.
   EXPECT_THAT(names, Contains(kCanUseModelExecutionFeaturesName));
 }
-
-#if !defined(NDEBUG) && !BUILDFLAG(IS_ANDROID)
-TEST_F(AccountCapabilitiesTest,
-       GetSupportedAccountCapabilityNames_FlagDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(switches::kEnableFakeCapabilityForTesting);
-
-  auto names =
-      AccountCapabilities::GetSupportedAccountCapabilityNamesInternal();
-
-  // Check one of the existing expected account capabilities.
-  EXPECT_THAT(names, Not(Contains(kFakeCapabilityForTestingName)));
-}
-
-TEST_F(AccountCapabilitiesTest,
-       GetSupportedAccountCapabilityNames_FlagEnabled) {
-  base::test::ScopedFeatureList feature_list{
-      switches::kEnableFakeCapabilityForTesting};
-
-  auto names =
-      AccountCapabilities::GetSupportedAccountCapabilityNamesInternal();
-
-  // Check one of the existing expected account capabilities.
-  EXPECT_THAT(names, Contains(kFakeCapabilityForTestingName));
-}
-#endif  // !defined(NDEBUG) && !BUILDFLAG(IS_ANDROID)
 
 TEST_F(AccountCapabilitiesTest, CanFetchFamilyMemberInfo) {
   AccountCapabilities capabilities;
@@ -105,6 +77,19 @@ TEST_F(AccountCapabilitiesTest, CanMakeChromeSearchEngineChoiceScreenChoice) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+TEST_F(AccountCapabilitiesTest, CanOverrideAccountInfo) {
+  AccountCapabilities capabilities;
+  EXPECT_EQ(capabilities.can_override_account_info(),
+            signin::Tribool::kUnknown);
+
+  AccountCapabilitiesTestMutator mutator(&capabilities);
+  mutator.set_can_override_account_info(true);
+  EXPECT_EQ(capabilities.can_override_account_info(), signin::Tribool::kTrue);
+
+  mutator.set_can_override_account_info(false);
+  EXPECT_EQ(capabilities.can_override_account_info(), signin::Tribool::kFalse);
+}
+
 TEST_F(AccountCapabilitiesTest,
        CanShowHistorySyncOptInsWithoutMinorModeRestrictions) {
   AccountCapabilities capabilities;
@@ -147,8 +132,6 @@ TEST_F(AccountCapabilitiesTest, CanSubmitFeedback) {
 
 #if BUILDFLAG(IS_IOS)
 TEST_F(AccountCapabilitiesTest, CanSignInToChrome) {
-  base::test::ScopedFeatureList feature_list{
-      switches::kEnforceCanSignInToChromeCapability};
   AccountCapabilities capabilities;
   EXPECT_EQ(capabilities.can_sign_in_to_chrome(), signin::Tribool::kUnknown);
 
@@ -161,8 +144,6 @@ TEST_F(AccountCapabilitiesTest, CanSignInToChrome) {
 }
 
 TEST_F(AccountCapabilitiesTest, MustFetchAppleAgeRangeInChrome) {
-  base::test::ScopedFeatureList feature_list{
-      switches::kBuildExternalPrivacyContext};
   AccountCapabilities capabilities;
   EXPECT_EQ(capabilities.must_fetch_apple_age_range_in_chrome(),
             signin::Tribool::kUnknown);
@@ -178,8 +159,6 @@ TEST_F(AccountCapabilitiesTest, MustFetchAppleAgeRangeInChrome) {
 }
 
 TEST_F(AccountCapabilitiesTest, MustSkipAppleAgeRangeInChrome) {
-  base::test::ScopedFeatureList feature_list{
-      switches::kBuildExternalPrivacyContext};
   AccountCapabilities capabilities;
   EXPECT_EQ(capabilities.must_skip_apple_age_range_in_chrome(),
             signin::Tribool::kUnknown);
@@ -194,23 +173,6 @@ TEST_F(AccountCapabilitiesTest, MustSkipAppleAgeRangeInChrome) {
             signin::Tribool::kFalse);
 }
 #endif  // BUILDFLAG(IS_IOS)
-
-#if !BUILDFLAG(IS_IOS)
-TEST_F(AccountCapabilitiesTest, CanRunChromePrivacySandboxTrials) {
-  AccountCapabilities capabilities;
-  EXPECT_EQ(capabilities.can_run_chrome_privacy_sandbox_trials(),
-            signin::Tribool::kUnknown);
-
-  AccountCapabilitiesTestMutator mutator(&capabilities);
-  mutator.set_can_run_chrome_privacy_sandbox_trials(true);
-  EXPECT_EQ(capabilities.can_run_chrome_privacy_sandbox_trials(),
-            signin::Tribool::kTrue);
-
-  mutator.set_can_run_chrome_privacy_sandbox_trials(false);
-  EXPECT_EQ(capabilities.can_run_chrome_privacy_sandbox_trials(),
-            signin::Tribool::kFalse);
-}
-#endif  // !BUILDFLAG(IS_IOS)
 
 TEST_F(AccountCapabilitiesTest, IsOptedInToParentalSupervision) {
   AccountCapabilities capabilities;
@@ -359,6 +321,21 @@ TEST_F(AccountCapabilitiesTest, IsSubjectToParentalControls) {
             signin::Tribool::kFalse);
 }
 
+TEST_F(AccountCapabilitiesTest, IsSubjectToParentalControlsViaBundle) {
+  AccountCapabilities capabilities;
+  EXPECT_EQ(capabilities.is_subject_to_parental_controls_via_bundle(),
+            signin::Tribool::kUnknown);
+
+  AccountCapabilitiesTestMutator mutator(&capabilities);
+  mutator.set_is_subject_to_parental_controls_via_bundle(true);
+  EXPECT_EQ(capabilities.is_subject_to_parental_controls_via_bundle(),
+            signin::Tribool::kTrue);
+
+  mutator.set_is_subject_to_parental_controls_via_bundle(false);
+  EXPECT_EQ(capabilities.is_subject_to_parental_controls_via_bundle(),
+            signin::Tribool::kFalse);
+}
+
 TEST_F(AccountCapabilitiesTest, CanUseSpeakerLabelInRecorderApp) {
   AccountCapabilities capabilities;
   EXPECT_EQ(capabilities.can_use_speaker_label_in_recorder_app(),
@@ -425,30 +402,19 @@ TEST_F(AccountCapabilitiesTest, CanUseGenerativeAi) {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-TEST_F(AccountCapabilitiesTest,
-       IsSubjectToPrivacySandboxRestrictedMeasurementApiNotice) {
+TEST_F(AccountCapabilitiesTest, IsSubjectToUniversalOptOut) {
   AccountCapabilities capabilities;
-  EXPECT_EQ(
-      capabilities
-          .is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice(),
-      signin::Tribool::kUnknown);
+  EXPECT_EQ(capabilities.is_subject_to_universal_opt_out(),
+            signin::Tribool::kUnknown);
 
   AccountCapabilitiesTestMutator mutator(&capabilities);
-  mutator
-      .set_is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice(
-          true);
-  EXPECT_EQ(
-      capabilities
-          .is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice(),
-      signin::Tribool::kTrue);
+  mutator.set_is_subject_to_universal_opt_out(true);
+  EXPECT_EQ(capabilities.is_subject_to_universal_opt_out(),
+            signin::Tribool::kTrue);
 
-  mutator
-      .set_is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice(
-          false);
-  EXPECT_EQ(
-      capabilities
-          .is_subject_to_chrome_privacy_sandbox_restricted_measurement_notice(),
-      signin::Tribool::kFalse);
+  mutator.set_is_subject_to_universal_opt_out(false);
+  EXPECT_EQ(capabilities.is_subject_to_universal_opt_out(),
+            signin::Tribool::kFalse);
 }
 
 TEST_F(AccountCapabilitiesTest, SupportsWalletPrivatePassesInAutofill) {
@@ -646,17 +612,18 @@ TEST_F(AccountCapabilitiesTest, CapabilityOverridesPrecedence) {
   AccountCapabilitiesTestMutator mutator(&capabilities);
 
   // 1. Configures an override.
-  mutator.SetCapabilityOverride(
-      kCanFetchFamilyMemberInfoCapabilityName, signin::Tribool::kTrue);
+  mutator.SetCapabilityOverride(kCanFetchFamilyMemberInfoCapabilityName,
+                                signin::Tribool::kTrue);
 
-  // 2. Simulates receiving a different value for the same capability from the server.
+  // 2. Simulates receiving a different value for the same capability from the
+  // server.
   mutator.set_can_fetch_family_member_info(false);
 
-  // 3. Checks that capability still has the overridden value, and not the one received later from the server.
+  // 3. Checks that capability still has the overridden value, and not the one
+  // received later from the server.
   EXPECT_EQ(capabilities.can_fetch_family_member_info(),
             signin::Tribool::kTrue);
 }
-
 
 #if BUILDFLAG(IS_ANDROID)
 

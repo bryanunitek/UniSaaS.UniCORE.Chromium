@@ -30,14 +30,32 @@
 
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 
-#include "base/synchronization/lock.h"
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "base/functional/callback_forward.h"
+#include "base/notreached.h"
+#include "build/buildflag.h"
+#include "media/base/audio_parameters.h"
+#include "media/base/sample_format.h"
+#include "third_party/blink/public/common/mediastream/media_stream_request.h"
+#include "third_party/blink/public/platform/modules/mediastream/web_media_stream_source.h"
+#include "third_party/blink/public/platform/modules/mediastream/web_platform_media_stream_source.h"
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
-#include "third_party/blink/renderer/platform/audio/audio_bus.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_processor_options.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_source.h"
-#include "third_party/blink/renderer/platform/mediastream/webaudio_destination_consumer.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/display/types/display_constants.h"
 
 namespace blink {
@@ -87,6 +105,15 @@ void GetSourceSettings(const blink::WebMediaStreamSource& web_source,
   // kSampleFormatS16 is the format used for all audio input streams.
   settings.sample_size =
       media::SampleFormatToBitsPerChannel(media::kSampleFormatS16);
+
+  // Voice isolation can be reconfigured dynamically at runtime. Override the
+  // initial track creation setting with the current dynamic setting from the
+  // active audio source if available.
+  if (auto properties = source->GetAudioProcessingProperties()) {
+    settings.voice_isolation =
+        properties->voice_isolation ==
+        AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled;
+  }
 }
 
 }  // namespace
@@ -124,29 +151,24 @@ MediaStreamSource::MediaStreamSource(
       remote_(remote),
       ready_state_(ready_state),
       platform_source_(std::move(platform_source)) {
-  SendLogMessage(UNSAFE_TODO(
-      String::Format(
-          "MediaStreamSource({id=%s}, {type=%s}, {name=%s}, {remote=%d}, "
-          "{ready_state=%s})",
-          id.Utf8().c_str(), StreamTypeToString(type), name.Utf8().c_str(),
-          remote, ReadyStateToString(ready_state))
-          .Utf8()));
+  SendLogMessage(Format("MediaStreamSource({{id={}}}, {{type={}}}, "
+                        "{{name={}}}, {{remote={}}}, {{ready_state={}}})",
+                        id, StreamTypeToString(type), name, remote,
+                        ReadyStateToString(ready_state))
+                     .Utf8());
   if (platform_source_)
     platform_source_->SetOwner(this);
 }
 
 void MediaStreamSource::SetGroupId(const String& group_id) {
-  SendLogMessage(
-      String::Format("SetGroupId({group_id=%s})", group_id.Utf8().c_str())
-          .Utf8());
+  SendLogMessage(StrCat({"SetGroupId({group_id=", group_id, "})"}).Utf8());
   group_id_ = group_id;
 }
 
 void MediaStreamSource::SetReadyState(ReadyState ready_state) {
-  SendLogMessage(UNSAFE_TODO(
-      String::Format("SetReadyState({id=%s}, {ready_state=%s})",
-                     Id().Utf8().c_str(), ReadyStateToString(ready_state))
-          .Utf8()));
+  SendLogMessage(StrCat({"SetReadyState(id=", Id(), ", ready_state=",
+                         ReadyStateToString(ready_state), ")"})
+                     .Utf8());
   if (ready_state_ != kReadyStateEnded && ready_state_ != ready_state) {
     ready_state_ = ready_state;
 
@@ -175,11 +197,10 @@ void MediaStreamSource::SetAudioProcessingProperties(
     bool noise_supression,
     bool voice_isolation) {
   SendLogMessage(
-      UNSAFE_TODO(String::Format(
-                      "%s({echo_cancellation=%s}, {auto_gain_control=%d}, "
-                      "{noise_supression=%d}, {voice_isolation=%d})",
-                      __func__, EchoCancellationModeToString(echo_cancellation),
-                      auto_gain_control, noise_supression, voice_isolation))
+      Format("{}({{echo_cancellation={}}}, {{auto_gain_control={}}}, "
+             "{{noise_supression={}}}, {{voice_isolation={}}})",
+             __func__, EchoCancellationModeToString(echo_cancellation),
+             auto_gain_control, noise_supression, voice_isolation)
           .Utf8());
   echo_cancellation_ = echo_cancellation;
   auto_gain_control_ = auto_gain_control;

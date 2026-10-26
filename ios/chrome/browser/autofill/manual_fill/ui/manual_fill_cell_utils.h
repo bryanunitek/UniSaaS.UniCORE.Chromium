@@ -14,10 +14,7 @@
 @class LegacyTableViewCell;
 
 // Margins of the cell content.
-extern const CGFloat kCellMargin;
-
-// Left and right margins for the chips.
-extern const CGFloat kChipsHorizontalMargin;
+inline constexpr CGFloat kCellMargin = 16.0;
 
 // Options for `AppendHorizontalConstraintsForViews`.
 typedef NS_OPTIONS(NSUInteger, AppendConstraints) {
@@ -177,11 +174,6 @@ UIButton* CreateAutofillFormButton(NSString* title);
 UILayoutGuide* AddLayoutGuideToContentView(UIView* content_view,
                                            BOOL cell_has_header);
 
-// Creates the attributed string containing the site name and potentially a host
-// subtitle for the site name label.
-NSMutableAttributedString* CreateSiteNameLabelAttributedText(
-    ManualFillSiteInfo* site_info,
-    BOOL should_show_host);
 
 // Creates the subtitle string, combining host and type if `host` differs from
 // `site_name`.

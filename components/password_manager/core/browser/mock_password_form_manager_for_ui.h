@@ -7,6 +7,7 @@
 
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace password_manager {
@@ -21,44 +22,48 @@ class MockPasswordFormManagerForUI : public PasswordFormManagerForUI {
 
   ~MockPasswordFormManagerForUI() override;
 
-  MOCK_METHOD(const GURL&, GetURL, (), (const override));
+  MOCK_METHOD(const GURL&, GetURL, (), (const, override));
   MOCK_METHOD(base::span<const StoredCredential>,
               GetBestMatches,
               (),
-              (const override));
+              (const, override));
   MOCK_METHOD(base::span<const StoredCredential>,
               GetFederatedMatches,
               (),
-              (const override));
-  MOCK_METHOD(const PasswordForm&, GetPendingCredentials, (), (const override));
+              (const, override));
+  MOCK_METHOD(const PasswordForm&,
+              GetPendingCredentials,
+              (),
+              (const, override));
   MOCK_METHOD(metrics_util::CredentialSourceType,
               GetCredentialSource,
               (),
-              (const override));
+              (const, override));
   MOCK_METHOD(PasswordFormMetricsRecorder*, GetMetricsRecorder, (), (override));
   MOCK_METHOD(base::span<const InteractionsStats>,
               GetInteractionsStats,
               (),
-              (const override));
+              (const, override));
   MOCK_METHOD(base::span<const StoredCredential>,
               GetInsecureCredentials,
               (),
-              (const override));
-  MOCK_METHOD(bool, IsBlocklisted, (), (const override));
-  MOCK_METHOD(bool, IsFetchCompleted, (), (const override));
-  MOCK_METHOD(bool, IsMovableToAccountStore, (), (const override));
+              (const, override));
+  MOCK_METHOD(bool, IsBlocklisted, (), (const, override));
+  MOCK_METHOD(bool, IsFetchCompleted, (), (const, override));
+  MOCK_METHOD(bool, IsMovableToAccountStore, (), (const, override));
   MOCK_METHOD(void, Save, (), (override));
+  MOCK_METHOD(bool, IsPasswordUpdate, (), (const, override));
   MOCK_METHOD(bool,
               IsUpdateAffectingPasswordsStoredInTheGoogleAccount,
               (),
-              (const override));
+              (const, override));
   MOCK_METHOD(void,
               OnUpdateUsernameFromPrompt,
               (const std::u16string&),
               (override));
   MOCK_METHOD(void,
               OnUpdatePasswordFromPrompt,
-              (const std::u16string&),
+              (const PasswordString&),
               (override));
   MOCK_METHOD(void, OnNopeUpdateClicked, (), (override));
   MOCK_METHOD(void, OnNeverClicked, (), (override));
@@ -70,7 +75,7 @@ class MockPasswordFormManagerForUI : public PasswordFormManagerForUI {
   MOCK_METHOD(PasswordForm::Store,
               GetPasswordStoreForSaving,
               (const PasswordForm& password_form),
-              (const override));
+              (const, override));
 };
 
 }  // namespace password_manager

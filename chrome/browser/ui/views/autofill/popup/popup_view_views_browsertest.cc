@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view.h"
 #include "chrome/browser/ui/autofill/mock_autofill_popup_controller.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_bnpl_footnote_view.h"
@@ -18,19 +20,23 @@
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_views_test_api.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/ui/tabbed_pane_enums.h"
 #include "components/autofill/core/common/aliases.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/range/range.h"
 #include "ui/gfx/render_text.h"
 #include "ui/views/controls/tabbed_pane/tabbed_pane.h"
+#include "url/gurl.h"
 
 namespace autofill {
 namespace {
@@ -126,7 +132,7 @@ std::vector<Suggestion> CreateLoyaltyCardSuggestions() {
 
 std::vector<Suggestion> CreatePasswordSuggestions(
     Suggestion::Acceptability acceptability =
-        Suggestion::Acceptability::kAcceptable) {
+        Suggestion::Acceptability::kSelectableAndAcceptable) {
   std::vector<Suggestion> suggestions;
   suggestions.emplace_back(u"Title suggestion", SuggestionType::kTitle);
   suggestions.back().acceptability = acceptability;
@@ -152,7 +158,7 @@ std::vector<Suggestion> CreatePasswordSuggestions(
 
 std::vector<Suggestion> CreateWebAuthnSuggestions(
     Suggestion::Acceptability acceptability =
-        Suggestion::Acceptability::kAcceptable) {
+        Suggestion::Acceptability::kSelectableAndAcceptable) {
   std::vector<Suggestion> suggestions;
   suggestions.push_back(Suggestion(
       u"cool passkey",
@@ -185,7 +191,7 @@ std::vector<Suggestion> CreateWebAuthnSuggestions(
 
 std::vector<Suggestion> CreatePasswordAndWebAuthnSuggestions(
     Suggestion::Acceptability acceptability =
-        Suggestion::Acceptability::kAcceptable) {
+        Suggestion::Acceptability::kSelectableAndAcceptable) {
   std::vector<Suggestion> suggestions =
       CreatePasswordSuggestions(acceptability);
   suggestions.pop_back();
@@ -212,8 +218,18 @@ Suggestion CreateBnplEntrySuggestion() {
 
 Suggestion CreateBnplFootnoteSuggestion() {
   Suggestion bnpl_footnote = Suggestion(SuggestionType::kBnplFootnote);
-  bnpl_footnote.acceptability = Suggestion::Acceptability::kUnacceptable;
+  bnpl_footnote.acceptability =
+      Suggestion::Acceptability::kSelectableButUnacceptable;
   return bnpl_footnote;
+}
+
+Suggestion CreateAtMemoryFetchingSuggestion() {
+  Suggestion suggestion(l10n_util::GetStringUTF16(
+                            IDS_AUTOFILL_AT_MEMORY_SEARCH_AFFORDANCE_SUBTITLE),
+                        SuggestionType::kAtMemoryFetching);
+  suggestion.acceptability =
+      Suggestion::Acceptability::kSelectableButUnacceptable;
+  return suggestion;
 }
 
 class PopupViewViewsBrowsertestBase
@@ -392,7 +408,7 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
 IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
                        InvokeUi_Passwords_And_WebAuthn_Deactivated) {
   PrepareSuggestions(CreatePasswordAndWebAuthnSuggestions(
-      Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle));
+      Suggestion::Acceptability::kUnselectableAndUnacceptable));
   ShowAndVerifyUi();
 }
 
@@ -480,7 +496,8 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, SearchBarViewProvided) {
   controller().set_suggestions({SuggestionType::kAddressEntry});
   ShowAndVerifyUi(
       /*popup_has_parent=*/false,
-      AutofillPopupView::SearchBarConfig{.placeholder = u"Search",
+      AutofillPopupView::SearchBarConfig{.placeholders = {u"Search"},
+                                         .initial_value = {},
                                          .no_results_message = u""});
 }
 
@@ -489,7 +506,8 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
   controller().set_suggestions({100, SuggestionType::kAddressEntry});
   ShowAndVerifyUi(
       /*popup_has_parent=*/false,
-      AutofillPopupView::SearchBarConfig{.placeholder = u"Search",
+      AutofillPopupView::SearchBarConfig{.placeholders = {u"Search"},
+                                         .initial_value = {},
                                          .no_results_message = u""});
 }
 
@@ -500,9 +518,10 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
       {SuggestionType::kSeparator, SuggestionType::kManageAddress});
   ON_CALL(controller(), HasFilteredOutSuggestions).WillByDefault(Return(true));
   ShowAndVerifyUi(
-      /*popup_has_parent=*/false,
-      AutofillPopupView::SearchBarConfig{
-          .placeholder = u"Search", .no_results_message = u"No suggestions"});
+      /*popup_has_parent=*/false, AutofillPopupView::SearchBarConfig{
+                                      .placeholders = {u"Search"},
+                                      .initial_value = {},
+                                      .no_results_message = u"No suggestions"});
 }
 
 IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, InvokeUi_BnplFootnote) {
@@ -519,25 +538,132 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
   ShowAndVerifyUi();
 }
 
-IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, InvokeUi_TabbedPane_PayNow) {
-  PrepareSuggestions(CreateCreditCardSuggestions());
-  ShowAndVerifyUi(/*popup_has_parent=*/false,
-                  /*search_bar_config=*/std::nullopt,
-                  AutofillPopupView::TabbedPaneConfig(
-                      {{TabbedPaneTabType::kPayNow, u"Pay now"},
-                       {TabbedPaneTabType::kPayLater, u"Pay later"}}));
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, InvokeUi_AtMemoryFetching) {
+  PrepareSuggestions({CreateAtMemoryFetchingSuggestion()});
+  ShowAndVerifyUi(
+      /*popup_has_parent=*/false,
+      AutofillPopupView::SearchBarConfig{.placeholders = {u"Find and fill"},
+                                         .initial_value = {},
+                                         .no_results_message = u""});
 }
 
 IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
-                       InvokeUi_TabbedPane_PayLater) {
+                       InvokeUi_MultiSuggestionNotice) {
+  ON_CALL(controller(), GetMainFillingProduct())
+      .WillByDefault(Return(FillingProduct::kAutofillAi));
+  Suggestion fill_suggestion(u"John Doe", u"Passport",
+                             Suggestion::Icon::kPassport,
+                             SuggestionType::kFillAutofillAi);
+  Suggestion notice_suggestion(SuggestionType::kPersonalContextNotice);
+  Suggestion manage_suggestion(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_MANAGE_ENHANCED_AUTOFILL),
+      SuggestionType::kManageEnhancedAutofill);
+  manage_suggestion.icon = Suggestion::Icon::kSettings;
   PrepareSuggestions(
-      {CreateBnplEntrySuggestion(), CreateBnplFootnoteSuggestion()});
-  PrepareSelectedTab(1);
-  ShowAndVerifyUi(/*popup_has_parent=*/false,
-                  /*search_bar_config=*/std::nullopt,
-                  AutofillPopupView::TabbedPaneConfig(
-                      {{TabbedPaneTabType::kPayNow, u"Pay now"},
-                       {TabbedPaneTabType::kPayLater, u"Pay later"}}));
+      {std::move(fill_suggestion), Suggestion(SuggestionType::kSeparator),
+       std::move(notice_suggestion), std::move(manage_suggestion)});
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
+                       InvokeUi_AtMemory_PersonalContextNotice) {
+  ON_CALL(controller(), GetMainFillingProduct())
+      .WillByDefault(Return(FillingProduct::kAtMemory));
+  Suggestion search_result(u"Passport number",
+                           SuggestionType::kAtMemorySearchResult);
+  Suggestion notice_suggestion(SuggestionType::kPersonalContextNotice);
+  PrepareSuggestions({std::move(search_result),
+                      Suggestion(SuggestionType::kSeparator),
+                      std::move(notice_suggestion)});
+  ShowAndVerifyUi(
+      /*popup_has_parent=*/false,
+      AutofillPopupView::SearchBarConfig{.placeholders = {u"Find and fill"},
+                                         .initial_value = {},
+                                         .no_results_message = u""});
+}
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
+                       InvokeUi_SuggestionNoticeIsTheOnlySuggestion) {
+  ON_CALL(controller(), GetMainFillingProduct())
+      .WillByDefault(Return(FillingProduct::kAutofillAi));
+  Suggestion notice_suggestion(SuggestionType::kPersonalContextNotice);
+  PrepareSuggestions({notice_suggestion});
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, InvokeUi_AutofillAi_SubMenu) {
+  Suggestion source_attribution(
+      u"From Gemini and connected apps · Photos\u00A0[1]",
+      SuggestionType::kAutofillAiSourceAttribution);
+  source_attribution.icon = Suggestion::Icon::kSpark;
+  source_attribution.payload = Suggestion::AutofillAiPayload(
+      autofill::EntityInstance::EntityId("test-guid"),
+      {Suggestion::PersonalContextSourceCitation(
+          GURL("https://photos.google.com/test"), gfx::Range(40, 43))});
+
+  Suggestion remove_suggestion(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_REMOVE_INFO),
+      SuggestionType::kRemoveAutofillAi);
+  remove_suggestion.icon = Suggestion::Icon::kClose;
+
+  Suggestion manage_suggestion(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_MANAGE_ENHANCED_AUTOFILL),
+      SuggestionType::kManageEnhancedAutofill);
+  manage_suggestion.icon = Suggestion::Icon::kSettings;
+
+  PrepareSuggestions(
+      {std::move(source_attribution), Suggestion(SuggestionType::kSeparator),
+       std::move(remove_suggestion), std::move(manage_suggestion)});
+  ShowAndVerifyUi(/*popup_has_parent=*/true);
+}
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
+                       InvokeUi_AutofillAi_SubMenu_Selected) {
+  Suggestion source_attribution(
+      u"From Gemini and connected apps · Photos\u00A0[1]",
+      SuggestionType::kAutofillAiSourceAttribution);
+  source_attribution.icon = Suggestion::Icon::kSpark;
+  source_attribution.payload = Suggestion::AutofillAiPayload(
+      autofill::EntityInstance::EntityId("test-guid"),
+      {Suggestion::PersonalContextSourceCitation(
+          GURL("https://photos.google.com/test"), gfx::Range(40, 43))});
+
+  Suggestion remove_suggestion(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_REMOVE_INFO),
+      SuggestionType::kRemoveAutofillAi);
+  remove_suggestion.icon = Suggestion::Icon::kClose;
+
+  Suggestion manage_suggestion(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_MANAGE_ENHANCED_AUTOFILL),
+      SuggestionType::kManageEnhancedAutofill);
+  manage_suggestion.icon = Suggestion::Icon::kSettings;
+
+  PrepareSuggestions(
+      {std::move(source_attribution), Suggestion(SuggestionType::kSeparator),
+       std::move(remove_suggestion), std::move(manage_suggestion)});
+  PrepareSelectedCell(CellIndex{3, CellType::kContent});
+  ShowAndVerifyUi(/*popup_has_parent=*/true);
+}
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
+                       InvokeUi_GmailOneTimePassword) {
+  Suggestion otp_suggestion(u"1234",
+                            SuggestionType::kGmailOneTimePasswordEntry);
+  otp_suggestion.icon = Suggestion::Icon::kMailAsterisk;
+  otp_suggestion.minor_texts = {Suggestion::Text(l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_GMAIL_OTP_VERIFICATION_CODE_LABEL))};
+  otp_suggestion.labels = {{Suggestion::Text(u"elisa.becket@gmail.com")}};
+
+  Suggestion open_gmail(
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_OPEN_GMAIL_FOR_OTP),
+      SuggestionType::kOpenGmailForOtps);
+  open_gmail.icon = Suggestion::Icon::kGmail;
+  open_gmail.trailing_icon = Suggestion::Icon::kOpenInNew;
+
+  PrepareSuggestions({std::move(otp_suggestion),
+                      Suggestion(SuggestionType::kSeparator),
+                      std::move(open_gmail)});
+  ShowAndVerifyUi();
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -570,6 +696,40 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertestShowAutocompleteDeleteButton,
 
 INSTANTIATE_TEST_SUITE_P(All,
                          PopupViewViewsBrowsertestShowAutocompleteDeleteButton,
+                         Combine(Bool(), Bool()),
+                         PopupViewViewsBrowsertestBase::GetTestSuffix);
+
+class PopupViewViewsPayNowPayLaterTabsBrowsertest
+    : public PopupViewViewsBrowsertestBase {
+ private:
+  base::test::ScopedFeatureList feature_list_{
+      features::kAutofillEnablePayNowPayLaterTabs};
+};
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsPayNowPayLaterTabsBrowsertest,
+                       InvokeUi_TabbedPane_PayNow) {
+  PrepareSuggestions(CreateCreditCardSuggestions());
+  ShowAndVerifyUi(/*popup_has_parent=*/false,
+                  /*search_bar_config=*/std::nullopt,
+                  AutofillPopupView::TabbedPaneConfig(
+                      {{TabbedPaneTabType::kPayNow, u"Pay now"},
+                       {TabbedPaneTabType::kPayLater, u"Pay later"}}));
+}
+
+IN_PROC_BROWSER_TEST_P(PopupViewViewsPayNowPayLaterTabsBrowsertest,
+                       InvokeUi_TabbedPane_PayLater) {
+  PrepareSuggestions(
+      {CreateBnplEntrySuggestion(), CreateBnplFootnoteSuggestion()});
+  PrepareSelectedTab(1);
+  ShowAndVerifyUi(/*popup_has_parent=*/false,
+                  /*search_bar_config=*/std::nullopt,
+                  AutofillPopupView::TabbedPaneConfig(
+                      {{TabbedPaneTabType::kPayNow, u"Pay now"},
+                       {TabbedPaneTabType::kPayLater, u"Pay later"}}));
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         PopupViewViewsPayNowPayLaterTabsBrowsertest,
                          Combine(Bool(), Bool()),
                          PopupViewViewsBrowsertestBase::GetTestSuffix);
 

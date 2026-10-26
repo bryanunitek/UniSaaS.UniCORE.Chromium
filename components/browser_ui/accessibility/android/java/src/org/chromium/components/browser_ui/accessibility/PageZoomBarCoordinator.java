@@ -19,7 +19,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.content_public.browser.LoadCommittedDetails;
 import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
@@ -53,20 +52,15 @@ public class PageZoomBarCoordinator {
     /**
      * @param delegate Used to interact with the coordinator.
      * @param manager The manager used to interact with the zoom functionality.
-     * @param useSlider Whether the page zoom UI should use the material slider.
      * @param bottomSheetControllerSupplier Supplier for the BottomSheetController.
      */
     public PageZoomBarCoordinator(
             PageZoomBarCoordinatorDelegate delegate,
             PageZoomManager manager,
-            boolean useSlider,
             MonotonicObservableSupplier<BottomSheetController> bottomSheetControllerSupplier) {
         mDelegate = delegate;
         mManager = manager;
-        mModel =
-                new PropertyModel.Builder(PageZoomProperties.ALL_KEYS)
-                        .with(PageZoomProperties.USE_SLIDER, useSlider)
-                        .build();
+        mModel = new PropertyModel.Builder(PageZoomProperties.ALL_KEYS).build();
         mMediator = new PageZoomBarMediator(mModel, mManager, this::onViewInteraction);
         mDismissalCallback = () -> hide();
 
@@ -83,7 +77,7 @@ public class PageZoomBarCoordinator {
         if (mBottomSheetController != null) {
             if (mBottomSheetObserver == null) {
                 mBottomSheetObserver =
-                        new EmptyBottomSheetObserver() {
+                        new BottomSheetObserver() {
                             @Override
                             public void onSheetOpened(int reason) {
                                 hide();

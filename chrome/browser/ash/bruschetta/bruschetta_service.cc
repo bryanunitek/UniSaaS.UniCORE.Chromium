@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
@@ -46,7 +47,8 @@ BruschettaService::VmRegistration& BruschettaService::VmRegistration::operator=(
     BruschettaService::VmRegistration&&) = default;
 BruschettaService::VmRegistration::~VmRegistration() = default;
 
-BruschettaService::BruschettaService(Profile* profile) : profile_(profile) {
+BruschettaService::BruschettaService(PrefService* local_state, Profile* profile)
+    : local_state_(CHECK_DEREF(local_state)), profile_(profile) {
   if (auto* concierge = ash::ConciergeClient::Get(); concierge) {
     concierge->AddVmObserver(this);
   }
@@ -167,7 +169,7 @@ void BruschettaService::AllowLaunch(guest_os::GuestId guest_id) {
   auto mount_id = guest_os::GuestOsServiceFactory::GetForProfile(profile_)
                       ->MountProviderRegistry()
                       ->Register(std::make_unique<BruschettaMountProvider>(
-                          profile_, std::move(guest_id)));
+                          &local_state_.get(), profile_, std::move(guest_id)));
 
   runnable_vms_.insert(
       {std::move(vm_name), VmRegistration{std::move(launcher), mount_id}});
@@ -200,7 +202,7 @@ void BruschettaService::StopRunningVms() {
 
 void BruschettaService::StopVm(std::string vm_name) {
   auto* client = ash::ConciergeClient::Get();
-  DCHECK(client);
+  CHECK(client, base::NotFatalUntil::M160);
 
   vm_tools::concierge::StopVmRequest request;
   request.set_name(vm_name);
@@ -241,7 +243,8 @@ void BruschettaService::RegisterInPrefs(const guest_os::GuestId& guest_id,
 
 void BruschettaService::RegisterWithTerminal(
     const guest_os::GuestId& guest_id) {
-  DCHECK(!terminal_providers_.contains(guest_id.vm_name));
+  CHECK(!terminal_providers_.contains(guest_id.vm_name),
+        base::NotFatalUntil::M160);
   terminal_providers_[guest_id.vm_name] =
       guest_os::GuestOsServiceFactory::GetForProfile(profile_)
           ->TerminalProviderRegistry()

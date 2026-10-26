@@ -273,50 +273,54 @@ class ClientControlledStateTest : public AshTestBase {
   void SetUp() override {
     AshTestBase::SetUp();
 
-    widget_delegate_ = new ClientControlledStateTestWidgetDelegate();
 
     views::Widget::InitParams params(
         views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     params.parent = Shell::GetPrimaryRootWindow()->GetChildById(
         desks_util::GetActiveDeskContainerId());
     params.bounds = kInitialBounds;
-    params.delegate = widget_delegate_.get();
+    params.delegate = new ClientControlledStateTestWidgetDelegate();
 
     widget_ = std::make_unique<views::Widget>();
     widget_->Init(std::move(params));
     WindowState* window_state = WindowState::Get(window());
     window_state->set_allow_set_bounds_direct(true);
     auto delegate = std::make_unique<TestClientControlledStateDelegate>();
-    state_delegate_ = delegate.get();
     auto state = std::make_unique<ClientControlledState>(std::move(delegate));
-    state_ = state.get();
     window_state->SetStateObject(std::move(state));
     auto window_state_delegate = std::make_unique<FakeWindowStateDelegate>();
-    window_state_delegate_ = window_state_delegate.get();
     window_state->SetDelegate(std::move(window_state_delegate));
     widget_->Show();
   }
 
   void TearDown() override {
-    widget_ = nullptr;
+    widget_.reset();
     AshTestBase::TearDown();
   }
 
   ClientControlledStateTestWidgetDelegate* widget_delegate() {
-    return widget_delegate_;
+    return static_cast<ClientControlledStateTestWidgetDelegate*>(
+        widget_->widget_delegate());
   }
 
  protected:
   aura::Window* window() { return widget_->GetNativeWindow(); }
   WindowState* window_state() { return WindowState::Get(window()); }
-  ClientControlledState* state() { return state_; }
-  TestClientControlledStateDelegate* delegate() { return state_delegate_; }
+  ClientControlledState* state() {
+    return static_cast<ClientControlledState*>(
+        WindowState::TestApi::GetStateImpl(window_state()));
+  }
+  TestClientControlledStateDelegate* delegate() {
+    return static_cast<TestClientControlledStateDelegate*>(
+        state()->delegate_for_testing());
+  }
   views::Widget* widget() { return widget_.get(); }
   ScreenPinningController* GetScreenPinningController() {
     return Shell::Get()->screen_pinning_controller();
   }
   FakeWindowStateDelegate* window_state_delegate() {
-    return window_state_delegate_;
+    return static_cast<FakeWindowStateDelegate*>(
+        WindowState::TestApi::GetWindowStateDelegate(window_state()));
   }
 
   chromeos::HeaderView* GetHeaderView() {
@@ -380,13 +384,6 @@ class ClientControlledStateTest : public AshTestBase {
   }
 
  private:
-  raw_ptr<ClientControlledState, DanglingUntriaged> state_ = nullptr;
-  raw_ptr<TestClientControlledStateDelegate, DanglingUntriaged>
-      state_delegate_ = nullptr;
-  raw_ptr<ClientControlledStateTestWidgetDelegate, DanglingUntriaged>
-      widget_delegate_ = nullptr;  // owned by itself.
-  raw_ptr<FakeWindowStateDelegate, DanglingUntriaged> window_state_delegate_ =
-      nullptr;
   std::unique_ptr<views::Widget> widget_;
 };
 
@@ -1775,7 +1772,7 @@ TEST_F(ClientControlledStateTest, ClamshellTabletConversionWithSnappedWindow) {
 // Pin events should not be applied immediately. The request should be sent
 // to delegate.
 TEST_F(ClientControlledStateTest, Pinned) {
-  ASSERT_FALSE(window_state()->IsLockedFullscreen());
+  ASSERT_FALSE(window_state()->IsTrustedPinned());
   ASSERT_FALSE(GetScreenPinningController()->IsPinned());
 
   const WMEvent pin_event(WM_EVENT_PIN);
@@ -1839,36 +1836,36 @@ TEST_F(ClientControlledStateTest, Pinned) {
   EXPECT_NE(WindowStateType::kPinned, delegate()->new_state());
 }
 
-TEST_F(ClientControlledStateTest, LockedFullscreenBasic) {
+TEST_F(ClientControlledStateTest, TrustedPinnedBasic) {
   EXPECT_FALSE(window_state()->IsPinned());
   EXPECT_FALSE(GetScreenPinningController()->IsPinned());
 
-  const WMEvent locked_fullscreen_event(WM_EVENT_LOCKED_FULLSCREEN);
-  window_state()->OnWMEvent(&locked_fullscreen_event);
+  const WMEvent trusted_pin_event(WM_EVENT_TRUSTED_PIN);
+  window_state()->OnWMEvent(&trusted_pin_event);
   EXPECT_FALSE(window_state()->IsPinned());
   EXPECT_EQ(WindowStateType::kDefault, delegate()->old_state());
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, delegate()->new_state());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, delegate()->new_state());
 
-  state()->EnterNextState(window_state(), WindowStateType::kLockedFullscreen);
+  state()->EnterNextState(window_state(), WindowStateType::kTrustedPinned);
   EXPECT_TRUE(window_state()->IsPinned());
   EXPECT_TRUE(GetScreenPinningController()->IsPinned());
 
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, window_state()->GetStateType());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, window_state()->GetStateType());
   EXPECT_EQ(WindowStateType::kDefault, delegate()->old_state());
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, delegate()->new_state());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, delegate()->new_state());
 
   // All state transition events are ignored except for NORMAL.
   widget()->Maximize();
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, window_state()->GetStateType());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, window_state()->GetStateType());
   EXPECT_TRUE(GetScreenPinningController()->IsPinned());
 
   widget()->Minimize();
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, window_state()->GetStateType());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, window_state()->GetStateType());
   EXPECT_TRUE(GetScreenPinningController()->IsPinned());
   EXPECT_TRUE(window()->IsVisible());
 
   widget()->SetFullscreen(true);
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, window_state()->GetStateType());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, window_state()->GetStateType());
   EXPECT_TRUE(GetScreenPinningController()->IsPinned());
 
   // WM/User cannot change the bounds of the trusted-pinned window.
@@ -1883,7 +1880,7 @@ TEST_F(ClientControlledStateTest, LockedFullscreenBasic) {
 
   widget()->Restore();
   EXPECT_TRUE(window_state()->IsPinned());
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, delegate()->old_state());
+  EXPECT_EQ(WindowStateType::kTrustedPinned, delegate()->old_state());
   EXPECT_EQ(WindowStateType::kNormal, delegate()->new_state());
   state()->EnterNextState(window_state(), WindowStateType::kNormal);
   EXPECT_FALSE(window_state()->IsPinned());
@@ -1894,26 +1891,26 @@ TEST_F(ClientControlledStateTest, LockedFullscreenBasic) {
   auto widget2 =
       CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   WindowState* window_state_2 = WindowState::Get(widget2->GetNativeWindow());
-  window_state_2->OnWMEvent(&locked_fullscreen_event);
-  EXPECT_TRUE(window_state_2->IsLockedFullscreen());
+  window_state_2->OnWMEvent(&trusted_pin_event);
+  EXPECT_TRUE(window_state_2->IsTrustedPinned());
   EXPECT_TRUE(GetScreenPinningController()->IsPinned());
 
-  EXPECT_FALSE(window_state()->IsLockedFullscreen());
-  window_state()->OnWMEvent(&locked_fullscreen_event);
-  EXPECT_NE(WindowStateType::kLockedFullscreen, delegate()->new_state());
-  EXPECT_TRUE(window_state_2->IsLockedFullscreen());
+  EXPECT_FALSE(window_state()->IsTrustedPinned());
+  window_state()->OnWMEvent(&trusted_pin_event);
+  EXPECT_NE(WindowStateType::kTrustedPinned, delegate()->new_state());
+  EXPECT_TRUE(window_state_2->IsTrustedPinned());
 }
 
 TEST_F(ClientControlledStateTest, ClosePinned) {
   EXPECT_FALSE(window_state()->IsPinned());
   EXPECT_FALSE(GetScreenPinningController()->IsPinned());
 
-  const WMEvent locked_fullscreen_event(WM_EVENT_LOCKED_FULLSCREEN);
-  window_state()->OnWMEvent(&locked_fullscreen_event);
+  const WMEvent trusted_pin_event(WM_EVENT_TRUSTED_PIN);
+  window_state()->OnWMEvent(&trusted_pin_event);
   EXPECT_FALSE(window_state()->IsPinned());
   EXPECT_EQ(WindowStateType::kDefault, delegate()->old_state());
-  EXPECT_EQ(WindowStateType::kLockedFullscreen, delegate()->new_state());
-  state()->EnterNextState(window_state(), WindowStateType::kLockedFullscreen);
+  EXPECT_EQ(WindowStateType::kTrustedPinned, delegate()->new_state());
+  state()->EnterNextState(window_state(), WindowStateType::kTrustedPinned);
 
   EXPECT_TRUE(window_state()->IsPinned());
   EXPECT_TRUE(GetScreenPinningController()->IsPinned());

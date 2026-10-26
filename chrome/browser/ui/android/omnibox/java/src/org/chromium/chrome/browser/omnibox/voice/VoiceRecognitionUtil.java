@@ -42,6 +42,7 @@ public class VoiceRecognitionUtil {
      *
      * <p>Note: this check does not perform strict policy checking.
      *
+     * @param androidPermissionDelegate Delegate used to query runtime permissions.
      * @return true if all the conditions permit execution of a voice search.
      */
     public static boolean isVoiceSearchEnabled(
@@ -59,7 +60,7 @@ public class VoiceRecognitionUtil {
 
         if (!isVoiceSearchPermittedByPolicy(/* strictPolicyCheck= */ false)) return false;
 
-        return isRecognitionIntentPresent(true);
+        return isRecognitionIntentPresent(/* useCachedValue= */ true);
     }
 
     /**
@@ -87,21 +88,6 @@ public class VoiceRecognitionUtil {
         return prefService == null || prefService.getBoolean(Pref.AUDIO_CAPTURE_ALLOWED);
     }
 
-    /**
-     * Set whether voice search is enabled. Should be reset back to null after the test has
-     * finished.
-     */
-    public static void setIsVoiceSearchEnabledForTesting(@Nullable Boolean isVoiceSearchEnabled) {
-        sIsVoiceSearchEnabledForTesting = isVoiceSearchEnabled;
-        ResettersForTesting.register(() -> sIsVoiceSearchEnabledForTesting = null);
-    }
-
-    static void setHasRecognitionIntentHandlerForTesting(@Nullable Boolean hasIntentHandler) {
-        var oldValue = sHasRecognitionIntentHandler;
-        sHasRecognitionIntentHandler = hasIntentHandler;
-        ResettersForTesting.register(() -> sHasRecognitionIntentHandler = oldValue);
-    }
-
     /** Returns the PrefService for the active Profile, or null if no profile has been loaded. */
     private static @Nullable PrefService getPrefService() {
         if (!ProfileManager.isInitialized()) return null;
@@ -126,5 +112,21 @@ public class VoiceRecognitionUtil {
         }
 
         return sHasRecognitionIntentHandler;
+    }
+
+    /**
+     * Set whether voice search is enabled. Should be reset back to null after the test has
+     * finished.
+     */
+    public static void setIsVoiceSearchEnabledForTesting(@Nullable Boolean isVoiceSearchEnabled) {
+        sIsVoiceSearchEnabledForTesting = isVoiceSearchEnabled;
+        ResettersForTesting.register(() -> sIsVoiceSearchEnabledForTesting = null);
+    }
+
+    public static void setHasRecognitionIntentHandlerForTesting(
+            @Nullable Boolean hasIntentHandler) {
+        var oldValue = sHasRecognitionIntentHandler;
+        sHasRecognitionIntentHandler = hasIntentHandler;
+        ResettersForTesting.register(() -> sHasRecognitionIntentHandler = oldValue);
     }
 }

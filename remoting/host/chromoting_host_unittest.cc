@@ -36,11 +36,13 @@
 #include "remoting/host/chromoting_host_context.h"
 #include "remoting/host/client_session.h"
 #include "remoting/host/fake_desktop_environment.h"
-#include "remoting/host/host_extension.h"
 #include "remoting/host/host_mock_objects.h"
 #include "remoting/host/mojom/chromoting_host_services.mojom.h"
+#include "remoting/host/peer_session_impl.h"
 #include "remoting/protocol/connection_to_client.h"
 #include "remoting/protocol/fake_connection_to_client.h"
+#include "remoting/protocol/fake_session.h"
+#include "remoting/protocol/ice_config_fetcher.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "remoting/protocol/session.h"
 #include "remoting/protocol/session_manager.h"
@@ -61,6 +63,7 @@ using testing::_;
 using testing::AnyNumber;
 using testing::AtLeast;
 using testing::AtMost;
+using testing::ByMove;
 using testing::DeleteArg;
 using testing::DoAll;
 using testing::Expectation;
@@ -91,19 +94,24 @@ class ChromotingHostTest : public testing::Test {
             base::SingleThreadTaskRunner::GetCurrentDefault());
     session_manager_ = new protocol::MockSessionManager();
 
-    host_ = std::make_unique<ChromotingHost>(
+    auto peer_session_factory = std::make_unique<PeerSessionImplFactory>(
         desktop_environment_factory_.get(),
+        /*get_ice_config_fetcher_cb=*/
+        base::BindRepeating(
+            []() -> std::unique_ptr<protocol::IceConfigFetcher> {
+              return nullptr;
+            }));
+    host_ = std::make_unique<ChromotingHost>(
+        std::move(peer_session_factory),
         base::WrapUnique(session_manager_.get()),
         /* secondary_session_manager */ nullptr,
-        protocol::TransportContext::ForTests(protocol::TransportRole::SERVER),
-        task_runner_,  // Audio
         DesktopEnvironmentOptions::CreateDefault(), base::NullCallback(),
         &local_session_policies_provider_);
     host_->status_monitor()->AddStatusObserver(&host_status_observer_);
 
     owner_email_ = "host@domain";
-    session1_ = new MockSession();
-    session2_ = new MockSession();
+    session1_ = std::make_unique<MockSession>();
+    session2_ = std::make_unique<MockSession>();
     session_unowned1_ = std::make_unique<MockSession>();
     session_unowned2_ = std::make_unique<MockSession>();
     session_jid1_ = "user@domain/rest-of-jid";
@@ -124,13 +132,11 @@ class ChromotingHostTest : public testing::Test {
         .Times(AnyNumber())
         .WillRepeatedly(SaveArg<0>(&session_unowned2_event_handler_));
 
-    connection1_ = std::make_unique<protocol::FakeConnectionToClient>(
-        base::WrapUnique(session1_.get()));
+    connection1_ = std::make_unique<protocol::FakeConnectionToClient>();
     connection1_->set_host_stub(&host_stub1_);
     connection1_->set_client_stub(&client_stub1_);
 
-    connection2_ = std::make_unique<protocol::FakeConnectionToClient>(
-        base::WrapUnique(session2_.get()));
+    connection2_ = std::make_unique<protocol::FakeConnectionToClient>();
     connection2_->set_host_stub(&host_stub2_);
     connection2_->set_client_stub(&client_stub2_);
   }
@@ -141,15 +147,23 @@ class ChromotingHostTest : public testing::Test {
                                 bool reject) {
     std::unique_ptr<protocol::ConnectionToClient> connection =
         std::move((connection_index == 0) ? connection1_ : connection2_);
-    protocol::ConnectionToClient* connection_ptr = connection.get();
-    auto client = std::make_unique<ClientSession>(
-        host_.get(), std::move(connection), desktop_environment_factory_.get(),
-        DesktopEnvironmentOptions::CreateDefault(), nullptr,
-        std::vector<raw_ptr<HostExtension, VectorExperimental>>(),
-        &local_session_policies_provider_);
+    std::unique_ptr<protocol::Session> session =
+        (connection_index == 0) ? std::move(session1_) : std::move(session2_);
+    auto mock_factory = std::make_unique<MockPeerSessionFactory>();
+    EXPECT_CALL(*mock_factory, Create())
+        .Times(AtMost(1))
+        .WillOnce(Return(ByMove(std::make_unique<PeerSessionImpl>(
+            std::move(connection), desktop_environment_factory_.get(),
+            base::NullCallback()))));
+    MockPeerSessionFactory* mock_factory_ptr = mock_factory.get();
+    mock_peer_session_factories_.push_back(std::move(mock_factory));
+
+    auto client = base::WrapUnique(
+        new ClientSession(host_.get(), std::move(session), mock_factory_ptr,
+                          DesktopEnvironmentOptions::CreateDefault(),
+                          &local_session_policies_provider_));
     ClientSession* client_ptr = client.get();
 
-    connection_ptr->set_host_stub(client.get());
     get_client(connection_index) = client_ptr;
 
     // |host| is responsible for deleting |client| from now on.
@@ -165,12 +179,23 @@ class ChromotingHostTest : public testing::Test {
       }
       client_ptr->OnConnectionAuthenticated(nullptr);
       if (!reject) {
-        client_ptr->OnConnectionChannelsConnected();
+        static_cast<PeerSessionImpl*>(client_ptr->peer_session())
+            ->OnConnectionChannelsConnected();
       }
     } else {
       PrepareForClientDisconnection(connection_index);
-      client_ptr->OnConnectionClosed(ErrorCode::AUTHENTICATION_FAILED);
+      client_ptr->DisconnectSession(ErrorCode::AUTHENTICATION_FAILED, {},
+                                    FROM_HERE);
     }
+  }
+
+  void CloseClientConnection(ClientSession* client,
+                             ErrorCode error = ErrorCode::OK) {
+    // Clear raw pointers to session event handlers to prevent dangling pointer
+    // access or redundant OnSessionStateChange(CLOSED) calls after teardown.
+    session_unowned1_event_handler_ = nullptr;
+    session_unowned2_event_handler_ = nullptr;
+    client->DisconnectSession(error, {}, FROM_HERE);
   }
 
   void TearDown() override {
@@ -206,6 +231,7 @@ class ChromotingHostTest : public testing::Test {
     client2_ = nullptr;
     session2_ = nullptr;
     host_.reset();
+    mock_peer_session_factories_.clear();
     desktop_environment_factory_.reset();
   }
 
@@ -236,6 +262,10 @@ class ChromotingHostTest : public testing::Test {
   ClientSession* PrepareForClientDisconnection(int connection_index) {
     // A client disconnecting will destroy the session and client.
     // Clear both the session and client and return the client to the caller.
+    // Also clear raw pointers to session event handlers to prevent dangling
+    // pointers or redundant OnSessionStateChange(CLOSED) calls after teardown.
+    session_unowned1_event_handler_ = nullptr;
+    session_unowned2_event_handler_ = nullptr;
     switch (connection_index) {
       case 0:
         session1_ = nullptr;
@@ -263,6 +293,10 @@ class ChromotingHostTest : public testing::Test {
     host_->per_session_policies_validator_ = validator;
   }
 
+  int GetBackoffFailureCount() const {
+    return host_->login_backoff_.failure_count();
+  }
+
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   mojo::Remote<mojom::ChromotingHostServices> BindChromotingHostServices() {
     mojo::Remote<mojom::ChromotingHostServices> remote;
@@ -285,13 +319,13 @@ class ChromotingHostTest : public testing::Test {
   std::unique_ptr<protocol::FakeConnectionToClient> connection1_;
   raw_ptr<ClientSession> client1_;  // Owned by |host_|.
   std::string session_jid1_;
-  raw_ptr<MockSession> session1_;  // Owned by |connection1_|.
+  std::unique_ptr<MockSession> session1_;
   MockClientStub client_stub1_;
   MockHostStub host_stub1_;
   std::unique_ptr<protocol::FakeConnectionToClient> connection2_;
   raw_ptr<ClientSession> client2_;  // Owned by |host_|.
   std::string session_jid2_;
-  raw_ptr<MockSession> session2_;  // Owned by |connection2_|.
+  std::unique_ptr<MockSession> session2_;
   MockClientStub client_stub2_;
   MockHostStub host_stub2_;
   std::unique_ptr<MockSession> session_unowned1_;  // Not owned by a connection.
@@ -300,6 +334,8 @@ class ChromotingHostTest : public testing::Test {
   std::string session_unowned_jid2_;
   raw_ptr<protocol::Session::EventHandler> session_unowned1_event_handler_;
   raw_ptr<protocol::Session::EventHandler> session_unowned2_event_handler_;
+  std::vector<std::unique_ptr<MockPeerSessionFactory>>
+      mock_peer_session_factories_;
 
   // Returns the cached client pointers client1_ or client2_.
   raw_ptr<ClientSession>& get_client(int connection_index) {
@@ -341,7 +377,7 @@ TEST_F(ChromotingHostTest, Reconnect) {
 
   // Disconnect first client.
   ClientSession* client1 = ExpectClientDisconnected(0);
-  client1->OnConnectionClosed(ErrorCode::OK);
+  CloseClientConnection(client1);
 
   // Connect second client.
   future = ExpectClientConnected(1);
@@ -350,7 +386,7 @@ TEST_F(ChromotingHostTest, Reconnect) {
 
   // Disconnect second client.
   ClientSession* client2 = ExpectClientDisconnected(1);
-  client2->OnConnectionClosed(ErrorCode::OK);
+  CloseClientConnection(client2);
 }
 
 TEST_F(
@@ -374,7 +410,7 @@ TEST_F(
 
   // Disconnect second client.
   ClientSession* client2 = ExpectClientDisconnected(1);
-  client2->OnConnectionClosed(ErrorCode::OK);
+  CloseClientConnection(client2);
 }
 
 TEST_F(
@@ -398,9 +434,9 @@ TEST_F(
 
   // Disconnect both.
   ClientSession* client1 = ExpectClientDisconnected(0);
-  client1->OnConnectionClosed(ErrorCode::OK);
+  CloseClientConnection(client1);
   ClientSession* client2 = ExpectClientDisconnected(1);
-  client2->OnConnectionClosed(ErrorCode::OK);
+  CloseClientConnection(client2);
 }
 
 TEST_F(ChromotingHostTest, IncomingSessionAccepted) {
@@ -415,7 +451,7 @@ TEST_F(ChromotingHostTest, IncomingSessionAccepted) {
                            &rejection_reason, &rejection_location);
   EXPECT_EQ(response, protocol::SessionManager::ACCEPT);
   EXPECT_TRUE(rejection_reason.empty());
-  EXPECT_EQ(rejection_location.program_counter(), nullptr);
+  EXPECT_EQ(rejection_location.program_counter(), 0u);
 
   EXPECT_CALL(*session, Close(_, _, _))
       .WillOnce(InvokeWithoutArgs(
@@ -429,12 +465,15 @@ TEST_F(ChromotingHostTest, SessionAcceptedWhenSecondarySessionManagerExists) {
   session_manager_ = new protocol::MockSessionManager();
   auto secondary_session_manager =
       std::make_unique<protocol::MockSessionManager>();
-  host_ = std::make_unique<ChromotingHost>(
+  auto peer_session_factory = std::make_unique<PeerSessionImplFactory>(
       desktop_environment_factory_.get(),
-      base::WrapUnique(session_manager_.get()),
+      /*get_ice_config_fetcher_cb=*/
+      base::BindRepeating([]() -> std::unique_ptr<protocol::IceConfigFetcher> {
+        return nullptr;
+      }));
+  host_ = std::make_unique<ChromotingHost>(
+      std::move(peer_session_factory), base::WrapUnique(session_manager_.get()),
       std::move(secondary_session_manager),
-      protocol::TransportContext::ForTests(protocol::TransportRole::SERVER),
-      task_runner_,  // Audio
       DesktopEnvironmentOptions::CreateDefault(), base::NullCallback(),
       &local_session_policies_provider_);
   host_->status_monitor()->AddStatusObserver(&host_status_observer_);
@@ -450,7 +489,7 @@ TEST_F(ChromotingHostTest, SessionAcceptedWhenSecondarySessionManagerExists) {
                            &rejection_reason, &rejection_location);
   EXPECT_EQ(response, protocol::SessionManager::ACCEPT);
   EXPECT_TRUE(rejection_reason.empty());
-  EXPECT_EQ(rejection_location.program_counter(), nullptr);
+  EXPECT_EQ(rejection_location.program_counter(), 0u);
 
   EXPECT_CALL(*session, Close(_, _, _))
       .WillOnce(InvokeWithoutArgs(
@@ -474,16 +513,15 @@ TEST_F(ChromotingHostTest, LoginBackOffTriggersIfClientsDoNotAuthenticate) {
     EXPECT_CALL(*session, SetEventHandler(_))
         .Times(AnyNumber())
         .WillRepeatedly(SaveArg<0>(&session_event_handler));
-    EXPECT_CALL(*session, Close(_, _, _))
-        .WillOnce(InvokeWithoutArgs([&session_event_handler]() {
-          session_event_handler->OnSessionStateChange(Session::CLOSED);
-        }));
+    EXPECT_CALL(*session, Close(_, _, _)).WillOnce([&session_event_handler]() {
+      session_event_handler->OnSessionStateChange(Session::CLOSED);
+    });
     // Simulate the incoming connection.
     host_->OnIncomingSession(session.release(), &response, &rejection_reason,
                              &rejection_location);
     EXPECT_EQ(response, protocol::SessionManager::ACCEPT);
     EXPECT_TRUE(rejection_reason.empty());
-    EXPECT_EQ(rejection_location.program_counter(), nullptr);
+    EXPECT_EQ(rejection_location.program_counter(), 0u);
     // Begin authentication; this will increase the backoff count, and since
     // OnSessionAuthenticated is never called, the host should only allow
     // kNumFailuresIgnored + 1 connections before beginning the backoff.
@@ -496,10 +534,60 @@ TEST_F(ChromotingHostTest, LoginBackOffTriggersIfClientsDoNotAuthenticate) {
                            &rejection_reason, &rejection_location);
   EXPECT_EQ(response, protocol::SessionManager::OVERLOAD);
   EXPECT_FALSE(rejection_reason.empty());
-  EXPECT_NE(rejection_location.program_counter(), nullptr);
+  EXPECT_NE(rejection_location.program_counter(), 0u);
   EXPECT_EQ(host_->client_sessions_for_tests().size(), kNumFailuresIgnored + 1);
 
   // Shut down host while objects owned by this test are still in scope.
+  ShutdownHost();
+}
+
+TEST_F(ChromotingHostTest, LoginBackOffExtendsWhenRejectedWhileActive) {
+  StartHost();
+
+  protocol::SessionManager::IncomingSessionResponse response =
+      protocol::SessionManager::DECLINE;
+  std::string rejection_reason;
+  base::Location rejection_location;
+
+  // Admit kNumFailuresIgnored + 2 sessions before any of them start
+  // authenticating (simulating parked sessions).
+  std::array<protocol::Session::EventHandler*, kNumFailuresIgnored + 2>
+      session_event_handlers{};
+  for (auto& session_event_handler : session_event_handlers) {
+    auto session = std::make_unique<MockSession>();
+    EXPECT_CALL(*session, jid()).WillRepeatedly(ReturnRef(session_jid1_));
+    EXPECT_CALL(*session, SetEventHandler(_))
+        .Times(AnyNumber())
+        .WillRepeatedly(SaveArg<0>(&session_event_handler));
+    EXPECT_CALL(*session, Close(_, _, _)).WillOnce([&session_event_handler]() {
+      if (session_event_handler) {
+        session_event_handler->OnSessionStateChange(Session::CLOSED);
+      }
+    });
+    host_->OnIncomingSession(session.release(), &response, &rejection_reason,
+                             &rejection_location);
+    EXPECT_EQ(response, protocol::SessionManager::ACCEPT);
+  }
+
+  // Trigger authentication on the first kNumFailuresIgnored + 1 sessions. This
+  // activates the backoff (6th failure sets failure_count to 6).
+  auto it = host_->client_sessions_for_tests().begin();
+  for (size_t i = 0; i < kNumFailuresIgnored + 1; ++i) {
+    ClientSession* client = (it++)->second.get();
+    host_->OnSessionAuthenticating(client);
+  }
+  EXPECT_EQ(GetBackoffFailureCount(),
+            static_cast<int>(kNumFailuresIgnored + 1));
+
+  // Trigger authentication on the remaining parked session while backoff is
+  // active. It should be disconnected with HOST_OVERLOAD and also increment the
+  // backoff failure count.
+  ClientSession* rejected_client = it->second.get();
+  host_->OnSessionAuthenticating(rejected_client);
+  EXPECT_EQ(GetBackoffFailureCount(),
+            static_cast<int>(kNumFailuresIgnored + 2));
+  EXPECT_EQ(host_->client_sessions_for_tests().size(), kNumFailuresIgnored + 1);
+
   ShutdownHost();
 }
 
@@ -519,16 +607,15 @@ TEST_F(ChromotingHostTest, LoginBackOffResetsIfClientsAuthenticate) {
     EXPECT_CALL(*session, SetEventHandler(_))
         .Times(AnyNumber())
         .WillRepeatedly(SaveArg<0>(&session_event_handler));
-    EXPECT_CALL(*session, Close(_, _, _))
-        .WillOnce(InvokeWithoutArgs([&session_event_handler]() {
-          session_event_handler->OnSessionStateChange(Session::CLOSED);
-        }));
+    EXPECT_CALL(*session, Close(_, _, _)).WillOnce([&session_event_handler]() {
+      session_event_handler->OnSessionStateChange(Session::CLOSED);
+    });
     // Simulate the incoming connection.
     host_->OnIncomingSession(session.release(), &response, &rejection_reason,
                              &rejection_location);
     EXPECT_EQ(response, protocol::SessionManager::ACCEPT);
     EXPECT_TRUE(rejection_reason.empty());
-    EXPECT_EQ(rejection_location.program_counter(), nullptr);
+    EXPECT_EQ(rejection_location.program_counter(), 0u);
     // Begin authentication; this will increase the backoff count
     host_->OnSessionAuthenticating(
         host_->client_sessions_for_tests().begin()->second.get());
@@ -548,26 +635,25 @@ TEST_F(ChromotingHostTest, LoginBackOffResetsIfClientsAuthenticate) {
   EXPECT_CALL(*session, SetEventHandler(_))
       .Times(AnyNumber())
       .WillRepeatedly(SaveArg<0>(&session_event_handler));
-  EXPECT_CALL(*session, Close(_, _, _))
-      .WillOnce(InvokeWithoutArgs([&session_event_handler]() {
-        session_event_handler->OnSessionStateChange(Session::CLOSED);
-      }));
+  EXPECT_CALL(*session, Close(_, _, _)).WillOnce([&session_event_handler]() {
+    session_event_handler->OnSessionStateChange(Session::CLOSED);
+  });
   host_->OnIncomingSession(session.release(), &response, &rejection_reason,
                            &rejection_location);
   EXPECT_EQ(response, protocol::SessionManager::ACCEPT);
   EXPECT_TRUE(rejection_reason.empty());
-  EXPECT_EQ(rejection_location.program_counter(), nullptr);
+  EXPECT_EQ(rejection_location.program_counter(), 0u);
 
   // Shut down host while objects owned by this test are still in scope.
   ShutdownHost();
 }
 
-// Flaky on all platforms.  http://crbug.com/1265894
-TEST_F(ChromotingHostTest, DISABLED_OnSessionRouteChange) {
+TEST_F(ChromotingHostTest, OnSessionRouteChange) {
   StartHost();
 
-  ExpectClientConnected(0);
+  auto future = ExpectClientConnected(0);
   SimulateClientConnection(0, true, false);
+  future->Get();
 
   std::string channel_name("ChannelName");
   protocol::TransportRoute route;
@@ -587,7 +673,7 @@ TEST_F(ChromotingHostTest, ExtraSessionPoliciesValidator) {
 
   StartHost();
 
-  EXPECT_CALL(host_status_observer_, OnClientDisconnected(get_session_jid(0)));
+  EXPECT_CALL(host_status_observer_, OnClientAccessDenied(get_session_jid(0)));
 
   SimulateClientConnection(0, /* authenticate= */ true, /* reject= */ true);
 }

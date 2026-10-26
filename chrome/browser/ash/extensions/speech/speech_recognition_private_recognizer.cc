@@ -5,7 +5,6 @@
 #include "chrome/browser/ash/extensions/speech/speech_recognition_private_recognizer.h"
 
 #include "ash/public/cpp/projector/speech_recognition_availability.h"
-#include "base/debug/crash_logging.h"
 #include "chrome/browser/ash/extensions/speech/speech_recognition_private_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/speech/network_speech_recognizer.h"
@@ -32,7 +31,7 @@ SpeechRecognitionPrivateRecognizer::SpeechRecognitionPrivateRecognizer(
     content::BrowserContext* context,
     const std::string& id)
     : delegate_(delegate), context_(context), id_(id) {
-  DCHECK(delegate);
+  CHECK(delegate, base::NotFatalUntil::M160);
 }
 
 SpeechRecognitionPrivateRecognizer::~SpeechRecognitionPrivateRecognizer() =
@@ -57,9 +56,6 @@ void SpeechRecognitionPrivateRecognizer::OnSpeechResult(
 
 void SpeechRecognitionPrivateRecognizer::OnSpeechRecognitionStateChanged(
     SpeechRecognizerStatus new_state) {
-  // Crash keys for https://crbug.com/40821591.
-  SCOPED_CRASH_KEY_NUMBER("Accessibility", "Speech recognition state",
-                          new_state);
   SpeechRecognizerStatus next_state = new_state;
   if (new_state == SPEECH_RECOGNIZER_READY) {
     if (current_state_ == SPEECH_RECOGNIZER_OFF && speech_recognizer_) {
@@ -158,7 +154,7 @@ void SpeechRecognitionPrivateRecognizer::HandleStop(OnStopCallback callback) {
     return;
 
   delegate_->HandleSpeechRecognitionStopped(id_);
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M160);
   std::move(callback).Run(/*error=*/std::optional<std::string>());
 }
 
@@ -177,7 +173,7 @@ void SpeechRecognitionPrivateRecognizer::MaybeUpdateProperties(
   if (interim_results.has_value())
     interim_results_ = interim_results.value();
   on_start_callback_ = std::move(callback);
-  DCHECK(!on_start_callback_.is_null());
+  CHECK(!on_start_callback_.is_null(), base::NotFatalUntil::M160);
 }
 
 }  // namespace extensions

@@ -4,10 +4,8 @@
 
 #include "chrome/browser/ui/views/passwords/password_save_update_view.h"
 
-#include <algorithm>
 #include <memory>
 #include <utility>
-#include <vector>
 
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
@@ -16,12 +14,9 @@
 #include "base/strings/string_util.h"
 #include "chrome/browser/password_manager/factories/password_store_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/chrome_signin_pref_names.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_promo_util.h"
 #include "chrome/browser/signin/signin_ui_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/passwords/password_dialog_prompts.h"
@@ -30,31 +25,24 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/passwords/credentials_item_view.h"
 #include "chrome/browser/ui/views/passwords/views_utils.h"
-#include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/feature_engagement/public/tracker.h"
 #include "components/password_manager/core/browser/features/password_features.h"
-#include "components/prefs/pref_service.h"
-#include "components/signin/public/base/signin_prefs.h"
-#include "components/signin/public/identity_manager/account_info.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/strings/grit/components_strings.h"
-#include "content/public/browser/storage_partition.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/models/simple_combobox_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/editable_combobox/editable_combobox.h"
 #include "ui/views/controls/editable_combobox/editable_password_combobox.h"
 #include "ui/views/controls/menu/menu_runner.h"
@@ -313,9 +301,10 @@ PasswordSaveUpdateView::PasswordSaveUpdateView(
               : PasswordBubbleControllerBase::DisplayReason::kUserAction),
       is_update_bubble_(controller_.state() ==
                         password_manager::ui::PENDING_PASSWORD_UPDATE_STATE) {
-  DCHECK(controller_.state() == password_manager::ui::PENDING_PASSWORD_STATE ||
-         controller_.state() ==
-             password_manager::ui::PENDING_PASSWORD_UPDATE_STATE);
+  CHECK(controller_.state() == password_manager::ui::PENDING_PASSWORD_STATE ||
+            controller_.state() ==
+                password_manager::ui::PENDING_PASSWORD_UPDATE_STATE,
+        base::NotFatalUntil::M162);
 
   const password_manager::PasswordForm& password_form =
       controller_.pending_password();
@@ -639,14 +628,15 @@ void PasswordSaveUpdateView::UpdateUsernameAndPasswordInModel() {
     return;
   }
   std::u16string new_username = controller_.pending_password().username_value;
-  std::u16string new_password = controller_.pending_password().password_value;
   if (username_dropdown_) {
     new_username = username_dropdown_->GetText();
     base::TrimString(new_username, u" ", &new_username);
   }
-  if (password_dropdown_) {
-    new_password = password_dropdown_->GetText();
-  }
+  password_manager::PasswordString new_password =
+      password_dropdown_ ? password_manager::PasswordString(
+                               std::u16string(password_dropdown_->GetText()))
+                         : controller_.pending_password().password_value;
+
   controller_.OnCredentialEdited(std::move(new_username),
                                  std::move(new_password));
 }
@@ -675,9 +665,15 @@ void PasswordSaveUpdateView::UpdateBubbleUIElements() {
       SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
 
       bool is_update = controller_.IsCurrentStateUpdate();
-      std::u16string ok_text = l10n_util::GetStringUTF16(
-          is_update ? IDS_PASSWORD_MANAGER_SHORT_UPDATE_BUTTON
-                    : IDS_PASSWORD_MANAGER_SAVE_BUTTON);
+      std::u16string ok_text;
+      if (IsTrustedVaultErrorResolutionEnabled() &&
+          controller_.IsSavingBlockedByTrustedVaultError()) {
+        ok_text = l10n_util::GetStringUTF16(IDS_CONTINUE);
+      } else {
+        ok_text = l10n_util::GetStringUTF16(
+            is_update ? IDS_PASSWORD_MANAGER_SHORT_UPDATE_BUTTON
+                      : IDS_PASSWORD_MANAGER_SAVE_BUTTON);
+      }
       bool ok_enabled = IsDialogButtonEnabled(ui::mojom::DialogButton::kOk);
 
       if (custom_button_row_) {
@@ -804,7 +800,7 @@ void PasswordSaveUpdateView::OnContentChanged() {
 }
 
 void PasswordSaveUpdateView::UpdateFootnote() {
-  DCHECK(GetBubbleFrameView());
+  CHECK(GetBubbleFrameView(), base::NotFatalUntil::M162);
   GetBubbleFrameView()->SetFootnoteView(CreateFooterView());
 }
 

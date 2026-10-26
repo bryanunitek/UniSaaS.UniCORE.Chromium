@@ -36,6 +36,32 @@ enum class TipsNotificationType;
 // YES if the current interface language uses RTL layout.
 + (BOOL)isRTL;
 
+// Stops startup tracing, flushes trace file to disk, and returns trace file
+// path.
++ (NSString*)stopStartupTracing;
+
+// Starts manual tracing. Returns YES on success.
++ (BOOL)startManualTracing;
+
+// Starts manual tracing with `categoryFilter` (e.g., @"ui"). Returns YES on
+// success.
++ (BOOL)startManualTracingWithCategoryFilter:(NSString*)categoryFilter;
+
+// Stops manual tracing, flushes trace file to disk, and returns trace file
+// path.
++ (NSString*)stopManualTracing;
+
+// Returns YES if the trace file at `filePath` exists and has a size greater
+// than 0.
++ (BOOL)isTraceFileReadyAtPath:(NSString*)filePath;
+
+// Returns the content of the trace file at `filePath` as NSData, or nil if
+// reading failed.
++ (NSData*)traceDataForPath:(NSString*)filePath;
+
+// Removes the trace file at `filePath`. Returns YES if successfully deleted.
++ (BOOL)removeTraceFileAtPath:(NSString*)filePath;
+
 // Returns YES if the application window is in windowed mode (multitasking).
 + (BOOL)isWindowedMode;
 
@@ -83,6 +109,9 @@ enum class TipsNotificationType;
 
 // Returns YES if the current WebState is loading.
 + (BOOL)isLoading;
+
+// Returns YES if any WebState across all foreground tabs is loading.
++ (BOOL)isAnyWebStateLoading;
 
 // Reloads the page without waiting for the page to load.
 + (void)startReloading;
@@ -171,6 +200,12 @@ enum class TipsNotificationType;
 + (void)openSendTabToSelfNewTabWithURL:(NSString*)url
                           textFragment:(NSString*)textFragment
                              entryGUID:(NSString*)guid;
+
+// Opens a new background tab with the given URL, text fragment, and marks it
+// as originating from Send Tab To Self with the given entry GUID.
++ (void)openSendTabToSelfNewBackgroundTabWithURL:(NSString*)url
+                                    textFragment:(NSString*)textFragment
+                                       entryGUID:(NSString*)guid;
 
 // Simulates opening a custom `URL` from another application.
 + (void)simulateExternalAppURLOpeningWithURL:(NSURL*)URL;
@@ -283,8 +318,28 @@ enum class TipsNotificationType;
 // windows.
 + (void)openSettingsInWindowWithNumber:(int)windowNumber;
 
+// Shows the tab switcher directly (not via the UI) in the window with the
+// given number.
++ (void)showTabSwitcherInWindowWithNumber:(int)windowNumber;
+
 // Returns the interface orientation of the scene.
 + (UIInterfaceOrientation)interfaceOrientation;
+
+// Returns YES if running on an iPhone Duo simulator.
++ (BOOL)isDuoSimulator;
+
+// Sends a simulated hinge angle event (0.0 = Closed, 130.0 = Book,
+// 180.0 = Open).
++ (BOOL)dispatchSimulatedDuoHingeAngle:(double)angleInDegrees;
+
+// Returns YES if the window and hinge posture match `angleInDegrees`.
++ (BOOL)isSimulatedDuoHingePostureSettled:(double)angleInDegrees;
+
+// Sends a simulated device orientation event.
++ (BOOL)dispatchSimulatedDuoOrientation:(UIDeviceOrientation)orientation;
+
+// Returns YES if the scene and window orientation match `orientation`.
++ (BOOL)isSimulatedDuoOrientationSettled:(UIDeviceOrientation)orientation;
 
 #pragma mark - WebState Utilities (EG2)
 
@@ -449,6 +504,10 @@ enum class TipsNotificationType;
 // GUID.
 + (BOOL)hasSendTabToSelfEntryWithGUID:(NSString*)guid;
 
+// Checks if the local Send Tab To Self model is ready and contains a target
+// device with the given `deviceName`.
++ (BOOL)hasSendTabToSelfTargetDevice:(NSString*)deviceName;
+
 // Returns the generated text fragment for the given URL, or nil if no entry
 // exists or no fragment is set.
 + (NSString*)textFragmentForSendTabToSelfEntryWithURL:(NSString*)URL;
@@ -470,9 +529,6 @@ enum class TipsNotificationType;
 // (depending on `expectPresent`), return YES. If the present status of `spec`
 // is not what is expected, or there is an error, return NO.
 + (BOOL)isURL:(NSString*)spec presentOnClient:(BOOL)expectPresent;
-
-// Triggers a sync cycle for a `type`.
-+ (void)triggerSyncCycleForType:(syncer::DataType)type;
 
 // Injects user demographics into the fake sync server. `rawBirthYear` is the
 // true birth year, pre-noise, and the gender corresponds to the proto enum
@@ -569,6 +625,9 @@ enum class TipsNotificationType;
 // Returns YES if kTestFeature is enabled.
 + (BOOL)isTestFeatureEnabled;
 
+// Returns YES if kOverflowMenuHomeCustomizationEntrypoint is enabled.
++ (BOOL)isOverflowMenuHomeCustomizationEntrypointEnabled;
+
 // Returns YES if Fullscreen smooth scrolling is supported.
 + (BOOL)isFullscreenSmoothScrollingSupported;
 
@@ -602,17 +661,20 @@ enum class TipsNotificationType;
 // Returns whether the current layout is showing the bottom omnibox.
 + (BOOL)isCurrentLayoutBottomOmnibox;
 
-// Returns whether the ComposeboxIOS feature is enabled.
-+ (BOOL)isComposeboxIOSEnabled;
-
 // Returns whether chrome next is enabled.
 + (BOOL)isChromeNextEnabled;
+
+// Returns whether next old design is enabled.
++ (BOOL)isNextOldDesignEnabled;
 
 // Returns whether overflow menu refactoring on the NTP is enabled.
 + (BOOL)isOverflowMenuNTPRefactorEnabled;
 
-// Returns whether the chrome next share icon is visible.
-+ (BOOL)isChromeNextShareIconVisible;
+// Returns whether the Pinned Tabs feature is enabled.
++ (BOOL)isPinnedTabsEnabled;
+
+// Returns whether the aim cobrowse web selection search is enabled.
++ (BOOL)isAimCobrowseWebSelectionSearchEnabled;
 
 #pragma mark - ContentSettings
 
@@ -821,6 +883,9 @@ enum class TipsNotificationType;
 // Returns YES if the view with `accessibilityID` or any of its ancestors is
 // animating.
 + (BOOL)isViewAnimatingWithAccessibilityID:(NSString*)accessibilityID;
+
+// Programmatically crashes the host application.
++ (void)induceCrash;
 
 @end
 

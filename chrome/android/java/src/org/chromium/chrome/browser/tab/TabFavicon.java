@@ -13,12 +13,12 @@ import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.JniOnceCallback;
-import org.chromium.base.ObserverList.RewindableIterator;
 import org.chromium.base.Promise;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
@@ -67,7 +67,10 @@ public class TabFavicon extends TabWebContentsUserData {
      */
     @CalledByNative
     public static @Nullable TabFavicon from(@Nullable @JniType("TabAndroid*") Tab tab) {
+        if (sInstanceForTesting != null) return sInstanceForTesting;
+
         if (!TabUtils.isValid(tab)) return null;
+        if (!(tab instanceof TabImpl)) return null;
 
         TabFavicon favicon = get(tab);
         if (favicon == null) {
@@ -101,8 +104,7 @@ public class TabFavicon extends TabWebContentsUserData {
     public static @Nullable Bitmap getBitmapWithFallback(
             @JniType("TabAndroid*") Tab tab, boolean allowFallback) {
         TabFavicon tabFavicon = get(tab);
-        if (tabFavicon == null) return null;
-        return tabFavicon.getFavicon(allowFallback);
+        return tabFavicon != null ? tabFavicon.getFavicon(allowFallback) : null;
     }
 
     private TabFavicon(Tab tab) {
@@ -111,6 +113,16 @@ public class TabFavicon extends TabWebContentsUserData {
         mIdealFaviconSize = getIdealFaviconSize();
         mNavigationTransitionsIdealFaviconSize = getNavigationTransitionsIdealFaviconSize();
         mNativeTabFavicon = TabFaviconJni.get().init(tab, mNavigationTransitionsIdealFaviconSize);
+        if (tab.getWebContents() != null) {
+            if (ChromeFeatureList.sClankStartupTabOptimizations.isEnabled()) {
+                // Call onContentChanged() rather than initWebContents() directly so
+                // TabWebContentsUserData#mWebContents is populated and the subsequent
+                // notifyContentChanged() call in TabImpl#initWebContents() is a no-op.
+                onContentChanged(tab);
+            } else {
+                initWebContents(tab.getWebContents());
+            }
+        }
     }
 
     private int getIdealFaviconSize() {
@@ -195,7 +207,7 @@ public class TabFavicon extends TabWebContentsUserData {
     }
 
     /**
-     * Requests a favicon for the tab. This will be fulfilled immediately if the favicon is alredy
+     * Requests a favicon for the tab. This will be fulfilled immediately if the favicon is already
      * available. Otherwise falls back to fetching a favicon from the local favicon db
      */
     public Promise<Bitmap> getFaviconOrFallback() {
@@ -326,8 +338,9 @@ public class TabFavicon extends TabWebContentsUserData {
         mFaviconHeight = icon.getHeight();
         mFaviconTabUrl = mTab.getUrl();
         mIsFaviconFallback = isFallback;
-        RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-        while (observers.hasNext()) observers.next().onFaviconUpdated(mTab, icon, iconUrl);
+        for (TabObserver observer : mTab.getTabObservers()) {
+            observer.onFaviconUpdated(mTab, icon, iconUrl);
+        }
     }
 
     @CalledByNative
@@ -387,8 +400,9 @@ public class TabFavicon extends TabWebContentsUserData {
     }
 
     @CalledByNative
-    private static long getNativePtrForTab(@JniType("TabAndroid*") Tab tab) {
-        TabFavicon tabFavicon = get(tab);
+    @VisibleForTesting
+    static long getNativePtrForTab(@JniType("TabAndroid*") Tab tab) {
+        TabFavicon tabFavicon = from(tab);
         return tabFavicon != null ? tabFavicon.mNativeTabFavicon : 0;
     }
 

@@ -22,6 +22,7 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/task_environment.h"
 #import "base/values.h"
+#import "components/affiliations/core/browser/match_type.h"
 #import "components/autofill/core/browser/foundations/test_autofill_client.h"
 #import "components/autofill/core/browser/suggestions/suggestion_type.h"
 #import "components/autofill/core/common/password_form_fill_data.h"
@@ -37,6 +38,7 @@
 #import "components/password_manager/core/browser/password_manager.h"
 #import "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
 #import "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "components/password_manager/core/browser/stub_password_manager_client.h"
 #import "components/password_manager/core/common/password_manager_features.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
@@ -100,6 +102,7 @@ using password_manager::PasswordForm;
 using password_manager::PasswordFormManager;
 using password_manager::PasswordFormManagerForUI;
 using password_manager::PasswordStoreConsumer;
+using password_manager::PasswordString;
 using password_manager::prefs::kPasswordLeakDetectionEnabled;
 using test_helpers::MakeSimpleFormData;
 using test_helpers::SetPasswordFormFillData;
@@ -130,7 +133,7 @@ class MockPasswordManagerClient
 
   ~MockPasswordManagerClient() override = default;
 
-  MOCK_METHOD(bool, IsOffTheRecord, (), (const override));
+  MOCK_METHOD(bool, IsOffTheRecord, (), (const, override));
   MOCK_METHOD(bool,
               PromptUserToSaveOrUpdatePassword,
               (std::unique_ptr<PasswordFormManagerForUI>, bool),
@@ -188,9 +191,9 @@ PasswordForm CreatePasswordForm(const char* origin_url,
   form.url = GURL(origin_url);
   form.signon_realm = origin_url;
   form.username_value = ASCIIToUTF16(username_value);
-  form.password_value = ASCIIToUTF16(password_value);
+  form.password_value = PasswordString(ASCIIToUTF16(password_value));
   form.in_store = password_manager::PasswordForm::Store::kProfileStore;
-  form.match_type = PasswordForm::MatchType::kExact;
+  form.match_type = affiliations::MatchType::kExact;
   return form;
 }
 
@@ -359,7 +362,7 @@ class PasswordControllerTest : public PlatformTest {
     WebFrame* frame =
         feature->GetWebFramesManager(web_state())->GetMainWebFrame();
     FormActivityParams params;
-    params.type = "form_changed";
+    params.type = FormActivityParams::ActivityType::kFormChanged;
     params.frame_id = frame->GetFrameId();
     [passwordController_.sharedPasswordController webState:web_state()
                                    didRegisterFormActivity:params
@@ -410,8 +413,8 @@ class PasswordControllerTest : public PlatformTest {
               formRendererID:formRendererID
              fieldIdentifier:SysUTF8ToNSString(field_identifier)
              fieldRendererID:fieldRendererID
-                   fieldType:@"not_important"
-                        type:@"input"
+                   fieldType:FieldType::kText
+                        type:FormActivityParams::ActivityType::kInput
                   typedValue:SysUTF8ToNSString(typed_value)
                      frameID:SysUTF8ToNSString(main_frame_id)
                 onlyPassword:NO];
@@ -611,8 +614,8 @@ void PasswordControllerTest::FillFormAndValidate(TestPasswordFormData test_data,
         formRendererID:FormRendererId(test_data.form_renderer_id)
        fieldIdentifier:SysUTF8ToNSString(test_data.username_element)
        fieldRendererID:FieldRendererId(test_data.username_renderer_id)
-             fieldType:@"text"
-                  type:@"focus"
+             fieldType:FieldType::kText
+                  type:FormActivityParams::ActivityType::kFocus
             typedValue:@""
                frameID:SysUTF8ToNSString(frame->GetFrameId())
           onlyPassword:NO];
@@ -701,11 +704,11 @@ PasswordForm MakeSimpleForm() {
   form.username_element = u"Username";
   form.password_element = u"Passwd";
   form.username_value = u"googleuser";
-  form.password_value = u"p4ssword";
+  form.password_value = PasswordString(u"p4ssword");
   form.signon_realm = "http://www.google.com/";
   form.form_data = MakeSimpleFormData();
   form.in_store = password_manager::PasswordForm::Store::kProfileStore;
-  form.match_type = password_manager::PasswordForm::MatchType::kExact;
+  form.match_type = affiliations::MatchType::kExact;
   return form;
 }
 
@@ -1156,16 +1159,16 @@ TEST_F(PasswordControllerTest, SuggestionUpdateTests) {
   SuggestionTestData test_data[] = {
     {
       "Should show all suggestions when focusing empty username field",
-      @[(@"var evt = document.createEvent('Events');"
-         "username_.focus();"),
+      @[(@"username_.focus();"
+         "username_.dispatchEvent(new Event('focus', {bubbles: true}));"),
         @";"],
       @[@"user0", @"abc"],
       @"[]=, onkeyup=false, onchange=false"
     },
     {
       "Should show password suggestions when focusing password field",
-      @[(@"var evt = document.createEvent('Events');"
-         "password_.focus();"),
+      @[(@"password_.focus();"
+         "password_.dispatchEvent(new Event('focus', {bubbles: true}));"),
         @";"],
       @[@"user0", @"abc"],
       @"[]=, onkeyup=false, onchange=false"
@@ -1173,7 +1176,8 @@ TEST_F(PasswordControllerTest, SuggestionUpdateTests) {
     {
       "Should not filter suggestions when focusing username field with input",
       @[(@"username_.value='ab';"
-         "username_.focus();"),
+         "username_.focus();"
+         "username_.dispatchEvent(new Event('focus', {bubbles: true}));"),
         @";"],
       @[@"user0", @"abc"],
       @"ab[]=, onkeyup=false, onchange=false"
@@ -1182,6 +1186,7 @@ TEST_F(PasswordControllerTest, SuggestionUpdateTests) {
       "Should filter suggestions when typing into a username field",
       @[(@"username_.value='ab';"
          "username_.focus();"
+         "username_.dispatchEvent(new Event('focus', {bubbles: true}));"
          // Keyup event is dispatched to simulate typing
          "var ev = new KeyboardEvent('keyup', {bubbles:true});"
          "username_.dispatchEvent(ev);"),
@@ -1194,6 +1199,7 @@ TEST_F(PasswordControllerTest, SuggestionUpdateTests) {
       @[(@"username_.value='abc';"
          "password_.value='••';"
          "password_.focus();"
+         "password_.dispatchEvent(new Event('focus', {bubbles: true}));"
          // Keyup event is dispatched to simulate typing.
          "var ev = new KeyboardEvent('keyup', {bubbles:true});"
          "password_.dispatchEvent(ev);"),
@@ -1407,7 +1413,9 @@ TEST_F(PasswordControllerTest, SendingToStoreDynamicallyAddedFormsOnFocus) {
 
   // Sets a focus on a username field.
   NSString* kSetUsernameInFocusScript =
-      @"document.getElementById('username').focus();";
+      @"document.getElementById('username').focus();"
+      @"document.getElementById('username').dispatchEvent("
+      @"new Event('focus', {bubbles: true}));";
   ExecuteJavaScript(kSetUsernameInFocusScript);
 
   // Wait until GetLogins is called.
@@ -1486,8 +1494,8 @@ TEST_F(PasswordControllerTest, CheckAsyncSuggestions) {
               formRendererID:form_id
              fieldIdentifier:@"username"
              fieldRendererID:field_id
-                   fieldType:@"text"
-                        type:@"focus"
+                   fieldType:FieldType::kText
+                        type:FormActivityParams::ActivityType::kFocus
                   typedValue:@""
                      frameID:SysUTF8ToNSString(GetMainWebFrameId())
                 onlyPassword:NO];
@@ -1531,8 +1539,8 @@ TEST_F(PasswordControllerTest, CheckNoAsyncSuggestionsOnNonUsernameField) {
         formRendererID:FormRendererId(1)
        fieldIdentifier:@"address"
        fieldRendererID:FieldRendererId(4)
-             fieldType:@"text"
-                  type:@"focus"
+             fieldType:FieldType::kText
+                  type:FormActivityParams::ActivityType::kFocus
             typedValue:@""
                frameID:SysUTF8ToNSString(GetMainWebFrameId())
           onlyPassword:NO];
@@ -1566,8 +1574,8 @@ TEST_F(PasswordControllerTest, CheckNoAsyncSuggestionsOnNoPasswordForms) {
         formRendererID:FormRendererId(1)
        fieldIdentifier:@"address"
        fieldRendererID:FieldRendererId(2)
-             fieldType:@"text"
-                  type:@"focus"
+             fieldType:FieldType::kText
+                  type:FormActivityParams::ActivityType::kFocus
             typedValue:@""
                frameID:SysUTF8ToNSString(GetMainWebFrameId())
           onlyPassword:NO];
@@ -1613,16 +1621,16 @@ TEST_F(PasswordControllerTest, CheckPasswordGenerationSuggestion) {
   SuggestionTestData test_data[] = {
     {
       "Should not show suggest password when focusing username field",
-      @[(@"var evt = document.createEvent('Events');"
-         "username_.focus();"),
+      @[(@"username_.focus();"
+         "username_.dispatchEvent(new Event('focus', {bubbles: true}));"),
         @";"],
       @[@"user0", @"abc"],
       @"[]=, onkeyup=false, onchange=false"
     },
     {
       "Should show suggest password when focusing password field",
-      @[(@"var evt = document.createEvent('Events');"
-         "password_.focus();"),
+      @[(@"password_.focus();"
+         "password_.dispatchEvent(new Event('focus', {bubbles: true}));"),
         @";"],
       @[@"user0", @"abc", @"Suggest strong password"],
       @"[]=, onkeyup=false, onchange=false"
@@ -2087,8 +2095,8 @@ TEST_F(PasswordControllerTest, PasswordGenerationFieldFocus) {
             formRendererID:FormRendererId(1)
            fieldIdentifier:@"pw"
            fieldRendererID:FieldRendererId(3)
-                 fieldType:@"password"
-                      type:@"focus"
+                 fieldType:FieldType::kObfuscated
+                      type:FormActivityParams::ActivityType::kFocus
                 typedValue:@""
                    frameID:SysUTF8ToNSString(GetMainWebFrameId())
               onlyPassword:NO];
@@ -2130,8 +2138,8 @@ TEST_F(PasswordControllerTest, PasswordGenerationFieldInput) {
             formRendererID:FormRendererId(1)
            fieldIdentifier:@"pw"
            fieldRendererID:FieldRendererId(3)
-                 fieldType:@"password"
-                      type:@"input"
+                 fieldType:FieldType::kObfuscated
+                      type:FormActivityParams::ActivityType::kInput
                 typedValue:@"generated_password_long"
                    frameID:SysUTF8ToNSString(GetMainWebFrameId())
               onlyPassword:NO];
@@ -2173,8 +2181,8 @@ TEST_F(PasswordControllerTest, PasswordGenerationFieldClear) {
             formRendererID:FormRendererId(1)
            fieldIdentifier:@"pw"
            fieldRendererID:FieldRendererId(3)
-                 fieldType:@"password"
-                      type:@"input"
+                 fieldType:FieldType::kObfuscated
+                      type:FormActivityParams::ActivityType::kInput
                 typedValue:@""
                    frameID:SysUTF8ToNSString(GetMainWebFrameId())
               onlyPassword:NO];

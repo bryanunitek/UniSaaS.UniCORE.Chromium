@@ -14,16 +14,17 @@
 #include "chrome/browser/glic/suggestions/contextual_cueing_service_factory.h"
 #include "chrome/browser/glic/suggestions/zero_state_suggestions_page_data.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/proto/contextual_cueing_metadata.pb.h"
 #include "components/optimization_guide/proto/features/zero_state_suggestions.pb.h"
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
@@ -32,6 +33,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace glic {
 
@@ -90,14 +92,14 @@ class ZeroStateSuggestionsBrowserTest
 
   void SetUpOnMainThread() override {
     // Override glic tab context sharing to be always on.
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         glic::prefs::kGlicTabContextEnabled, true);
   }
 
   void DisableOptimizationPermissionCheck() {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        optimization_guide::switches::
-            kDisableCheckingUserPermissionsForTesting);
+        optimization_guide::
+            kDisableCheckingUserPermissionsForTestingSwitch);
   }
 
   GURL url() { return url_; }
@@ -547,7 +549,7 @@ IN_PROC_BROWSER_TEST_P(ZeroStateSuggestionsBrowserTest,
 
   // Navigate to a new URL in a second tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url2, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   auto* web_contents2 = browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -589,7 +591,7 @@ IN_PROC_BROWSER_TEST_P(ZeroStateSuggestionsBrowserTest,
 
   // Navigate to a new URL in a second tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url2, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   auto* web_contents2 = browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -659,7 +661,7 @@ IN_PROC_BROWSER_TEST_P(ZeroStateSuggestionsBrowserTest, BasicPinnedTabsFlow) {
 
   // Navigate to a new URL in a second tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), url2, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   auto* web_contents2 = browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -731,11 +733,11 @@ class ZeroStateSuggestionsBFCacheConfusionBrowserTest
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         glic::prefs::kGlicTabContextEnabled, true);
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        optimization_guide::switches::
-            kDisableCheckingUserPermissionsForTesting);
+        optimization_guide::
+            kDisableCheckingUserPermissionsForTestingSwitch);
   }
 
   void SetUpHintsNoResult(const GURL& url) {

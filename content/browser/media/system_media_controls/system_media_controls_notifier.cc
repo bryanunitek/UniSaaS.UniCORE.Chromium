@@ -44,7 +44,7 @@ SystemMediaControlsNotifier::SystemMediaControlsNotifier(
     system_media_controls::SystemMediaControls* system_media_controls,
     base::UnguessableToken request_id)
     : system_media_controls_(system_media_controls) {
-  DCHECK(system_media_controls_);
+  CHECK(system_media_controls_, base::NotFatalUntil::M160);
 
 #if BUILDFLAG(IS_WIN)
   lock_polling_timer_.Start(
@@ -175,7 +175,16 @@ void SystemMediaControlsNotifier::MediaSessionPositionChanged(
   if (position) {
     DebouncePositionUpdate(*position);
   } else {
-    ClearAllMetadata();
+    delayed_position_update_ = std::nullopt;
+
+    // Do not cancel metadata or playback state updates just because position
+    // is unavailable. A Media Session can retain both while explicitly
+    // clearing its position state.
+    if (!delayed_metadata_update_ && !delayed_playback_status_) {
+      metadata_update_timer_.Stop();
+    }
+
+    system_media_controls_->ClearPosition();
   }
 }
 

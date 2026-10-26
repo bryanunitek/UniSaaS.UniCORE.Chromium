@@ -4,19 +4,35 @@
 
 #include "chrome/browser/ui/views/drive_picker_host/drive_picker_host_controller.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/views/drive_picker_host/drive_picker_host_view.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/webui/drive_picker_host/drive_picker_host_request.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/views/chrome_views_test_base.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/web_modal/modal_dialog_host.h"
+#include "components/web_modal/test_web_contents_modal_dialog_host.h"
+#include "content/public/test/test_renderer_host.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/display/screen.h"
+#include "ui/views/bubble/bubble_border.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_delegate.h"
+#include "ui/views/window/dialog_delegate.h"
 #include "url/gurl.h"
 
 namespace {
@@ -28,6 +44,7 @@ constexpr int kResizeWindowY = 10;
 constexpr int kResizeWindowWidth = 800;
 constexpr int kResizeWindowHeight = 600;
 #endif
+
 // Calculates the expected client view size by mirroring the constrained
 // window position and sizing capping logic dynamically.
 gfx::Size GetExpectedClientViewSize(
@@ -76,21 +93,35 @@ class ViewDestroyedWaiter : public views::ViewObserver {
 
 }  // namespace
 
-class DrivePickerHostControllerTest : public TestWithBrowserView {
+class DrivePickerHostControllerTest : public ChromeViewsTestBase {
  public:
-  DrivePickerHostControllerTest() = default;
+  DrivePickerHostControllerTest() {
+    feature_list_.InitAndEnableFeature(omnibox::kOmniboxEverywhere);
+  }
   ~DrivePickerHostControllerTest() override = default;
 
   void SetUp() override {
-    TestWithBrowserView::SetUp();
+    ChromeViewsTestBase::SetUp();
+    profile_ = std::make_unique<TestingProfile>();
 
-    // Ensure the browser window is visible and active, which is often required
-    // for modal dialogs to be correctly parented and displayed in tests.
-    browser_view()->GetWidget()->Show();
-    browser_view()->GetWidget()->SetBounds(gfx::Rect(0, 0, 600, 500));
+    // Ensure the parent window is visible and active for modal dialogs.
+    parent_widget_ =
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    parent_widget_->Show();
+    parent_widget_->SetBounds(gfx::Rect(0, 0, 1000, 800));
 
-    AddTab(browser(), GURL("about:blank"));
-    controller_ = std::make_unique<DrivePickerHostController>(browser());
+    dialog_host_ = std::make_unique<web_modal::TestWebContentsModalDialogHost>(
+        parent_widget_->GetNativeView());
+    dialog_host_->set_max_dialog_size(gfx::Size(1000, 800));
+
+    ON_CALL(mock_browser_window_interface_, GetProfile())
+        .WillByDefault(testing::Return(profile_.get()));
+    ON_CALL(mock_browser_window_interface_,
+            GetWebContentsModalDialogHostForWindow())
+        .WillByDefault(testing::Return(dialog_host_.get()));
+
+    controller_ = std::make_unique<DrivePickerHostController>(
+        profile(), &mock_browser_window_interface_);
   }
 
   void TearDown() override {
@@ -100,7 +131,13 @@ class DrivePickerHostControllerTest : public TestWithBrowserView {
       view_waiter_.reset();
     }
     controller_.reset();
-    TestWithBrowserView::TearDown();
+    dialog_host_.reset();
+    if (parent_widget_) {
+      parent_widget_->CloseNow();
+      parent_widget_.reset();
+    }
+    profile_.reset();
+    ChromeViewsTestBase::TearDown();
   }
 
   void ShowDrivePickerHost() {
@@ -116,6 +153,15 @@ class DrivePickerHostControllerTest : public TestWithBrowserView {
     view_waiter_ = std::make_unique<ViewDestroyedWaiter>(picker_view());
   }
 
+  TestingProfile* profile() { return profile_.get(); }
+  views::Widget* parent_widget() { return parent_widget_.get(); }
+  web_modal::TestWebContentsModalDialogHost* dialog_host() {
+    return dialog_host_.get();
+  }
+  MockBrowserWindowInterface* browser_window_interface() {
+    return &mock_browser_window_interface_;
+  }
+
   views::Widget* picker_widget() { return controller_->GetWidgetForTesting(); }
   DrivePickerHostView* picker_view() {
     return controller_->GetViewForTesting();
@@ -123,6 +169,12 @@ class DrivePickerHostControllerTest : public TestWithBrowserView {
   void ResetControllerState() { controller_->ResetControllerStateForTesting(); }
 
  protected:
+  base::test::ScopedFeatureList feature_list_;
+  std::unique_ptr<TestingProfile> profile_;
+  MockBrowserWindowInterface mock_browser_window_interface_;
+  std::unique_ptr<views::Widget> parent_widget_;
+  std::unique_ptr<web_modal::TestWebContentsModalDialogHost> dialog_host_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
   std::unique_ptr<DrivePickerHostController> controller_;
   std::unique_ptr<ViewDestroyedWaiter> view_waiter_;
 };
@@ -134,8 +186,8 @@ TEST_F(DrivePickerHostControllerTest, ShowDrivePickerHostRequestsFocus) {
 
   // Manually update the modal dialog position to trigger layout and sizing
   // in headless environments, so that child views become focusable.
-  constrained_window::UpdateWidgetModalDialogPosition(
-      picker_widget(), browser_view()->GetWebContentsModalDialogHost());
+  constrained_window::UpdateWidgetModalDialogPosition(picker_widget(),
+                                                      dialog_host());
 
   // The hosted `WebView` inside the view should have requested focus.
   ASSERT_FALSE(view->children().empty());
@@ -151,13 +203,27 @@ TEST_F(DrivePickerHostControllerTest, ShowDrivePickerHostCreatesView) {
   EXPECT_EQ(controller_->web_contents(), view->GetWebContents());
 }
 
+TEST_F(DrivePickerHostControllerTest, FrameViewHasNoShadowAndZeroInsets) {
+  ShowDrivePickerHost();
+  ASSERT_TRUE(picker_widget());
+  auto* frame_view = picker_widget()
+                         ->widget_delegate()
+                         ->AsDialogDelegate()
+                         ->GetBubbleFrameView();
+  ASSERT_TRUE(frame_view);
+  EXPECT_EQ(frame_view->GetInsets(), gfx::Insets());
+  auto* bubble_border = frame_view->bubble_border();
+  ASSERT_TRUE(bubble_border);
+  EXPECT_EQ(bubble_border->shadow(), views::BubbleBorder::NO_SHADOW);
+}
+
 TEST_F(DrivePickerHostControllerTest, PickerCoversBrowserContents) {
   ShowDrivePickerHost();
 
   // Manually update the modal dialog position to trigger layout and sizing
   // in headless environments.
-  constrained_window::UpdateWidgetModalDialogPosition(
-      picker_widget(), browser_view()->GetWebContentsModalDialogHost());
+  constrained_window::UpdateWidgetModalDialogPosition(picker_widget(),
+                                                      dialog_host());
 
   // The widget should be window-modal.
   EXPECT_EQ(picker_widget()->widget_delegate()->GetModalType(),
@@ -165,8 +231,7 @@ TEST_F(DrivePickerHostControllerTest, PickerCoversBrowserContents) {
 
   // The view bounds size should match the exact calculated size.
   gfx::Size expected_size = GetExpectedClientViewSize(
-      picker_widget(), browser_view()->GetWebContentsModalDialogHost(),
-      picker_view()->GetPreferredSize());
+      picker_widget(), dialog_host(), picker_view()->GetPreferredSize());
   EXPECT_EQ(picker_view()->bounds().size(), expected_size);
 }
 
@@ -177,19 +242,18 @@ TEST_F(DrivePickerHostControllerTest, PickerResizesWithWindow) {
   // Resize the browser window.
   gfx::Rect new_window_bounds(kResizeWindowX, kResizeWindowY,
                               kResizeWindowWidth, kResizeWindowHeight);
-  browser_view()->GetWidget()->SetBounds(new_window_bounds);
+  parent_widget()->SetBounds(new_window_bounds);
 
   // Manually update the modal dialog position to simulate the resize event in
   // tests.
-  constrained_window::UpdateWidgetModalDialogPosition(
-      picker_widget(), browser_view()->GetWebContentsModalDialogHost());
+  constrained_window::UpdateWidgetModalDialogPosition(picker_widget(),
+                                                      dialog_host());
 
   // Wait for the positioning and bounds updates to propagate to the child
   // dialog.
   ASSERT_TRUE(base::test::RunUntil([&]() {
     gfx::Size expected_current_size = GetExpectedClientViewSize(
-        picker_widget(), browser_view()->GetWebContentsModalDialogHost(),
-        picker_view()->GetPreferredSize());
+        picker_widget(), dialog_host(), picker_view()->GetPreferredSize());
     return picker_view()->bounds().size() == expected_current_size;
   }));
 }
@@ -209,4 +273,41 @@ TEST_F(DrivePickerHostControllerTest, ResetControllerStateClearsView) {
   EXPECT_FALSE(picker_view());
 }
 
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ShowDrivePickerHostWithAnchorWidget \
+  DISABLED_ShowDrivePickerHostWithAnchorWidget
+#else
+#define MAYBE_ShowDrivePickerHostWithAnchorWidget \
+  ShowDrivePickerHostWithAnchorWidget
+#endif
+// Verifies Drive Picker host lifecycle when anchored to a widget.
+TEST_F(DrivePickerHostControllerTest,
+       MAYBE_ShowDrivePickerHostWithAnchorWidget) {
+  // Create an anchor widget to simulate Loomnibox
+  views::Widget anchor_widget;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
+  params.context = parent_widget()->GetNativeWindow();
+  anchor_widget.Init(std::move(params));
+  anchor_widget.Show();
 
+  // Instantiate controller with null BWI, but passing the anchor widget.
+  auto anchor_controller = std::make_unique<DrivePickerHostController>(
+      profile(), nullptr, &anchor_widget);
+
+  auto request = std::make_unique<drive_picker_host::DrivePickerHostRequest>(
+      drive_picker_host::DrivePickerHostRequest::RequestType::kPickerUi,
+      mojo::PendingRemote<
+          drive_picker_host::mojom::DrivePickerResultHandler>());
+  anchor_controller->ShowDrivePickerHost(std::move(request));
+
+  views::Widget* picker_widget = anchor_controller->GetWidgetForTesting();
+  ASSERT_TRUE(picker_widget);
+  EXPECT_TRUE(picker_widget->IsVisible());
+
+  // Closing the anchor widget (Loomnibox) should automatically reset the
+  // controller and close the picker.
+  anchor_widget.CloseNow();
+  EXPECT_FALSE(anchor_controller->GetWidgetForTesting());
+}

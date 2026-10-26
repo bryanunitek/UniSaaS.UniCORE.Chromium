@@ -12,8 +12,9 @@
 #include <sstream>
 #include <string>
 
-#include "google/protobuf/compiler/code_generator.h"
 #include "absl/log/absl_log.h"
+#include "google/protobuf/compiler/code_generator.h"
+#include "google/protobuf/compiler/csharp/csharp_generator.h"
 #include "google/protobuf/compiler/csharp/csharp_helpers.h"
 #include "google/protobuf/compiler/csharp/names.h"
 #include "google/protobuf/descriptor.h"
@@ -42,7 +43,8 @@ void FieldGeneratorBase::SetCommonFieldVariables(
   }
   uint tag = internal::WireFormat::MakeTag(descriptor_);
   uint8_t tag_array[5];
-  io::CodedOutputStream::WriteTagToArray(tag, tag_array);
+  // TODO: Remove this suppression.
+  (void)io::CodedOutputStream::WriteTagToArray(tag, tag_array);
   std::string tag_bytes = absl::StrCat(tag_array[0]);
   for (int i = 1; i < part_tag_size; i++) {
     absl::StrAppend(&tag_bytes, ", ", tag_array[i]);
@@ -56,7 +58,8 @@ void FieldGeneratorBase::SetCommonFieldVariables(
     tag = internal::WireFormatLite::MakeTag(
         descriptor_->number(),
         internal::WireFormatLite::WIRETYPE_END_GROUP);
-    io::CodedOutputStream::WriteTagToArray(tag, tag_array);
+    // TODO: Remove this suppression.
+    (void)io::CodedOutputStream::WriteTagToArray(tag, tag_array);
     tag_bytes = absl::StrCat(tag_array[0]);
     for (int i = 1; i < part_tag_size; i++) {
       absl::StrAppend(&tag_bytes, ", ", tag_array[i]);
@@ -113,6 +116,9 @@ void FieldGeneratorBase::SetCommonFieldVariables(
                        absl::StrCat("other.", (*variables)["property_name"],
                                     " != ", (*variables)["default_value"])});
   }
+  // This isn't valid everywhere, but we assume that the code which uses
+  // the variable will only do so in a context where the annotation is valid.
+  (*variables)["nrt_annotation"] = nrt_enabled_ ? "?" : "";
 }
 
 void FieldGeneratorBase::SetCommonOneofFieldVariables(
@@ -127,6 +133,9 @@ void FieldGeneratorBase::SetCommonOneofFieldVariables(
   }
   (*variables)["oneof_case_name"] = oneof_case_name();
   (*variables)["oneof_property_name"] = oneof_property_name();
+  // This isn't valid everywhere, but we assume that the code which uses
+  // the variable will only do so in a context where the annotation is valid.
+  (*variables)["nrt_annotation"] = nrt_enabled_ ? "?" : "";
 }
 
 FieldGeneratorBase::FieldGeneratorBase(const FieldDescriptor* descriptor,
@@ -134,6 +143,9 @@ FieldGeneratorBase::FieldGeneratorBase(const FieldDescriptor* descriptor,
     : SourceGeneratorBase(options),
       descriptor_(descriptor),
       presenceIndex_(presenceIndex) {
+  nrt_enabled_ = Generator::GetResolvedSourceFeatures(*descriptor->file())
+                     .GetExtension(pb::csharp)
+                     .nullable_reference_types();
   SetCommonFieldVariables(&variables_);
 }
 
@@ -214,10 +226,12 @@ std::string FieldGeneratorBase::type_name(const FieldDescriptor* descriptor) {
         const FieldDescriptor* wrapped_field =
             descriptor->message_type()->field(0);
         std::string wrapped_field_type_name = type_name(wrapped_field);
-        // String and ByteString go to the same type; other wrapped types
-        // go to the nullable equivalent.
-        if (wrapped_field->type() == FieldDescriptor::TYPE_STRING ||
-            wrapped_field->type() == FieldDescriptor::TYPE_BYTES) {
+        // String and ByteString go to the same type (unless nullable reference
+        // type is supported for this field); other wrapped types go to the
+        // nullable equivalent.
+        if (!nrt_enabled_ &&
+            (wrapped_field->type() == FieldDescriptor::TYPE_STRING ||
+             wrapped_field->type() == FieldDescriptor::TYPE_BYTES)) {
           return wrapped_field_type_name;
         } else {
           return absl::StrCat(wrapped_field_type_name, "?");

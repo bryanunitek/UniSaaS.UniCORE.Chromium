@@ -34,6 +34,7 @@ namespace cc {
 struct AppendQuadsContext;
 class AppendQuadsData;
 class DamageTracker;
+class EffectTree;
 class FilterOperations;
 class Occlusion;
 class LayerImpl;
@@ -212,10 +213,9 @@ class CC_EXPORT RenderSurfaceImpl {
     return viz::CompositorRenderPassId(id().GetInternalValue());
   }
 
-  // This is a render pass id that is used for view transition capture phase
-  // when ViewTransitionCaptureAndDisplay feature is enabled. It's constructed
-  // by using the regular `render_pass_id()` and mapping it to a reserved
-  // internal cc namespace (see code in cc/paint/element_.h:
+  // This is a render pass id that is used for view transition capture phase.
+  // It's constructed by using the regular `render_pass_id()` and mapping it to
+  // a reserved internal cc namespace (see code in cc/paint/element_.h:
   // `kElementIdReservedBitCount` and `RemapElementIdToCcNamespace`).
   viz::CompositorRenderPassId view_transition_capture_render_pass_id() const {
     return viz::CompositorRenderPassId(
@@ -282,6 +282,9 @@ class CC_EXPORT RenderSurfaceImpl {
 
   void set_effect_tree_index(int index) { effect_tree_index_ = index; }
   int EffectTreeIndex() const;
+
+  // Returns the effect tree associated with this render surface.
+  const EffectTree* effect_tree() const;
 
   const EffectNode* OwningEffectNode() const;
   EffectNode* OwningEffectNodeMutableForTest() const;

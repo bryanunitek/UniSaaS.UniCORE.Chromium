@@ -23,10 +23,15 @@
 #include "chromeos/ash/components/phonehub/phone_hub_manager.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace ash::settings {
 
 OsSettingsManager::OsSettingsManager(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     Profile* profile,
     local_search_service::LocalSearchServiceProxy* local_search_service_proxy,
     multidevice_setup::MultiDeviceSetupClient* multidevice_setup_client,
@@ -40,7 +45,11 @@ OsSettingsManager::OsSettingsManager(
     : search_tag_registry_(
           std::make_unique<SearchTagRegistry>(local_search_service_proxy)),
       sections_(
-          std::make_unique<OsSettingsSections>(profile,
+          std::make_unique<OsSettingsSections>(local_state,
+                                               application_locale_storage,
+                                               browser_policy_connector_ash,
+                                               std::move(url_loader_factory),
+                                               profile,
                                                search_tag_registry_.get(),
                                                multidevice_setup_client,
                                                phone_hub_manager,

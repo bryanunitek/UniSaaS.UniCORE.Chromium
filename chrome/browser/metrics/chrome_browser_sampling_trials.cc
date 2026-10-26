@@ -4,14 +4,21 @@
 
 #include "chrome/browser/metrics/chrome_browser_sampling_trials.h"
 
+#include <utility>
+
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
+#include "build/build_config.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
 #include "chrome/common/channel_info.h"
 #include "components/ukm/ukm_recorder_impl.h"
 #include "components/version_info/channel.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
 
 namespace metrics {
 namespace {
@@ -42,7 +49,8 @@ void AppendSamplingTrialGroup(const std::string& group_name,
     params.insert({"disable_crashes", "true"});
   }
 
-  base::AssociateFieldTrialParams(trial->trial_name(), group_name, params);
+  base::AssociateFieldTrialParams(trial->trial_name(), group_name,
+                                  std::move(params));
   trial->AppendGroup(group_name, rate);
 }
 
@@ -140,7 +148,8 @@ void CreateFallbackUkmSamplingTrial(
   // Everybody (100%) should have a sampling configuration.
   std::map<std::string, std::string> params = {
       {"_default_sampling", base::NumberToString(default_sampling)}};
-  base::AssociateFieldTrialParams(trial->trial_name(), sampled_group, params);
+  base::AssociateFieldTrialParams(trial->trial_name(), sampled_group,
+                                  std::move(params));
   trial->AppendGroup(sampled_group, 100);
 
   // Setup the feature.
@@ -155,6 +164,12 @@ void CreateFallbackSamplingTrialsIfNeeded(
     const base::FieldTrial::EntropyProvider& entropy_provider,
     base::FeatureList* feature_list) {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  // On Android Desktop, do not sample out data at all.
+  if (base::android::device_info::is_desktop()) {
+    return;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 
   const bool is_stable = chrome::GetChannel() == version_info::Channel::STABLE;
 

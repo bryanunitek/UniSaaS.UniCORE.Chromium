@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
@@ -18,6 +19,12 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/origin_gating/core/decision.h"
+#include "components/origin_gating/core/decision_attribution.h"
+#include "components/origin_gating/core/gateable_event.h"
+#include "components/origin_gating/core/gating_decision.h"
+#include "components/origin_gating/core/origin_gating_configuration.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -29,17 +36,17 @@ constexpr char kBlocklistKey[] = "blocklist";
 // static
 const DevToolsNavigationGatingRuleManager&
 DevToolsNavigationGatingRuleManager::Get() {
-  static const base::NoDestructor<DevToolsNavigationGatingRuleManager> instance(
+  static base::NoDestructor<DevToolsNavigationGatingRuleManager> instance(
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kDevToolsNavigationGatingRules));
   return *instance;
 }
 
 // static
-DevToolsNavigationGatingRuleManager
+std::unique_ptr<DevToolsNavigationGatingRuleManager>
 DevToolsNavigationGatingRuleManager::CreateForTesting(
     std::string_view rules_json) {
-  return DevToolsNavigationGatingRuleManager(rules_json);
+  return base::WrapUnique(new DevToolsNavigationGatingRuleManager(rules_json));
 }
 
 DevToolsNavigationGatingRuleManager::DevToolsNavigationGatingRuleManager(
@@ -106,17 +113,19 @@ bool DevToolsNavigationGatingRuleManager::MayBlockNavigation() const {
   return !rules_.empty() || has_allowlist_;
 }
 
-bool DevToolsNavigationGatingRuleManager::IsNavigationAllowed(
-    const GURL& url) const {
+origin_gating::Decision DevToolsNavigationGatingRuleManager::EvaluateRules(
+    const origin_gating::GateableEvent& event) const {
   if (!MayBlockNavigation()) {
-    return true;
+    return origin_gating::Decision::kAllowed;
   }
 
   // GURL() is passed as primary_url to represent the wildcard source pattern.
-  const content_settings::RuleEntry* rule_entry = rules_.Find(GURL(), url);
+  const content_settings::RuleEntry* rule_entry =
+      rules_.Find(GURL(), event.destination());
 
   if (!rule_entry) {
-    return !has_allowlist_;
+    return has_allowlist_ ? origin_gating::Decision::kBlocked
+                          : origin_gating::Decision::kAllowed;
   }
 
   std::optional<ContentSetting> setting =
@@ -124,9 +133,9 @@ bool DevToolsNavigationGatingRuleManager::IsNavigationAllowed(
   CHECK(setting.has_value());
   switch (setting.value()) {
     case CONTENT_SETTING_ALLOW:
-      return true;
+      return origin_gating::Decision::kAllowed;
     case CONTENT_SETTING_BLOCK:
-      return false;
+      return origin_gating::Decision::kBlocked;
     case CONTENT_SETTING_DEFAULT:
     case CONTENT_SETTING_ASK:
     case CONTENT_SETTING_SESSION_ONLY:

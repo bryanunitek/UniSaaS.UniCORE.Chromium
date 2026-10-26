@@ -13,9 +13,9 @@
 #include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_waiter.h"
@@ -31,7 +31,6 @@
 #include "chrome/browser/ui/views/side_panel/side_panel.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_header.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_header_controller.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_helper.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_toolbar_pinning_controller.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
@@ -58,8 +57,6 @@ SidePanelCoordinator::SidePanelCoordinator(BrowserWindowInterface* browser)
   // the ToolbarView does not create a button for them. This specifically seems
   // to hit web apps. See https://crbug.com/40803038.
   side_panel_observation_.Observe(side_panel);
-  SidePanelHelper::PopulateGlobalEntries(browser,
-                                         SidePanelRegistry::From(browser));
 }
 
 SidePanelCoordinator::~SidePanelCoordinator() = default;
@@ -159,9 +156,6 @@ void SidePanelCoordinator::Show(
     ClosePromoAndMaybeNotifyUsed(
         feature_engagement::kIPHPowerBookmarksSidePanelFeature,
         SidePanelEntryId::kBookmarks, input.key.id());
-    ClosePromoAndMaybeNotifyUsed(
-        feature_engagement::kIPHReadingModeSidePanelFeature,
-        SidePanelEntryId::kReadAnything, input.key.id());
   }
 
   SidePanelMetrics::RecordSidePanelShowOrChangeEntryTrigger(open_trigger);
@@ -220,6 +214,16 @@ void SidePanelCoordinator::Close(SidePanelEntryHideReason reason,
     return;
   }
 
+  // If focus is currently inside the side panel (e.g. close button),
+  // shift focus back to the main web contents before closing.
+  views::FocusManager* focus_manager = side_panel->GetFocusManager();
+  if (focus_manager &&
+      side_panel->Contains(focus_manager->GetStoredFocusView())) {
+    tabs::TabInterface* active_tab = browser_->GetActiveTabInterface();
+    if (active_tab && active_tab->GetContents()) {
+      active_tab->GetContents()->Focus();
+    }
+  }
 
   // If we are currently animating the side panel contents so it is parented to
   // the BrowserView, reparent it now so that the entry will be notified it is
@@ -272,10 +276,10 @@ void SidePanelCoordinator::PopulateSidePanel(
     side_panel->RemoveHeaderView();
   }
   auto* content_wrapper = side_panel->GetContentParentView();
-  DCHECK(content_wrapper);
+  CHECK(content_wrapper, base::NotFatalUntil::M162);
   // |content_wrapper| should have either no child views or one child view for
   // the currently hosted SidePanelEntry.
-  DCHECK(content_wrapper->children().size() <= 1);
+  CHECK(content_wrapper->children().size() <= 1, base::NotFatalUntil::M162);
 
   content_wrapper->SetVisible(true);
 
@@ -377,7 +381,8 @@ void SidePanelCoordinator::MaybeShowEntryOnTabStripModelChanged(
           current_key()->tab_handle &&
           (*active_entry)->key() == current_key()->key) {
         auto* content_wrapper = side_panel->GetContentParentView();
-        DCHECK(content_wrapper->children().size() == 1);
+        CHECK(content_wrapper->children().size() == 1,
+              base::NotFatalUntil::M162);
         auto current_entry_view = content_wrapper->RemoveChildViewT(
             content_wrapper->children().front());
         (*active_entry)->CacheView(std::move(current_entry_view));

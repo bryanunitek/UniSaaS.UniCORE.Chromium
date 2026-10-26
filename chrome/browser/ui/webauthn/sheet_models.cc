@@ -38,6 +38,7 @@
 #include "device/fido/public/fido_types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/style/typography.h"
 
@@ -115,7 +116,7 @@ std::u16string PossibleAttestationWarning(
 AuthenticatorSheetModelBase::AuthenticatorSheetModelBase(
     AuthenticatorRequestDialogModel* dialog_model)
     : dialog_model_(dialog_model) {
-  DCHECK(dialog_model);
+  CHECK(dialog_model, base::NotFatalUntil::M162);
   dialog_model_->observers.AddObserver(this);
 }
 
@@ -224,7 +225,7 @@ void AuthenticatorSheetModelBase::OnCancel() {
 
 void AuthenticatorSheetModelBase::OnModelDestroyed(
     AuthenticatorRequestDialogModel* model) {
-  DCHECK(model == dialog_model_);
+  CHECK(model == dialog_model_, base::NotFatalUntil::M162);
   dialog_model_ = nullptr;
 }
 
@@ -852,7 +853,8 @@ void AuthenticatorClientPinEntrySheetModel::SetPinCode(
 
 void AuthenticatorClientPinEntrySheetModel::SetPinConfirmation(
     std::u16string pin_confirmation) {
-  DCHECK(mode_ == Mode::kPinSetup || mode_ == Mode::kPinChange);
+  CHECK(mode_ == Mode::kPinSetup || mode_ == Mode::kPinChange,
+        base::NotFatalUntil::M162);
   pin_confirmation_ = std::move(pin_confirmation);
 }
 
@@ -1199,8 +1201,9 @@ AuthenticatorSelectAccountSheetModel::~AuthenticatorSelectAccountSheetModel() =
     default;
 
 void AuthenticatorSelectAccountSheetModel::SetCurrentSelection(int selected) {
-  DCHECK_LE(0, selected);
-  DCHECK_LT(static_cast<size_t>(selected), dialog_model()->creds.size());
+  CHECK_LE(0, selected, base::NotFatalUntil::M162);
+  CHECK_LT(static_cast<size_t>(selected), dialog_model()->creds.size(),
+           base::NotFatalUntil::M162);
   selected_ = selected;
 }
 

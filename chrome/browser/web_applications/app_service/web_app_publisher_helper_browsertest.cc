@@ -7,12 +7,12 @@
 #include <memory>
 #include <string>
 
-#include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -30,7 +30,7 @@
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/test/browser_test.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "third_party/blink/public/common/features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/test/dialog_test.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/any_widget_observer.h"
@@ -148,7 +148,8 @@ IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperBrowserTest, CreateIntentFilters) {
 
   apps::IntentFilters filters;
   {
-    auto& provider = *web_app::WebAppProvider::GetForTest(browser()->profile());
+    auto& provider =
+        *web_app::WebAppProvider::GetForTest(browser()->GetProfile());
     const webapps::AppId app_id =
         web_app::InstallWebAppFromManifest(browser(), app_url);
     filters = WebAppPublisherHelper::CreateIntentFiltersForWebApp(
@@ -179,7 +180,8 @@ IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperBrowserTest, PartialWild) {
 
   apps::IntentFilters filters;
   {
-    auto& provider = *web_app::WebAppProvider::GetForTest(browser()->profile());
+    auto& provider =
+        *web_app::WebAppProvider::GetForTest(browser()->GetProfile());
     const webapps::AppId app_id =
         web_app::InstallWebAppFromManifest(browser(), app_url);
     filters = WebAppPublisherHelper::CreateIntentFiltersForWebApp(
@@ -208,7 +210,8 @@ IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperBrowserTest,
 
   apps::IntentFilters filters;
   {
-    auto& provider = *web_app::WebAppProvider::GetForTest(browser()->profile());
+    auto& provider =
+        *web_app::WebAppProvider::GetForTest(browser()->GetProfile());
     const webapps::AppId app_id =
         web_app::InstallWebAppFromManifest(browser(), app_url);
     filters = WebAppPublisherHelper::CreateIntentFiltersForWebApp(
@@ -225,11 +228,7 @@ IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperBrowserTest,
 }
 
 class WebAppPublisherHelperMigrationTest
-    : public WebAppPublisherHelperBrowserTest {
- private:
-  base::test::ScopedFeatureList feature_list_{
-      blink::features::kWebAppMigrationApi};
-};
+    : public WebAppPublisherHelperBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperMigrationTest, MigrationCalls) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -237,13 +236,13 @@ IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperMigrationTest, MigrationCalls) {
   // 1. Install source app.
   const GURL from_url = embedded_test_server()->GetURL(
       "/web_apps/migration/migrate_from/no_migration_info.html");
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::InstallWebAppFromPageGetBrowser(browser(), from_url);
   const webapps::AppId source_app_id =
       web_app::AppBrowserController::From(app_browser)->app_id();
 
   auto* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(browser()->profile());
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
 
   // Verify source app is installed.
   bool source_found = proxy->AppRegistryCache().ForOneApp(
@@ -263,13 +262,13 @@ IN_PROC_BROWSER_TEST_F(WebAppPublisherHelperMigrationTest, MigrationCalls) {
                   .WaitAndFlushCommands());
 
   web_app::WebAppProvider* provider =
-      web_app::WebAppProvider::GetForTest(browser()->profile());
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile());
 
   // 3. Accept migration dialog.
   views::NamedWidgetShownWaiter update_dialog_waiter(
       views::test::AnyWidgetTestPasskey{}, "WebAppUpdateReviewDialog");
   {
-    chrome::Reload(app_browser, WindowOpenDisposition::CURRENT_TAB);
+    chrome::Reload(app_browser, WindowOpenDisposition::kCurrentTab);
     WebAppMenuModel model(/*provider=*/nullptr, app_browser);
     model.Init();
     model.ExecuteCommand(IDC_WEB_APP_UPGRADE_DIALOG, /*event_flags=*/0);

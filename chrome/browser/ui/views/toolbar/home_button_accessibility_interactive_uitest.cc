@@ -5,6 +5,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_accessibility_test.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -51,8 +52,7 @@ class HomeButtonAccessibilityTest : public ToolbarAccessibilityTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
-// TODO(crbug.com/506481721): Flaky time out
-IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, DISABLED_LeftClickHome) {
+IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, LeftClickHome) {
   DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(
       ui::test::PollingElementStateObserver<bool>, kHomeButtonAXNodeExists);
 
@@ -64,8 +64,8 @@ IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, DISABLED_LeftClickHome) {
   RunTestSequence(
       // Show the home button first to ensure it's available.
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                        true);
       }),
       InstrumentTab(kWebContentsElementId),
       // Navigate away from home
@@ -86,7 +86,8 @@ IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, DISABLED_LeftClickHome) {
                              return GetAXNode(el, ax::mojom::Role::kButton,
                                               home_name) != nullptr;
                            }),
-               WaitForState(kHomeButtonAXNodeExists, true))),
+               WaitForState(kHomeButtonAXNodeExists, true),
+               StopObservingState(kHomeButtonAXNodeExists))),
       MoveMouseToElement(kToolbarHomeButtonElementId), ClickMouse(),
       // Wait for navigation back to home
       WaitForWebContentsNavigation(kWebContentsElementId, home_url));
@@ -98,20 +99,40 @@ IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, DISABLED_LeftClickHome) {
 #define MAYBE_MiddleClickHome MiddleClickHome
 #endif
 IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, MAYBE_MiddleClickHome) {
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(
+      ui::test::PollingElementStateObserver<bool>, kHomeButtonAXNodeExists);
+
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url = embedded_test_server()->GetURL("/title1.html");
+  const std::u16string home_name = l10n_util::GetStringUTF16(IDS_ACCNAME_HOME);
+
   RunTestSequence(
       // Show the home button first.
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                        true);
       }),
       InstrumentTab(kWebContentsElementId),
       NavigateWebContents(kWebContentsElementId, url),
+      WaitForShow(kToolbarHomeButtonElementId),
       WaitForElementNonzeroSize(kToolbarHomeButtonElementId),
-      Check([&]() { return browser()->tab_strip_model()->count() == 1; }),
+      // For WebUI, wait for the accessibility node to be ready to ensure it's
+      // interactive.
+      IfElement(
+          kToolbarHomeButtonElementId,
+          [](const ui::TrackedElement* el) {
+            return !!el->AsA<ui::TrackedElementWebUI>();
+          },
+          Then(PollElement(kHomeButtonAXNodeExists, kToolbarHomeButtonElementId,
+                           [home_name](const ui::TrackedElement* el) {
+                             return GetAXNode(el, ax::mojom::Role::kButton,
+                                              home_name) != nullptr;
+                           }),
+               WaitForState(kHomeButtonAXNodeExists, true),
+               StopObservingState(kHomeButtonAXNodeExists))),
+      Check([&]() { return browser()->GetTabStripModel()->count() == 1; }),
       PollState(kTabCountState,
-                [this]() { return browser()->tab_strip_model()->count(); }),
+                [this]() { return browser()->GetTabStripModel()->count(); }),
       MoveMouseToElement(kToolbarHomeButtonElementId),
       ClickMouse(ui_controls::MIDDLE), WaitForState(kTabCountState, 2));
 }
@@ -124,8 +145,8 @@ IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest, AccessibilityNode) {
 
   RunTestSequence(
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                        true);
       }),
       WaitForShow(kToolbarHomeButtonElementId),
       // For WebUI, wait for the accessibility node to be ready.
@@ -171,20 +192,20 @@ IN_PROC_BROWSER_TEST_P(HomeButtonAccessibilityTest,
   RunTestSequence(
       // Start visible
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                        true);
       }),
       WaitForShow(kToolbarHomeButtonElementId),
       // Hide it
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
-                                                     false);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                        false);
       }),
       WaitForHide(kToolbarHomeButtonElementId),
       // Show it again
       Do([this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                        true);
       }),
       WaitForShow(kToolbarHomeButtonElementId));
 }

@@ -13,7 +13,11 @@
 #include "ash/test/ash_test_base.h"
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_icu_locale.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/accessibility/view_accessibility.h"
 
@@ -235,21 +239,26 @@ TEST_F(AutoclickMenuBubbleControllerTest, DefaultChangesWithTextDirection) {
   gfx::Rect window_bounds = Shell::GetPrimaryRootWindow()->bounds();
 
   // RTL should position the menu on the bottom left.
-  base::i18n::SetICUDefaultLocale("he");
-  // Trigger the LocaleChangeObserver, which should cause a layout of the menu.
-  ash::LocaleUpdateController::Get()->OnLocaleChanged();
-  EXPECT_TRUE(base::i18n::IsRTL());
-  EXPECT_LT(
-      GetMenuViewBounds().ManhattanDistanceToPoint(window_bounds.bottom_left()),
-      kMenuViewBoundsBuffer);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
+    // Trigger the LocaleChangeObserver, which should cause a layout of the
+    // menu.
+    ash::LocaleUpdateController::Get()->OnLocaleChanged();
+    EXPECT_TRUE(base::i18n::IsRTL());
+    EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
+                  window_bounds.bottom_left()),
+              kMenuViewBoundsBuffer);
+  }
 
   // LTR should position the menu on the bottom right.
-  base::i18n::SetICUDefaultLocale("en");
-  ash::LocaleUpdateController::Get()->OnLocaleChanged();
-  EXPECT_FALSE(base::i18n::IsRTL());
-  EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
-                window_bounds.bottom_right()),
-            kMenuViewBoundsBuffer);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
+    ash::LocaleUpdateController::Get()->OnLocaleChanged();
+    EXPECT_FALSE(base::i18n::IsRTL());
+    EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
+                  window_bounds.bottom_right()),
+              kMenuViewBoundsBuffer);
+  }
 }
 
 TEST_F(AutoclickMenuBubbleControllerTest, ScrollBubbleShowsAndCloses) {
@@ -282,7 +291,7 @@ TEST_F(AutoclickMenuBubbleControllerTest, ScrollBubbleDefaultPositioning) {
   for (auto& test : kTestCases) {
     // These positions should be relative to the corners of the screen
     // whether we are in RTL or LTR.
-    base::i18n::SetRTLForTesting(test.is_RTL);
+    base::i18n::ScopedRTLForTesting scoped_rtl(test.is_RTL);
 
     // When the menu is in the top right, the scroll view should be directly
     // under it and along the right side of the screen.
@@ -340,7 +349,7 @@ TEST_F(AutoclickMenuBubbleControllerTest,
   };
   for (auto& test : kTestCases) {
     UpdateDisplay(test.display_spec);
-    base::i18n::SetRTLForTesting(test.is_RTL);
+    base::i18n::ScopedRTLForTesting scoped_rtl(test.is_RTL);
     gfx::Rect scroll_bounds = test.scroll_bounds;
     controller->SetAutoclickMenuPosition(FloatingMenuPosition::kTopRight);
 
@@ -474,7 +483,7 @@ TEST_F(AutoclickMenuBubbleControllerTest,
        false, false, true /* on bottom */},
   };
   for (auto& test : kTestCases) {
-    base::i18n::SetRTLForTesting(test.is_RTL);
+    base::i18n::ScopedRTLForTesting scoped_rtl(test.is_RTL);
     gfx::Rect scroll_bounds = test.scroll_bounds;
     gfx::Point scroll_point = test.scroll_point;
     GetBubbleController()->SetScrollPosition(scroll_bounds, scroll_point);

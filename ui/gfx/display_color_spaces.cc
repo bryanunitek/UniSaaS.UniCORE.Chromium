@@ -2,16 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/354829279): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/gfx/display_color_spaces.h"
 
 #include <array>
 #include <cmath>
+#include <string_view>
 
+#include "base/compiler_specific.h"
 #include "base/trace_event/traced_value.h"
 #include "build/build_config.h"
 #include "skia/ext/skcolorspace_primaries.h"
@@ -32,7 +29,8 @@ viz::SharedImageFormat DefaultFormat() {
   // The default format on Mac is BGRA in screen_mac.cc, so we set it here
   // too so that it matches with --ensure-forced-color-profile.
   // https://crbug.com/1478708
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+  // The default format on Windows is BGRA in screen_win.cc.
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   return viz::SinglePlaneFormat::kBGRA_8888;
 #else
   return viz::SinglePlaneFormat::kRGBA_8888;
@@ -53,11 +51,8 @@ size_t GetIndex(ContentColorUsage color_usage, bool needs_alpha) {
 }  // namespace
 
 DisplayColorSpaces::DisplayColorSpaces() {
-  // TODO(crbug.com/40219387): Revert back to range-based for loops if possible
-  for (size_t i = 0; i < kConfigCount; i++) {
-    color_spaces_[i] = gfx::ColorSpace::CreateSRGB();
-    formats_[i] = DefaultFormat();
-  }
+  color_spaces_.fill(gfx::ColorSpace::CreateSRGB());
+  formats_.fill(DefaultFormat());
 }
 
 DisplayColorSpaces::DisplayColorSpaces(const gfx::DisplayColorSpaces&) =
@@ -71,15 +66,16 @@ DisplayColorSpaces::DisplayColorSpaces(const gfx::ColorSpace& c)
   if (!c.IsValid())
     return;
   primaries_ = c.GetPrimaries();
-  for (size_t i = 0; i < kConfigCount; i++)  // NOLINT (modernize-loop-convert)
-    color_spaces_[i] = c;
+  for (auto& color_space : color_spaces_) {
+    color_space = c;
+  }
 }
 
 DisplayColorSpaces::DisplayColorSpaces(const ColorSpace& c,
                                        viz::SharedImageFormat f)
     : DisplayColorSpaces(c) {
-  for (size_t i = 0; i < kConfigCount; i++) {
-    formats_[i] = f;
+  for (auto& format : formats_) {
+    format = f;
   }
 }
 
@@ -118,45 +114,43 @@ viz::SharedImageFormat DisplayColorSpaces::GetOutputFormat(
 
 ColorSpace DisplayColorSpaces::GetRasterAndCompositeColorSpace(
     ContentColorUsage color_usage) const {
-  gfx::ColorSpace result;
-  if (color_usage == ContentColorUsage::kSRGB) {
-    result =
-        GetOutputColorSpace(ContentColorUsage::kSRGB, /*needs_alpha=*/true);
-    if (!result.IsSuitableForBlending()) {
-      result = ColorSpace::CreateSRGB();
-    }
-  } else {
-    result = GetOutputColorSpace(ContentColorUsage::kWideColorGamut,
-                                 /*needs_alpha=*/true);
-
-    // The below logic is to work around the issue that Windows' output buffer
-    // choices are limited. It is not a generic operation. Windows only offers
-    // three usable options for backbuffer formats:
-    // * 8-bit sRGB
-    // * 10-bit Rec2020 PQ
-    // * F16 sRGB linear HDR (identical to PQ, with 1.0 matching 80 nits)
-    // Absent in this list is an 8-bit wide color gamut option (like P3). This
-    // gives us the options of:
-    // * Raster wide color gamut content into F16 extended-sRGB buffers.
-    //   This is expensive, but raster/composite results are always consistent.
-    // * Raster wide color gamut into 8-bit P3 buffers
-    //   This isn't expensive, but raster/composite results differ based on
-    //   whether or not WCG content is visible.
-    // We go with the second option, and do all non-sRGB raster and composite
-    // in P3.
-    if (!result.IsSuitableForBlending()) {
-      result =
-          ColorSpace(ColorSpace::PrimaryID::P3, ColorSpace::TransferID::SRGB);
-    }
-
-    // Report the HDR version of the space only if HDR is both requested and
-    // supported.
-    if (SupportsHDR() && color_usage == ContentColorUsage::kHDR) {
-      result = result.GetAsHDR();
-    }
+  // Report the HDR version of the space only if HDR is both requested and
+  // supported.
+  if (!SupportsHDR() && color_usage == ContentColorUsage::kHDR) {
+    color_usage = ContentColorUsage::kWideColorGamut;
   }
 
-  return result;
+  gfx::ColorSpace result =
+      GetOutputColorSpace(color_usage, /*needs_alpha=*/true);
+  if (result.IsSuitableForBlending()) {
+    return result;
+  }
+
+  // The below logic is to work around the issue that Windows' output buffer
+  // choices are limited. It is not a generic operation. Windows only offers
+  // three usable options for backbuffer formats:
+  // * 8-bit sRGB
+  // * 10-bit Rec2020 PQ
+  // * F16 sRGB linear HDR (identical to PQ, with 1.0 matching 80 nits)
+  // Absent in this list is an 8-bit wide color gamut option (like P3). This
+  // gives us the options of:
+  // * Raster wide color gamut content into F16 extended-sRGB buffers.
+  //   This is expensive, but raster/composite results are always consistent.
+  // * Raster wide color gamut into 8-bit P3 buffers
+  //   This isn't expensive, but raster/composite results differ based on
+  //   whether or not WCG content is visible.
+  // We go with the second option, and do all non-sRGB raster and composite
+  // in P3.
+  switch (color_usage) {
+    case ContentColorUsage::kSRGB:
+      return ColorSpace::CreateSRGB();
+    case ContentColorUsage::kHDR:
+      return ColorSpace(ColorSpace::PrimaryID::P3,
+                        ColorSpace::TransferID::SRGB_HDR);
+    default:
+      return ColorSpace(ColorSpace::PrimaryID::P3,
+                        ColorSpace::TransferID::SRGB);
+  }
 }
 
 bool DisplayColorSpaces::SupportsHDR() const {
@@ -178,15 +172,16 @@ void DisplayColorSpaces::ToStrings(
     std::vector<gfx::ColorSpace>* out_color_spaces,
     std::vector<viz::SharedImageFormat>* out_formats) const {
   // The names of the configurations.
-  std::array<const char*, kConfigCount> config_names = {
+  constexpr std::array<std::string_view, kConfigCount> config_names = {
       "sRGB/no-alpha", "sRGB/alpha",   "WCG/no-alpha",
       "WCG/alpha",     "HDR/no-alpha", "HDR/alpha",
   };
   // Names for special configuration subsets (e.g, all sRGB, all WCG, etc).
   constexpr size_t kSpecialConfigCount = 5;
-  std::array<const char*, kSpecialConfigCount> special_config_names = {
-      "sRGB", "WCG", "SDR", "HDR", "all",
-  };
+  constexpr std::array<std::string_view, kSpecialConfigCount>
+      special_config_names = {
+          "sRGB", "WCG", "SDR", "HDR", "all",
+      };
   const std::array<std::array<const size_t, 2>, kSpecialConfigCount>
       special_config_indices = {{
           {0, 2},
@@ -205,8 +200,8 @@ void DisplayColorSpaces::ToStrings(
   while (i != kConfigCount) {
     // Keep growing the interval [i, j) until entry j is different, or past the
     // end.
-    if (color_spaces_[i] == color_spaces_[j] && formats_[i] == formats_[j] &&
-        j != kConfigCount) {
+    if (j != kConfigCount && color_spaces_[i] == color_spaces_[j] &&
+        formats_[i] == formats_[j]) {
       j += 1;
       continue;
     }
@@ -223,7 +218,7 @@ void DisplayColorSpaces::ToStrings(
     // If that didn't work, just list the configs.
     if (name.empty()) {
       for (size_t k = i; k < j; ++k) {
-        name += std::string(config_names[k]);
+        name += config_names[k];
         if (k != j - 1)
           name += ",";
       }
@@ -258,23 +253,6 @@ void DisplayColorSpaces::AsValueInto(
   value->SetDouble("hdr_max_luminance_relative", hdr_max_luminance_relative_);
 }
 
-bool DisplayColorSpaces::operator==(const DisplayColorSpaces& other) const {
-  for (size_t i = 0; i < kConfigCount; ++i) {
-    if (color_spaces_[i] != other.color_spaces_[i])
-      return false;
-    if (formats_[i] != other.formats_[i]) {
-      return false;
-    }
-  }
-  if (primaries_ != other.primaries_)
-    return false;
-  if (sdr_max_luminance_nits_ != other.sdr_max_luminance_nits_)
-    return false;
-  if (hdr_max_luminance_relative_ != other.hdr_max_luminance_relative_)
-    return false;
-
-  return true;
-}
 
 // static
 bool DisplayColorSpaces::EqualExceptForHdrHeadroom(

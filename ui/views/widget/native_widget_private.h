@@ -210,6 +210,9 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
   virtual void Activate() = 0;
   virtual void Deactivate() = 0;
   virtual bool IsActive() const = 0;
+  // Returns whether a request to focus a View in this (inactive) widget should
+  // activate the widget. If false, the View is focused without activating.
+  virtual bool ShouldActivateOnFocusRequest() const;
   virtual void PaintAsActiveChanged();
   virtual void SetZOrderLevel(ui::ZOrderLevel order) = 0;
   virtual ui::ZOrderLevel GetZOrderLevel() const = 0;
@@ -258,6 +261,8 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
   virtual void ClearNativeFocus() = 0;
   virtual gfx::Rect GetWorkAreaBoundsInScreen() const = 0;
   virtual bool IsMoveLoopSupported() const;
+  virtual void PrepareForMoveLoop(Widget::MoveLoopSource source) {}
+  virtual void SetBypassWindowManager(bool bypass) {}
   virtual Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,

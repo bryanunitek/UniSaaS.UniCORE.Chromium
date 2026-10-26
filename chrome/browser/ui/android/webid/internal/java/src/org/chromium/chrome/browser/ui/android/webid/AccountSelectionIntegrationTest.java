@@ -48,10 +48,13 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.blink.mojom.RpContext;
 import org.chromium.blink.mojom.RpMode;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.HeaderType;
 import org.chromium.chrome.browser.ui.android.webid.data.RelyingPartyData;
@@ -256,10 +259,17 @@ public class AccountSelectionIntegrationTest extends AccountSelectionIntegration
                 });
         pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
 
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.BACK_PRESS);
+
         Espresso.pressBack();
 
         waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.BACK_PRESS);
         verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -277,6 +287,12 @@ public class AccountSelectionIntegrationTest extends AccountSelectionIntegration
                             RpContext.SIGN_IN);
                 });
         pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.SWIPE);
+
         BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
         runOnUiThreadBlocking(
                 () -> {
@@ -284,6 +300,8 @@ public class AccountSelectionIntegrationTest extends AccountSelectionIntegration
                 });
         waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.SWIPE);
         verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -421,5 +439,156 @@ public class AccountSelectionIntegrationTest extends AccountSelectionIntegration
         assertEquals(HeaderType.SIGN_IN, mAccountSelection.getMediator().getHeaderType());
         waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.OTHER);
         verify(mMockBridge, never()).onAccountSelected(any());
+    }
+
+    @Test
+    @MediumTest
+    public void testFailureDialogContinueRecordsMismatchDialogResultHistogram() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.CONTINUED);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.getMediator().setComponentShowTime(-1000);
+                    mBottomSheetController
+                            .getCurrentSheetContent()
+                            .getContentView()
+                            .findViewById(R.id.account_selection_continue_btn)
+                            .performClick();
+                });
+
+        // Continue also dismisses the dialog, so we simulate a subsequent dismissal to
+        // prevent double counting.
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection
+                            .getMediator()
+                            .onDismissed(IdentityRequestDialogDismissReason.OTHER);
+                });
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    public void testFailureDialogTapScrimRecordsMismatchDialogResultHistogram() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.TAP_SCRIM);
+
+        BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
+        runOnUiThreadBlocking(
+                () -> {
+                    sheetSupport.forceClickOutsideTheSheet();
+                });
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.TAP_SCRIM);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    @DisableFeatures(ChromeFeatureList.BOTTOM_SHEET_ON_DESKTOP_WINDOWING)
+    public void testFailureDialogCloseButtonRecordsMismatchDialogResultHistogram() {
+        if (mRpMode == RpMode.ACTIVE) return;
+
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.DISMISSED_BY_CLOSE_ICON);
+
+        // Click close button in header.
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.getMediator().setComponentShowTime(-1000);
+                    mBottomSheetController
+                            .getCurrentSheetContent()
+                            .getContentView()
+                            .findViewById(R.id.close_button)
+                            .performClick();
+                });
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.CLOSE_BUTTON);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    @MediumTest
+    public void testFailureDialogDestroyRecordsMismatchDialogResultHistogram() {
+        runOnUiThreadBlocking(
+                () -> {
+                    mAccountSelection.showFailureDialog(
+                            new RelyingPartyData(
+                                    EXAMPLE_ETLD_PLUS_ONE,
+                                    /* iframeForDisplay= */ "",
+                                    /* rpIcon= */ null),
+                            TEST_ETLD_PLUS_ONE_2,
+                            IDP_METADATA,
+                            RpContext.SIGN_IN);
+                });
+        pollUiThread(() -> getBottomSheetState() == mExpectedSheetState);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        "Blink.FedCm.IdpSigninStatus.MismatchDialogResult",
+                        MismatchDialogResult.DISMISSED_FOR_OTHER_REASONS);
+
+        // Simulate sheet suppression due to navigation / destruction.
+        BottomSheetTestSupport sheetSupport = new BottomSheetTestSupport(mBottomSheetController);
+        runOnUiThreadBlocking(
+                () -> {
+                    sheetSupport.suppressSheet(BottomSheetController.StateChangeReason.NAVIGATION);
+                });
+
+        waitForEvent(mMockBridge).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        verify(mMockBridge, never()).onAccountSelected(any());
+
+        histogramWatcher.assertExpected();
     }
 }

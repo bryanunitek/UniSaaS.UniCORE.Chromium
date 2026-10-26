@@ -10,7 +10,7 @@
 #include "components/autofill/core/browser/integrators/password_manager/mock_password_manager_delegate.h"
 #include "components/autofill/core/browser/suggestions/suggestion_generator.h"
 #include "components/autofill/core/browser/suggestions/suggestion_test_helpers.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -66,6 +66,25 @@ TEST_F(PasskeySuggestionGeneratorTest, FetchCreatesValidSuggestionForGenerate) {
   base::MockOnceCallback<void(ReturnedSuggestions)> generate_cb;
   EXPECT_CALL(generate_cb, Run(Pair(SuggestionDataSource::kPasskey,
                                     ElementsAre(suggestion))));
+  generator().GenerateSuggestions(form(), field(), /*form_structure=*/nullptr,
+                                  /*trigger_autofill_field=*/nullptr, client(),
+                                  generate_cb.Get());
+}
+
+TEST_F(PasskeySuggestionGeneratorTest,
+       FetchCreatesValidInlineQrAndHybridSuggestionsForGenerate) {
+  Suggestion inline_qr(SuggestionType::kWebauthnPasskeyQrCode);
+  Suggestion hybrid_suggestion(
+      SuggestionType::kWebauthnSignInWithAnotherDevice);
+  EXPECT_CALL(password_delegate(), GetWebauthnInlineQrCodeSuggestion)
+      .WillRepeatedly(Return(inline_qr));
+  EXPECT_CALL(password_delegate(), GetWebauthnSignInWithAnotherDeviceSuggestion)
+      .WillRepeatedly(Return(hybrid_suggestion));
+
+  base::MockOnceCallback<void(ReturnedSuggestions)> generate_cb;
+  EXPECT_CALL(generate_cb,
+              Run(Pair(SuggestionDataSource::kPasskey,
+                       ElementsAre(inline_qr, hybrid_suggestion))));
   generator().GenerateSuggestions(form(), field(), /*form_structure=*/nullptr,
                                   /*trigger_autofill_field=*/nullptr, client(),
                                   generate_cb.Get());

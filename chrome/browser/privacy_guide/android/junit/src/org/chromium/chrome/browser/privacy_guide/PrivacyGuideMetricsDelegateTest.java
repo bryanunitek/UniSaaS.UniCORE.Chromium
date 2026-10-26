@@ -8,8 +8,6 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.when;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -22,7 +20,6 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.UserActionTester;
-import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridgeJni;
@@ -99,18 +96,12 @@ public class PrivacyGuideMetricsDelegateTest {
                 .thenReturn(initialCookiesMode, finalCookiesMode);
     }
 
-    private void mockAdTopicsState(boolean initialAdTopicsState, boolean finalAdTopicsState) {
-        when(mPrefServiceMock.getBoolean(Pref.PRIVACY_SANDBOX_M1_TOPICS_ENABLED))
-                .thenReturn(initialAdTopicsState, finalAdTopicsState);
-    }
-
     private void triggerMetricsOnNext(@PrivacyGuideFragment.FragmentType int fragmentType) {
         mPrivacyGuideMetricsDelegate.setInitialStateForCard(fragmentType);
         mPrivacyGuideMetricsDelegate.recordMetricsOnNextForCard(fragmentType);
     }
 
     @Test
-    @SmallTest
     public void testMSBB_offToOffSettingsStatesHistogram() {
         mockMSBBState(false, false);
         HistogramWatcher watcher =
@@ -121,7 +112,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testMSBB_offToOnSettingsStatesHistogram() {
         mockMSBBState(false, true);
         HistogramWatcher watcher =
@@ -132,7 +122,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testMSBB_onToOffSettingsStatesHistogram() {
         mockMSBBState(true, false);
         HistogramWatcher watcher =
@@ -143,7 +132,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testMSBB_onToOnSettingsStatesHistogram() {
         mockMSBBState(true, true);
         HistogramWatcher watcher =
@@ -154,7 +142,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testMSBB_nextClickUserAction() {
         mockMSBBState(false, false);
         triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.MSBB);
@@ -162,7 +149,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testMSBB_nextNavigationHistogram() {
         mockMSBBState(false, false);
         HistogramWatcher watcher =
@@ -173,7 +159,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_offToOffSettingsStatesHistogram() {
         mockHistorySyncState(false, false);
         HistogramWatcher watcher =
@@ -185,7 +170,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_offToOnSettingsStatesHistogram() {
         mockHistorySyncState(false, true);
         HistogramWatcher watcher =
@@ -197,7 +181,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_onToOffSettingsStatesHistogram() {
         mockHistorySyncState(true, false);
         HistogramWatcher watcher =
@@ -209,7 +192,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_onToOnSettingsStatesHistogram() {
         mockHistorySyncState(true, true);
         HistogramWatcher watcher =
@@ -221,7 +203,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_nextClickUserAction() {
         mockHistorySyncState(false, false);
         triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.HISTORY_SYNC);
@@ -230,7 +211,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_nextNavigationHistogram() {
         mockHistorySyncState(false, false);
         HistogramWatcher watcher =
@@ -242,7 +222,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_enhanceToEnhanceSettingsStatesHistogram() {
         mockSafeBrowsingState(
                 SafeBrowsingState.ENHANCED_PROTECTION, SafeBrowsingState.ENHANCED_PROTECTION);
@@ -255,7 +234,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_enhanceToStandardSettingsStatesHistogram() {
         mockSafeBrowsingState(
                 SafeBrowsingState.ENHANCED_PROTECTION, SafeBrowsingState.STANDARD_PROTECTION);
@@ -268,7 +246,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_standardToEnhanceSettingsStatesHistogram() {
         mockSafeBrowsingState(
                 SafeBrowsingState.ENHANCED_PROTECTION, SafeBrowsingState.STANDARD_PROTECTION);
@@ -281,7 +258,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_standardToStandardSettingsStatesHistogram() {
         mockSafeBrowsingState(
                 SafeBrowsingState.STANDARD_PROTECTION, SafeBrowsingState.STANDARD_PROTECTION);
@@ -294,7 +270,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_nextClickUserAction() {
         mockSafeBrowsingState(
                 SafeBrowsingState.STANDARD_PROTECTION, SafeBrowsingState.STANDARD_PROTECTION);
@@ -304,7 +279,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_nextNavigationHistogram() {
         mockSafeBrowsingState(
                 SafeBrowsingState.STANDARD_PROTECTION, SafeBrowsingState.STANDARD_PROTECTION);
@@ -317,7 +291,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_block3PIncognitoTo3PIncognitoSettingsStatesHistogram() {
         mockCookieControlsMode(
                 CookieControlsMode.INCOGNITO_ONLY, CookieControlsMode.INCOGNITO_ONLY);
@@ -330,7 +303,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_block3PIncognitoTo3PSettingsStatesHistogram() {
         mockCookieControlsMode(
                 CookieControlsMode.INCOGNITO_ONLY, CookieControlsMode.BLOCK_THIRD_PARTY);
@@ -343,7 +315,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_block3PTo3PIncognitoSettingsStatesHistogram() {
         mockCookieControlsMode(
                 CookieControlsMode.BLOCK_THIRD_PARTY, CookieControlsMode.INCOGNITO_ONLY);
@@ -356,7 +327,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_block3PTo3PSettingsStatesHistogram() {
         mockCookieControlsMode(
                 CookieControlsMode.BLOCK_THIRD_PARTY, CookieControlsMode.BLOCK_THIRD_PARTY);
@@ -368,7 +338,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_offTo3PSettingsStatesHistogram() {
         mockCookieControlsMode(CookieControlsMode.OFF, CookieControlsMode.BLOCK_THIRD_PARTY);
         HistogramWatcher watcher =
@@ -380,7 +349,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_offTo3PIncognitoSettingsStatesHistogram() {
         mockCookieControlsMode(CookieControlsMode.OFF, CookieControlsMode.INCOGNITO_ONLY);
         HistogramWatcher watcher =
@@ -392,7 +360,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_nextClickUserAction() {
         mockCookieControlsMode(
                 CookieControlsMode.INCOGNITO_ONLY, CookieControlsMode.INCOGNITO_ONLY);
@@ -401,7 +368,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_nextNavigationHistogram() {
         mockCookieControlsMode(
                 CookieControlsMode.INCOGNITO_ONLY, CookieControlsMode.INCOGNITO_ONLY);
@@ -413,14 +379,12 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testWelcome_nextClickUserAction() {
         triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.WELCOME);
         assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.NextClickWelcome"));
     }
 
     @Test
-    @SmallTest
     public void testWelcome_nextNavigationHistogram() {
         HistogramWatcher watcher =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -430,21 +394,18 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testMSBB_changeMSBBOnUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnMSBBChange(true);
         assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.ChangeMSBBOn"));
     }
 
     @Test
-    @SmallTest
     public void testMSBB_changeMSBBOffUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnMSBBChange(false);
         assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.ChangeMSBBOff"));
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_changeHistorySyncOnUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnHistorySyncChange(true);
         assertTrue(
@@ -452,7 +413,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_changeHistorySyncOffUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnHistorySyncChange(false);
         assertTrue(
@@ -460,7 +420,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_changeSafeBrowsingEnhancedUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnSafeBrowsingChange(
                 SafeBrowsingState.ENHANCED_PROTECTION);
@@ -471,7 +430,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_changeSafeBrowsingStandardUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnSafeBrowsingChange(
                 SafeBrowsingState.STANDARD_PROTECTION);
@@ -482,14 +440,12 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test(expected = AssertionError.class)
-    @SmallTest
     public void testSafeBrowsing_changeSafeBrowsingOff() {
         PrivacyGuideMetricsDelegate.recordMetricsOnSafeBrowsingChange(
                 SafeBrowsingState.NO_SAFE_BROWSING);
     }
 
     @Test
-    @SmallTest
     public void testCookies_changeCookiesBlock3PIncognitoUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnCookieControlsChange(
                 CookieControlsMode.INCOGNITO_ONLY);
@@ -500,7 +456,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_changeCookiesBlock3PUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnCookieControlsChange(
                 CookieControlsMode.BLOCK_THIRD_PARTY);
@@ -509,13 +464,11 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test(expected = AssertionError.class)
-    @SmallTest
     public void testCookies_changeCookiesOff() {
         PrivacyGuideMetricsDelegate.recordMetricsOnCookieControlsChange(CookieControlsMode.OFF);
     }
 
     @Test
-    @SmallTest
     public void testHistorySync_backClickUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnBackForCard(
                 PrivacyGuideFragment.FragmentType.HISTORY_SYNC);
@@ -524,7 +477,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testSafeBrowsing_backClickUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnBackForCard(
                 PrivacyGuideFragment.FragmentType.SAFE_BROWSING);
@@ -533,7 +485,6 @@ public class PrivacyGuideMetricsDelegateTest {
     }
 
     @Test
-    @SmallTest
     public void testCookies_backClickUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnBackForCard(
                 PrivacyGuideFragment.FragmentType.COOKIES);
@@ -559,89 +510,5 @@ public class PrivacyGuideMetricsDelegateTest {
     public void testWelcome_backClickUserAction() {
         PrivacyGuideMetricsDelegate.recordMetricsOnBackForCard(
                 PrivacyGuideFragment.FragmentType.WELCOME);
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_offToOffSettingsStatesHistogram() {
-        mockAdTopicsState(false, false);
-        HistogramWatcher watcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        SETTINGS_STATES_HISTOGRAM, PrivacyGuideSettingsStates.AD_TOPICS_OFF_TO_OFF);
-        triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        watcher.assertExpected();
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_offToOnSettingsStatesHistogram() {
-        mockAdTopicsState(false, true);
-        HistogramWatcher watcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        SETTINGS_STATES_HISTOGRAM, PrivacyGuideSettingsStates.AD_TOPICS_OFF_TO_ON);
-        triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        watcher.assertExpected();
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_onToOffSettingsStatesHistogram() {
-        mockAdTopicsState(true, false);
-        HistogramWatcher watcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        SETTINGS_STATES_HISTOGRAM, PrivacyGuideSettingsStates.AD_TOPICS_ON_TO_OFF);
-        triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        watcher.assertExpected();
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_onToOnSettingsStatesHistogram() {
-        mockAdTopicsState(true, true);
-        HistogramWatcher watcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        SETTINGS_STATES_HISTOGRAM, PrivacyGuideSettingsStates.AD_TOPICS_ON_TO_ON);
-        triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        watcher.assertExpected();
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_nextNavigationHistogram() {
-        mockAdTopicsState(false, false);
-        HistogramWatcher watcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        NEXT_NAVIGATION_HISTOGRAM, PrivacyGuideInteractions.AD_TOPICS_NEXT_BUTTON);
-        triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        watcher.assertExpected();
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_changeAdTopicsOnUserAction() {
-        PrivacyGuideMetricsDelegate.recordMetricsOnAdTopicsChange(true);
-        assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.ChangeAdTopicsOn"));
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_changeAdTopicsOffUserAction() {
-        PrivacyGuideMetricsDelegate.recordMetricsOnAdTopicsChange(false);
-        assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.ChangeAdTopicsOff"));
-    }
-
-    @Test
-    @SmallTest
-    public void testAdTopics_nextClickUserAction() {
-        mockAdTopicsState(false, false);
-        triggerMetricsOnNext(PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.NextClickAdTopics"));
-    }
-
-    @Test
-    public void testAdTopics_backClickUserAction() {
-        PrivacyGuideMetricsDelegate.recordMetricsOnBackForCard(
-                PrivacyGuideFragment.FragmentType.AD_TOPICS);
-        assertTrue(mActionTester.getActions().contains("Settings.PrivacyGuide.BackClickAdTopics"));
     }
 }

@@ -19,7 +19,6 @@ bool StructTraits<blink::mojom::UntrustworthyContextMenuParamsDataView,
   if (!data.ReadMediaType(&out->media_type) ||
       !data.ReadLinkUrl(&out->link_url) ||
       !data.ReadLinkText(&out->link_text) ||
-      !data.ReadImpression(&out->impression) ||
       !data.ReadUnfilteredLinkUrl(&out->unfiltered_link_url) ||
       !data.ReadSrcUrl(&out->src_url) ||
       !data.ReadSelectionText(&out->selection_text) ||
@@ -36,7 +35,9 @@ bool StructTraits<blink::mojom::UntrustworthyContextMenuParamsDataView,
       !data.ReadSelectionRect(&out->selection_rect) ||
       !data.ReadFormControlType(&out->form_control_type) ||
       !data.ReadFormRendererId(&out->form_renderer_id) ||
-      !data.ReadFieldRendererId(&out->field_renderer_id)) {
+      !data.ReadFieldRendererId(&out->field_renderer_id) ||
+      !data.ReadImageReplacementFrameToken(
+          &out->image_replacement_frame_token)) {
     return false;
   }
 

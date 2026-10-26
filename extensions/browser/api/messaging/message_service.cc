@@ -12,7 +12,9 @@
 #include <utility>
 #include <variant>
 
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/json/json_writer.h"
@@ -58,6 +60,7 @@
 #include "extensions/common/api/messaging/messaging_util.h"
 #include "extensions/common/api/messaging/port_context.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/background_info.h"
@@ -95,6 +98,27 @@ const char kMissingPermissionError[] =
 const char kProhibitedByPoliciesError[] =
     "Access to the native messaging host was disabled by the system "
     "administrator.";
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+constexpr char kUnauthorizedExtensionError[] =
+    "Access to native messaging is unauthorized for this extension.";
+
+// TODO(crbug.com/555299632): Currently native messaging on desktop Android is
+// restricted to allowlisted extensions. This allowlist restriction will be
+// removed once a library is added that would allow external app developers to
+// securely audit the connection between Chrome/extensions and their app.
+constexpr auto kAndroidNativeMessagingAllowedExtensionIds =
+    base::MakeFixedFlatSet<std::string_view>({
+        // gnubbyd-v3 dev
+        "ckcendljdlmgnhghiaomidhiiclmapok",
+        // gnubbyd-v3 prod
+        "lfboplenmmjcmpbkeemecobbadnmpfhi",
+        // Chrome Remote Desktop dev
+        "pbnaomcgbfiofkfobmlhmdobjchjkphi",
+        // Chrome Remote Desktop prod
+        "inomeogfingihgjfjlpeplalcfajhgai",
+    });
 #endif
 
 LazyContextId LazyContextIdFor(content::BrowserContext* browser_context,
@@ -358,12 +382,13 @@ class MessageServiceFactory
       Source source,
       const PortId& source_port_id,
       const std::string& native_app_name,
+      const SigningCertificates& android_certificates,
       mojo::PendingAssociatedRemote<extensions::mojom::MessagePort> port,
       mojo::PendingAssociatedReceiver<extensions::mojom::MessagePortHost>
           port_host) override {
     MessageService::Get(context)->OpenChannelToNativeApp(
         GetEndpoint(context, source), source_port_id, native_app_name,
-        std::move(port), std::move(port_host));
+        android_certificates, std::move(port), std::move(port_host));
   }
 
   void OpenChannelToTab(
@@ -525,9 +550,7 @@ void MessageService::OpenChannelToExtension(
     // information (so that it's always present, even for extensions that don't
     // have an explicit key); we should.
     const ExternallyConnectableInfo* externally_connectable =
-        static_cast<const ExternallyConnectableInfo*>(
-            target_extension->GetManifestData(
-                manifest_keys::kExternallyConnectable));
+        target_extension->GetManifestData<ExternallyConnectableInfo>();
     bool is_externally_connectable = false;
 
     if (externally_connectable) {
@@ -545,10 +568,8 @@ void MessageService::OpenChannelToExtension(
         // Check that the web page URL matches. Skip error pages, whose last
         // committed URL reflects the failed navigation target rather than a
         // document the source process actually hosts.
-        is_externally_connectable =
-            !source_render_frame_host->IsErrorDocument() &&
-            externally_connectable->matches.MatchesURL(
-                source_render_frame_host->GetLastCommittedURL());
+        is_externally_connectable = externally_connectable->matches.MatchesURL(
+            util::GetURLForExtensionPermissionCheck(source_render_frame_host));
       }
     } else {
       // Default behaviour. Any extension or content script, no webpages.
@@ -651,7 +672,9 @@ void MessageService::OpenChannelToExtension(
     // - Only for extensions that can't normally be enabled in incognito, since
     //   that surface (e.g. chrome://extensions) should be the only one for
     //   enabling in incognito. In practice this means platform apps only.
-    if (relationship != MessagingEndpoint::Relationship::kExternalWebPage ||
+    if (base::FeatureList::IsEnabled(
+            extensions_features::kExtensionAutoRejectIncognitoConnectability) ||
+        relationship != MessagingEndpoint::Relationship::kExternalWebPage ||
         IncognitoInfo::IsSplitMode(target_extension) ||
         util::CanBeIncognitoEnabled(target_extension)) {
       OnOpenChannelAllowed(std::move(params), false);
@@ -693,6 +716,7 @@ void MessageService::OpenChannelToNativeAppImpl(
     const ChannelEndpoint& source,
     const PortId& source_port_id,
     const std::string& native_app_name,
+    const SigningCertificates& android_certificates,
     mojo::PendingAssociatedRemote<extensions::mojom::MessagePort> port,
     mojo::PendingAssociatedReceiver<extensions::mojom::MessagePortHost>
         port_host) {
@@ -717,10 +741,21 @@ void MessageService::OpenChannelToNativeAppImpl(
     BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   bool has_permission = extension->permissions_data()->HasAPIPermission(
       mojom::APIPermissionID::kNativeMessaging);
+
   if (!has_permission) {
     opener_port->DispatchOnDisconnect(kMissingPermissionError);
     return;
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(
+          extensions_features::
+              kApiDesktopAndroidNativeMessagingBypassExtensionAllowlist) &&
+      !kAndroidNativeMessagingAllowedExtensionIds.contains(extension->id())) {
+    opener_port->DispatchOnDisconnect(kUnauthorizedExtensionError);
+    return;
+  }
+#endif
 
   // Verify that the host is not blocked by policies.
   BrowserContext* source_context = source.browser_context();
@@ -753,7 +788,7 @@ void MessageService::OpenChannelToNativeAppImpl(
           context_, weak_factory_.GetWeakPtr(), source_render_frame_host,
           extension->id(), receiver_port_id, native_app_name,
           policy_permission == MessagingDelegate::PolicyPermission::ALLOW_ALL,
-          &error));
+          android_certificates, &error));
 
   if (!receiver.get()) {
     // Abandon the channel.

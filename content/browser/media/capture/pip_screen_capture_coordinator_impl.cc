@@ -5,6 +5,7 @@
 #include "content/browser/media/capture/pip_screen_capture_coordinator_impl.h"
 
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "content/browser/media/capture/pip_screen_capture_coordinator_proxy_impl.h"
@@ -106,6 +107,21 @@ PipScreenCaptureCoordinatorImpl::PipScreenCaptureCoordinatorImpl() = default;
 
 PipScreenCaptureCoordinatorImpl::~PipScreenCaptureCoordinatorImpl() = default;
 
+void PipScreenCaptureCoordinatorImpl::OnPipInitiated(
+    const GlobalRenderFrameHostId& pip_owner_render_frame_host_id) {
+  if (pip_owner_render_frame_host_id_ == pip_owner_render_frame_host_id) {
+    return;
+  }
+
+  // A new session starts here. Reset in case OnPipClosed() was not called for
+  // the previous one.
+  was_excluded_from_screen_capture_ = false;
+  bool was_excluded = IsExcludedFromScreenCapture();
+  pip_owner_render_frame_host_id_ = pip_owner_render_frame_host_id;
+  NotifyStateChanged();
+  NotifyExclusionChanged(was_excluded);
+}
+
 void PipScreenCaptureCoordinatorImpl::OnPipShown(
     WebContents& pip_web_contents,
     const GlobalRenderFrameHostId& pip_owner_render_frame_host_id) {
@@ -132,9 +148,13 @@ void PipScreenCaptureCoordinatorImpl::OnPipShown(
 }
 
 void PipScreenCaptureCoordinatorImpl::OnPipClosed() {
-  if (!pip_window_id_) {
+  if (!pip_window_id_ && !pip_owner_render_frame_host_id_) {
     return;
   }
+  base::UmaHistogramBoolean(
+      "Media.DocumentPictureInPicture.ScreenCaptureExclusion",
+      was_excluded_from_screen_capture_);
+  was_excluded_from_screen_capture_ = false;
   pip_window_id_ = std::nullopt;
   pip_owner_render_frame_host_id_ = {};
   NotifyStateChanged();
@@ -208,6 +228,9 @@ void PipScreenCaptureCoordinatorImpl::NotifyStateChanged() {
 void PipScreenCaptureCoordinatorImpl::NotifyExclusionChanged(
     bool was_excluded) {
   bool is_excluded = IsExcludedFromScreenCapture();
+  if (is_excluded) {
+    was_excluded_from_screen_capture_ = true;
+  }
   if (was_excluded != is_excluded) {
     for (desktop_capture::PipScreenCaptureExclusionObserver& obs :
          exclusion_observers_) {
@@ -245,7 +268,7 @@ bool PipScreenCaptureCoordinatorImpl::IsExcludedFromScreenCapture() const {
   if (!base::FeatureList::IsEnabled(features::kExcludePipFromScreenCapture)) {
     return false;
   }
-  if (!pip_window_id_ || captures_.empty()) {
+  if (!pip_owner_render_frame_host_id_ || captures_.empty()) {
     return false;
   }
   for (const auto& capture : captures_) {
@@ -259,6 +282,7 @@ bool PipScreenCaptureCoordinatorImpl::IsExcludedFromScreenCapture() const {
 void PipScreenCaptureCoordinatorImpl::ResetForTesting() {
   pip_window_id_ = std::nullopt;
   pip_owner_render_frame_host_id_ = {};
+  was_excluded_from_screen_capture_ = false;
   observers_.Clear();
   exclusion_observers_.Clear();
   captures_.clear();

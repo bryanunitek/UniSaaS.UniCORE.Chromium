@@ -12,9 +12,12 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
@@ -38,14 +41,11 @@
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
 #include "chrome/browser/ash/guest_os/guest_os_shelf_utils.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_files.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/icon_transcoder/svg_icon_transcoder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/chromeos_app_icon_resources.h"
 #include "chromeos/ash/components/dbus/vm_applications/apps.pb.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/crx_file/id_util.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -54,6 +54,7 @@
 #include "extensions/browser/api/file_handlers/mime_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_scale_factor.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/gfx/image/image_skia_operations.h"
 
 using vm_tools::apps::App;
@@ -62,10 +63,20 @@ namespace guest_os {
 
 namespace {
 
-// Returns the current locale and fallbacks for it (in this order).
-std::vector<std::string> GetFallbackLocales() {
-  std::vector<std::string> locales = l10n_util::GetParentLocales(
-      l10n_util::NormalizeLocale(g_browser_process->GetApplicationLocale()));
+using ::base::i18n::LanguageTag;
+using ::base::i18n::LanguageTagConverter;
+
+std::vector<std::string> GetFallbackLocales(std::string_view app_locale) {
+  std::vector<std::string> locales;
+  std::optional<LanguageTag> base_tag =
+      LanguageTagConverter::GetInstance().FromString(app_locale);
+
+  if (base_tag) {
+    for (const LanguageTag& tag : base_tag->GetLineage()) {
+      locales.push_back(tag.ToLegacyICUFormat());
+    }
+  }
+
   // We use an empty locale as fallback.
   locales.push_back(std::string());
   return locales;
@@ -79,11 +90,6 @@ void Launch(vm_tools::apps::VmType vm_type,
     case VmType::TERMINA:
       crostini::LaunchCrostiniApp(profile, app_id, display::kInvalidDisplayId,
                                   {url.spec()}, base::DoNothing());
-      break;
-
-    case VmType::PLUGIN_VM:
-      plugin_vm::LaunchPluginVmApp(profile, app_id, {url.spec()},
-                                   base::DoNothing());
       break;
 
     case VmType::BOREALIS:
@@ -124,12 +130,9 @@ base::DictValue ProtoToDictionary(const App::LocaleString& locale_string) {
   base::DictValue result;
   for (const App::LocaleString::Entry& entry : locale_string.values()) {
     const std::string& locale = entry.locale();
-
-    std::string locale_with_dashes(locale);
-    std::replace(locale_with_dashes.begin(), locale_with_dashes.end(), '_',
-                 '-');
-    if (!locale.empty() &&
-        !l10n_util::IsValidLocaleSyntax(locale_with_dashes)) {
+    if (!locale.empty() && !base::i18n::LanguageTagConverter::GetInstance()
+                                .FromString(locale)
+                                .has_value()) {
       continue;
     }
 
@@ -165,12 +168,9 @@ base::DictValue LocaleStringsProtoToDictionary(
   base::DictValue result;
   for (const auto& strings_with_locale : repeated_locale_string.values()) {
     const std::string& locale = strings_with_locale.locale();
-
-    std::string locale_with_dashes(locale);
-    std::replace(locale_with_dashes.begin(), locale_with_dashes.end(), '_',
-                 '-');
-    if (!locale.empty() &&
-        !l10n_util::IsValidLocaleSyntax(locale_with_dashes)) {
+    if (!locale.empty() && !base::i18n::LanguageTagConverter::GetInstance()
+                                .FromString(locale)
+                                .has_value()) {
       continue;
     }
     result.Set(locale, ProtoToList(strings_with_locale.value()));
@@ -229,8 +229,9 @@ bool EqualsExcludingTimestamps(const base::DictValue& left,
       ++right_iter;
       continue;
     }
-    if (*left_iter != *right_iter)
+    if (*left_iter != *right_iter) {
       return false;
+    }
     ++left_iter;
     ++right_iter;
   }
@@ -239,6 +240,8 @@ bool EqualsExcludingTimestamps(const base::DictValue& left,
 
 void InstallIconFromFileThread(const base::FilePath& icon_path,
                                const std::string& content) {
+  // TODO(crbug.com/571847721): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!content.empty());
 
   base::CreateDirectory(icon_path.DirName());
@@ -253,10 +256,11 @@ void InstallIconFromFileThread(const base::FilePath& icon_path,
 }
 
 void DeleteIconFolderFromFileThread(const base::FilePath& path) {
-  DCHECK(path.DirName().BaseName().MaybeAsASCII() == kCrostiniIconFolder &&
-         (!base::PathExists(path) || base::DirectoryExists(path)));
+  CHECK(path.DirName().BaseName().MaybeAsASCII() == kCrostiniIconFolder &&
+            (!base::PathExists(path) || base::DirectoryExists(path)),
+        base::NotFatalUntil::M160);
   const bool deleted = base::DeletePathRecursively(path);
-  DCHECK(deleted);
+  CHECK(deleted, base::NotFatalUntil::M160);
 }
 
 template <typename List>
@@ -349,9 +353,12 @@ std::string GetStringKey(const base::Value& dict, std::string_view key) {
 
 }  // namespace
 
-GuestOsRegistryService::Registration::Registration(std::string app_id,
+GuestOsRegistryService::Registration::Registration(std::string app_locale,
+                                                   std::string app_id,
                                                    base::Value pref)
-    : app_id_(std::move(app_id)), pref_(std::move(pref)) {}
+    : app_locale_(std::move(app_locale)),
+      app_id_(std::move(app_id)),
+      pref_(std::move(pref)) {}
 
 GuestOsRegistryService::Registration::~Registration() = default;
 
@@ -372,11 +379,6 @@ std::string GuestOsRegistryService::Registration::ContainerName() const {
 }
 
 std::string GuestOsRegistryService::Registration::Name() const {
-  if (VmType() == VmType::PLUGIN_VM) {
-    return l10n_util::GetStringFUTF8(
-        IDS_PLUGIN_VM_APP_NAME_WINDOWS_SUFFIX,
-        base::UTF8ToUTF16(GetLocalizedString(guest_os::prefs::kAppNameKey)));
-  }
   return GetLocalizedString(guest_os::prefs::kAppNameKey);
 }
 
@@ -487,7 +489,7 @@ std::string GuestOsRegistryService::Registration::GetLocalizedString(
     return std::string();
   }
 
-  for (const std::string& locale : GetFallbackLocales()) {
+  for (const std::string& locale : GetFallbackLocales(app_locale_)) {
     if (const std::string* value = dict->FindString(locale)) {
       return *value;
     }
@@ -505,7 +507,7 @@ std::set<std::string> GuestOsRegistryService::Registration::GetLocalizedList(
     return {};
   }
 
-  for (const std::string& locale : GetFallbackLocales()) {
+  for (const std::string& locale : GetFallbackLocales(app_locale_)) {
     if (const base::ListValue* list = dict->FindList(locale)) {
       return ListToStringSet(list);
     }
@@ -513,8 +515,11 @@ std::set<std::string> GuestOsRegistryService::Registration::GetLocalizedList(
   return {};
 }
 
-GuestOsRegistryService::GuestOsRegistryService(Profile* profile)
-    : profile_(profile),
+GuestOsRegistryService::GuestOsRegistryService(
+    const ApplicationLocaleStorage* application_locale_storage,
+    Profile* profile)
+    : application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      profile_(profile),
       prefs_(profile->GetPrefs()),
       base_icon_path_(profile->GetPath().AppendASCII(kCrostiniIconFolder)),
       clock_(base::DefaultClock::GetInstance()),
@@ -533,7 +538,11 @@ GuestOsRegistryService::GetAllRegisteredApps() const {
       prefs_->GetDict(guest_os::prefs::kGuestOsRegistry);
   std::map<std::string, GuestOsRegistryService::Registration> result;
   for (const auto item : apps) {
-    result.emplace(item.first, Registration(item.first, item.second.Clone()));
+    result.emplace(
+        item.first,
+        Registration(
+            std::string(application_locale_storage_->GetTag().tag_string()),
+            item.first, item.second.Clone()));
   }
   return result;
 }
@@ -542,13 +551,11 @@ std::map<std::string, GuestOsRegistryService::Registration>
 GuestOsRegistryService::GetEnabledApps() const {
   bool crostini_enabled =
       crostini::CrostiniFeatures::Get()->IsEnabled(profile_);
-  bool plugin_vm_enabled =
-      plugin_vm::PluginVmFeatures::Get()->IsEnabled(profile_);
   bool borealis_enabled =
       borealis::BorealisServiceFactory::GetForProfile(profile_)
           ->Features()
           .IsEnabled();
-  if (!crostini_enabled && !plugin_vm_enabled && !borealis_enabled) {
+  if (!crostini_enabled && !borealis_enabled) {
     return {};
   }
 
@@ -560,7 +567,6 @@ GuestOsRegistryService::GetEnabledApps() const {
         enabled = crostini_enabled;
         break;
       case VmType::PLUGIN_VM:
-        enabled = plugin_vm_enabled;
         break;
       case VmType::BOREALIS:
         enabled = borealis_enabled;
@@ -601,7 +607,8 @@ GuestOsRegistryService::GetRegistration(const std::string& app_id) const {
     return std::nullopt;
   }
   return std::make_optional<Registration>(
-      app_id, base::Value(pref_registration->Clone()));
+      std::string(application_locale_storage_->GetTag().tag_string()), app_id,
+      base::Value(pref_registration->Clone()));
 }
 
 void GuestOsRegistryService::RegisterTransientUrlHandler(
@@ -804,7 +811,9 @@ void GuestOsRegistryService::ClearApplicationList(
     base::DictValue& apps = update.Get();
 
     for (const auto item : apps) {
-      Registration registration(item.first, item.second.Clone());
+      Registration registration(
+          std::string(application_locale_storage_->GetTag().tag_string()),
+          item.first, item.second.Clone());
       if (vm_type != registration.VmType()) {
         continue;
       }
@@ -1057,7 +1066,7 @@ void GuestOsRegistryService::RequestContainerAppIcon(
   // Ignore requests for app_id that isn't registered.
   std::optional<GuestOsRegistryService::Registration> registration =
       GetRegistration(app_id);
-  DCHECK(registration);
+  CHECK(registration, base::NotFatalUntil::M160);
   if (!registration) {
     LOG(ERROR) << "Request to load icon for non-registered app: " << app_id;
     return;
@@ -1143,7 +1152,7 @@ void GuestOsRegistryService::OnContainerAppIcon(
     return;
   }
 
-  if (icons.empty()) {
+  if (icons.empty() || icons[0].content.empty()) {
     VLOG(1) << "No icon in container for app: " << app_id;
     InvokeActiveIconCallbacks(app_id, scale_factor, std::string());
     return;

@@ -5,6 +5,8 @@
 #ifndef CHROME_UPDATER_UTIL_UTIL_H_
 #define CHROME_UPDATER_UTIL_UTIL_H_
 
+#include <stdint.h>
+
 #include <cmath>
 #include <concepts>
 #include <limits>
@@ -79,6 +81,9 @@ std::optional<base::FilePath> GetVersionedInstallDirectory(UpdaterScope scope);
 // Returns the path where cached CRX files should be stored, common to all
 // versions of the updater. Does not create the directory if it does not exist.
 std::optional<base::FilePath> GetCrxCacheDirectory(UpdaterScope scope);
+
+// Returns the temporary directory used by the updater.
+std::optional<base::FilePath> GetUpdaterTempDir();
 
 #if BUILDFLAG(IS_MAC)
 // For example: ~/Library/Google/GoogleUpdater/88.0.4293.0/GoogleUpdater.app

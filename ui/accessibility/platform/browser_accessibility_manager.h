@@ -252,7 +252,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManager
               ax::mojom::Action scroll_action);
   void ScrollToMakeVisible(
       const BrowserAccessibility& node,
-      gfx::Rect subfocus,
+      std::optional<gfx::Rect> subfocus = std::nullopt,
       ax::mojom::ScrollAlignment horizontal_scroll_alignment =
           ax::mojom::ScrollAlignment::kScrollAlignmentCenter,
       ax::mojom::ScrollAlignment vertical_scroll_alignment =
@@ -274,6 +274,8 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManager
                      const std::vector<BrowserAccessibility::AXRange>& ranges,
                      const std::vector<std::string>& replacement_strings);
   void ShowContextMenu(const BrowserAccessibility& node);
+  void ShowTooltip(const BrowserAccessibility& node);
+  void HideTooltip(const BrowserAccessibility& node);
   void SignalEndOfTest();
   void StitchChildTree(const BrowserAccessibility& node,
                        const AXTreeID& child_tree_id);
@@ -462,8 +464,16 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManager
   // yet.
   AXPlatformTreeManagerDelegate* GetDelegateFromRootManager() const;
 
-  // Returns whether this is the root frame.
+  // Returns the delegate that owns the native view backing this tree: the root
+  // frame for web content, whose native view is shared by its frames, or this
+  // manager's own delegate for any other source.
+  AXPlatformTreeManagerDelegate* GetDelegateForNativeView() const;
+
+  // Returns whether this is the root frame manager for a web contents tree.
   bool IsRootFrameManager() const;
+
+  // Returns whether this manager's tree was serialized from web content.
+  bool IsWebContentSource() const;
 
   // Get a snapshot of the current tree as an AXTreeUpdate.
   AXTreeUpdate SnapshotAXTreeForTesting();

@@ -9,21 +9,24 @@
 #include "ash/shell.h"
 #include "ash/webui/boca_ui/url_constants.h"
 #include "chrome/browser/ash/boca/on_task/on_task_locked_session_window_tracker.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/login_detection/login_detection_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/boca/boca_role_util.h"
 #include "chromeos/ash/components/boca/on_task/on_task_blocklist.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "components/google/core/common/google_util.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/user_manager/user_manager.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/extension_urls.h"
 #include "net/base/url_util.h"
@@ -52,9 +55,16 @@ bool DoAllQueryParamsExist(const std::set<std::string>& request_params,
 }
 
 // Returns whether the url is the start of an Oauth login.
+// TODO(b/541544177): Harden `login_detection_util` to offer all indicators
+// needed to reliably detect an OAuth login start.
 bool IsOauthLoginStart(const GURL& url) {
-  return DoAllQueryParamsExist(login_detection::GetOAuthLoginStartQueryParams(),
-                               url);
+  if (!url.SchemeIsHTTPOrHTTPS()) {
+    return false;
+  }
+  std::set<std::string> params =
+      login_detection::GetOAuthLoginStartQueryParams();
+  params.insert("response_type");
+  return DoAllQueryParamsExist(params, url);
 }
 
 // Returns whether the url is the completion of an Oauth login.
@@ -68,9 +78,64 @@ bool IsChromeWebStoreURL(const GURL& url) {
          (url.GetHost() == extension_urls::GetNewWebstoreLaunchURL().GetHost());
 }
 
+content::WebContents* GetWebContentsForTabId(BrowserDelegate* browser,
+                                             SessionID tab_id) {
+  if (!browser || !tab_id.is_valid()) {
+    return nullptr;
+  }
+  for (size_t i = 0; i < browser->GetWebContentsCount(); ++i) {
+    content::WebContents* web_contents = browser->GetWebContentsAt(i);
+    if (web_contents &&
+        sessions::SessionTabHelper::IdForTab(web_contents) == tab_id) {
+      return web_contents;
+    }
+  }
+  return nullptr;
+}
+
 bool IsBocaAppHostURL(const GURL& url) {
   return (url.SchemeIs(content::kChromeUIUntrustedScheme) &&
           url.GetHost() == boca::kChromeBocaAppHost);
+}
+
+// Resolves and returns the parent tab for the navigating tab. Abstracts out the
+// complex logic around identifying the parent tab for background navigations,
+// especially those that spawn new tabs.
+content::WebContents* GetParentTab(content::NavigationHandle* navigation_handle,
+                                   OnTaskBlocklist* on_task_blocklist,
+                                   LockedSessionWindowTracker* window_tracker) {
+  content::WebContents* navigating_tab = navigation_handle->GetWebContents();
+  content::WebContents* parent_tab =
+      navigating_tab->GetFirstWebContentsInLiveOriginalOpenerChain();
+  if (!parent_tab) {
+    // Normally happens when the site uses noopener on links. We fall back to
+    // the one tracked by the blocklist if there is one instead.
+    const SessionID parent_tab_id =
+        on_task_blocklist->GetParentTabId(navigating_tab);
+    if (parent_tab_id.is_valid()) {
+      BrowserDelegate* const tracked_browser = window_tracker->browser();
+      parent_tab = GetWebContentsForTabId(tracked_browser, parent_tab_id);
+    }
+
+    // If there is none tracked by the blocklist (mostly for new uncommitted
+    // background navigations that spawn new tabs), we try to derive this via
+    // initiator routing ids and frame tokens.
+    if (!parent_tab &&
+        navigation_handle->GetInitiatorFrameToken().has_value()) {
+      content::RenderFrameHost* const initiator_rfh =
+          content::RenderFrameHost::FromFrameToken(
+              content::GlobalRenderFrameHostToken(
+                  navigation_handle->GetInitiatorProcessId(),
+                  navigation_handle->GetInitiatorFrameToken().value()));
+      if (initiator_rfh) {
+        parent_tab = content::WebContents::FromRenderFrameHost(initiator_rfh);
+        if (parent_tab == navigating_tab) {
+          parent_tab = nullptr;
+        }
+      }
+    }
+  }
+  return parent_tab;
 }
 
 }  // namespace
@@ -124,7 +189,7 @@ void OnTaskLockedSessionNavigationThrottle::MaybeCreateAndAdd(
 
   // Ensure we only apply the nav throttle on OnTask SWA navigations.
   if (content_browser &&
-      (&content_browser->GetBrowser() != window_tracker->browser() &&
+      (content_browser != window_tracker->browser() &&
        content_browser->GetType() != BrowserType::kAppPopup)) {
     return;
   }
@@ -209,7 +274,7 @@ bool OnTaskLockedSessionNavigationThrottle::IsOutsideOnTaskAppNavigation() {
   // context, but is moved to a different browser right after (such as open link
   // in chrome window context menu).
   if (!content_browser ||
-      (&content_browser->GetBrowser() != window_tracker->browser() &&
+      (content_browser != window_tracker->browser() &&
        content_browser->GetType() != BrowserType::kAppPopup)) {
     return true;
   }
@@ -224,12 +289,29 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
        ui::PageTransition::PAGE_TRANSITION_CLIENT_REDIRECT)) {
     return PROCEED;
   }
+
+  content::WebContents* const navigating_tab =
+      navigation_handle()->GetWebContents();
+  if (!navigating_tab) {
+    return CANCEL;
+  }
+
   LockedSessionWindowTracker* const window_tracker =
       LockedSessionWindowTrackerFactory::GetForBrowserContext(
-          navigation_handle()->GetWebContents()->GetBrowserContext());
+          navigating_tab->GetBrowserContext());
+  OnTaskBlocklist* const on_task_blocklist =
+      window_tracker->on_task_blocklist();
+
+  // Resolve and register parent child tab association early on to simplify
+  // downstream blocklist processing.
+  content::WebContents* const parent_tab =
+      GetParentTab(navigation_handle(), on_task_blocklist, window_tracker);
+  if (parent_tab) {
+    on_task_blocklist->SetParentForTab(navigating_tab, parent_tab);
+  }
+
   BrowserDelegate* const content_browser =
-      BrowserController::GetInstance()->GetBrowserForTab(
-          navigation_handle()->GetWebContents());
+      BrowserController::GetInstance()->GetBrowserForTab(navigating_tab);
 
   if (IsOutsideOnTaskAppNavigation()) {
     return PROCEED;
@@ -245,10 +327,8 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
   // they do not count towards the 1LD quota. We do not extend this to other
   // navigation restrictions to prevent users from circumventing said
   // restrictions.
-  OnTaskBlocklist* const on_task_blocklist =
-      window_tracker->on_task_blocklist();
   if (navigation_handle()->GetRedirectChain().size() > 1 &&
-      on_task_blocklist->IsCurrentRestrictionOneLevelDeep()) {
+      on_task_blocklist->IsTabRestrictionOneLevelDeep(navigating_tab)) {
     return PROCEED;
   }
   const GURL& url = navigation_handle()->GetURL();
@@ -261,9 +341,9 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
     return PROCEED;
   }
 
-  // Checks if the query is the end of an OAuth login. If so, then we want
-  // to let these pass.
-  if (IsOauthLoginComplete(url)) {
+  // Checks if the query is the end of an OAuth login. Only allow completion
+  // URLs to bypass restrictions when an OAuth login flow is actively tracked.
+  if (window_tracker->oauth_in_progress() && IsOauthLoginComplete(url)) {
     should_redirects_pass_ = true;
     return PROCEED;
   }
@@ -296,9 +376,9 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
   // that URL needs to be blocked by another blocklist, such as the one imposed
   // by the device admin panel, this would be enforced by a different
   // NavigationThrottle.
-  if (on_task_blocklist->IsCurrentRestrictionOneLevelDeep() &&
+  if (on_task_blocklist->IsTabRestrictionOneLevelDeep(navigating_tab) &&
       navigation_handle()->GetReloadType() != content::ReloadType::NONE &&
-      navigation_handle()->GetWebContents()->GetLastCommittedURL().is_valid()) {
+      navigating_tab->GetLastCommittedURL().is_valid()) {
     should_redirects_pass_ = true;
     return PROCEED;
   }
@@ -307,12 +387,11 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
   // the context menu. Back needs to be explicitly allowed to go back in the
   // case this was a one level deep navigation and we do not want to block
   // the navigation from going back.
-  if (on_task_blocklist->IsCurrentRestrictionOneLevelDeep() &&
+  if (on_task_blocklist->IsTabRestrictionOneLevelDeep(navigating_tab) &&
       navigation_handle()->GetNavigationEntry() &&
       navigation_handle()->GetNavigationEntry()->GetTransitionType() &
           ui::PageTransition::PAGE_TRANSITION_FORWARD_BACK) {
-    content::NavigationController& controller =
-        navigation_handle()->GetWebContents()->GetController();
+    content::NavigationController& controller = navigating_tab->GetController();
     int current_index = controller.GetLastCommittedEntryIndex();
     int pending_index = controller.GetPendingEntryIndex();
     if (pending_index < current_index) {
@@ -322,7 +401,7 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
   }
 
   policy::URLBlocklist::URLBlocklistState blocklist_state =
-      on_task_blocklist->GetURLBlocklistState(url);
+      on_task_blocklist->GetURLBlocklistState(url, navigating_tab);
   if (blocklist_state ==
       policy::URLBlocklist::URLBlocklistState::URL_IN_BLOCKLIST) {
     MaybeShowBlockedURLToast();
@@ -338,15 +417,27 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
     // newly opened tabs, such as when ctrl-clicking a link, also count as
     // navigating one level deep. For those cases, restrict the new tab to the
     // exact URL for subsequent navigations. The exact URL matching will occur
-    // in `on_task_blocklist->CanPerformOneLevelNavigation()`.
-    if (on_task_blocklist->current_page_restriction_level() ==
-        LockedNavigationOptions::LIMITED_NAVIGATION) {
-      if (!MaybeProceedForOneLevelDeep(on_task_blocklist->previous_tab(),
-                                       url)) {
+    // in `on_task_blocklist->CanPerformOneLevelNavigation()`. The budget needs
+    // to be accounted for from the parent tab for such newly spawned child
+    // tabs.
+    content::WebContents* budget_tab = navigating_tab;
+    const SessionID budget_tab_id =
+        sessions::SessionTabHelper::IdForTab(budget_tab);
+    if (!on_task_blocklist->IsParentTab(navigating_tab) &&
+        !on_task_blocklist->child_tab_to_nav_filters().contains(
+            budget_tab_id)) {
+      // Newly spawned child tab.
+      budget_tab = parent_tab;
+    }
+
+    LockedNavigationOptions::NavigationType tab_restriction =
+        on_task_blocklist->GetRestrictionLevelForTab(navigating_tab);
+    if (tab_restriction == LockedNavigationOptions::LIMITED_NAVIGATION) {
+      if (!MaybeProceedForOneLevelDeep(budget_tab, url)) {
         MaybeShowBlockedURLToast();
         return content::NavigationThrottle::CANCEL;
       }
-    } else if (on_task_blocklist->current_page_restriction_level() ==
+    } else if (tab_restriction ==
                LockedNavigationOptions::
                    SAME_DOMAIN_OPEN_OTHER_DOMAIN_LIMITED_NAVIGATION) {
       // We need to account for several scenarios here, because a navigation
@@ -360,43 +451,36 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
       // instance).
       // 3. Navigation on a pre-existing child tab that may or may not have
       // already met the 1LD requirement.
-      GURL source_url = window_tracker->browser()
-                            ->GetTabStripModel()
-                            ->GetActiveWebContents()
-                            ->GetLastCommittedURL();
-      const SessionID original_tab_id = sessions::SessionTabHelper::IdForTab(
-          on_task_blocklist->previous_tab());
-      if (on_task_blocklist->one_level_deep_original_url().contains(
-              original_tab_id)) {
-        source_url =
-            on_task_blocklist->one_level_deep_original_url()[original_tab_id];
+      SessionID original_tab_id = SessionID::InvalidValue();
+      if (budget_tab) {
+        original_tab_id = sessions::SessionTabHelper::IdForTab(budget_tab);
       }
+
+      const GURL source_url =
+          on_task_blocklist->GetOneLevelDeepOriginalURL(original_tab_id);
       if (source_url.is_valid()) {
         if (OnTaskBlocklist::IsURLInDomain(url, source_url)) {
           // Same domain navigation.
           on_task_blocklist->MaybeSetURLRestrictionLevel(
-              navigation_handle()->GetWebContents(), url,
+              navigating_tab, url,
               LockedNavigationOptions::
                   SAME_DOMAIN_OPEN_OTHER_DOMAIN_LIMITED_NAVIGATION);
-        } else if (on_task_blocklist->IsParentTab(
-                       navigation_handle()->GetWebContents()) &&
-                   !MaybeProceedForOneLevelDeep(
-                       navigation_handle()->GetWebContents(), url)) {
+        } else if (on_task_blocklist->IsParentTab(navigating_tab) &&
+                   !MaybeProceedForOneLevelDeep(navigating_tab, url)) {
           // Cannot go 1LD on the same parent tab.
           MaybeShowBlockedURLToast();
           return content::NavigationThrottle::CANCEL;
         } else if (const SessionID nav_tab_id =
-                       sessions::SessionTabHelper::IdForTab(
-                           navigation_handle()->GetWebContents());
+                       sessions::SessionTabHelper::IdForTab(navigating_tab);
                    on_task_blocklist->child_tab_to_nav_filters().contains(
                        nav_tab_id) &&
-                   on_task_blocklist->child_tab_to_nav_filters()[nav_tab_id] ==
+                   on_task_blocklist->child_tab_to_nav_filters().at(
+                       nav_tab_id) ==
                        LockedNavigationOptions::BLOCK_NAVIGATION) {
           // Cannot go 1LD on a pre-existing child tab.
           MaybeShowBlockedURLToast();
           return content::NavigationThrottle::CANCEL;
-        } else if (!MaybeProceedForOneLevelDeep(
-                       on_task_blocklist->previous_tab(), url)) {
+        } else if (!MaybeProceedForOneLevelDeep(budget_tab, url)) {
           // Disallowed 1LD navigation on a new child tab.
           MaybeShowBlockedURLToast();
           return content::NavigationThrottle::CANCEL;
@@ -406,9 +490,8 @@ OnTaskLockedSessionNavigationThrottle::CheckRestrictions() {
       // Set the restrictions for this new url if possible with the parent tab's
       // restrictions. This will be skipped if the tab which this
       // navigation is occurring in is already set.
-      on_task_blocklist->MaybeSetURLRestrictionLevel(
-          navigation_handle()->GetWebContents(), url,
-          on_task_blocklist->current_page_restriction_level());
+      on_task_blocklist->MaybeSetURLRestrictionLevel(navigating_tab, url,
+                                                     tab_restriction);
     }
     should_redirects_pass_ = true;
     return PROCEED;

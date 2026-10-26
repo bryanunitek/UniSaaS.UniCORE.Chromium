@@ -2,16 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://webui-toolbar.top-chrome/app.js';
+import 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
 
 import {assertEquals} from 'chrome://webui-test/chai_assert.js';
+import {TestSearchboxBrowserProxy} from 'chrome://webui-test/cr_components/searchbox/test_searchbox_browser_proxy.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
-import type {LocationBarElement, LocationBarState} from 'chrome://webui-toolbar.top-chrome/app.js';
+import {BrowserProxyImpl, SearchboxBrowserProxy} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+import type {LocationBarElement, LocationBarState} from 'chrome://webui-toolbar.top-chrome/webui_toolbar.js';
+
+import {TestToolbarBrowserProxy} from './test_toolbar_browser_proxy.js';
+import type {TestToolbarUiHandler} from './test_toolbar_browser_proxy.js';
 
 suite('LocationBarFocus', function() {
   let locationBar: LocationBarElement;
   let other: HTMLInputElement;  // A focusable sibling element.
   let initialState: LocationBarState;
+  let uiHandler: TestToolbarUiHandler;
 
   const colorLocationBarBackground = 'rgb(0, 0, 255)';
   const colorOmniboxResultsBackground = 'rgb(0, 0, 200)';
@@ -27,6 +33,11 @@ suite('LocationBarFocus', function() {
   }
 
   setup(() => {
+    const browserProxy = new TestToolbarBrowserProxy();
+    uiHandler = browserProxy.toolbarUIHandler;
+    BrowserProxyImpl.setInstance(browserProxy);
+    SearchboxBrowserProxy.setInstance(new TestSearchboxBrowserProxy());
+
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     // Make first element something else focusable so we don't end up with
     // focus. It'll also be handy for transferring focus to.
@@ -89,27 +100,25 @@ suite('LocationBarFocus', function() {
         style.get('background-color')?.toString());
   });
 
-  test('Border (and box-shadow) computation', async () => {
+  test('Outline layout computation', async () => {
     locationBar.locationBarState = initialState;
     blurLocationBar();
     await microtasksFinished();
     const style = locationBar.computedStyleMap();
-    assertEquals('none', style.get('border-style')?.toString());
-    assertEquals('none', style.get('box-shadow')?.toString());
 
-    // Focus doesn't add a border.
+    // Default invisible outline
+    assertEquals('solid', style.get('outline-style')?.toString());
+    assertEquals('1px', style.get('outline-width')?.toString());
+    assertEquals('rgba(0, 0, 0, 0)', style.get('outline-color')?.toString());
+
+    // Focus upgrades the outline to a 2px boundary.
     focusLocationBar();
     await microtasksFinished();
-    assertEquals('none', style.get('border-style')?.toString());
-    // It does hover have a box-shadow that's pretty border-like.
-    assertEquals(
-        crFocusOutlineColor + ' 0px 0px 0px 2px inset',
-        style.get('box-shadow')?.toString());
+    assertEquals('solid', style.get('outline-style')?.toString());
+    assertEquals('2px', style.get('outline-width')?.toString());
+    assertEquals(crFocusOutlineColor, style.get('outline-color')?.toString());
 
-    // No outline in regular contrast.
-    assertEquals('none', style.get('outline-style')?.toString());
-
-    // If popup is open, the box-shadow goes away.
+    // If popup is open, the outline reverts.
     locationBar.locationBarState = {
       ...initialState,
       locationBarFlags: {
@@ -118,9 +127,10 @@ suite('LocationBarFocus', function() {
       },
     };
     await microtasksFinished();
-    assertEquals('none', style.get('box-shadow')?.toString());
+    assertEquals('1px', style.get('outline-width')?.toString());
+    assertEquals('rgba(0, 0, 0, 0)', style.get('outline-color')?.toString());
 
-    // In-progress gets a special border....
+    // In-progress gets a special outline color....
     blurLocationBar();
     locationBar.locationBarState = {
       ...initialState,
@@ -130,19 +140,37 @@ suite('LocationBarFocus', function() {
       },
     };
     await microtasksFinished();
-    assertEquals('solid', style.get('border-style')?.toString());
+    assertEquals('solid', style.get('outline-style')?.toString());
+    assertEquals('1px', style.get('outline-width')?.toString());
     assertEquals(
         colorLocationBarBorderOnMismatch,
-        style.get('border-color')?.toString());
-    assertEquals('none', style.get('box-shadow')?.toString());
+        style.get('outline-color')?.toString());
 
-    // ...unless it has focus, too.
+    // ...unless it has focus, too. (The 2px focus ring overrides it).
     focusLocationBar();
     await microtasksFinished();
-    assertEquals('none', style.get('border-style')?.toString());
-    assertEquals(
-        crFocusOutlineColor + ' 0px 0px 0px 2px inset',
-        style.get('box-shadow')?.toString());
-    assertEquals('none', style.get('outline-style')?.toString());
+    assertEquals('solid', style.get('outline-style')?.toString());
+    assertEquals('2px', style.get('outline-width')?.toString());
+    assertEquals(crFocusOutlineColor, style.get('outline-color')?.toString());
+  });
+
+  test('Focus state events', async () => {
+    locationBar.locationBarState = initialState;
+    blurLocationBar();
+    await microtasksFinished();
+    uiHandler.reset();
+
+    focusLocationBar();
+    await microtasksFinished();
+    assertEquals(1, uiHandler.getCallCount('onLocationBarFocusWithinChanged'));
+    let lastFocused =
+        uiHandler.getArgs('onLocationBarFocusWithinChanged').at(-1);
+    assertEquals(true, lastFocused);
+
+    blurLocationBar();
+    await microtasksFinished();
+    assertEquals(2, uiHandler.getCallCount('onLocationBarFocusWithinChanged'));
+    lastFocused = uiHandler.getArgs('onLocationBarFocusWithinChanged').at(-1);
+    assertEquals(false, lastFocused);
   });
 });

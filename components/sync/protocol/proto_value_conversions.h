@@ -17,7 +17,6 @@ class AppSpecifics;
 class ArcPackageSpecifics;
 class AutofillProfileSpecifics;
 class AutofillSpecifics;
-class AutofillOfferSpecifics;
 class AutofillValuableMetadataSpecifics;
 class AutofillWalletCredentialSpecifics;
 class AutofillWalletSpecifics;
@@ -58,8 +57,6 @@ class PasswordSpecifics;
 class PasswordSpecificsData;
 class PaymentInstrument;
 class PaymentsCustomerData;
-class PlusAddressSettingSpecifics;
-class PlusAddressSpecifics;
 class PowerBookmarkSpecifics;
 class PreferenceSpecifics;
 class PrinterPPDReference;
@@ -95,7 +92,6 @@ class WalletCreditCardCloudTokenData;
 class WalletMaskedCreditCard;
 class WalletMetadataSpecifics;
 class WalletPostalAddress;
-class WebApkSpecifics;
 class WebAppSpecifics;
 class WebauthnCredentialSpecifics;
 class WifiConfigurationSpecifics;
@@ -123,9 +119,6 @@ base::Value AppSpecificsToValue(const sync_pb::AppSpecifics& app_specifics);
 
 base::Value ArcPackageSpecificsToValue(
     const sync_pb::ArcPackageSpecifics& proto);
-
-base::Value AutofillOfferSpecificsToValue(
-    const sync_pb::AutofillOfferSpecifics& autofill_offer_specifics);
 
 base::Value AutofillProfileSpecificsToValue(
     const sync_pb::AutofillProfileSpecifics& autofill_profile_specifics);
@@ -240,12 +233,6 @@ base::Value PaymentInstrumentToValue(
 base::Value PaymentsCustomerDataToValue(
     const sync_pb::PaymentsCustomerData& payments_customer_data);
 
-base::Value PlusAddressSettingSpecificsToValue(
-    const sync_pb::PlusAddressSettingSpecifics& plus_address_setting_specifics);
-
-base::Value PlusAddressSpecificsToValue(
-    const sync_pb::PlusAddressSpecifics& plus_address_specifics);
-
 base::Value PowerBookmarkSpecificsToValue(
     const sync_pb::PowerBookmarkSpecifics& power_bookmark_specifics);
 
@@ -347,9 +334,6 @@ base::Value WalletMetadataSpecificsToValue(
 
 base::Value WalletPostalAddressToValue(
     const sync_pb::WalletPostalAddress& wallet_postal_address);
-
-base::Value WebApkSpecificsToValue(
-    const sync_pb::WebApkSpecifics& web_apk_specifics);
 
 base::Value WebAppSpecificsToValue(
     const sync_pb::WebAppSpecifics& web_app_specifics);

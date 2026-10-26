@@ -6,21 +6,26 @@
 
 #import <AppKit/AppKit.h>
 
+#include <memory>
 #include <set>
 
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_mac.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/web_modal/browser_window_modal_dialog_delegate.h"
+#include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/sublevel_manager.h"
 
 // static
-OverlayWidgetMac* OverlayWidgetMac::Create(BrowserView* browser_view,
-                                           views::Widget* parent) {
+std::unique_ptr<OverlayWidgetMac> OverlayWidgetMac::Create(
+    BrowserView* browser_view,
+    views::Widget* parent) {
   views::Widget::InitParams params(
-      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_POPUP);
   params.child = true;
   params.parent = parent->GetNativeView();
@@ -33,8 +38,11 @@ OverlayWidgetMac* OverlayWidgetMac::Create(BrowserView* browser_view,
   // darker dimming color on macOS.
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.name = "mac-fullscreen-overlay";
-  OverlayWidgetMac* overlay_widget =
-      new OverlayWidgetMac(browser_view->GetWidget());
+  BrowserWindowModalDialogDelegate* modal_dialog_delegate =
+      BrowserWindowModalDialogDelegate::From(browser_view->browser());
+  CHECK(modal_dialog_delegate);
+  std::unique_ptr<OverlayWidgetMac> overlay_widget = base::WrapUnique(
+      new OverlayWidgetMac(*modal_dialog_delegate, browser_view->GetWidget()));
 
   // When the overlay is used some Views are moved to the overlay_widget. When
   // this happens we want the fullscreen state of the overlay_widget to match
@@ -61,20 +69,33 @@ OverlayWidgetMac* OverlayWidgetMac::Create(BrowserView* browser_view,
   // which operates at the Widget level.
   if (overlay_widget->GetSublevelManager()) {
     overlay_widget->parent()->GetSublevelManager()->OnWidgetChildRemoved(
-        overlay_widget->parent(), overlay_widget);
+        overlay_widget->parent(), overlay_widget.get());
   }
 
   return overlay_widget;
 }
 
-OverlayWidgetMac::OverlayWidgetMac(views::Widget* role_model)
-    : ThemeCopyingWidget(role_model) {}
+OverlayWidgetMac::OverlayWidgetMac(
+    BrowserWindowModalDialogDelegate& modal_dialog_delegate,
+    views::Widget* role_model)
+    : ThemeCopyingWidget(role_model),
+      modal_dialog_delegate_(modal_dialog_delegate) {}
 
 OverlayWidgetMac::~OverlayWidgetMac() = default;
 
+void OverlayWidgetMac::OnNativeWidgetMove() {
+  ThemeCopyingWidget::OnNativeWidgetMove();
+  modal_dialog_delegate_->NotifyModalDialogsPositionRequiresUpdate();
+}
+
+void OverlayWidgetMac::OnNativeWidgetSizeChanged(const gfx::Size& new_size) {
+  ThemeCopyingWidget::OnNativeWidgetSizeChanged(new_size);
+  modal_dialog_delegate_->NotifyModalDialogsPositionRequiresUpdate();
+}
+
 bool OverlayWidgetMac::GetAccelerator(int cmd_id,
                                       ui::Accelerator* accelerator) const {
-  DCHECK(parent());
+  CHECK(parent(), base::NotFatalUntil::M162);
   return parent()->GetAccelerator(cmd_id, accelerator);
 }
 

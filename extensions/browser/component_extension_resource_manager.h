@@ -12,13 +12,17 @@ namespace base {
 class FilePath;
 }
 
+namespace content {
+class BrowserContext;
+}
+
 namespace extensions {
 
 // This class manages which extension resources actually come from
 // the resource bundle.
 class ComponentExtensionResourceManager {
  public:
-  virtual ~ComponentExtensionResourceManager() {}
+  virtual ~ComponentExtensionResourceManager() = default;
 
   // Checks whether image is a component extension resource. Returns false
   // if a given `resource` does not have a corresponding image in bundled
@@ -33,7 +37,8 @@ class ComponentExtensionResourceManager {
   // exist, or nullptr otherwise. If non-null, the returned value must remain
   // valid for the life of this ComponentExtensionResourceManager.
   virtual const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
-      const ExtensionId& extension_id) const = 0;
+      const ExtensionId& extension_id,
+      content::BrowserContext* context) const = 0;
 };
 
 }  // namespace extensions

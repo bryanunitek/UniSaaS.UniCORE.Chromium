@@ -9,15 +9,22 @@
 
 #include "base/component_export.h"
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 
 namespace features {
 
+enum class ScrollbarMode {
+  kOverlay,
+  kDevice,
+  kClassic,
+};
+
 COMPONENT_EXPORT(NATIVE_THEME_FEATURES) BASE_DECLARE_FEATURE(kOverlayScrollbar);
+COMPONENT_EXPORT(NATIVE_THEME_FEATURES)
+BASE_DECLARE_FEATURE_PARAM(ScrollbarMode, kScrollbarMode);
 COMPONENT_EXPORT(NATIVE_THEME_FEATURES)
 BASE_DECLARE_FEATURE(kScrollbarAnimations);
 
-COMPONENT_EXPORT(NATIVE_THEME_FEATURES)
-BASE_DECLARE_FEATURE(kOverlayScrollbarFlashOnlyOnceVisibleOnViewport);
 COMPONENT_EXPORT(NATIVE_THEME_FEATURES)
 BASE_DECLARE_FEATURE(kOverlayScrollbarFlashWhenMouseEnter);
 
@@ -30,6 +37,9 @@ COMPONENT_EXPORT(NATIVE_THEME_FEATURES) bool IsFluentScrollbarEnabled();
 
 COMPONENT_EXPORT(NATIVE_THEME_FEATURES)
 bool IsOverlayScrollbarEnabledByFeatureFlag();
+
+COMPONENT_EXPORT(NATIVE_THEME_FEATURES)
+bool ShouldUseOverlayScrollbar(bool os_prefers_overlay_scrollbars);
 
 }  // namespace ui
 

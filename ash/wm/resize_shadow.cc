@@ -12,7 +12,7 @@
 #include "ui/aura/window.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_provider_source.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_nine_patch.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -140,8 +140,8 @@ ResizeShadow::ResizeShadow(aura::Window* window,
     : window_(window), params_(params), type_(type) {
   // Use a NinePatchLayer to tile the shadow image (which is simply a
   // roundrect).
-  layer_ = std::make_unique<ui::Layer>(ui::LAYER_NINE_PATCH);
-  layer_->SetName("WindowResizeShadow");
+  layer_ = std::make_unique<ui::LayerNinePatch>();
+  layer_->SetName("ResizeShadow:WindowShadow");
   layer_->SetFillsBoundsOpaquely(false);
   layer_->SetOpacity(0.f);
   layer_->SetVisible(false);

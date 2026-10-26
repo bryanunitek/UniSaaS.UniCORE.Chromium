@@ -16,6 +16,7 @@ source_set("payments") {
     "credit_card_scanner_view_delegate.h",
     "mandatory_reauth_bubble_controller.h",
     "mandatory_reauth_bubble_controller_impl.h",
+    "offer_notification_handler.h",
     "payments_ui_constants.h",
     "payments_view_factory.h",
     "virtual_card_enroll_bubble_controller_impl.h",
@@ -40,6 +41,7 @@ source_set("payments") {
       "android_bnpl_ui_delegate.h",
       "android_payments_window_manager.h",
       "offer_notification_controller_android.h",
+      "payments_churned_users_ui_delegate_android.h",
     ]
     public_deps += [
       "//chrome/browser/touch_to_fill/autofill/android:public",
@@ -53,8 +55,13 @@ source_set("payments") {
       "desktop_payments_window_manager.h",
       "omnibox_autofill_bubble_controller.h",
       "omnibox_autofill_page_action_controller.h",
+      "omnibox_gpay_button_page_action_controller.h",
       "payments_churned_users_bubble_controller.h",
       "payments_churned_users_page_action_controller.h",
+      "payments_churned_users_ui_delegate_desktop.h",
+      "wallet_reminder_notice_bubble_controller.h",
+      "wallet_reminder_notice_page_action_controller.h",
+      "wallet_reminder_notice_ui_delegate_desktop.h",
       "webauthn_dialog.h",
       "webauthn_dialog_controller.h",
       "webauthn_dialog_controller_impl.h",
@@ -64,6 +71,7 @@ source_set("payments") {
     ]
     public_deps += [
       "//chrome/browser/profiles:profile",
+      "//chrome/browser/ui/page_action",
       "//chrome/browser/ui/webauthn",
       "//components/autofill/core/browser:legal_message_line",
       "//components/signin/public/identity_manager",
@@ -98,10 +106,11 @@ source_set("impl") {
     "credit_card_scanner_controller.cc",
     "credit_card_scanner_view.cc",
     "mandatory_reauth_bubble_controller_impl.cc",
+    "offer_notification_handler.cc",
     "virtual_card_enroll_bubble_controller_impl.cc",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
+  public_deps = []
 
   deps = [
     ":payments",
@@ -128,9 +137,11 @@ source_set("impl") {
       "android_bnpl_ui_delegate.cc",
       "android_payments_window_manager.cc",
       "offer_notification_controller_android.cc",
+      "payments_churned_users_ui_delegate_android.cc",
     ]
     public_deps += [ "//chrome/browser/touch_to_fill/autofill/android:public" ]
     deps += [
+      "//chrome/browser/android:resource_mapper",
       "//chrome/browser/keyboard_accessory/android",
       "//chrome/browser/mandatory_reauth/android:mandatory_reauth",
       "//chrome/browser/mandatory_reauth/android/internal:jni",
@@ -152,8 +163,13 @@ source_set("impl") {
       "desktop_payments_window_manager.cc",
       "omnibox_autofill_bubble_controller.cc",
       "omnibox_autofill_page_action_controller.cc",
+      "omnibox_gpay_button_page_action_controller.cc",
       "payments_churned_users_bubble_controller.cc",
       "payments_churned_users_page_action_controller.cc",
+      "payments_churned_users_ui_delegate_desktop.cc",
+      "wallet_reminder_notice_bubble_controller.cc",
+      "wallet_reminder_notice_page_action_controller.cc",
+      "wallet_reminder_notice_ui_delegate_desktop.cc",
       "webauthn_dialog_controller_impl.cc",
       "webauthn_dialog_model.cc",
     ]
@@ -196,6 +212,12 @@ source_set("impl") {
       "//chrome/browser/ui/location_bar",
     ]
   }
+  if (!is_android) {
+    deps += [
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui/views/frame:browser_view_header",
+    ]
+  }
 }
 
 if (!is_android) {
@@ -210,7 +232,6 @@ if (!is_android) {
 
     public_deps = [
       ":payments",
-      "//chrome/browser/ui",
       "//chrome/browser/ui/autofill",
       "//components/autofill/core/browser",
       "//components/prefs",
@@ -241,9 +262,11 @@ if (!is_android) {
       ":test_support",
       "//base",
       "//chrome/browser/autofill",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/hats:test_support",
       "//chrome/browser/ui/page_action:icon_type",
+      "//chrome/browser/ui/views/frame:browser_view_header",
       "//chrome/common",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
@@ -255,6 +278,13 @@ if (!is_android) {
       "//content/test:test_support",
       "//testing/gtest",
     ]
+
+    if (toolkit_views) {
+      deps += [
+        "//chrome/browser/ui/views/autofill/payments:save_payment_method_and_virtual_card_enroll_confirmation_bubble_views",
+        "//chrome/browser/ui/views/autofill/payments:virtual_card_enroll_bubble_views",
+      ]
+    }
   }
 }
 
@@ -263,6 +293,7 @@ source_set("unit_tests") {
   sources = [
     "card_unmask_authentication_selection_dialog_controller_impl_unittest.cc",
     "chrome_payments_autofill_client_unittest.cc",
+    "offer_notification_handler_unittest.cc",
   ]
 
   public_deps = []
@@ -271,12 +302,12 @@ source_set("unit_tests") {
     ":test_support",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser",
-    "//chrome/browser/ui",
     "//chrome/browser/ui/actions:actions_headers",
     "//chrome/browser/ui/autofill",
     "//chrome/browser/ui/autofill:test_support",
     "//chrome/test:test_support",
+    "//chrome/test/base:chrome_render_view_host_test_harness",
+    "//chrome/test/base:chrome_test_scoped_utils",
     "//components/autofill/core/browser",
     "//components/autofill/core/browser:test_support",
     "//components/autofill/core/browser/payments:card_unmask_challenge_option",
@@ -284,6 +315,7 @@ source_set("unit_tests") {
     "//components/feature_engagement/test:test_support",
     "//components/strings:components_strings",
     "//components/strings:components_strings_grit",
+    "//components/sync:test_support",
     "//components/tabs:test_support",
     "//content/public/browser",
     "//testing/gmock",
@@ -295,6 +327,7 @@ source_set("unit_tests") {
     sources += [
       "android_bnpl_ui_delegate_unittest.cc",
       "android_payments_window_manager_unittest.cc",
+      "payments_churned_users_ui_delegate_android_unittest.cc",
       "virtual_card_enroll_bubble_controller_impl_unittest.cc",
     ]
     public_deps += [ ":payments" ]
@@ -304,6 +337,7 @@ source_set("unit_tests") {
       "//chrome/browser/keyboard_accessory/test_utils/android",
       "//chrome/browser/touch_to_fill/autofill/android:test_support",
       "//chrome/browser/ui/android/autofill",
+      "//chrome/browser/ui/android/autofill:test_support",
       "//chrome/browser/ui/android/tab_model:test_support",
       "//components/autofill/android:autofill_core_browser_java_enums",
       "//components/autofill/content/browser:test_support",
@@ -319,7 +353,11 @@ source_set("unit_tests") {
       "offer_notification_bubble_controller_impl_unittest.cc",
       "omnibox_autofill_bubble_controller_unittest.cc",
       "omnibox_autofill_page_action_controller_unittest.cc",
+      "payments_churned_users_ui_delegate_desktop_unittest.cc",
       "save_card_bubble_controller_impl_unittest.cc",
+      "wallet_reminder_notice_bubble_controller_unittest.cc",
+      "wallet_reminder_notice_page_action_controller_unittest.cc",
+      "wallet_reminder_notice_ui_delegate_desktop_unittest.cc",
     ]
     deps += [
       ":payments",
@@ -348,7 +386,6 @@ source_set("test_support") {
   public_deps = [
     ":payments",
     "//base",
-    "//chrome/browser/ui",
     "//components/autofill/core/browser",
     "//ui/gfx/geometry",
   ]
@@ -370,6 +407,7 @@ if (!is_android && !is_chromeos_device) {
     sources = [
       "desktop_payments_window_manager_interactive_uitest.cc",
       "save_card_bubble_controller_impl_interactive_uitest.cc",
+      "wallet_reminder_notice_page_action_controller_interactive_uitest.cc",
     ]
 
     public_deps = [
@@ -380,21 +418,23 @@ if (!is_android && !is_chromeos_device) {
     deps = [
       "//base",
       "//base/test:test_support",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_tabstrip",
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui/actions:actions_headers",
+      "//chrome/browser/ui/browser_window",
+      "//chrome/browser/ui/views/autofill/payments:payments_window_user_consent_dialog_view",
+      "//chrome/browser/ui/views/autofill/payments:save_card_bubble_views",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
       "//components/autofill/content/browser:test_support",
       "//components/autofill/core/browser",
       "//components/autofill/core/browser:test_support",
       "//components/autofill/core/browser/payments:card_unmask_challenge_option",
+      "//components/autofill/core/common",
       "//content/public/browser",
       "//content/test:test_support",
       "//testing/gtest",
       "//ui/views",
     ]
-
-    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-    # enable the diagnostic by removing this line.
-    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
   }
 }

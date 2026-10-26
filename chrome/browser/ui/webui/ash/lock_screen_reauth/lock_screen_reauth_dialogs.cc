@@ -30,12 +30,15 @@
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_network_dialog.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_reauth_handler.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_start_reauth_ui.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/network/network_connection_handler.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -53,7 +56,7 @@ bool IsDialogLoaded(bool is_loaded,
   if (is_loaded) {
     return true;
   }
-  DCHECK(!on_loaded_callback);
+  CHECK(!on_loaded_callback, base::NotFatalUntil::M162);
   on_loaded_callback = std::move(callback);
   return false;
 }
@@ -115,7 +118,7 @@ bool LockScreenStartReauthDialog::CheckMediaAccessPermission(
 
 // static
 void LockScreenStartReauthDialog::Show() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   CHECK(session_manager::SessionManager::Get()->IsScreenLocked());
   if (g_dialog) {
     g_dialog->Focus();
@@ -148,7 +151,7 @@ void LockScreenStartReauthDialog::OnProfileInitialized(Profile* profile) {
 
 // static
 void LockScreenStartReauthDialog::Dismiss() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (g_dialog) {
     g_dialog->Close();
   }
@@ -286,7 +289,7 @@ LockScreenStartReauthDialog::LockScreenStartReauthDialog()
 }
 
 LockScreenStartReauthDialog::~LockScreenStartReauthDialog() {
-  DCHECK_EQ(this, g_dialog);
+  CHECK_EQ(this, g_dialog, base::NotFatalUntil::M162);
   HttpAuthDialog::RemoveObserver(this);
   DeleteLockScreenNetworkDialog();
   g_dialog = nullptr;
@@ -377,7 +380,7 @@ bool LockScreenStartReauthDialog::IsLoadedForTesting(
   if (is_dialog_loaded_for_testing_) {
     return true;
   }
-  DCHECK(!on_dialog_loaded_callback_for_testing_);
+  CHECK(!on_dialog_loaded_callback_for_testing_, base::NotFatalUntil::M162);
   on_dialog_loaded_callback_for_testing_ = std::move(callback);
   return false;
 }
@@ -387,7 +390,7 @@ bool LockScreenStartReauthDialog::IsClosedForTesting(
   if (!is_dialog_loaded_for_testing_) {
     return true;
   }
-  DCHECK(!on_dialog_closed_callback_for_testing_);
+  CHECK(!on_dialog_closed_callback_for_testing_, base::NotFatalUntil::M162);
   on_dialog_closed_callback_for_testing_ = std::move(callback);
   return false;
 }
@@ -453,11 +456,16 @@ void LockScreenStartReauthDialog::TransferHttpAuthCaches() {
         ->SaveHttpAuthCacheProxyEntries(base::BindOnce(
             &TransferHttpAuthCacheToSystemNetworkContext, base::DoNothing()));
 
-    const user_manager::User* user =
-        user_manager::UserManager::Get()->GetPrimaryUser();
-    Profile* profile = ProfileHelper::Get()->GetProfileByUser(user);
-    // Transfer auth cache to the active user's profile so that there is no need
-    // to enter them again after unlocking the device.
+    // TODO(crbug.com/278643115): Take the account_id from the callers.
+    const session_manager::Session* primary_session =
+        session_manager::SessionManager::Get()->GetPrimarySession();
+    CHECK(primary_session);
+    Profile* profile = Profile::FromBrowserContext(
+        ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+            primary_session->account_id()));
+    CHECK(profile);
+    // Transfer auth cache to the primary user's profile so that there is no
+    // need to enter them again after unlocking the device.
     ProfileAuthData::TransferHttpAuthCacheProxyEntries(
         base::DoNothing(), webview_storage_partition,
         profile->GetDefaultStoragePartition());

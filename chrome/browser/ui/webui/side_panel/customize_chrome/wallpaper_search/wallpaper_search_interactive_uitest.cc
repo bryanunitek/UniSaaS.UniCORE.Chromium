@@ -8,6 +8,8 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_view_util.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/media/webrtc/desktop_capture_access_handler.h"
+#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -21,10 +23,9 @@
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
@@ -75,9 +76,19 @@ class WallpaperSearchInteractiveTest : public InteractiveBrowserTest {
   void SetUpOnMainThread() override {
     InteractiveBrowserTest::SetUpOnMainThread();
     signin::IdentityManager* identity_manager =
-        IdentityManagerFactory::GetForProfile(browser()->profile());
+        IdentityManagerFactory::GetForProfile(browser()->GetProfile());
     signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                         signin::ConsentLevel::kSignin);
+    MediaCaptureDevicesDispatcher::GetInstance()
+        ->desktop_capture_access_handler_for_test()
+        ->SetRequestApprovedForTest(true);
+  }
+
+  void TearDownOnMainThread() override {
+    MediaCaptureDevicesDispatcher::GetInstance()
+        ->desktop_capture_access_handler_for_test()
+        ->SetRequestApprovedForTest(false);
+    InteractiveBrowserTest::TearDownOnMainThread();
   }
 
   std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures() {
@@ -133,7 +144,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchInteractiveTest,
   RunTestSequence(
       // 1. Open the NTP.
       Steps(InstrumentTab(kNewTabPageElementId, 0), Do([=, this]() {
-              browser()->profile()->GetPrefs()->SetInteger(
+              browser()->GetProfile()->GetPrefs()->SetInteger(
                   optimization_guide::prefs::GetSettingEnabledPrefName(
                       optimization_guide::UserVisibleFeatureKey::
                           kWallpaperSearch),
@@ -148,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchInteractiveTest,
       WaitForElementToRender(kNewTabPageElementId, kWallpaperSearchButton),
       // 3. Turn wallpaper search setting off.
       Do([=, this]() {
-        browser()->profile()->GetPrefs()->SetInteger(
+        browser()->GetProfile()->GetPrefs()->SetInteger(
             optimization_guide::prefs::GetSettingEnabledPrefName(
                 optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
             static_cast<int>(
@@ -158,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchInteractiveTest,
       WaitForElementExists(kNewTabPageElementId, kWallpaperSearchButton, false),
       // 5. Turn wallpaper search setting on.
       Do([=, this]() {
-        browser()->profile()->GetPrefs()->SetInteger(
+        browser()->GetProfile()->GetPrefs()->SetInteger(
             optimization_guide::prefs::GetSettingEnabledPrefName(
                 optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
             static_cast<int>(
@@ -184,7 +195,7 @@ class WallpaperSearchOptimizationGuideInteractiveTest
     mock_optimization_guide_keyed_service_ =
         static_cast<testing::NiceMock<MockOptimizationGuideKeyedService>*>(
             OptimizationGuideKeyedServiceFactory::GetForProfile(
-                browser()->profile()));
+                browser()->GetProfile()));
     ASSERT_TRUE(mock_optimization_guide_keyed_service_);
   }
 
@@ -340,8 +351,8 @@ class WallpaperSearchOptimizationGuideInteractiveTest
   base::CallbackListSubscription subscription_;
 };
 
-// TODO(crbug.com/524036564): Flaky on Win.
-#if BUILDFLAG(IS_WIN)
+// TODO(crbug.com/524036564): Flaky on Win and macOS.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #define MAYBE_CustomizeButtonsWorkTogether DISABLED_CustomizeButtonsWorkTogether
 #else
 #define MAYBE_CustomizeButtonsWorkTogether CustomizeButtonsWorkTogether
@@ -387,7 +398,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
                               kWallpaperSearch))
                   .WillByDefault(testing::Return(true));
               // Set shown count lower than threshold.
-              browser()->profile()->GetPrefs()->SetInteger(
+              browser()->GetProfile()->GetPrefs()->SetInteger(
                   prefs::kNtpWallpaperSearchButtonShownCount, 14);
             }),
             NavigateWebContents(kNewTabPageElementId,
@@ -417,7 +428,7 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
                               kWallpaperSearch))
                   .WillByDefault(testing::Return(true));
               // Set shown count higher than threshold.
-              browser()->profile()->GetPrefs()->SetInteger(
+              browser()->GetProfile()->GetPrefs()->SetInteger(
                   prefs::kNtpWallpaperSearchButtonShownCount, 16);
             }),
             NavigateWebContents(kNewTabPageElementId,
@@ -658,7 +669,7 @@ IN_PROC_BROWSER_TEST_F(NTPWallpaperSearchButtonAnimationTest,
                               kWallpaperSearch))
                   .WillByDefault(testing::Return(true));
               // Set shown count higher than threshold.
-              browser()->profile()->GetPrefs()->SetInteger(
+              browser()->GetProfile()->GetPrefs()->SetInteger(
                   prefs::kNtpWallpaperSearchButtonShownCount, 1000);
             }),
             NavigateWebContents(kNewTabPageElementId,

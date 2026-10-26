@@ -23,7 +23,7 @@
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_util.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
@@ -214,9 +214,7 @@ PhoneFieldParser::GetPhoneGrammars() {
   // LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:PhoneNumberGrammarUsage2)
 
   DCHECK(std::ranges::all_of(*grammars, [](const PhoneGrammar& grammar) {
-    return std::ranges::any_of(grammar.rules, [](const Rule& rule) {
-      return rule.phone_part == FIELD_PHONE;
-    });
+    return std::ranges::contains(grammar.rules, FIELD_PHONE, &Rule::phone_part);
   })) << "No grammar without `FIELD_PHONE` should be defined.";
 
   DCHECK(

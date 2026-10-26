@@ -11,7 +11,6 @@
 #import "components/sync/service/sync_service.h"
 #import "components/sync/service/sync_service_utils.h"
 #import "components/sync/service/sync_user_settings.h"
-#import "ios/chrome/browser/authentication/ui_bundled/signin_presenter.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_commands.h"
 #import "ios/chrome/browser/default_browser/model/promo_source.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
@@ -21,6 +20,7 @@
 #import "ios/chrome/browser/shared/public/commands/credential_provider_promo_commands.h"
 #import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_sign_in_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/sync_presenter_commands.h"
@@ -143,8 +143,9 @@ void TipsNotificationPresenter::ShowSignin() {
                             PROMO_ACTION_NO_SIGNIN_PROMO
              completion:nil];
 
-  [HandlerForProtocol(browser_->GetCommandDispatcher(), SigninPresenter)
-      showSignin:command];
+  [HandlerForProtocol(browser_->GetCommandDispatcher(), SceneSignInCommands)
+              showSignin:command
+      baseViewController:nil];
 }
 
 void TipsNotificationPresenter::ShowSetUpListContinuation() {
@@ -228,8 +229,7 @@ void TipsNotificationPresenter::ShowEnhancedSafeBrowsingPromo() {
 }
 
 void TipsNotificationPresenter::ShowCPEPromo() {
-  [HandlerForProtocol(browser_->GetCommandDispatcher(),
-                      CredentialProviderPromoCommands)
+  [HandlerForProtocol(browser_->GetCommandDispatcher(), PromosManagerCommands)
       showCredentialProviderPromoWithTrigger:CredentialProviderPromoTrigger::
                                                  TipsNotification];
 }

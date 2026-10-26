@@ -20,6 +20,7 @@ found in the LICENSE file.
     <color name="black_alpha_12" tools:ignore="UnusedResources">#1F000000</color>
     <color name="black_alpha_20" tools:ignore="UnusedResources">#33000000</color>
     <color name="black_alpha_30" tools:ignore="UnusedResources">#4D000000</color>
+    <color name="black_alpha_40" tools:ignore="UnusedResources">#66000000</color>
     <color name="black_alpha_50">#80000000</color>
 
     <color name="green_50">#E6F4EA</color>
@@ -208,7 +209,6 @@ found in the LICENSE file.
     <color name="ntp_color_fuchsia_primary_dark">#CF8DC5</color>
     <color name="ntp_color_violet_primary_light">#6B5395</color>
     <color name="ntp_color_violet_primary_dark">#B196DE</color>
-    <color name="ntp_customization_theme_sync_badge_stroke_color">#F7F9FD</color>
 
     <!-- Colors used in Setup List celebratory promo illustration -->
     <color name="setup_list_celebratory_promo_yellow_base">#FCC934</color>
@@ -224,10 +224,19 @@ found in the LICENSE file.
     <!-- Colors used for the Glic solid spark icon. -->
     <color name="glic_solid_spark_blue">@color/baseline_primary_40</color>
 
-    <!-- Colors used for the tab bottom sheet. -->
-    <color name="glic_dark_theme_background">#141414</color>
-
     <!-- Colors used for the Glic/Actor take over button glow. -->
     <color name="actor_button_glow_soft">#4D0B57D0</color>
     <color name="actor_button_glow_strong">#800B57D0</color>
+
+    <!-- Colors used for google logo-->
+    <color name="google_logo_light_red" tools:ignore="UnusedResources">#FC413D</color>
+    <color name="google_logo_light_yellow" tools:ignore="UnusedResources">#FFBE00</color>
+    <color name="google_logo_light_green" tools:ignore="UnusedResources">#00AF57</color>
+    <color name="google_logo_light_blue" tools:ignore="UnusedResources">@color/spark_blue_gradient_mid</color>
+
+    <!-- GM3 Aurora Tertiary Container Energy seed colors for illustrations -->
+    <color name="gm3_aurora_tertiary_container_mid_energy_light">#6EE3C5</color>
+    <color name="gm3_aurora_tertiary_container_mid_energy_dark">#0C976D</color>
+    <color name="gm3_aurora_tertiary_container_end_energy_light">#6DD4FF</color>
+    <color name="gm3_aurora_tertiary_container_end_energy_dark">#00ADCC</color>
 </resources>

@@ -37,11 +37,16 @@ namespace extensions_features {
 // NOTE(devlin): If there are consistently enough of these in flux, it might
 // make sense to have their own file.
 
-// Controls the availability of action.openPopup().
-BASE_DECLARE_FEATURE(kApiActionOpenPopup);
+// Controls the return value of alarms.clearAll() API. If enabled,
+// alarms.clearAll() returns undefined, matching the new proposed behavior.
+// If disabled, alarms.clearAll() always returns true, matching legacy Chrome
+// behavior.
+// TODO(crbug.com/541711725): Remove after M160 and update alarms.clearAll()
+// in extensions/common/api/alarms.webidl to return Promise<undefined>.
+BASE_DECLARE_FEATURE(kApiAlarmsClearAllReturnUndefined);
 
-// Controls the limit for alarms.create() API input.
-BASE_DECLARE_FEATURE(kApiAlarmsCreateLengthLimit);
+// Controls the availability of SplitView Extension APIs.
+BASE_DECLARE_FEATURE(kApiTabsSplitView);
 
 // Controls the availability of contentSettings.clipboard.
 BASE_DECLARE_FEATURE(kApiContentSettingsClipboard);
@@ -70,10 +75,20 @@ BASE_DECLARE_FEATURE(kApiGlicPrivate);
 // `enterprise.reportingPrivate.onDataMaskingRulesTriggered` API.
 BASE_DECLARE_FEATURE(kApiEnterpriseReportingPrivateOnDataMaskingRulesTriggered);
 
+// Controls the availability of the
+// `enterprise.reportingPrivate.reportForceSaveToCloudEventHandled` API.
+BASE_DECLARE_FEATURE(
+    kApiEnterpriseReportingPrivateReportForceSaveToCloudEventHandled);
+
 // Controls the availability of Glic access from Google webpages.
 BASE_DECLARE_FEATURE(kApiGlicAccessFromGoogleWebpage);
+
 // Controls the availability of Glic access from Chrome promotion pages.
 BASE_DECLARE_FEATURE(kApiGlicAccessFromPromotionPage);
+
+// Controls the availability of Glic access from Web Continuity.
+BASE_DECLARE_FEATURE(kApiGlicAccessFromWebContinuity);
+
 extern const base::FeatureParam<std::string> kProdPromptEndpointUrlParam;
 extern const base::FeatureParam<std::string> kGlicInvokeApiOAuth2ScopeParam;
 extern const base::FeatureParam<bool> kGlicRequireConsentForInvokeParam;
@@ -93,6 +108,11 @@ inline constexpr char kGlicOpenNewTabDispositionBackground[] = "background";
 inline constexpr char kGlicOpenNewTabDispositionForegroundIfNotConsented[] =
     "foreground_if_not_consented";
 
+// Controls the availability of the enterprise.webrtc API. Acts as a remote
+// kill switch: with this disabled the API is not present in the extension
+// context at all.
+BASE_DECLARE_FEATURE(kApiEnterpriseWebrtc);
+
 // Controls the availability of the new `proxyOverrideRulesPrivate` API.
 BASE_DECLARE_FEATURE(kApiProxyOverrideRulesPrivate);
 
@@ -100,15 +120,28 @@ BASE_DECLARE_FEATURE(kApiProxyOverrideRulesPrivate);
 // runtime.getPlatformInfo() API.
 BASE_DECLARE_FEATURE(kApiRuntimeGetPlatformInfoNaClArch);
 
+// Controls the availability of runtime.sendNativeMessage and
+// runtime.connectNative on Desktop Android.
+BASE_DECLARE_FEATURE(kApiDesktopAndroidNativeMessaging);
+
+// If enabled, bypasses the allowlist check on Desktop Android for native
+// messaging extension IDs.
+BASE_DECLARE_FEATURE(kApiDesktopAndroidNativeMessagingBypassExtensionAllowlist);
+
 ///////////////////////////////////////////////////////////////////////////////
 // Other Features
 ///////////////////////////////////////////////////////////////////////////////
 
 // For historical reasons, this includes some APIs. Please don't add more APIs.
 
-// Enables the UI in the install prompt which lets a user choose to withhold
-// requested host permissions by default.
-BASE_DECLARE_FEATURE(kAllowWithholdingExtensionPermissionsOnInstall);
+// Controls whether opted-in component extension frames are permitted to
+// enter BackForwardCache instead of being unconditionally disabled.
+BASE_DECLARE_FEATURE(kBackForwardCacheForComponentExtensionFrames);
+
+// If enabled, navigations and window.open calls to URLs outside a hosted app's
+// web extent in background contents are blocked and not persisted to prefs.
+// TODO(crbug.com/511824746): Clean up in M156.
+BASE_DECLARE_FEATURE(kBlockBackgroundContentsOffExtentNavigation);
 
 // When enabled, then bad_message::ReceivedBadMessage will be called when
 // browser receives an IPC from a content script and the IPC that unexpectedly
@@ -121,15 +154,35 @@ BASE_DECLARE_FEATURE(kCheckingNoExtensionIdInExtensionIpcs);
 // URLs in worker scripts and subresources.
 BASE_DECLARE_FEATURE(kComponentExtensionAllowWorkerChromeResources);
 
+// When enabled (the default), `CrxInstaller::ReloadExtensionAfterInstall`
+// verifies that the manifest reloaded from the final install directory matches
+// the unpacked manifest validated in `OnUnpackSuccess`, failing the install
+// on mismatch (or falling back to a local install on ChromeOS if a shared copy
+// mismatched), and cleans up `version_dir` under `install_directory_` on
+// post-install reload failures (`CANT_LOAD_EXTENSION` and
+// `MANIFEST_MISMATCH_AFTER_INSTALL`).
+BASE_DECLARE_FEATURE(kCrxInstallerVerifyReloadedManifest);
+
+// Gates native UI affordances for leaving reviews on installed Chrome Web Store
+// extensions.
+BASE_DECLARE_FEATURE(kCWSReviewPromptingNativeUI);
+
+// If enabled, declarative net request rules that match on the values of
+// response headers (other than CORS-safelisted response headers and
+// Content-Encoding) only match requests that the extension has host permissions
+// for. If disabled (kill switch), rule matching conditions can match against
+// requests the extension does not have host permissions for.
+BASE_DECLARE_FEATURE(kDeclarativeNetRequestRestrictResponseHeaderValueMatching);
+
 // If enabled, <webview>s will be allowed to request permission from an
 // embedding Chrome App to request access to Human Interface Devices.
 BASE_DECLARE_FEATURE(kEnableWebHidInWebView);
 
-#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
-// If enabled, extensions will be enabled for @google.com and @managedchrome.com
-// users on desktop Android. Otherwise they will be blocked.
-BASE_DECLARE_FEATURE(kEnableExtensionsForCorpDesktopAndroid);
-#endif
+// If enabled, extensions can opt in to asynchronous listener registration via
+// the `background.async_listener_registration` manifest key to defer event
+// dispatch on worker start until the extension signals that its listeners are
+// registered.
+BASE_DECLARE_FEATURE(kExtensionAsyncListenerRegistration);
 
 // If enabled, JS content scripts injected at document start will be compiled
 // in a background thread.
@@ -138,8 +191,20 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kBackgroundCompilationTimeout);
 BASE_DECLARE_FEATURE_PARAM(size_t, kMinScriptSizeForBackgroundCompilation);
 BASE_DECLARE_FEATURE_PARAM(size_t, kMaxScriptSizeForBackgroundCompilation);
 
-// If enabled, disables unpacked extensions if developer mode is off.
-BASE_DECLARE_FEATURE(kExtensionDisableUnsupportedDeveloper);
+// If enabled, queries for external web page connections to extensions or apps
+// in incognito mode are short-circuited and automatically rejected without
+// prompting the user.
+BASE_DECLARE_FEATURE(kExtensionAutoRejectIncognitoConnectability);
+
+// If enabled (the default), extensions calling chrome.debugger.attach are
+// rejected upfront when enterprise policy configures runtime_blocked_hosts or
+// disables/restricts screenshots. If disabled (kill switch), extension debugger
+// attachment reverts to the pre-existing behavior prior to M155: falling back
+// to per-URL IsPolicyBlockedHost checks and allowing attachment when
+// screenshots are disabled. Note that disabling this feature has security
+// implications.
+// See https://developer.chrome.com/blog/debugger-enterprise-policy-restrictions.
+BASE_DECLARE_FEATURE(kExtensionDebuggerStrictPolicyRestrictions);
 
 // Allow e.g. .css files to use default_locale messages in WAR files via GUID.
 // TODO(crbug.com/435609878): Remove after m142. It's for safe m141 back merge.
@@ -147,6 +212,10 @@ BASE_DECLARE_FEATURE(kExtensionLocalizationGuid);
 
 // A replacement key for declaring icons, in addition to supporting dark mode.
 BASE_DECLARE_FEATURE(kExtensionIconVariants);
+
+// Enables the "Allow site access" section in the extension install dialog which
+// lets the user choose site permissions.
+BASE_DECLARE_FEATURE(kExtensionInstallSiteAccessOptions);
 
 // If enabled, allows an extension to specify protocol_handlers keys in the
 // Manifest, registering a group of custom handlers so that the browser can
@@ -195,7 +264,6 @@ BASE_DECLARE_FEATURE(kExperimentalOmniboxLabs);
 // extensions can be disabled at ESB opt-in time or when an extension is moved
 // out of the allowlist.
 BASE_DECLARE_FEATURE(kSafeBrowsingCrxAllowlistAutoDisable);
-
 
 // Controls whether the component webstore hosted app is loaded.
 BASE_DECLARE_FEATURE(kWebstoreHostedApp);
@@ -253,12 +321,6 @@ BASE_DECLARE_FEATURE(kDebuggerAPIRestrictedToDevMode);
 // even if they are not externally connectable.
 BASE_DECLARE_FEATURE(kExtensionBrowserNamespaceOnWebPages);
 
-// When enabled, a call to base::ListValue::Clone is avoided when dispatching an
-// extension function. Behind a feature to assess impact
-// (go/chrome-performance-work-should-be-finched).
-// TODO(crbug.com/424432184): Clean up when experiment is complete.
-BASE_DECLARE_FEATURE(kAvoidCloneArgsOnExtensionFunctionDispatch);
-
 // If enabled, the ContentVerifier cache key will include the extension root
 // path. This prevents collisions when an extension is updated or reloaded
 // to a new directory while keeping the same version ID.
@@ -288,6 +350,12 @@ BASE_DECLARE_FEATURE_PARAM(bool,
 // engine override dialog.
 BASE_DECLARE_FEATURE(kSearchEngineUnconditionalDialog);
 
+// When enabled, Event argument ref-counting is used to share arguments across
+// dispatched events instead of deep-cloning. Behind a feature to assess impact
+// (go/chrome-performance-work-should-be-finched).
+// TODO(crbug.com/424432184): Clean up when experiment is complete.
+BASE_DECLARE_FEATURE(kShareEventArgsOnDispatch);
+
 // Enables the securityInfo in chrome.webRequest API for extensions.
 // Allowing them to retrieve certificate information from web requests.
 BASE_DECLARE_FEATURE(kWebRequestSecurityInfo);
@@ -305,8 +373,17 @@ BASE_DECLARE_FEATURE(kOptimizeWebRequestProxy);
 // (using per-listener synthetic sub-event names). The renderer matches
 // listeners itself, reports each blocking listener's response via the
 // `webRequestInternal.eventHandled` function, and signals completion with a
-// single `webRequestInternal.eventHandlingDone` per context.
+// single `WebRequestHost.EventHandlingDone` mojo call per target.
 BASE_DECLARE_FEATURE(kWebRequestPerContextEventDispatch);
+
+// If enabled, `HashedExtensionId` uses SHA-256 hashes instead of SHA-1.
+BASE_DECLARE_FEATURE(kUseSha256ForExtensionHashes);
+
+// When enabled, generated paths (e.g. _favicon and the generated background
+// page) are excluded from wildcard web_accessible_resources entries. _favicon
+// must be explicitly listed to be web accessible, and the generated background
+// page is never web accessible.
+BASE_DECLARE_FEATURE(kRestrictGeneratedPathsInWebAccessibleResources);
 
 }  // namespace extensions_features
 

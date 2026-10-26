@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+
 #include <stddef.h>
 
 #include "base/functional/bind.h"
@@ -16,21 +18,22 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_menu_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/test/vertical_tabs_interactive_test_mixin.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_accessibility_test.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/views/toolbar/webui_and_views_toolbar_interactive_uitest_base.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 #include "chrome/browser/ui/waap/initial_web_ui_manager.h"
@@ -46,6 +49,8 @@
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/focused_node_details.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -53,11 +58,13 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
@@ -126,6 +133,21 @@ class ToolbarViewTest : public ToolbarAccessibilityTest {
                features::kWebUIBackForwardButton,
                features::kWebUISplitTabsButton, features::kWebUIHomeButton});
     }
+    webui_omnibox_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
+
+    // TODO(crbug.com/557287887): Make SplitViewLayoutMenuModel work with
+    // OpenSideBySideTab.
+    spit_view_horizontal_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/{{tabs::kSplitViewHorizontal,
+                               {{"split_view_horizontal_direct_tab_access",
+                                 "false"}}}},
+        /*disabled_features=*/{});
   }
   ToolbarViewTest(const ToolbarViewTest&) = delete;
   ToolbarViewTest& operator=(const ToolbarViewTest&) = delete;
@@ -141,8 +163,9 @@ class ToolbarViewTest : public ToolbarAccessibilityTest {
     if (features::IsWebUIBackForwardButtonEnabled()) {
       return Steps(CheckResult(
           [this, id]() {
-            return browser()->command_controller()->IsCommandEnabled(
-                id == kToolbarBackButtonElementId ? IDC_BACK : IDC_FORWARD);
+            return chrome::BrowserCommandController::From(browser())
+                ->IsCommandEnabled(
+                    id == kToolbarBackButtonElementId ? IDC_BACK : IDC_FORWARD);
           },
           enabled));
     } else {
@@ -150,7 +173,7 @@ class ToolbarViewTest : public ToolbarAccessibilityTest {
     }
   }
 
-  void RunToolbarCycleFocusTest(Browser* browser);
+  void RunToolbarCycleFocusTest(BrowserWindowInterface* browser);
 
   void SetLocationBarSecurityLevelForTesting(
       security_state::SecurityLevel security_level) {
@@ -174,9 +197,12 @@ class ToolbarViewTest : public ToolbarAccessibilityTest {
 
  private:
   base::test::ScopedFeatureList feature_list_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
+  base::test::ScopedFeatureList spit_view_horizontal_feature_list_;
 };
 
-void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
+void ToolbarViewTest::RunToolbarCycleFocusTest(
+    BrowserWindowInterface* browser) {
   // Navigate to a few URLs so that the back and forward buttons are enabled
   // and focusable.
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -193,8 +219,8 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, url2));
   // Navigate back once so forward is enabled too.
   content::TestNavigationObserver back_nav_observer(
-      browser->tab_strip_model()->GetActiveWebContents());
-  browser->command_controller()->ExecuteCommand(IDC_BACK);
+      browser->GetTabStripModel()->GetActiveWebContents());
+  chrome::BrowserCommandController::From(browser)->ExecuteCommand(IDC_BACK);
   back_nav_observer.Wait();
 
   gfx::NativeWindow window = browser->GetWindow()->GetNativeWindow();
@@ -218,7 +244,7 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
 
   // Send focus to the toolbar as if the user pressed Alt+Shift+T. This should
   // happen after the browser window activation.
-  CommandUpdater* updater = browser->command_controller();
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser);
   updater->ExecuteCommand(IDC_FOCUS_TOOLBAR);
 
   views::FocusManager* focus_manager = widget->GetFocusManager();
@@ -298,7 +324,7 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, ToolbarCycleFocus) {
 }
 
 IN_PROC_BROWSER_TEST_P(ToolbarViewTest, ToolbarCycleFocusWithBookmarkBar) {
-  CommandUpdater* updater = browser()->command_controller();
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser());
   updater->ExecuteCommand(IDC_SHOW_BOOKMARK_BAR);
 
   BookmarkModel* model =
@@ -308,7 +334,8 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, ToolbarCycleFocusWithBookmarkBar) {
   // We want to specifically test the case where the bookmark bar is
   // already showing when a window opens, so create a second browser
   // window with the same profile.
-  Browser* second_browser = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* second_browser =
+      CreateBrowser(browser()->GetProfile());
   WaitForInitialWebUI(second_browser);
   RunToolbarCycleFocusTest(second_browser);
 }
@@ -329,7 +356,7 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackForwardButtonUpdate) {
 
       Do([this]() {
         auto& controller = browser()
-                               ->tab_strip_model()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetController();
         controller.DeleteNavigationEntries(base::BindRepeating(
@@ -340,7 +367,15 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackForwardButtonUpdate) {
       ExpectBackForwardButtonEnabled(kToolbarForwardButtonElementId, false));
 }
 
-IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonHoverThenClick) {
+// TODO(crbug.com/548345902, crbug.com/574662700): Re-enable once fixed. Failing
+// at step 9:
+// WaitForWebContentsNavigation(kWebContentsId, GURL(url::kAboutBlankURL))
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_BackButtonHoverThenClick DISABLED_BackButtonHoverThenClick
+#else
+#define MAYBE_BackButtonHoverThenClick BackButtonHoverThenClick
+#endif
+IN_PROC_BROWSER_TEST_P(ToolbarViewTest, MAYBE_BackButtonHoverThenClick) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url1 = embedded_test_server()->GetURL("/title1.html");
@@ -358,6 +393,86 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonHoverThenClick) {
       WaitForWebContentsNavigation(kWebContentsId, GURL(url::kAboutBlankURL)),
 
       ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, false));
+}
+
+// Verifies that when the browser window is in standard (unmaximized) mode,
+// the back button is inset from toolbar edge by exact standard interior
+// margin (TOOLBAR_INTERIOR_MARGIN.left). In this mode, Fitts' law target
+// stretching is inactive, and the margin space outside button is not
+// clickable.
+IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonDistanceFromEdge) {
+  auto restore_if_maximized = Do([this]() {
+    if (browser()->GetWindow() && (browser()->GetWindow()->IsMaximized() ||
+                                   browser()->GetWindow()->IsFullscreen())) {
+      browser()->GetWindow()->Restore();
+      ASSERT_TRUE(base::test::RunUntil([this]() {
+        return !browser()->GetWindow()->IsMaximized() &&
+               !browser()->GetWindow()->IsFullscreen();
+      }));
+    }
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    if (browser_view && browser_view->toolbar()) {
+      browser_view->toolbar()->InvalidateLayout();
+    }
+    if (browser_view && browser_view->GetWidget()) {
+      browser_view->InvalidateLayout();
+      browser_view->GetWidget()->LayoutRootViewIfNecessary();
+    }
+  });
+  int expected_margin =
+      GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN).left();
+  const int default_margin =
+      GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
+  if (features::IsWebUIBackForwardButtonEnabled()) {
+    // For WebUI: Verify that the internal #buttonWrapper element starts at
+    // one of valid boundary offsets depending on platform and rollout state:
+    // - `expected_margin` (6px): Default unmaximized non-touch margin.
+    // - `default_margin` (2px): Standard icon gap during intermediate rollout
+    //   phases when adjacent container boundaries override edge spacing.
+    // - `0`: Touch UI mode on Ash (where TOOLBAR_INTERIOR_MARGIN is 0) or
+    //   when running under maximized window Fitts' law target stretching
+    //   where outer margins collapse directly into inner wrapper padding.
+    RunTestSequence(
+        std::move(restore_if_maximized), WaitForToolbarLoaded(),
+        CheckJsResultAt(
+            WebUIToolbarId(),
+            WebUIAndViewsToolbarInteractiveUiTestBase::
+                WebUIBackForwardButtonDeepQuery(),
+            [expected_margin, default_margin]() {
+              return base::StringPrintf(
+                  "el => { const left = Math.round("
+                  "el.shadowRoot.querySelector('#buttonWrapper')"
+                  ".getBoundingClientRect().left); return left === %d || "
+                  "left === %d || left === 0; }",
+                  expected_margin, default_margin);
+            }(),
+            true));
+  } else {
+    // For native C++: Verify that `GetScreenBounds().x()` is inset from
+    // `ToolbarView` left edge by `expected_margin`, `default_margin`, or `0`.
+    // As noted above, these fallback tolerances accommodate unmaximized mode,
+    // intermediate rollout spacing, touch UI, or maximized Fitts' law modes.
+    RunTestSequence(
+        std::move(restore_if_maximized),
+        WaitForElementNonzeroSize(kToolbarBackButtonElementId),
+        CheckResult(
+            [this, expected_margin, default_margin]() -> bool {
+              ui::ElementContext context =
+                  BrowserView::GetBrowserViewForBrowser(browser())
+                      ->GetElementContext();
+              ui::TrackedElement* back_el =
+                  ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                      kToolbarBackButtonElementId, context);
+              ui::TrackedElement* toolbar_el =
+                  ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                      ToolbarView::kToolbarElementId, context);
+              const int margin = back_el->GetScreenBounds().x() -
+                                 toolbar_el->GetScreenBounds().x();
+              return margin == expected_margin || margin == default_margin ||
+                     margin == 0;
+            },
+            true));
+  }
 }
 
 // TODO(crbug.com/40252318): The ui test utils do not seem to adequately
@@ -409,7 +524,7 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest,
   ExtensionsToolbarDesktop* extensions_container =
       BrowserView::GetBrowserViewForBrowser(browser())
           ->toolbar()
-          ->extensions_container();
+          ->extensions_container_for_testing();
   EXPECT_NE(nullptr, extensions_container);
 }
 
@@ -433,7 +548,7 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest,
   ExtensionsToolbarDesktop* extensions_container =
       BrowserView::GetBrowserViewForBrowser(target_browser)
           ->toolbar()
-          ->extensions_container();
+          ->extensions_container_for_testing();
   EXPECT_EQ(nullptr, extensions_container);
 }
 
@@ -524,14 +639,6 @@ class ToolbarViewVerticalTabsRTLTest
     ToolbarViewTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII("force-ui-direction", "rtl");
   }
-
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(tabs::kVerticalTabs);
-    ToolbarViewTest::SetUp();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(ToolbarViewVerticalTabsRTLTest, ReloadButtonWorks) {

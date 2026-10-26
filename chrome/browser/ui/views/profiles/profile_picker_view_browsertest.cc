@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/profiles/profile_picker_view.h"
 
+#include <array>
 #include <optional>
 #include <set>
 #include <string>
@@ -12,6 +13,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/cfi_buildflags.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
@@ -30,7 +32,6 @@
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/test_future.h"
-#include "base/test/with_feature_override.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version_info/version_info.h"
@@ -39,6 +40,9 @@
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
+#include "chrome/browser/enterprise/signin/profile_management_disclaimer_service.h"
+#include "chrome/browser/enterprise/signin/profile_management_disclaimer_service_factory.h"
+#include "chrome/browser/enterprise/signin/signals_disclaimer_metrics.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/interstitials/chrome_settings_page_helper.h"
@@ -60,6 +64,7 @@
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/signin/dice_tab_helper.h"
@@ -73,7 +78,7 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/themes/theme_syncable_service.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -88,10 +93,14 @@
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/startup/first_run_service.h"
-#include "chrome/browser/ui/tab_dialogs.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/toolbar/avatar_toolbar_iph_controller.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
+#include "chrome/browser/ui/views/profiles/device_signals_disclaimer_test_utils.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_reauth_provider.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_test_base.h"
+#include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
 #include "chrome/browser/ui/webui/profile_helper.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
@@ -117,12 +126,14 @@
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "components/browser_sync/browser_sync_switches.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/device_signals/core/browser/pref_names.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -147,6 +158,7 @@
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
 #include "components/sync/test/test_sync_service.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
@@ -158,12 +170,12 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
-#include "net/base/url_util.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ozone_buildflags.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/events/event_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -187,6 +199,11 @@
 
 namespace {
 
+using ::device_signals_disclaimer_test::GetSelectors;
+using ::device_signals_disclaimer_test::ManagedUserProfileNoticeSelectors;
+using ::device_signals_disclaimer_test::WaitForAndClickCancelButton;
+using ::device_signals_disclaimer_test::WaitForAndClickLearnMoreLink;
+using ::device_signals_disclaimer_test::WaitForAndClickProceedButton;
 using signin::constants::kNoHostedDomainFound;
 using testing::_;
 using testing::Eq;
@@ -313,62 +330,6 @@ GURL GetSyncConfirmationURL() {
                                            /*is_sync_promo=*/true);
 }
 
-std::string_view GetRejectHistoryOptinScript() {
-  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
-    static constexpr std::string_view kScript = R"(
-      (() => {
-        const appElement =
-            document.querySelector('history-sync-optin-app-refresh');
-        const rejectButton =
-            appElement.shadowRoot.querySelector('#rejectButton');
-        rejectButton.click();
-        return true;
-      })();
-    )";
-    return kScript;
-  } else {
-    static constexpr std::string_view kScript = R"(
-      (() => {
-        const appElement =
-            document.querySelector('history-sync-optin-app');
-        const rejectButton =
-            appElement.shadowRoot.querySelector('#rejectButton');
-        rejectButton.click();
-        return true;
-      })();
-    )";
-    return kScript;
-  }
-}
-
-std::string_view GetAcceptHistoryOptinScript() {
-  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
-    static constexpr std::string_view kScript = R"(
-      (() => {
-        const appElement =
-            document.querySelector('history-sync-optin-app-refresh');
-        const acceptButton =
-            appElement.shadowRoot.querySelector('#acceptButton');
-        acceptButton.click();
-        return true;
-      })();
-    )";
-    return kScript;
-  } else {
-    static constexpr std::string_view kScript = R"(
-      (() => {
-        const appElement =
-            document.querySelector('history-sync-optin-app');
-        const acceptButton =
-            appElement.shadowRoot.querySelector('#acceptButton');
-        acceptButton.click();
-        return true;
-      })();
-    )";
-    return kScript;
-  }
-}
-
 class BrowserAddedWaiter : public BrowserCollectionObserver {
  public:
   enum class ReturnMode { kNew, kLatest };
@@ -422,54 +383,10 @@ class BrowserAddedWaiter : public BrowserCollectionObserver {
   const ReturnMode return_mode_;
   raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> browser_ =
       nullptr;
-  std::set<BrowserWindowInterface*> initial_browsers_;
+  std::set<raw_ptr<BrowserWindowInterface>> initial_browsers_;
   base::RunLoop run_loop_;
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       observation_{this};
-};
-
-class TestTabDialogs : public TabDialogs {
- public:
-  TestTabDialogs(content::WebContents* contents, base::RunLoop* run_loop)
-      : contents_(contents), run_loop_(run_loop) {}
-  ~TestTabDialogs() override = default;
-
-  // Creates a platform specific instance, and attaches it to |contents|.
-  // If an instance is already attached, it overwrites it.
-  static void OverwriteForWebContents(content::WebContents* contents,
-                                      base::RunLoop* run_loop) {
-    DCHECK(contents);
-    contents->SetUserData(UserDataKey(),
-                          std::make_unique<TestTabDialogs>(contents, run_loop));
-  }
-
-  gfx::NativeView GetDialogParentView() const override {
-    return contents_->GetNativeView();
-  }
-  void ShowCollectedCookies() override {}
-  void ShowHungRendererDialog(
-      content::RenderWidgetHost* render_widget_host,
-      base::RepeatingClosure hang_monitor_restarter) override {}
-  void HideHungRendererDialog(
-      content::RenderWidgetHost* render_widget_host) override {}
-  bool IsShowingHungRendererDialog() override { return false; }
-
-  void ShowManagePasswordsBubble(bool user_action) override {}
-  void HideManagePasswordsBubble() override {}
-  void ShowDeprecatedAppsDialog(
-      const extensions::ExtensionId& optional_launched_extension_id,
-      const std::set<extensions::ExtensionId>& deprecated_app_ids,
-      content::WebContents* web_contents) override {}
-  void ShowForceInstalledDeprecatedAppsDialog(
-      const extensions::ExtensionId& app_id,
-      content::WebContents* web_contents) override {}
-  void ShowForceInstalledPreinstalledDeprecatedAppDialog(
-      const extensions::ExtensionId& app_id,
-      content::WebContents* web_contents) override {}
-
- private:
-  raw_ptr<content::WebContents> contents_;
-  raw_ptr<base::RunLoop> run_loop_;
 };
 
 class PageNonEmptyPaintObserver : public content::WebContentsObserver {
@@ -551,12 +468,9 @@ void WaitForBrowserUrl(const GURL& url, content::WebContents* target) {
 }
 
 GURL GetManagedUserProfileNoticeUrl() {
-  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
-    const ManagedUserProfileNoticeUI::ScreenType default_type =
-        ManagedUserProfileNoticeUI::ScreenType::kProfilePicker;
-    return ManagedUserProfileNoticeUI::GetURLForType(default_type);
-  }
-  return GURL(chrome::kChromeUIManagedUserProfileNoticeUrl);
+  return base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)
+             ? GURL(chrome::kChromeUIManagedUserProfileNoticeRefreshURL)
+             : GURL(chrome::kChromeUIManagedUserProfileNoticeUrl);
 }
 
 // Browser extra part used to be notified early enough to track the
@@ -818,11 +732,13 @@ class ProfilePickerCreationFlowBrowserTest
     // Add an account - simulate a successful Gaia sign-in.
     signin::IdentityManager* identity_manager =
         IdentityManagerFactory::GetForProfile(profile_being_created);
-    CoreAccountInfo core_account_info = signin::MakeAccountAvailable(
-        identity_manager,
-        signin::AccountAvailabilityOptionsBuilder(test_url_loader_factory())
-            .WithAccessPoint(signin_metrics::AccessPoint::kUserManager)
-            .Build(email));
+    CoreAccountInfo core_account_info =
+        signin::MakeAccountAvailable(
+            identity_manager,
+            signin::AccountAvailabilityOptionsBuilder(test_url_loader_factory())
+                .WithAccessPoint(signin_metrics::AccessPoint::kUserManager)
+                .Build(email))
+            .GetCoreAccountInfo();
     EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
         core_account_info.account_id));
 
@@ -900,7 +816,7 @@ class ProfilePickerCreationFlowBrowserTest
         profile_manager, new_profile_path);
 
     ProfileDestructionWaiter profile_destruction_waiter(new_profile);
-    Browser* new_browser = CreateBrowser(new_profile);
+    BrowserWindowInterface* new_browser = CreateBrowser(new_profile);
     CloseBrowserSynchronously(new_browser);
     profile_destruction_waiter.Wait();
 
@@ -973,14 +889,16 @@ class ProfilePickerCreationFlowBrowserTest
   // TODO(crbug.com/447584795): Add retry logic.
   void RejectHistoryOptin() {
     CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
-    CHECK_EQ(content::EvalJs(web_contents(), GetRejectHistoryOptinScript()),
+    CHECK_EQ(content::EvalJs(web_contents(),
+                             profiles::testing::GetRejectHistoryOptinScript()),
              true);
   }
 
   // TODO(crbug.com/447584795): Add retry logic.
   void AcceptHistoryOptin() {
     CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
-    CHECK_EQ(content::EvalJs(web_contents(), GetAcceptHistoryOptinScript()),
+    CHECK_EQ(content::EvalJs(web_contents(),
+                             profiles::testing::GetAcceptHistoryOptinScript()),
              true);
   }
 
@@ -1251,7 +1169,6 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
       SignInForNewProfile(target_url, "joe.consumer@gmail.com", "Joe");
 
   // Simulate closing the UI with "No, thanks".
-  // Simulate closing the UI with "No, thanks".
   BrowserAddedWaiter browser_waiter(2u, BrowserAddedWaiter::ReturnMode::kNew);
   if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     RejectHistoryOptin();
@@ -1260,7 +1177,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
         ->SyncConfirmationUIClosed(LoginUIService::ABORT_SYNC);
   }
   BrowserWindowInterface* const new_browser = browser_waiter.Wait();
-  ASSERT_EQ(4u, new_browser->GetTabStripModel()->count());
+  ASSERT_EQ(4, new_browser->GetTabStripModel()->count());
   ASSERT_FALSE(ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened());
 
   // Check expectations when the profile creation flow is done.
@@ -1291,7 +1208,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 
   BrowserWindowInterface* const new_browser = browser_waiter.Wait();
   ASSERT_EQ(new_browser->GetProfile(), other_profile);
-  ASSERT_EQ(4u, new_browser->GetTabStripModel()->count());
+  ASSERT_EQ(4, new_browser->GetTabStripModel()->count());
   ASSERT_FALSE(ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened());
 
   // Check expectations when the profile creation flow is done.
@@ -1327,20 +1244,13 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 // on Linux.
 #if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
 class ForceSigninProfilePickerCreationFlowBrowserTest
-    : public ProfilePickerCreationFlowBrowserTest,
-      public base::test::WithFeatureOverride {
+    : public ProfilePickerCreationFlowBrowserTest {
  public:
   static constexpr char kConsumerEmail[] = "joe@consumer@gmail.com";
 
   explicit ForceSigninProfilePickerCreationFlowBrowserTest(
       bool force_signin_enabled = true)
-      : base::test::WithFeatureOverride(
-            syncer::kReplaceSyncPromosWithSignInPromos),
-        force_signin_setter_(force_signin_enabled) {
-    scoped_feature_list_.InitWithFeatureState(
-        syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
-        IsParamFeatureEnabled());
-  }
+      : force_signin_setter_(force_signin_enabled) {}
 
   // ProfilePickerCreationFlowBrowserTest:
   void CreatedBrowserMainParts(content::BrowserMainParts* parts) override {
@@ -1373,19 +1283,17 @@ class ForceSigninProfilePickerCreationFlowBrowserTest
   signin_util::ScopedForceSigninSetterForTesting force_signin_setter_;
   base::HistogramTester histogram_tester_;
   ProfileManagementCounter profile_management_counter_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        ForceSigninSuccessful) {
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
-  // Create a new signin flow, sign-in, and wait for the Sync Comfirmation
+  // Create a new signin flow, sign-in, and wait for the History Sync Optin
   // promo.
-  GURL target_url = IsParamFeatureEnabled() ? GetHistorySyncOptinURL()
-                                            : GetSyncConfirmationURL();
-  Profile* force_sign_in_profile = SignInForNewProfile(
-      target_url, "joe.consumer@gmail.com", "Joe", kNoHostedDomainFound, true);
+  Profile* force_sign_in_profile =
+      SignInForNewProfile(GetHistorySyncOptinURL(), "joe.consumer@gmail.com",
+                          "Joe", kNoHostedDomainFound, true);
   // No browser for the created profile exist yet.
   ASSERT_EQ(
       ProfileBrowserCollection::GetForProfile(force_sign_in_profile)->GetSize(),
@@ -1402,14 +1310,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
 
   BrowserAddedWaiter browser_waiter(initial_browser_count + 1u,
                                     BrowserAddedWaiter::ReturnMode::kNew);
-  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
-    RejectHistoryOptin();
-  } else {
-    LoginUIService::SyncConfirmationUIClosedResult sync_choice =
-        LoginUIService::SYNC_WITH_DEFAULT_SETTINGS;  // "Yes, I'm in".
-    LoginUIServiceFactory::GetForProfile(force_sign_in_profile)
-        ->SyncConfirmationUIClosed(sync_choice);
-  }
+  RejectHistoryOptin();
 
   // A browser should open up and the picker should be closed.
   BrowserWindowInterface* const new_browser = browser_waiter.Wait();
@@ -1422,7 +1323,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   EXPECT_EQ(entry->IsEphemeral(), false);
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        ForceSigninSyncDeclined) {
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
@@ -1431,14 +1332,13 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   size_t initial_profile_count = 1u;
   ASSERT_EQ(profile_manager->GetNumberOfProfiles(), initial_profile_count);
 
-  // Create a new signin flow, sign-in, and wait for the Sync Confirmation
+  // Create a new signin flow, sign-in, and wait for the History Sync Optin
   // promo.
-  GURL target_url = IsParamFeatureEnabled() ? GetHistorySyncOptinURL()
-                                            : GetSyncConfirmationURL();
   BrowserAddedWaiter browser_waiter(initial_browser_count + 1u,
                                     BrowserAddedWaiter::ReturnMode::kLatest);
-  Profile* force_sign_in_profile = SignInForNewProfile(
-      target_url, "joe.consumer@gmail.com", "Joe", kNoHostedDomainFound, true);
+  Profile* force_sign_in_profile =
+      SignInForNewProfile(GetHistorySyncOptinURL(), "joe.consumer@gmail.com",
+                          "Joe", kNoHostedDomainFound, true);
   base::FilePath force_sign_in_profile_path = force_sign_in_profile->GetPath();
   // No browser for the created profile exist yet.
   ASSERT_EQ(
@@ -1457,61 +1357,14 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   EXPECT_EQ(entry->IsSigninRequired(), true);
   EXPECT_EQ(entry->IsEphemeral(), true);
 
-  ProfileDeletionObserver deletion_observer;
   // Simulate the "No thanks" button clicked.
-  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
-    RejectHistoryOptin();
-  } else {
-    LoginUIServiceFactory::GetForProfile(force_sign_in_profile)
-        ->SyncConfirmationUIClosed(LoginUIService::ABORT_SYNC);
-  }
+  RejectHistoryOptin();
 
-  // If the feature is enabled, declining sync would still proceed with
-  // finalizing the profile.
-  if (IsParamFeatureEnabled()) {
-    BrowserWindowInterface* const new_browser = browser_waiter.Wait();
-    EXPECT_EQ(new_browser->GetProfile(), force_sign_in_profile);
-    EXPECT_EQ(entry->IsSigninRequired(), false);
-    EXPECT_EQ(entry->IsEphemeral(), false);
-    return;
-  }
-  // Otherwise the profile should be destroyed, and signing in again should be
-  // possible.
-
-  // Expect the profile to be deleted.
-  deletion_observer.Wait();
-
-  // Expect a redirect to the initial page of the profile picker.
-  WaitForLoadStop(GURL("chrome://profile-picker"));
-  EXPECT_TRUE(ProfilePicker::IsOpen());
-
-  // The created profile path entry is now deletec.
-  EXPECT_EQ(storage.GetProfileAttributesWithPath(force_sign_in_profile_path),
-            nullptr);
-  // Makes sure that the only profile that exist is the default one and not the
-  // one we attempted to create.
-  EXPECT_EQ(profile_manager->GetNumberOfProfiles(), initial_profile_count);
-
-  // ---------------------------------------------------------------------------
-  // This part of the test is to make sure we can safely instantiate a new sign
-  // in flow after declining the first one.
-  // ---------------------------------------------------------------------------
-
-  // Create a second signin flow as part of the same session.
-  BrowserAddedWaiter browser_waiter_2(initial_browser_count + 1u,
-                                      BrowserAddedWaiter::ReturnMode::kNew);
-  Profile* force_sign_in_profile_2 =
-      SignInForNewProfile(GetSyncConfirmationURL(), "joe.consumer1@gmail.com",
-                          "Joe", kNoHostedDomainFound, true);
-
-  LoginUIServiceFactory::GetForProfile(force_sign_in_profile_2)
-      ->SyncConfirmationUIClosed(LoginUIService::SYNC_WITH_DEFAULT_SETTINGS);
-
-  BrowserWindowInterface* const new_browser = browser_waiter_2.Wait();
-  WaitForPickerClosed();
-
-  // The browser is for the newly created profile.
-  EXPECT_EQ(new_browser->GetProfile(), force_sign_in_profile_2);
+  // Declining history sync still proceeds with finalizing the profile.
+  BrowserWindowInterface* const new_browser = browser_waiter.Wait();
+  EXPECT_EQ(new_browser->GetProfile(), force_sign_in_profile);
+  EXPECT_EQ(entry->IsSigninRequired(), false);
+  EXPECT_EQ(entry->IsEphemeral(), false);
 }
 
 // The following test is split in two to simulate a session restart.
@@ -1522,7 +1375,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
 // - Session restart.
 // - Profile should be locked.
 // - Perform reauth through the Picker.
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        PRE_PRE_ForceSigninSigninThenReauthSuccessful) {
   ASSERT_TRUE(signin_util::IsForceSigninEnabled());
   ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 0u);
@@ -1548,17 +1401,12 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   OpenProfileFromPicker(entry->GetPath(), false);
   WaitForLoadStop(GetSigninChromeSyncDiceUrl());
 
-  // Sign in an accept enable sync.
+  // Sign in and decline sync.
   FinishDiceSignIn(profile, kConsumerEmail, "Joe");
   WaitForLoadStop(GetSyncConfirmationURL());
-  LoginUIService::SyncConfirmationUIClosedResult sync_choice =
-      // If the feature is enabled, Sync can be declined or skipped.
-      IsParamFeatureEnabled()
-          ? LoginUIService::ABORT_SYNC                   // "No Thanks".
-          : LoginUIService::SYNC_WITH_DEFAULT_SETTINGS;  // "Yes, I'm in".
   BrowserAddedWaiter browser_waiter(1u, BrowserAddedWaiter::ReturnMode::kNew);
   LoginUIServiceFactory::GetForProfile(profile)->SyncConfirmationUIClosed(
-      sync_choice);
+      LoginUIService::ABORT_SYNC);
 
   // Opens a browser and unlocks the profile.
   BrowserWindowInterface* const initial_browser = browser_waiter.Wait();
@@ -1582,7 +1430,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
 }
 
 // TODO(crbug.com/441934129) Test is flafy on Mac
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        DISABLED_PRE_ForceSigninSigninThenReauthSuccessful) {
   //----------------------------------------------------------------------------
   // The setup of the browser test attempts to open a browser for the startup
@@ -1608,7 +1456,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   ASSERT_TRUE(entry->IsSigninRequired());
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        DISABLED_ForceSigninSigninThenReauthSuccessful) {
   //----------------------------------------------------------------------------
   // In this part, the startup profile load happened but is not destroyed since
@@ -1660,7 +1508,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
       kReauthResultHistogramName, ProfilePickerReauthResult::kSuccess, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        ForceSigninReauthInGlicModeShowsErrorDialog) {
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
@@ -1683,10 +1531,6 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   const std::string email("test@managedchrome.com");
   signin::MakePrimaryAccountAvailable(identity_manager, email,
                                       signin::ConsentLevel::kSignin);
-  if (!IsParamFeatureEnabled()) {
-    // Only managed accounts are allowed to reauth.
-    entry->SetUserAcceptedAccountManagement(true);
-  }
   // Only glic eligible profiles are shown in the Glic version of the picker.
   entry->SetIsGlicEligible(true);
 
@@ -1731,7 +1575,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   WaitForPickerClosed();
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        ForceSigninReauthWithAnotherAccount) {
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
@@ -1754,14 +1598,9 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
 
-  const std::string email(IsParamFeatureEnabled() ? "test@gmail.com"
-                                                  : "test@managedchrome.com");
+  const std::string email("test@gmail.com");
   signin::MakePrimaryAccountAvailable(identity_manager, email,
                                       signin::ConsentLevel::kSignin);
-  if (!IsParamFeatureEnabled()) {
-    // Only managed accounts are allowed to reauth.
-    entry->SetUserAcceptedAccountManagement(true);
-  }
 
   ASSERT_TRUE(entry->GetSigninState() ==
               SigninState::kSignedInWithUnconsentedPrimaryAccount);
@@ -1777,8 +1616,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   WaitForLoadStop(GetChromeReauthURL(email));
 
   // Simulate a successful sign in with another email address.
-  const std::string different_email(
-      IsParamFeatureEnabled() ? "test2@gmail.com" : "test2@managedchrome.com");
+  const std::string different_email("test2@gmail.com");
   ASSERT_NE(email, different_email);
   SimulateSuccesfulSignin(identity_manager, different_email);
 
@@ -1810,7 +1648,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
 // Test in two parts:
 // - Preparing the profile for reauth (Sign in, invalidate token).
 // - Attempt to open the profile from picker (Reauth).
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        PRE_ForceSigninReauthNavigateBackShouldAbort) {
   const std::vector<Profile*> profiles =
       g_browser_process->profile_manager()->GetLoadedProfiles();
@@ -1827,14 +1665,9 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
 
-  const std::string email(IsParamFeatureEnabled() ? "test@gmail.com"
-                                                  : "test@managedchrome.com");
+  const std::string email("test@gmail.com");
   signin::MakePrimaryAccountAvailable(identity_manager, email,
                                       signin::ConsentLevel::kSignin);
-  if (!IsParamFeatureEnabled()) {
-    // Only managed accounts are allowed to reauth.
-    entry->SetUserAcceptedAccountManagement(true);
-  }
 
   CoreAccountId primary_account =
       identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
@@ -1846,14 +1679,13 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   // Simulate a profile reload/session restart.
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        ForceSigninReauthNavigateBackShouldAbort) {
   // Profile is locked and can be reauthed.
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
   ASSERT_EQ(initial_browser_count, 0u);
-  const std::string email(IsParamFeatureEnabled() ? "test@gmail.com"
-                                                  : "test@managedchrome.com");
+  const std::string email("test@gmail.com");
   ASSERT_TRUE(ProfilePicker::IsOpen());
   ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 0u);
   std::vector<ProfileAttributesEntry*> entries =
@@ -1901,7 +1733,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   EXPECT_TRUE(entry->IsSigninRequired());
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTest,
                        ForceSigninLaunchInactiveDefaultProfile) {
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
@@ -1931,20 +1763,12 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
   // Finish the signin that was started from opening the default profile.
   FinishDiceSignIn(default_profile, "joe.consumer@gmail.com", "Joe");
 
-  GURL target_url = syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
-                        ? GetHistorySyncOptinURL()
-                        : GetSyncConfirmationURL();
-  WaitForLoadStop(target_url);
+  WaitForLoadStop(GetHistorySyncOptinURL());
 
   // Simulate closing the UI with "No, thanks".
   BrowserAddedWaiter browser_waiter(initial_browser_count + 1u,
                                     BrowserAddedWaiter::ReturnMode::kNew);
-  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
-    RejectHistoryOptin();
-  } else {
-    LoginUIServiceFactory::GetForProfile(default_profile)
-        ->SyncConfirmationUIClosed(LoginUIService::SYNC_WITH_DEFAULT_SETTINGS);
-  }
+  RejectHistoryOptin();
 
   // A browser should open and the profile should now be unlocked.
   BrowserWindowInterface* const new_browser = browser_waiter.Wait();
@@ -1959,7 +1783,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTest,
 }
 
 // Regression test for crbug.com/360733721.
-IN_PROC_BROWSER_TEST_P(
+IN_PROC_BROWSER_TEST_F(
     ForceSigninProfilePickerCreationFlowBrowserTest,
     ForceSigninWithPatternMatchingShouldFailSigninWithWrongPatternEmail) {
   // Set the username pattern restriction.
@@ -1991,12 +1815,9 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_FALSE(signin::IsUsernameAllowedByPatternFromPrefs(local_state, email));
 
   // Signing in with a profile that does not match the pattern should stop the
-  // profile creation flow.
-  // When flag is set we don't set primary account, otherwise legacy flow is
-  // invoked and user is signed in (thus primary account is set) just to be
-  // signed out a little later.
+  // profile creation flow without setting the primary account.
   FinishDiceSignIn(profile_being_created, email, "Joe", kNoHostedDomainFound,
-                   false, !IsParamFeatureEnabled());
+                   false, false);
 
   // Returning to the profile picker main page.
   WaitForLoadStop(GURL("chrome://profile-picker"));
@@ -2012,9 +1833,6 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_EQ(GetSigninErrorDialogBodyText(web_contents()), errors.second);
 }
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
-    ForceSigninProfilePickerCreationFlowBrowserTest);
-
 class ForceSigninProfilePickerCreationFlowBrowserTestWithPRE
     : public ForceSigninProfilePickerCreationFlowBrowserTest {
  public:
@@ -2023,7 +1841,7 @@ class ForceSigninProfilePickerCreationFlowBrowserTestWithPRE
             /*force_signin_enabled=*/!content::IsPreTest()) {}
 };
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTestWithPRE,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTestWithPRE,
                        PRE_SignedOutProfileCannotBeOpened) {
   ASSERT_FALSE(signin_util::IsForceSigninEnabled());
 
@@ -2039,7 +1857,7 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTestWithPRE,
           signin::ConsentLevel::kSignin));
 }
 
-IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTestWithPRE,
+IN_PROC_BROWSER_TEST_F(ForceSigninProfilePickerCreationFlowBrowserTestWithPRE,
                        SignedOutProfileCannotBeOpened) {
   ASSERT_TRUE(signin_util::IsForceSigninEnabled());
 
@@ -2080,9 +1898,6 @@ IN_PROC_BROWSER_TEST_P(ForceSigninProfilePickerCreationFlowBrowserTestWithPRE,
   // Profile is still locked.
   EXPECT_TRUE(existing_entry->IsSigninRequired());
 }
-
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
-    ForceSigninProfilePickerCreationFlowBrowserTestWithPRE);
 
 #endif  // !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
 
@@ -2433,12 +2248,13 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
           .WithCookie()
           .Build("joe.consumer@gmail.com"));
   MakeHistorySyncOptinUiAvailable(*identity_manager, account_info);
-  ASSERT_TRUE(
-      identity_manager->HasAccountWithRefreshToken(account_info.account_id));
+  ASSERT_TRUE(identity_manager->HasAccountWithRefreshToken(
+      account_info.GetAccountId()));
 
   // Simulate the Dice "ENABLE_SYNC" header parameter, resulting in sync
   // confirmation screen getting displayed.
-  SimulateEnableSyncDiceHeader(web_contents(), account_info);
+  SimulateEnableSyncDiceHeader(web_contents(),
+                               account_info.GetCoreAccountInfo());
   GURL target_url = syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
                         ? GetHistorySyncOptinURL()
                         : GetSyncConfirmationURL();
@@ -2508,12 +2324,13 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
           .Build("joe.consumer@gmail.com"));
   MakeHistorySyncOptinUiAvailable(*identity_manager, account_info);
 
-  ASSERT_TRUE(
-      identity_manager->HasAccountWithRefreshToken(account_info.account_id));
+  ASSERT_TRUE(identity_manager->HasAccountWithRefreshToken(
+      account_info.GetAccountId()));
 
   // Simulate the Dice "ENABLE_SYNC" header parameter, resulting in sync
   // confirmation screen getting displayed.
-  SimulateEnableSyncDiceHeader(web_contents(), account_info);
+  SimulateEnableSyncDiceHeader(web_contents(),
+                               account_info.GetCoreAccountInfo());
   GURL target_url = syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
                         ? GetHistorySyncOptinURL()
                         : GetSyncConfirmationURL();
@@ -2538,8 +2355,8 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
   base::RunLoop().RunUntilIdle();
 
   // Add full account info.
-  AccountInfo full_account_info =
-      FillAccountInfo(account_info, "Joe", kNoHostedDomainFound);
+  AccountInfo full_account_info = FillAccountInfo(
+      account_info.GetCoreAccountInfo(), "Joe", kNoHostedDomainFound);
   signin::UpdateAccountInfoForAccount(identity_manager, full_account_info);
 
   // Check expectations when the profile creation flow is closes.
@@ -2609,12 +2426,12 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 // profile is added.
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                        PRE_ProfileNameChangesOnProfileAdded) {
-  Profile* default_profile = browser()->profile();
+  Profile* default_profile = browser()->GetProfile();
   AccountInfo default_account_info =
       FinishDiceSignIn(default_profile, "joe@gmail.com", "Joe");
   IdentityManagerFactory::GetForProfile(default_profile)
       ->GetPrimaryAccountMutator()
-      ->SetPrimaryAccount(default_account_info.account_id,
+      ->SetPrimaryAccount(default_account_info.GetAccountId(),
                           signin::ConsentLevel::kSync,
                           signin_metrics::AccessPoint::kStartPage);
 
@@ -2633,7 +2450,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
       FinishDiceSignIn(second_profile, "joe.secondary@gmail.com", "Joe");
   IdentityManagerFactory::GetForProfile(second_profile)
       ->GetPrimaryAccountMutator()
-      ->SetPrimaryAccount(second_profile_info.account_id,
+      ->SetPrimaryAccount(second_profile_info.GetAccountId(),
                           signin::ConsentLevel::kSync,
                           signin_metrics::AccessPoint::kStartPage);
 
@@ -2728,7 +2545,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
   base::HistogramTester histogram_tester;
 
   auto scoped_iph_delay =
-      AvatarToolbarButton::SetScopedIPHMinDelayAfterCreationForTesting(
+      AvatarToolbarIphController::SetScopedIPHMinDelayAfterCreationForTesting(
           base::Seconds(0));
   ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   // Create a second profile.
@@ -2844,7 +2661,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                        MAYBE_OpenProfile_Settings) {
   auto scoped_iph_delay =
-      AvatarToolbarButton::SetScopedIPHMinDelayAfterCreationForTesting(
+      AvatarToolbarIphController::SetScopedIPHMinDelayAfterCreationForTesting(
           base::Seconds(0));
   ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   // Create a second profile.
@@ -2890,7 +2707,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                        OpenProfile_Guest) {
   auto scoped_iph_delay =
-      AvatarToolbarButton::SetScopedIPHMinDelayAfterCreationForTesting(
+      AvatarToolbarIphController::SetScopedIPHMinDelayAfterCreationForTesting(
           base::Seconds(0));
   ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   // Create a second profile.
@@ -2962,8 +2779,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
   BrowserWindowInterface* const new_browser = waiter.Wait();
   profile_customization_observer.Wait();
   content::WebContents* dialog_web_contents =
-      new_browser->GetFeatures()
-          .signin_view_controller()
+      SigninViewController::From(new_browser)
           ->GetModalDialogWebContentsForTesting();
   EXPECT_EQ(dialog_web_contents->GetLastCommittedURL(),
             kLocalProfileCreationUrl);
@@ -2974,8 +2790,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
           .GetProfileAttributesWithPath(new_browser->GetProfile()->GetPath());
   ASSERT_TRUE(entry->IsEphemeral());
   EXPECT_FALSE(ProfilePicker::IsOpen());
-  EXPECT_TRUE(
-      new_browser->GetFeatures().signin_view_controller()->ShowsModalDialog());
+  EXPECT_TRUE(SigninViewController::From(new_browser)->ShowsModalDialog());
 
   // Simulate clicking the "Done" button on the profile customization dialog.
   ConfirmLocalProfileCreation(dialog_web_contents);
@@ -2985,8 +2800,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
   ASSERT_EQ(2u, g_browser_process->profile_manager()
                     ->GetProfileAttributesStorage()
                     .GetNumberOfProfiles());
-  EXPECT_FALSE(
-      new_browser->GetFeatures().signin_view_controller()->ShowsModalDialog());
+  EXPECT_FALSE(SigninViewController::From(new_browser)->ShowsModalDialog());
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -3018,8 +2832,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
   BrowserWindowInterface* const new_browser = browser_added_waiter.Wait();
   profile_customization_observer.Wait();
   content::WebContents* dialog_web_contents =
-      new_browser->GetFeatures()
-          .signin_view_controller()
+      SigninViewController::From(new_browser)
           ->GetModalDialogWebContentsForTesting();
   EXPECT_EQ(dialog_web_contents->GetLastCommittedURL(),
             kLocalProfileCreationUrl);
@@ -3034,8 +2847,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                     .GetNumberOfProfiles());
   ASSERT_TRUE(entry->IsEphemeral());
   EXPECT_FALSE(ProfilePicker::IsOpen());
-  EXPECT_TRUE(
-      new_browser->GetFeatures().signin_view_controller()->ShowsModalDialog());
+  EXPECT_TRUE(SigninViewController::From(new_browser)->ShowsModalDialog());
 
   // Simulate clicking the "Delete profile" button on the profile customization
   // dialog.
@@ -3077,12 +2889,12 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest, DeleteProfile) {
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                        DeleteProfileFromOwnTab) {
   // Open the picker in a tab.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL(chrome::kChromeUIProfilePickerUrl)));
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ProfilePickerHandler* handler = contents->GetWebUI()
                                       ->GetController()
                                       ->GetAs<ProfilePickerUI>()
@@ -3136,7 +2948,7 @@ class SupervisedProfilePickerHideGuestModeTest
 
 IN_PROC_BROWSER_TEST_F(SupervisedProfilePickerHideGuestModeTest,
                        DeleteSupervisedProfile) {
-  Profile* default_profile = browser()->profile();
+  Profile* default_profile = browser()->GetProfile();
   AccountInfo default_account_info =
       FinishDiceSignIn(default_profile, "adult@gmail.com", "Adult");
 
@@ -3183,7 +2995,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedProfilePickerHideGuestModeTest,
 
 IN_PROC_BROWSER_TEST_F(SupervisedProfilePickerHideGuestModeTest,
                        RegularProfile_GuestModeAvailable) {
-  Profile* default_profile = browser()->profile();
+  Profile* default_profile = browser()->GetProfile();
   AccountInfo default_account_info =
       FinishDiceSignIn(default_profile, "adult@gmail.com", "Adult");
 
@@ -3249,7 +3061,7 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserProfileIPHTest,
   size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
   auto scoped_iph_delay =
-      AvatarToolbarButton::SetScopedIPHMinDelayAfterCreationForTesting(
+      AvatarToolbarIphController::SetScopedIPHMinDelayAfterCreationForTesting(
           base::Seconds(0));
 
   // Simulate a successful sign-in and wait for the sign-in to propagate to the
@@ -3575,14 +3387,15 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerEnterpriseCreationFlowBrowserTest,
           .WithAccessPoint(signin_metrics::AccessPoint::kUserManager)
           .Build("joe.acme@gmail.com"));
   MakeHistorySyncOptinUiAvailable(*identity_manager, account_info);
-  ASSERT_TRUE(
-      identity_manager->HasAccountWithRefreshToken(account_info.account_id));
+  ASSERT_TRUE(identity_manager->HasAccountWithRefreshToken(
+      account_info.GetAccountId()));
 
   signin::UpdateAccountInfoForAccount(
       identity_manager,
-      /*account_info=*/FillAccountInfo(account_info, "Joe", "acme.com"));
+      /*account_info=*/FillAccountInfo(account_info.GetCoreAccountInfo(), "Joe",
+                                       "acme.com"));
   identity_manager->GetPrimaryAccountMutator()->SetPrimaryAccount(
-      account_info.account_id, signin::ConsentLevel::kSignin,
+      account_info.GetAccountId(), signin::ConsentLevel::kSignin,
       signin_metrics::AccessPoint::kUserManager);
 
   // Redirect the web contents to a the two factor intersitial authentication
@@ -4122,7 +3935,7 @@ struct GlicTestParam {
   std::string expected_learn_more_url;
 };
 
-const GlicTestParam kGlicTestParams[] = {
+const base::NoDestructor kGlicTestParams(std::to_array<GlicTestParam>({
     {
         .profiles_are_glic_eligible = false,
         .expected_learn_more_url = chrome::kSigninOnDesktopLearnMoreURL,
@@ -4131,7 +3944,7 @@ const GlicTestParam kGlicTestParams[] = {
         .profiles_are_glic_eligible = true,
         .expected_learn_more_url = chrome::kAddNewProfileOnDesktopLearnMoreURL,
     },
-};
+}));
 
 class ProfilePickerWithGlicParamBrowserTest
     : public ProfilePickerCreationFlowBrowserTest,
@@ -4151,7 +3964,7 @@ IN_PROC_BROWSER_TEST_P(ProfilePickerWithGlicParamBrowserTest,
   ASSERT_TRUE(profile_entry);
   profile_entry->SetIsGlicEligible(GetParam().profiles_are_glic_eligible);
 
-  base::FilePath initial_profile_path = browser()->profile()->GetPath();
+  base::FilePath initial_profile_path = browser()->GetProfile()->GetPath();
   // Destroy the current profile to make sure no profiles are loaded.
   ProfileDestructionWaiter profile_destruction_waiter(browser()->GetProfile());
   CloseBrowserSynchronously(browser());
@@ -4165,7 +3978,7 @@ IN_PROC_BROWSER_TEST_P(ProfilePickerWithGlicParamBrowserTest,
   WaitForLoadStop(GURL("chrome://profile-picker/"));
 
   profile_picker_handler()->HandleOnLearnMoreClicked(base::ListValue());
-  Browser* new_browser = ui_test_utils::WaitForBrowserToOpen();
+  BrowserWindowInterface* new_browser = ui_test_utils::WaitForBrowserToOpen();
   EXPECT_TRUE(new_browser);
   EXPECT_EQ(new_browser->GetProfile()->GetPath(), initial_profile_path);
 
@@ -4176,7 +3989,7 @@ IN_PROC_BROWSER_TEST_P(ProfilePickerWithGlicParamBrowserTest,
 
 INSTANTIATE_TEST_SUITE_P(,
                          ProfilePickerWithGlicParamBrowserTest,
-                         testing::ValuesIn(kGlicTestParams),
+                         testing::ValuesIn(*kGlicTestParams),
                          [](const auto& info) {
                            return info.param.profiles_are_glic_eligible
                                       ? "GlicEligibleProfiles"
@@ -4307,3 +4120,423 @@ IN_PROC_BROWSER_TEST_F(SigninErrorProfilePickerBrowserTest,
       "ProfilePicker.ProfilePickerFlow.SignInError",
       static_cast<int>(SigninUIError::Type::kFromGoogleServiceAuthError), 1);
 }
+
+// The test parameter indicates whether the refreshed UI is enabled.
+class ProfilePickerDeviceSignalsDisclaimerBrowserTest
+    : public ProfilePickerCreationFlowBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  ProfilePickerDeviceSignalsDisclaimerBrowserTest() {
+    scoped_feature_list_.InitWithFeatureStates(
+        {{policy::features::kDeviceSignalsBackfillDisclaimer, true},
+         {switches::kEnforceManagementDisclaimer, true},
+         {switches::kFirstRunDesktopRefresh, UseRefreshedUi()},
+         {switches::kFirstRunDesktopChoiceScreenRefresh, UseRefreshedUi()},
+         {switches::kEnterpriseSigninDialogsRefresh, UseRefreshedUi()}});
+  }
+
+  void SetUpOnMainThread() override {
+    ProfilePickerCreationFlowBrowserTest::SetUpOnMainThread();
+
+    // Create and set up a managed profile that requires the disclaimer.
+    managed_profile_path_ = CreateNewProfileWithoutBrowser();
+    Profile* managed_profile =
+        g_browser_process->profile_manager()->GetProfile(managed_profile_path_);
+    ASSERT_TRUE(managed_profile);
+
+    auto* identity_manager =
+        IdentityManagerFactory::GetForProfile(managed_profile);
+    signin::MakePrimaryAccountAvailable(identity_manager, "email@example.com",
+                                        signin::ConsentLevel::kSignin);
+
+    enterprise_util::SetUserAcceptedAccountManagement(managed_profile, true);
+    managed_profile->GetPrefs()->SetBoolean(
+        device_signals::prefs::kDeviceSignalsPermanentConsentReceived, false);
+
+    ProfileManagementDisclaimerServiceFactory::GetForProfile(managed_profile)
+        ->SetBypassNoFirstRunForTesting(true);
+  }
+
+  const base::FilePath& managed_profile_path() const {
+    return managed_profile_path_;
+  }
+
+  bool UseRefreshedUi() const { return GetParam(); }
+
+  const ManagedUserProfileNoticeSelectors& selectors() const {
+    return GetSelectors(UseRefreshedUi());
+  }
+
+  // URL of the device signals disclaimer shown for the managed profile,
+  // matching the UI variant selected by the test parameter.
+  GURL GetDisclaimerUrl() const {
+    Profile* profile = g_browser_process->profile_manager()->GetProfileByPath(
+        managed_profile_path_);
+    return ManagedUserProfileNoticeUI::GetUrl(
+        ManagedUserProfileNoticeUI::ScreenType::kDeviceSignalsDisclaimer,
+        CHECK_DEREF(profile));
+  }
+
+  void ClickDisclaimerProceedButton() {
+    content::WebContents* wc = web_contents();
+    ASSERT_TRUE(wc);
+    std::ignore = WaitForAndClickProceedButton(wc, selectors());
+  }
+
+  void ClickDisclaimerCancelButton() {
+    content::WebContents* wc = web_contents();
+    ASSERT_TRUE(wc);
+    std::ignore = WaitForAndClickCancelButton(wc, selectors());
+  }
+
+  ::testing::AssertionResult ClickLearnMoreLink() {
+    return WaitForAndClickLearnMoreLink(web_contents(), selectors());
+  }
+
+  const base::HistogramTester& histogram_tester() const {
+    return histogram_tester_;
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+  base::FilePath managed_profile_path_;
+  base::HistogramTester histogram_tester_;
+};
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerProceed) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  BrowserAddedWaiter browser_waiter(2u, BrowserAddedWaiter::ReturnMode::kNew);
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+
+  WaitForLoadStop(GetDisclaimerUrl());
+  ClickDisclaimerProceedButton();
+
+  BrowserWindowInterface* const new_browser = browser_waiter.Wait();
+  EXPECT_EQ(new_browser->GetProfile()->GetPath(), managed_profile_path());
+  WaitForPickerClosed();
+  EXPECT_TRUE(new_browser->GetProfile()->GetPrefs()->GetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived));
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerShown, true, 1);
+  histogram_tester().ExpectUniqueSample(
+      kEnterpriseSignalsDisclaimerProfilePickerResult,
+      EnterpriseSignalsDisclaimerProfilePickerResult::kAccepted, 1);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerCancel) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+
+  WaitForLoadStop(GetDisclaimerUrl());
+  ClickDisclaimerCancelButton();
+
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  Profile* managed_profile =
+      g_browser_process->profile_manager()->GetProfile(managed_profile_path());
+  EXPECT_FALSE(managed_profile->GetPrefs()->GetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived));
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerShown, true, 1);
+  histogram_tester().ExpectUniqueSample(
+      kEnterpriseSignalsDisclaimerProfilePickerResult,
+      EnterpriseSignalsDisclaimerProfilePickerResult::kDeclined, 1);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerCancelAndReopen) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+
+  WaitForLoadStop(GetDisclaimerUrl());
+  ClickDisclaimerCancelButton();
+
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  // Picking the profile again should re-show the disclaimer without crashing.
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+  WaitForLoadStop(GetDisclaimerUrl());
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerClosePicker) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+
+  WaitForLoadStop(GetDisclaimerUrl());
+  ProfilePicker::Hide();
+
+  WaitForPickerClosed();
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  Profile* managed_profile =
+      g_browser_process->profile_manager()->GetProfile(managed_profile_path());
+  EXPECT_FALSE(managed_profile->GetPrefs()->GetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived));
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerShown, true, 1);
+  histogram_tester().ExpectUniqueSample(
+      kEnterpriseSignalsDisclaimerProfilePickerResult,
+      EnterpriseSignalsDisclaimerProfilePickerResult::kProfilePickerClosed, 1);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerAlreadyConsented) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  Profile* managed_profile =
+      g_browser_process->profile_manager()->GetProfile(managed_profile_path());
+  managed_profile->GetPrefs()->SetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived, true);
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  BrowserAddedWaiter browser_waiter(2u, BrowserAddedWaiter::ReturnMode::kNew);
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+
+  BrowserWindowInterface* const new_browser = browser_waiter.Wait();
+  EXPECT_EQ(new_browser->GetProfile()->GetPath(), managed_profile_path());
+  WaitForPickerClosed();
+  EXPECT_TRUE(new_browser->GetProfile()->GetPrefs()->GetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived));
+  histogram_tester().ExpectTotalCount(
+      kEnterpriseSignalsDisclaimerProfilePickerShown, 0);
+  histogram_tester().ExpectTotalCount(
+      kEnterpriseSignalsDisclaimerProfilePickerResult, 0);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerOpenSettings) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  BrowserAddedWaiter browser_waiter(2u, BrowserAddedWaiter::ReturnMode::kNew);
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/true);
+
+  WaitForLoadStop(GetDisclaimerUrl());
+  ClickDisclaimerProceedButton();
+
+  BrowserWindowInterface* const new_browser = browser_waiter.Wait();
+  WaitForBrowserUrl(GURL("chrome://settings/manageProfile"),
+                    new_browser->GetTabStripModel()->GetActiveWebContents());
+  EXPECT_EQ(new_browser->GetProfile()->GetPath(), managed_profile_path());
+  WaitForPickerClosed();
+  EXPECT_TRUE(new_browser->GetProfile()->GetPrefs()->GetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived));
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerShown, true, 1);
+  histogram_tester().ExpectUniqueSample(
+      kEnterpriseSignalsDisclaimerProfilePickerResult,
+      EnterpriseSignalsDisclaimerProfilePickerResult::kAccepted, 1);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerOpensCommandLineUrls) {
+  ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(true);
+  base::CommandLine::ForCurrentProcess()->AppendArg("https://www.google.com");
+  base::CommandLine::ForCurrentProcess()->AppendArg("https://www.youtube.com");
+  base::CommandLine::ForCurrentProcess()->AppendArg("https://www.gmail.com");
+
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  BrowserAddedWaiter browser_waiter(2u, BrowserAddedWaiter::ReturnMode::kNew);
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+
+  WaitForLoadStop(GetDisclaimerUrl());
+  ClickDisclaimerProceedButton();
+
+  BrowserWindowInterface* const new_browser = browser_waiter.Wait();
+  EXPECT_EQ(new_browser->GetProfile()->GetPath(), managed_profile_path());
+  ASSERT_EQ(4, new_browser->GetTabStripModel()->count());
+  ASSERT_FALSE(ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened());
+  WaitForPickerClosed();
+  EXPECT_TRUE(new_browser->GetProfile()->GetPrefs()->GetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived));
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerShown, true, 1);
+  histogram_tester().ExpectUniqueSample(
+      kEnterpriseSignalsDisclaimerProfilePickerResult,
+      EnterpriseSignalsDisclaimerProfilePickerResult::kAccepted, 1);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerLearnMoreClose) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  // Wait for popup browser to open when Learn More is clicked.
+  ui_test_utils::BrowserCreatedObserver browser_creation_observer;
+
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+  WaitForLoadStop(GetDisclaimerUrl());
+
+  ASSERT_TRUE(ClickLearnMoreLink());
+
+  BrowserWindowInterface* const popup_browser =
+      browser_creation_observer.Wait();
+  ASSERT_TRUE(popup_browser);
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  // Simulate the user clicking Close button and wait for destruction.
+  ui_test_utils::BrowserDestroyedObserver browser_destroyed_observer(
+      popup_browser);
+  BrowserView::GetBrowserViewForBrowser(popup_browser)
+      ->GetWidget()
+      ->CloseWithReason(views::Widget::ClosedReason::kCloseButtonClicked);
+  browser_destroyed_observer.Wait();
+
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerLearnMoreClicked, true, 1);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerLearnMoreOpenAndOpen) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  // Wait for popup browser to open when Learn More is clicked.
+  ui_test_utils::BrowserCreatedObserver browser_creation_observer;
+
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+  WaitForLoadStop(GetDisclaimerUrl());
+
+  ASSERT_TRUE(ClickLearnMoreLink());
+
+  BrowserWindowInterface* const popup_browser =
+      browser_creation_observer.Wait();
+  ASSERT_TRUE(popup_browser);
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  BrowserActiveStateManager::From(popup_browser)->DidBecomeInactive();
+  widget()->Activate();
+
+  // Click Learn More again.
+  ASSERT_FALSE(ui_test_utils::IsBrowserActive(popup_browser));
+  ASSERT_TRUE(ClickLearnMoreLink());
+
+  // No new window should open, instead the existing popup should be focused.
+  ui_test_utils::WaitUntilBrowserBecomeActive(popup_browser);
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerLearnMoreClicked, true, 2);
+}
+
+IN_PROC_BROWSER_TEST_P(ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                       OpenProfileFromPickerLearnMoreDoesNotRestoreSession) {
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  Profile* managed_profile =
+      g_browser_process->profile_manager()->GetProfile(managed_profile_path());
+  ASSERT_TRUE(managed_profile);
+
+  // Set the profile startup setting to "Continue where you left off".
+  SessionStartupPref pref(SessionStartupPref::LAST);
+  SessionStartupPref::SetStartupPref(managed_profile, pref);
+
+  // Temporarily grant consent so the modal dialog does not block opening
+  // chrome://policy.
+  managed_profile->GetPrefs()->SetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived, true);
+
+  // Open a browser for the managed profile and navigate to chrome://policy so
+  // there is a session to restore.
+  BrowserWindowInterface* profile_browser = CreateBrowser(managed_profile);
+  ASSERT_TRUE(
+      ui_test_utils::NavigateToURL(profile_browser, GURL("chrome://policy")));
+
+  // Reset consent back to false so the disclaimer flow can be tested.
+  managed_profile->GetPrefs()->SetBoolean(
+      device_signals::prefs::kDeviceSignalsPermanentConsentReceived, false);
+
+  ScopedProfileKeepAlive profile_keep_alive(
+      managed_profile, ProfileKeepAliveOrigin::kBrowserWindow);
+  CloseBrowserSynchronously(profile_browser);
+
+  ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
+      ProfilePicker::EntryPoint::kProfileMenuManageProfiles));
+  WaitForLoadStop(GURL(chrome::kChromeUIProfilePickerUrl));
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+
+  // Wait for popup browser to open when Learn More is clicked.
+  ui_test_utils::BrowserCreatedObserver browser_creation_observer;
+
+  OpenProfileFromPicker(managed_profile_path(), /*open_settings=*/false);
+  WaitForLoadStop(GetDisclaimerUrl());
+
+  ASSERT_TRUE(ClickLearnMoreLink());
+
+  BrowserWindowInterface* const popup_browser =
+      browser_creation_observer.Wait();
+  ASSERT_TRUE(popup_browser);
+
+  // Verify that the managed profile is not restoring a session.
+  EXPECT_FALSE(SessionRestore::IsRestoring(managed_profile));
+  EXPECT_FALSE(SessionRestore::IsAnySessionRestored());
+
+  // Verify that only the Learn More popup browser window and the default test
+  // browser exist (no restored normal browser).
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_EQ(popup_browser->GetType(), BrowserWindowInterface::Type::TYPE_POPUP);
+  EXPECT_TRUE(ProfilePicker::IsOpen());
+  histogram_tester().ExpectBucketCount(
+      kEnterpriseSignalsDisclaimerProfilePickerLearnMoreClicked, true, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(,
+                         ProfilePickerDeviceSignalsDisclaimerBrowserTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Refreshed" : "Legacy";
+                         });

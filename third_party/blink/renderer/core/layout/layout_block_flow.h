@@ -43,6 +43,7 @@
 
 namespace blink {
 
+class PhysicalBoxFragment;
 struct InlineNodeData;
 
 // LayoutBlockFlow is the class that implements a block container in CSS 2.1.
@@ -65,7 +66,7 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   ~LayoutBlockFlow() override;
   void Trace(Visitor*) const override;
 
-  static LayoutBlockFlow* CreateAnonymous(Document*, const ComputedStyle*);
+  static LayoutBlockFlow* CreateAnonymous(Document&, const ComputedStyle&);
 
   bool IsLayoutBlockFlow() const final {
     NOT_DESTROYED();
@@ -88,6 +89,13 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
     NOT_DESTROYED();
     return IsMulticolContainer();
   }
+
+  // For a fragmented multicol container, converts a row-gap index within one
+  // fragment to its index across the whole container.
+  wtf_size_t StitchedRowGapIndex(
+      const PhysicalBoxFragment& fragment,
+      wtf_size_t gap_index,
+      std::optional<wtf_size_t> line_index) const override;
 
   bool IsInitialLetterBox() const override;
 
@@ -140,6 +148,7 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
  protected:
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   void InvalidateDisplayItemClients(PaintInvalidationReason) const override;

@@ -2,9 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//third_party/libprotobuf-mutator/fuzzable_proto_library.gni")
+import("//third_party/protobuf/proto_library.gni")
 
-fuzzable_proto_library("proto") {
+proto_library("proto") {
   sources = [ "leak_detection_api.proto" ]
 }
 
@@ -21,13 +21,14 @@ source_set("leak_detection_interface_headers") {
       "bulk_leak_check_service.h",
       "bulk_leak_check_service_interface.h",
     ]
+    public_deps =
+        [ "//components/password_manager/core/browser:password_string" ]
   }
   deps = [
     "//base",
     "//components/keyed_service/core",
     "//url",
   ]
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 source_set("leak_detection") {
@@ -79,8 +80,6 @@ source_set("leak_detection") {
     "//third_party/private-join-and-compute/src:ec_commutative_cipher",
     "//url",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
 source_set("test_support") {

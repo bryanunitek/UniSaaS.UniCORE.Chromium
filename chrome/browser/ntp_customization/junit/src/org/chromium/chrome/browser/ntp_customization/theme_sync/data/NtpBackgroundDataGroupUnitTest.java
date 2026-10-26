@@ -18,19 +18,16 @@ import org.json.JSONObject;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Tests for {@link NtpBackgroundDataGroup}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NtpBackgroundDataGroupUnitTest {
     private Context mContext;
 
@@ -44,7 +41,7 @@ public class NtpBackgroundDataGroupUnitTest {
 
     @Test
     public void testToJsonAndFromJson() throws JSONException {
-        @PlatformType int platformType = PlatformType.ANDROID_LOCAL;
+        @PlatformType int platformType = PlatformType.ANDROID;
         List<NtpBackgroundDataBase> dataList = new ArrayList<>();
 
         // Add a NtpBackgroundDataColor.

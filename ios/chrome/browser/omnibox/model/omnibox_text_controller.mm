@@ -24,7 +24,6 @@
 #import "ios/chrome/browser/omnibox/ui/omnibox_focus_delegate.h"
 #import "ios/chrome/browser/omnibox/ui/omnibox_text_input.h"
 #import "ios/chrome/browser/omnibox/ui/omnibox_text_input_delegate.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/pasteboard_util.h"
 #import "ios/chrome/common/NSString+Chromium.h"
 #import "net/base/apple/url_conversions.h"
@@ -118,7 +117,8 @@ const char kOmniboxFocusResultedInNavigation[] =
 
   [textInput.view becomeFirstResponder];
 
-  if (_presentationContext == OmniboxPresentationContext::kComposebox &&
+  if ((_presentationContext == OmniboxPresentationContext::kComposebox ||
+       _presentationContext == OmniboxPresentationContext::kCobrowse) &&
       _omniboxTextModel && _omniboxTextModel->user_input_in_progress) {
     // In composebox, the omnibox is refocused after using the camera
     // attachment. If user has existing input, set the caret to the end of the
@@ -162,8 +162,8 @@ const char kOmniboxFocusResultedInNavigation[] =
   // Exiting pre edit also shows the selections handle when animating the
   // defocus (crbug.com/458055336).
   BOOL skipExitPreEdit =
-      IsComposeboxIOSEnabled() &&
-      _presentationContext == OmniboxPresentationContext::kComposebox;
+      _presentationContext == OmniboxPresentationContext::kComposebox ||
+      _presentationContext == OmniboxPresentationContext::kCobrowse;
   if (!skipExitPreEdit) {
     [self.textInput exitPreEditState];
   }
@@ -174,7 +174,8 @@ const char kOmniboxFocusResultedInNavigation[] =
 
   // Composebox is destroyed on endEditing, skip revert to avoid resizing on
   // revert.
-  if (_presentationContext != OmniboxPresentationContext::kComposebox) {
+  if (_presentationContext != OmniboxPresentationContext::kComposebox &&
+      _presentationContext != OmniboxPresentationContext::kCobrowse) {
     // Blow away any in-progress edits.
     [self revertAll];
     DCHECK(![self.textInput hasAutocompleteText]);
@@ -491,7 +492,7 @@ const char kOmniboxFocusResultedInNavigation[] =
     _omniboxClient->OnThumbnailOnlyAccept();
   } else {
     [self.omniboxAutocompleteController
-        openCurrentSelectionWithDisposition:WindowOpenDisposition::CURRENT_TAB
+        openCurrentSelectionWithDisposition:WindowOpenDisposition::kCurrentTab
                                   timestamp:base::TimeTicks()];
   }
 
@@ -563,8 +564,7 @@ const char kOmniboxFocusResultedInNavigation[] =
   }
 
   // Don't enter pre-edit if the user has already input text.
-  BOOL userInputInProgress =
-      IsComposeboxIOSEnabled() && _omniboxTextModel->user_input_in_progress;
+  BOOL userInputInProgress = _omniboxTextModel->user_input_in_progress;
 
   // If the omnibox is displaying a URL and the popup is not showing, set the
   // input into pre-editing state.  If the omnibox is displaying search terms,
@@ -601,8 +601,8 @@ const char kOmniboxFocusResultedInNavigation[] =
 
   if ([textInput isPreEditing]) {
     [textInput setClearingPreEditText:YES];
-    if (IsComposeboxIOSEnabled() &&
-        _presentationContext == OmniboxPresentationContext::kComposebox) {
+    if (_presentationContext == OmniboxPresentationContext::kComposebox ||
+        _presentationContext == OmniboxPresentationContext::kCobrowse) {
       // Clear pre-edit text manually instead of relying on clearsOnInsertion.
       // clearsOnInsertion calls selectAll: which can can crash when called on
       // begin editing (crbug.com/479185287).
@@ -912,9 +912,14 @@ const char kOmniboxFocusResultedInNavigation[] =
   // Prevent inline-autocomplete if the IME is currently composing or if the
   // cursor is not at the end of the text.
   const BOOL IMEComposing = [textInput markedTextRange] != nil;
+  // Cobrowse should not show inline-autocomplete regardless of all other
+  // conditions.
+  const BOOL isCobrowse =
+      _presentationContext == OmniboxPresentationContext::kCobrowse;
   NSRange currentSelection = [self currentSelection];
   BOOL preventInlineAutocomplete =
-      IMEComposing || NSMaxRange(currentSelection) != [textInput.text length];
+      isCobrowse || IMEComposing ||
+      NSMaxRange(currentSelection) != [textInput.text length];
   [self startAutocompletePreventingInline:preventInlineAutocomplete];
 
   [self updatePopupLayoutDirection];

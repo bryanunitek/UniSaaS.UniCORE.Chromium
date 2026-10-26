@@ -21,7 +21,9 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.DrawableRes;
 import androidx.annotation.StringRes;
+import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.widget.ImageViewCompat;
@@ -31,24 +33,27 @@ import org.chromium.base.Callback;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.tab.MediaState;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabData.PriceDrop;
 import org.chromium.chrome.browser.tab_ui.TabCardThemeUtil;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider.TabFavicon;
 import org.chromium.chrome.browser.tab_ui.TabThumbnailView;
 import org.chromium.chrome.browser.tab_ui.TabThumbnailView.ThumbnailViewState;
+import org.chromium.chrome.browser.tab_ui.ThumbnailFetcher;
 import org.chromium.chrome.browser.tasks.tab_management.TabActionButtonData.TabActionButtonType;
 import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.ShoppingPersistedTabDataFetcher;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabActionState;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabCardHighlightState;
+import org.chromium.chrome.browser.tasks.tab_management.labels.TabCardLabelData;
+import org.chromium.chrome.browser.tasks.tab_management.labels.TabCardLabelType;
+import org.chromium.chrome.browser.tasks.tab_management.labels.TabCardLabelView;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.util.TextResolver;
 import org.chromium.components.tab_groups.TabGroupColorId;
+import org.chromium.components.tabs.TabAlert;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.widget.ChromeImageView;
 import org.chromium.ui.widget.ViewLookupCachingFrameLayout;
 
 /**
@@ -83,6 +88,8 @@ public class TabGridViewBinder {
             bindClosableTabProperties(model, (ViewLookupCachingFrameLayout) view, propertyKey);
         } else if (tabActionState == TabActionState.SELECTABLE) {
             bindSelectableTabProperties(model, (ViewLookupCachingFrameLayout) view, propertyKey);
+        } else if (tabActionState == TabActionState.UNSET) {
+            // No action button bindings needed for UNSET.
         } else {
             assert false : "Unsupported TabActionState provided to bindTab.";
         }
@@ -111,6 +118,9 @@ public class TabGridViewBinder {
             TabCardViewBinderUtils.detachTabGroupColorView(container);
 
             tabGridView.clearHighlight();
+            tabGridView.setThumbnailSpinnerVisibility(false);
+            tabGridView.updateActionButtonBackground(
+                    /* isSelected= */ false, /* isIncognito= */ false);
         }
     }
 
@@ -120,23 +130,24 @@ public class TabGridViewBinder {
             @Nullable PropertyKey propertyKey) {
         if (TabProperties.TITLE == propertyKey
                 || TabProperties.IS_PINNED == propertyKey
-                || TabProperties.MEDIA_INDICATOR == propertyKey) {
+                || TabProperties.ALERT_STATE == propertyKey) {
             String title = model.get(TabProperties.TITLE);
             TextView tabTitleView = view.fastFindViewById(R.id.tab_title);
             if (TabProperties.TITLE == propertyKey) tabTitleView.setText(title);
-            if (TabProperties.MEDIA_INDICATOR == propertyKey) {
-                ((TabGridView) view).setMediaIndicator(model.get(TabProperties.MEDIA_INDICATOR));
+            if (TabProperties.ALERT_STATE == propertyKey) {
+                ((TabGridView) view).setAlertState(model.get(TabProperties.ALERT_STATE));
             }
             boolean isPinned =
                     model.containsKey(TabProperties.IS_PINNED)
                             && model.get(TabProperties.IS_PINNED);
-            @MediaState
-            int mediaState =
-                    model.containsKey(TabProperties.MEDIA_INDICATOR)
-                            ? model.get(TabProperties.MEDIA_INDICATOR)
-                            : MediaState.NONE;
+            @TabAlert
+            int alertState =
+                    model.containsKey(TabProperties.ALERT_STATE)
+                            ? model.get(TabProperties.ALERT_STATE)
+                            : TabAlert.NONE;
             @StringRes
-            int contentDescriptionStringId = getTabContentDescriptionStringId(isPinned, mediaState);
+            int contentDescriptionStringId =
+                    TabListViewBinderUtils.getTabContentDescriptionStringId(isPinned, alertState);
             tabTitleView.setContentDescription(
                     view.getResources().getString(contentDescriptionStringId, title));
         } else if (TabProperties.IS_SELECTED == propertyKey) {
@@ -250,13 +261,16 @@ public class TabGridViewBinder {
         } else if (TabProperties.IS_SELECTED == propertyKey
                 || TabProperties.TAB_ACTION_BUTTON_DATA == propertyKey
                 || TabProperties.TAB_GROUP_CARD_COLOR == propertyKey) {
+            boolean isSelected = model.get(TabProperties.IS_SELECTED);
+            boolean isIncognito = model.get(TabProperties.IS_INCOGNITO);
             ((TabGridView) view)
                     .setTabActionButtonTint(
                             TabCardThemeUtil.getActionButtonTintList(
                                     view.getContext(),
-                                    model.get(TabProperties.IS_INCOGNITO),
-                                    model.get(TabProperties.IS_SELECTED),
+                                    isIncognito,
+                                    isSelected,
                                     model.get(TabProperties.TAB_GROUP_CARD_COLOR)));
+            ((TabGridView) view).updateActionButtonBackground(isSelected, isIncognito);
         } else if (TabProperties.TAB_CARD_LABEL_DATA == propertyKey) {
             updateTabCardLabel(view, model.get(TabProperties.TAB_CARD_LABEL_DATA));
         } else if (TabProperties.HIGHLIGHT_STATE == propertyKey) {
@@ -333,12 +347,11 @@ public class TabGridViewBinder {
             }
 
             TextResolver contentDescriptionResolver =
-                    (context) -> {
-                        return context.getString(
-                                R.string.accessibility_tab_price_card,
-                                priceDrop.previousPrice,
-                                priceDrop.price);
-                    };
+                    (Context context) ->
+                            context.getString(
+                                    R.string.accessibility_tab_price_card,
+                                    priceDrop.previousPrice,
+                                    priceDrop.price);
             PriceDropTextResolver priceDropResolver =
                     new PriceDropTextResolver(priceDrop.price, priceDrop.previousPrice);
             TabCardLabelData labelData =
@@ -440,8 +453,8 @@ public class TabGridViewBinder {
         View cardView = rootView.fastFindViewById(R.id.card_view);
         TextView titleView = rootView.fastFindViewById(R.id.tab_title);
         TabThumbnailView thumbnail = rootView.fastFindViewById(R.id.tab_thumbnail);
-        ChromeImageView backgroundView = rootView.fastFindViewById(R.id.background_view);
-        ImageView mediaIndicator = rootView.fastFindViewById(R.id.media_indicator_icon);
+        ImageView backgroundView = rootView.fastFindViewById(R.id.background_view);
+        ImageView alertIndicator = rootView.fastFindViewById(R.id.alert_indicator_icon);
 
         cardView.getBackground().mutate();
         final @ColorInt int backgroundColor =
@@ -463,9 +476,20 @@ public class TabGridViewBinder {
                 TabUiThemeProvider.getHoveredCardBackgroundTintList(
                         backgroundView.getContext(), isIncognito, isSelected));
 
-        mediaIndicator.setImageTintList(
-                TabCardThemeUtil.getMediaIndicatorColorStateList(
-                        mediaIndicator.getContext(), isIncognito, isSelected));
+        alertIndicator.setImageTintList(
+                TabCardThemeUtil.getAlertIndicatorColorStateList(
+                        alertIndicator.getContext(), isIncognito, isSelected));
+
+        View contentView = rootView.fastFindViewById(R.id.content_view);
+        if (contentView != null) {
+            @DrawableRes
+            int focusRingRes =
+                    isIncognito
+                            ? R.drawable.tab_grid_focus_ring_incognito
+                            : R.drawable.tab_grid_focus_ring;
+            contentView.setForeground(
+                    AppCompatResources.getDrawable(contentView.getContext(), focusRingRes));
+        }
     }
 
     private static void updateColorForSelectionToggleButton(
@@ -511,41 +535,8 @@ public class TabGridViewBinder {
         labelView.setData(tabCardLabelData);
     }
 
-    private static @StringRes int getTabContentDescriptionStringId(
-            boolean isPinned, @MediaState int mediaState) {
-        switch (mediaState) {
-            case MediaState.MUTED:
-                return isPinned
-                        ? R.string.accessibility_tabstrip_tab_pinned_muted
-                        : R.string.accessibility_tabstrip_tab_muted;
-            case MediaState.AUDIBLE:
-                return isPinned
-                        ? R.string.accessibility_tabstrip_tab_pinned_audible
-                        : R.string.accessibility_tabstrip_tab_audible;
-            case MediaState.RECORDING:
-                return isPinned
-                        ? R.string.accessibility_tabstrip_tab_pinned_recording
-                        : R.string.accessibility_tabstrip_tab_recording;
-            case MediaState.SHARING:
-                return isPinned
-                        ? R.string.accessibility_tabstrip_tab_pinned_sharing
-                        : R.string.accessibility_tabstrip_tab_sharing;
-            case MediaState.NONE:
-            default:
-                return isPinned
-                        ? R.string.accessibility_tabstrip_tab_pinned
-                        : R.string.accessibility_tabstrip_tab;
-        }
-    }
-
     static void setThumbnailFetcherForTesting(ThumbnailFetcher fetcher) {
         sThumbnailFetcherForTesting = fetcher;
-        ResettersForTesting.register(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        sThumbnailFetcherForTesting = null;
-                    }
-                });
+        ResettersForTesting.register(() -> sThumbnailFetcherForTesting = null);
     }
 }

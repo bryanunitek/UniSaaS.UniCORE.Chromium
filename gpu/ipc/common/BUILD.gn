@@ -51,9 +51,6 @@ source_set("ipc_common_sources") {
     "gpu_disk_cache_type.cc",
     "gpu_disk_cache_type.h",
     "gpu_memory_buffer_handle_info.h",
-    "gpu_param_traits.cc",
-    "gpu_param_traits.h",
-    "gpu_param_traits_macros.h",
     "gpu_watchdog_timeout.h",
     "result_codes.h",
   ]
@@ -73,8 +70,8 @@ source_set("ipc_common_sources") {
   }
 
   configs += [
+    "//gpu:gl_headers",
     "//gpu:gpu_implementation",
-    "//third_party/khronos:khronos_headers",
   ]
 
   public_deps = [
@@ -186,27 +183,17 @@ mojom("gpu_channel_mojom") {
       traits_headers = [ "scheduling_priority_mojom_traits.h" ]
       traits_public_deps = [ "//gpu/command_buffer/common" ]
     },
-    {
-      types = [
-        {
-          mojom = "gpu.mojom.SwapBuffersCompleteParams"
-          cpp = "::gpu::SwapBuffersCompleteParams"
-        },
-      ]
-      traits_headers = [ "gpu_param_traits_macros.h" ]
-    },
   ]
 
   # Unlike some definitions in ":interfaces_mojom", these bindings are never
   # used in Blink. We disable variants to simplify the dependency graph.
-  disable_variants = true
-
   export_class_attribute = "GPU_EXPORT"
   export_header = "gpu/gpu_export.h"
   cpp_configs = [ "//gpu:gpu_implementation" ]
 }
 
 mojom("shared_image_pool_client_interface") {
+  generate_blink = true
   generate_java = true
   visibility = [
     "//gpu/*",
@@ -220,6 +207,7 @@ mojom("shared_image_pool_client_interface") {
 }
 
 mojom("surface_handle") {
+  generate_blink = true
   generate_java = true
   sources = [ "surface_handle.mojom" ]
   cpp_typemaps = [
@@ -238,6 +226,7 @@ mojom("surface_handle") {
 }
 
 mojom("interfaces") {
+  generate_blink = true
   generate_java = true
   sources = [
     "capabilities.mojom",
@@ -264,7 +253,6 @@ mojom("interfaces") {
   }
 
   public_deps = [
-    ":gpu_preferences_interface",
     ":shared_image_pool_client_interface",
     ":surface_handle",
     "//mojo/public/mojom/base",
@@ -651,6 +639,7 @@ mojom("interfaces") {
 }
 
 mojom("gpu_preferences_interface") {
+  generate_blink = true
   generate_java = true
   sources = [ "gpu_preferences.mojom" ]
 
@@ -689,6 +678,7 @@ mojom("gpu_preferences_interface") {
 
 if (enable_vulkan) {
   mojom("vulkan_interface") {
+    generate_blink = true
     generate_java = true
     webui_module_path = "/"
     generate_legacy_js_bindings = true

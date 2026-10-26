@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/check_op.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
@@ -255,6 +256,12 @@ class CC_EXPORT LayerTreeImpl {
     Iterator it_;
   };
   size_t num_layers() const { return layer_list_.size(); }
+  // Returns the layer at |index| in the layer list. |index| is bounds-checked
+  // against num_layers().
+  LayerImpl* LayerAtIndex(size_t index) const {
+    CHECK_LT(index, num_layers());
+    return layer_list_[index].get();
+  }
   using const_iterator = IteratorAdapter<OwnedLayerImplList::const_iterator>;
   using const_reverse_iterator =
       IteratorAdapter<OwnedLayerImplList::const_reverse_iterator>;
@@ -528,6 +535,8 @@ class CC_EXPORT LayerTreeImpl {
   void set_ui_resource_request_queue(UIResourceRequestQueue queue);
 
   const RenderSurfaceList& GetRenderSurfaceList() const;
+  RenderSurfaceImpl* GetRenderSurface(int effect_id);
+  const RenderSurfaceImpl* GetRenderSurface(int effect_id) const;
   const Region& UnoccludedScreenSpaceRegion() const;
 
   // These return the size of the root scrollable area and the size of
@@ -723,6 +732,13 @@ class CC_EXPORT LayerTreeImpl {
 
   void DidUpdateScrollOffset(ElementId id,
                              bool pushed_from_main_or_pending_tree);
+  // Sets the snap targets of the snap container scroll node with
+  // `scroll_element_id`. When called on the active tree, this also updates the
+  // pending tree (or the recycle tree) so that they don't overwrite the active
+  // tree's snap targets with stale ones when activated. Returns whether the
+  // snap targets changed on this tree.
+  bool SetTargetSnapAreaElementIds(ElementId scroll_element_id,
+                                   TargetSnapAreaElementIds snap_target_ids);
 
   // See LayerTreeHost.
   bool have_scroll_event_handlers() const {
@@ -1005,10 +1021,9 @@ class CC_EXPORT LayerTreeImpl {
 
   base::flat_set<viz::SurfaceRange> surface_layer_ranges_;
 
-  // List of render surfaces for the most recently prepared frame.
-  //
-  // RAW_PTR_EXCLUSION: visible in stack samples when Renderer BRP is enabled.
-  RAW_PTR_EXCLUSION RenderSurfaceList render_surface_list_;
+  // List of effect node IDs for the render surfaces in the most recently
+  // prepared frame.
+  RenderSurfaceList render_surface_list_;
   // After drawing the |render_surface_list_| the areas in this region
   // would not be fully covered by opaque content.
   Region unoccluded_screen_space_region_;

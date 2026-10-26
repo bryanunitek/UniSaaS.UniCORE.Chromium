@@ -32,8 +32,7 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.homepage.settings.HomepageSettings;
-import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
@@ -69,8 +68,8 @@ public class PartnerHomepageIntegrationTest {
                     new BasePartnerBrowserCustomizationIntegrationTestRule();
 
     @Rule
-    public SettingsActivityTestRule<HomepageSettings> mHomepageSettingsTestRule =
-            new SettingsActivityTestRule<>(HomepageSettings.class);
+    public SettingsTestRule<HomepageSettings> mHomepageSettingsTestRule =
+            new SettingsTestRule<>(HomepageSettings.class);
 
     @Rule
     public final RuleChain mRuleChain =
@@ -183,7 +182,8 @@ public class PartnerHomepageIntegrationTest {
     public void testLastTabClosed() {
         ChromeTabUtils.closeCurrentTab(
                 InstrumentationRegistry.getInstrumentation(),
-                (ChromeTabbedActivity) mActivityTestRule.getActivity());
+                (ChromeTabbedActivity) mActivityTestRule.getActivity(),
+                TabClosingSource.GRID_TAB_SWITCHER);
         Assert.assertTrue(
                 "Activity was not closed.",
                 mActivityTestRule.getActivity().isFinishing()
@@ -208,7 +208,10 @@ public class PartnerHomepageIntegrationTest {
                                 }
                             });
                     TabClosureParams params =
-                            TabClosureParams.closeAllTabs().uponExit(false).build();
+                            TabClosureParams.closeAllTabs()
+                                    .uponExit(false)
+                                    .tabClosingSource(TabClosingSource.GRID_TAB_SWITCHER)
+                                    .build();
                     TabModelSelector selector =
                             mActivityTestRule.getActivity().getTabModelSelector();
                     selector.getModel(false)
@@ -254,8 +257,7 @@ public class PartnerHomepageIntegrationTest {
      */
     private void toggleHomepageSwitchPreference(boolean expected) {
         // Launch preference activity with Homepage settings fragment.
-        SettingsActivity homepagePreferenceActivity =
-                mHomepageSettingsTestRule.startSettingsActivity();
+        mHomepageSettingsTestRule.startSettingsActivity();
         HomepageSettings fragment = mHomepageSettingsTestRule.getFragment();
         ChromeSwitchPreference preference =
                 (ChromeSwitchPreference)

@@ -16,7 +16,7 @@
 #include "chrome/browser/password_manager/factories/account_password_store_factory.h"
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -33,6 +33,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace extensions {
 
@@ -146,11 +147,11 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPrivateApiBrowserTest, GetReferrerChain) {
       embedded_test_server()->GetURL("foo.test", "/title1.html"),
       embedded_test_server()->GetURL("bar.test", "/title2.html")};
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL("about:blank"), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GURL("about:blank"), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   for (const auto& url : urls) {
     ASSERT_TRUE(content::NavigateToURL(web_contents, url));
@@ -167,18 +168,18 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingPrivateApiBrowserTest, GetReferrerChain) {
 IN_PROC_BROWSER_TEST_F(SafeBrowsingPrivateApiBrowserTest,
                        GetReferrerChainForNonSafeBrowsingUser) {
   // Disable Safe Browsing.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                  false);
 
   const std::vector<GURL> urls = {
       embedded_test_server()->GetURL("foo.test", "/title1.html"),
       embedded_test_server()->GetURL("bar.test", "/title2.html")};
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL("about:blank"), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GURL("about:blank"), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   for (const auto& url : urls) {
     ASSERT_TRUE(content::NavigateToURL(web_contents, url));

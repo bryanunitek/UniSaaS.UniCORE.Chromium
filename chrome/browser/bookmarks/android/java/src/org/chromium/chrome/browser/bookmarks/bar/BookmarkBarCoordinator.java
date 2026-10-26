@@ -31,6 +31,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -47,6 +48,7 @@ import org.chromium.chrome.browser.browser_controls.TopControlLayer;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlType;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.fullscreen.FullscreenManager;
 import org.chromium.chrome.browser.fullscreen.FullscreenOptions;
 import org.chromium.chrome.browser.layouts.CompositorModelChangeProcessor;
@@ -55,17 +57,19 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.TopResumedActivityChangedObserver;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.CurrentTabObserver;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObscuringHandler;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
-import org.chromium.chrome.browser.ui.side_ui.SideUiObserver;
+import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.UiUpdateRequest;
 import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
 import org.chromium.chrome.browser.ui.side_ui.ViewMarginAdjusterForSideUi;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.widget.ViewResourceFrameLayout;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -96,7 +100,7 @@ public class BookmarkBarCoordinator
     private final BookmarkBarMediator mMediator;
     private final BookmarkBar mView;
     private final FrameLayout mContentContainer;
-    private final SideUiObserver mSideUiObserver;
+    private final BookmarkBarAdjusterForSideUi mSideUiObserver;
     private @Nullable SideUiStateProvider mSideUiStateProvider;
     private final TopControlsStacker mTopControlsStacker;
     private final TabObscuringHandler mTabObscuringHandler;
@@ -141,15 +145,19 @@ public class BookmarkBarCoordinator
      * @param resourceManager The resource manager for providing resources to C++ layers.
      * @param browserControlsStateProvider The state provider for browser controls.
      * @param heightChangeCallback A callback to notify owner of bookmark bar height changes.
-     * @param profileSupplier The supplier for the currently active profile.
+     * @param profileSupplier Used to access the active user profile.
      * @param viewStub The stub used to inflate the bookmark bar.
      * @param currentTab The current tab if it exists.
      * @param bookmarkOpener Used to open bookmarks.
      * @param bookmarkManagerOpenerSupplier Used to open the bookmark manager.
      * @param topControlsStacker TopControlsStacker to manage the view's y-offset.
-     * @param currentTabSupplier Supplier of current tab to use for observers.
+     * @param currentTabSupplier Used to observe or retrieve the active tab.
      * @param topUiThemeColorProvider Provider for theme colors to match background color.
-     * @param sideUiStateProviderSupplier Provider for the {@link SideUiStateProvider}.
+     * @param sideUiStateProviderSupplier Used to access the {@link SideUiStateProvider}.
+     * @param tabObscuringHandler Handler for tab obscuring state.
+     * @param modalDialogManagerSupplier Used to display modal dialogs.
+     * @param snackbarManagerSupplier Used to display snackbar notifications.
+     * @param xrSpaceModeObservableSupplier Used to check if currently in XR full space mode.
      */
     public BookmarkBarCoordinator(
             Activity activity,
@@ -169,7 +177,10 @@ public class BookmarkBarCoordinator
             NullableObservableSupplier<Tab> currentTabSupplier,
             TopUiThemeColorProvider topUiThemeColorProvider,
             OneshotSupplier<SideUiStateProvider> sideUiStateProviderSupplier,
-            TabObscuringHandler tabObscuringHandler) {
+            TabObscuringHandler tabObscuringHandler,
+            Supplier<ModalDialogManager> modalDialogManagerSupplier,
+            Supplier<@Nullable SnackbarManager> snackbarManagerSupplier,
+            NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier) {
         mContext = activity;
         mRequestUpdate = requestUpdate;
         mTabObscuringHandler = tabObscuringHandler;
@@ -183,7 +194,10 @@ public class BookmarkBarCoordinator
         mContentHeight =
                 mContext.getResources().getDimensionPixelSize(R.dimen.bookmark_bar_min_height);
         mHairlineHeight =
-                mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_hairline_height);
+                ChromeFeatureList.sToolbarProgressBarRefactor.isEnabled()
+                        ? 0
+                        : mContext.getResources()
+                                .getDimensionPixelSize(R.dimen.toolbar_hairline_height);
 
         // The Bookmark Bar may first be turned on in fullscreen mode, in which case we want its
         // initial state to be hidden, which is tracked by this member variable.
@@ -192,12 +206,21 @@ public class BookmarkBarCoordinator
         // Inflate the Bookmark Bar. The bar is a ViewStub which contains a container to hold all
         // the content of the Bookmark Bar, and a hairline footer.
         mView = (BookmarkBar) viewStub.inflate();
+        if (ChromeFeatureList.sToolbarProgressBarRefactor.isEnabled()) {
+            View hairline = mView.findViewById(R.id.bookmark_bar_hairline);
+            if (hairline != null) hairline.setVisibility(View.GONE);
+        }
         mContentContainer = mView.findViewById(R.id.bookmark_bar_content_container);
         mSideUiObserver = new BookmarkBarAdjusterForSideUi(mView);
         sideUiStateProviderSupplier.onAvailable(
                 (sideUiStateProvider) -> {
                     mSideUiStateProvider = sideUiStateProvider;
                     mSideUiStateProvider.addObserver(mSideUiObserver);
+
+                    // BookmarkBarCoordinator is created lazily, therefore may miss the latest
+                    // SideUi changes. Update the bar UI with the current SideUiSpecs.
+                    mSideUiObserver.updateMarginsForSideUi(
+                            sideUiStateProvider.getCurrentSideUiSpecs());
                 });
 
         // The content container contains the tightly-wrapper ViewResourceFrameLayout for snapshots.
@@ -250,6 +273,9 @@ public class BookmarkBarCoordinator
                                 mBrowserControlsStateProvider.getTopControlsHeight(),
                                 mBrowserControlsStateProvider.getBottomControlsHeight());
 
+        BookmarkBarPopupCoordinator popupCoordinator =
+                new BookmarkBarPopupCoordinator(activity, mView, controlsHeightSupplier);
+
         // Bind view/model for bookmark bar and instantiate mediator.
         final var model = new PropertyModel.Builder(BookmarkBarProperties.ALL_KEYS).build();
         mModel = model;
@@ -257,7 +283,6 @@ public class BookmarkBarCoordinator
                 new BookmarkBarMediator(
                         activity,
                         allBookmarksButtonModel,
-                        controlsHeightSupplier,
                         itemsModel,
                         mBookmarkBarItemsLayoutManager,
                         mModel,
@@ -265,8 +290,12 @@ public class BookmarkBarCoordinator
                         currentTabSupplier,
                         bookmarkOpener,
                         bookmarkManagerOpenerSupplier,
+                        snackbarManagerSupplier,
+                        modalDialogManagerSupplier,
                         mItemsContainer,
-                        mView);
+                        mView,
+                        popupCoordinator,
+                        xrSpaceModeObservableSupplier);
         PropertyModelChangeProcessor.create(model, mView, BookmarkBarViewBinder::bind);
 
         // All dimensions and offsets require the first layout pass to complete, so don't set here.
@@ -291,7 +320,7 @@ public class BookmarkBarCoordinator
         mCurrentTabObserver =
                 new CurrentTabObserver(
                         currentTabSupplier,
-                        new EmptyTabObserver() {
+                        new TabObserver() {
                             @Override
                             public void onContentChanged(Tab tab) {
                                 updateBackgroundColor(tab);
@@ -405,6 +434,9 @@ public class BookmarkBarCoordinator
         mShouldBookmarkBarBeShown = isVisible;
         updateSceneLayerVisibility();
         updateAndroidWidgetVisibility();
+        if (mTopControlsStacker != null) {
+            mTopControlsStacker.requestLayerUpdateSync(false);
+        }
 
         if (!isVisible) {
             unregisterResource();
@@ -643,6 +675,9 @@ public class BookmarkBarCoordinator
             mIsInFullscreenMode = true;
             updateSceneLayerVisibility();
             updateAndroidWidgetVisibility();
+            if (mTopControlsStacker != null) {
+                mTopControlsStacker.requestLayerUpdateSync(false);
+            }
         }
     }
 
@@ -664,6 +699,9 @@ public class BookmarkBarCoordinator
         mIsInFullscreenMode = false;
         updateSceneLayerVisibility();
         updateAndroidWidgetVisibility();
+        if (mTopControlsStacker != null) {
+            mTopControlsStacker.requestLayerUpdateSync(false);
+        }
     }
 
     // TopResumedActivityChangedObserver implementation:
@@ -715,7 +753,9 @@ public class BookmarkBarCoordinator
 
         // Match the hairline color with the divider color.
         mModel.set(BookmarkBarProperties.DIVIDER_COLOR, hairlineColor);
-        mModel.set(BookmarkBarProperties.HAIRLINE_COLOR, hairlineColor);
+        if (!ChromeFeatureList.sToolbarProgressBarRefactor.isEnabled()) {
+            mModel.set(BookmarkBarProperties.HAIRLINE_COLOR, hairlineColor);
+        }
 
         @BrandedColorScheme
         int brandedColorScheme = ThemeUtils.getBrandedColorScheme(mContext, color, isIncognito);
@@ -740,6 +780,17 @@ public class BookmarkBarCoordinator
 
         // The SceneLayer should never be visible when in full screen mode.
         if (mIsInFullscreenMode) {
+            mBookmarkBarSceneLayer.setVisibility(false);
+            return;
+        }
+
+        // If the Android controls are fully invisible AND completely scrolled off screen, we do
+        // not need the SceneLayer to be visible. Hiding it here prevents single-frame flashes when
+        // height recalculations mismatch the CC offset. We also check the hidden ratio because
+        // some features (like Contextual Search) can force Android controls to be INVISIBLE while
+        // leaving the CC layer on screen under a scrim.
+        if (mBrowserControlsStateProvider.getAndroidControlsVisibility() == INVISIBLE
+                && mBrowserControlsStateProvider.getBrowserControlHiddenRatio() == 1.0f) {
             mBookmarkBarSceneLayer.setVisibility(false);
             return;
         }
@@ -780,7 +831,7 @@ public class BookmarkBarCoordinator
 
     private static class BookmarkBarAdjusterForSideUi extends ViewMarginAdjusterForSideUi {
         BookmarkBarAdjusterForSideUi(View view) {
-            super(view);
+            super(view, /* forToolbarElement= */ true);
         }
 
         @Override
@@ -801,8 +852,9 @@ public class BookmarkBarCoordinator
         }
 
         @Override
-        public @Nullable Transition onPreSideUiSpecsChange(SideUiSpecs sideUiSpecs) {
-            Transition transition = super.onPreSideUiSpecsChange(sideUiSpecs);
+        public @Nullable Transition onPreSideUiSpecsChange(
+                SideUiSpecs sideUiSpecs, UiUpdateRequest request) {
+            Transition transition = super.onPreSideUiSpecsChange(sideUiSpecs, request);
             super.triggerSynchronousMeasureAndLayout();
             return transition;
         }

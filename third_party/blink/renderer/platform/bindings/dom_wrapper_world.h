@@ -97,8 +97,6 @@ class PLATFORM_EXPORT DOMWrapperWorld final
     // An isolated world for the inspector. The world id is generated
     // internally.
     kInspectorIsolated,
-    // A utility world that is not considered an isolated world.
-    kRegExp,
     // A utility world for context snapshotting that is not considered an
     // isolated world.
     kForV8ContextSnapshotNonMain,
@@ -168,6 +166,9 @@ class PLATFORM_EXPORT DOMWrapperWorld final
 
   static void SetNonMainWorldHumanReadableName(int32_t world_id, const String&);
   String NonMainWorldHumanReadableName() const;
+
+  static void SetNonMainWorldEmbedderWorldId(int32_t world_id, const String&);
+  String NonMainWorldEmbedderWorldId() const;
 
   // Associates an isolated world (see above for description) with a security
   // origin. XMLHttpRequest instances used in that world will be considered

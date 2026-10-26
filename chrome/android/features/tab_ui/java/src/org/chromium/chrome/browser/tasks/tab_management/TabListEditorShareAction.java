@@ -34,26 +34,18 @@ import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.share.ShareImageFileUtils;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
-import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.content_public.common.ContentUrlConstants;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 
 /** Share action for the {@link TabListEditorMenu}. */
 @NullMarked
 public class TabListEditorShareAction extends TabListEditorAction {
-    private static final List<String> UNSUPPORTED_SCHEMES =
-            new ArrayList<>(
-                    Arrays.asList(
-                            UrlConstants.CHROME_SCHEME,
-                            UrlConstants.CHROME_NATIVE_SCHEME,
-                            ContentUrlConstants.ABOUT_SCHEME));
     private static @Nullable Callback<Intent> sIntentCallbackForTesting;
 
     private final Context mContext;
@@ -139,7 +131,7 @@ public class TabListEditorShareAction extends TabListEditorAction {
             }
         }
 
-        int size = editorSupportsActionOnRelatedTabs() ? selectedTabs.size() : itemIds.size();
+        int size = getSelectedTabCount(itemIds);
         setEnabledAndItemCount(enableShare, size);
     }
 
@@ -153,7 +145,7 @@ public class TabListEditorShareAction extends TabListEditorAction {
         TabList tabList = getTabModel();
         List<Tab> sortedTabList = filterTabs(tabs, tabList);
 
-        if (sortedTabList.size() == 0) {
+        if (sortedTabList.isEmpty()) {
             TabUiMetricsHelper.recordShareStateHistogram(
                     TabListEditorShareActionState.ALL_TABS_FILTERED);
             return false;
@@ -187,7 +179,7 @@ public class TabListEditorShareAction extends TabListEditorAction {
                         R.plurals.tab_selection_editor_share_sheet_preview_message,
                         sortedTabList.size(),
                         sortedTabList.size()));
-        shareIntent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
         float padding =
                 resources.getDimension(
@@ -307,10 +299,7 @@ public class TabListEditorShareAction extends TabListEditorAction {
     private boolean shouldFilterUrl(@Nullable GURL url) {
         if (mSkipUrlCheckForTesting) return false;
 
-        return url == null
-                || !url.isValid()
-                || url.isEmpty()
-                || UNSUPPORTED_SCHEMES.contains(url.getScheme());
+        return url == null || !url.isValid() || url.isEmpty() || UrlUtilities.isInternalScheme(url);
     }
 
     void setSkipUrlCheckForTesting(boolean skip) {

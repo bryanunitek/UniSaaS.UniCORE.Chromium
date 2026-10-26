@@ -23,13 +23,11 @@
 //! the same value. Aside from this exception, all values should round-trip
 //! correctly under the CTAP2 configuration.
 //!
-//! Note on Relaxations: When `Config::allow_floating_point` or
-//! `Config::allow_invalid_utf8` are enabled, the injectivity and exact
-//! round-tripping guarantees no longer hold. For example, `f16` floats will
-//! parse to `f64` and serialize back as `f64` (changing the byte string).
+//! Note on Relaxations: When `Config::allow_invalid_utf8` is enabled, the
+//! injectivity and exact round-tripping guarantees no longer hold.
 //!
 //! ```
-//! let value = cbor::Value::String("hello".to_string());
+//! let value = cbor::Value::String("hello");
 //! let serialized = value.to_bytes();
 //! assert_eq!(serialized, vec![0x65u8, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
 //! assert_eq!(cbor::parse_with_config(serialized, cbor::Config::default()), Ok((value, 1)));
@@ -43,14 +41,16 @@
 extern crate alloc;
 
 mod constants;
-mod float_conversions;
 mod reader;
 mod values;
 mod writer;
 
 pub use constants::MAX_DEPTH;
-pub use reader::{parse_with_config, Config, Error};
-pub use values::{MapKey, Value};
+pub use reader::{parse_with_config, CborEvent, Config, Decoder, Error, ParseResult};
+pub use values::{
+    vec_push_entry, vec_push_value, vec_with_capacity_entries, vec_with_capacity_values, Map,
+    MapEntry, MapKey, MapKeyKind, Value, ValueKind,
+};
 pub use writer::write;
 
 // This code assumes that `usize` fits in a `u64` because it uses `as u64` in a

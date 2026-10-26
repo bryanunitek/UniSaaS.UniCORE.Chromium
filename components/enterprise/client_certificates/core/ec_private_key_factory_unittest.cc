@@ -14,6 +14,7 @@
 #include "components/enterprise/client_certificates/core/private_key_types.h"
 #include "components/enterprise/client_certificates/core/scoped_ssl_key_converter.h"
 #include "crypto/keypair.h"
+#include "crypto/sign.h"
 #include "net/ssl/ssl_private_key.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -45,13 +46,14 @@ TEST(ECPrivateKeyFactoryTest, SupportedCreateKey_LoadKey) {
   auto ec_private_key = create_key_future.Get();
 
   ASSERT_TRUE(ec_private_key);
-  EXPECT_EQ(ec_private_key->GetAlgorithm(),
-            crypto::SignatureVerifier::ECDSA_SHA256);
+  EXPECT_EQ(ec_private_key->GetAlgorithm(), crypto::sign::ECDSA_SHA256);
 
   auto spki_bytes = ec_private_key->GetSubjectPublicKeyInfo();
   EXPECT_GT(spki_bytes.size(), 0U);
 
-  auto signature = ec_private_key->SignSlowly(spki_bytes);
+  base::test::TestFuture<std::optional<std::vector<uint8_t>>> test_future;
+  ec_private_key->Sign(spki_bytes, test_future.GetCallback());
+  auto signature = test_future.Get();
   ASSERT_TRUE(signature.has_value());
   EXPECT_GT(signature->size(), 0U);
 

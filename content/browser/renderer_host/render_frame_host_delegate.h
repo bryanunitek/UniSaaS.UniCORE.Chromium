@@ -13,6 +13,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/safe_ref.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
@@ -109,10 +110,11 @@ struct AXLocationAndScrollUpdates;
 namespace content {
 class BackForwardCacheImpl;
 class FrameTreeNode;
+class InitiatorNavigationState;
 class Page;
 class PrerenderHostRegistry;
 class RenderWidgetHostImpl;
-class SessionStorageNamespace;
+class SessionStorageNamespaceHandle;
 class SiteInstanceGroup;
 class SurfaceEmbedConnector;
 struct ContextMenuParams;
@@ -163,6 +165,7 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
       const GURL& blocked_url,
       const GURL& initiator_url,
       const url::Origin& initiator_origin,
+      scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
       blink::mojom::NavigationBlockedReason reason) {}
 
   // Called when blink.mojom.LocalFrameHost::DidFinishLoad() is invoked.
@@ -171,6 +174,9 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
 
   // Notifies that the manifest URL is updated.
   virtual void OnManifestUrlChanged(PageImpl& page) {}
+
+  // Notifies the delegate that the primary page is about to be deactivated.
+  virtual void NotifyPrimaryPageWillBeDeactivated(PageImpl& page) {}
 
   // A message was added to the console. |source_id| is a URL.
   // |untrusted_stack_trace| is not present for most messages; only when
@@ -239,7 +245,12 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
       RenderFrameHostImpl* render_frame_host) {}
 
   // Called when a federated login request completes.
-  virtual void OnFedCmFederatedLogin(webid::FederatedLoginResult result) {}
+  // |result| is the result of the federated login request.
+  // |idp_origin| is the origin of the identity provider. It is nullopt on all
+  // failure cases during the FedCM login flow.
+  virtual void OnFedCmFederatedLogin(
+      webid::FederatedLoginResult result,
+      const std::optional<url::Origin>& idp_origin) {}
 
   // Binds a DisplayCutoutHost object associated to |render_frame_host|.
   virtual void BindDisplayCutoutHost(
@@ -449,7 +460,7 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
       const mojom::CreateNewWindowParams& params,
       bool is_new_browsing_instance,
       bool has_user_gesture,
-      SessionStorageNamespace* session_storage_namespace);
+      SessionStorageNamespaceHandle* session_storage_namespace);
 
   // Show a previously created page with the specified disposition and window
   // features. The window is identified by the |main_frame_widget_route_id|
@@ -529,7 +540,7 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
 
   // Returns the light, dark and forced color maps for the ColorProvider
   // associated with this RenderFrameHost's WebContents.
-  virtual blink::ColorProviderColorMaps GetColorProviderColorMaps() const = 0;
+  virtual blink::ColorProviderColorMaps GetColorProviderColorMaps() = 0;
 
   // Returns the visibility of the delegate.
   virtual Visibility GetVisibility();
@@ -644,7 +655,11 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
           receiver) {}
 
   // Return whether HTML Fullscreen requires transient activation.
-  virtual bool IsTransientActivationRequiredForHtmlFullscreen();
+  // `requesting_frame` is the frame requesting fullscreen, and `is_xr_overlay`
+  // indicates whether the request is for a WebXR DOM Overlay.
+  virtual bool IsTransientActivationRequiredForHtmlFullscreen(
+      RenderFrameHostImpl* requesting_frame,
+      bool is_xr_overlay);
 
   // Return true if the back forward cache is supported. This is not an
   // indication that the cache will be used.
@@ -770,7 +785,16 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   virtual bool IsPopup() const;
 
   // Called when a first contentful paint happened in the primary main frame.
-  virtual void OnFirstContentfulPaintInPrimaryMainFrame() {}
+  // `presentation_time` is the renderer-side presentation timestamp of the
+  // paint.
+  virtual void OnFirstContentfulPaintInPrimaryMainFrame(
+      base::TimeTicks presentation_time) {}
+
+  // Called when the largest contentful paint candidate changed in the primary
+  // main frame. `presentation_time` is the renderer-side presentation timestamp
+  // of the current candidate.
+  virtual void OnLargestContentfulPaintInPrimaryMainFrame(
+      base::TimeTicks presentation_time) {}
 
   // Returns the top-level native window for the associated WebContents.
   virtual gfx::NativeWindow GetOwnerNativeWindow();

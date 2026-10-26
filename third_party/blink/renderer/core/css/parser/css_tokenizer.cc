@@ -104,7 +104,7 @@ CSSParserToken CSSTokenizer::HyphenMinus(UChar cc) {
 }
 
 CSSParserToken CSSTokenizer::Hash(UChar cc) {
-  UChar next_char = input_.PeekWithoutReplacement(0);
+  UChar next_char = input_.NextInputChar();
   if (IsNameCodePoint(next_char) ||
       TwoCharsAreValidEscape(next_char, input_.PeekWithoutReplacement(1))) {
     HashTokenType type =
@@ -688,11 +688,6 @@ StringView CSSTokenizer::ConsumeName() {
 // https://drafts.csswg.org/css-syntax/#consume-an-escaped-code-point
 UChar32 CSSTokenizer::ConsumeEscape() {
   return blink::ConsumeEscape(input_);
-}
-
-bool CSSTokenizer::NextTwoCharsAreValidEscape() {
-  return TwoCharsAreValidEscape(input_.PeekWithoutReplacement(0),
-                                input_.PeekWithoutReplacement(1));
 }
 
 // http://www.w3.org/TR/css3-syntax/#starts-with-a-number

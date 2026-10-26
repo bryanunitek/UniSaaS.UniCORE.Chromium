@@ -45,6 +45,12 @@ using base::test::ios::WaitUntilConditionOrTimeout;
                              withCapabilities:capabilities];
 }
 
+- (void)setCapabilities:(NSDictionary<NSString*, NSNumber*>*)capabilities
+            forIdentity:(FakeSystemIdentity*)fakeIdentity {
+  [SigninEarlGreyAppInterface setCapabilities:capabilities
+                                  forIdentity:fakeIdentity];
+}
+
 - (void)addFakeIdentityForSSOAuthAddAccountFlow:
     (FakeSystemIdentity*)fakeIdentity {
   [self addFakeIdentityForSSOAuthAddAccountFlow:fakeIdentity
@@ -71,6 +77,34 @@ using base::test::ios::WaitUntilConditionOrTimeout;
   [SigninEarlGreyAppInterface
       setPersistentAuthErrorForAccount:base::SysUTF8ToNSString(
                                            accountId.ToString())];
+}
+
+- (void)setMDMErrorForIdentity:(FakeSystemIdentity*)fakeIdentity
+                userActionable:(BOOL)userActionable {
+  [SigninEarlGreyAppInterface setMDMErrorForIdentity:fakeIdentity
+                                      userActionable:userActionable];
+}
+
+- (void)clearMDMErrorForIdentity:(FakeSystemIdentity*)fakeIdentity {
+  [SigninEarlGreyAppInterface clearMDMErrorForIdentity:fakeIdentity];
+}
+
+- (void)resetMDMNotificationDisplayed {
+  [SigninEarlGreyAppInterface resetMDMNotificationDisplayed];
+}
+
+- (BOOL)wasMDMNotificationDisplayed {
+  return [SigninEarlGreyAppInterface wasMDMNotificationDisplayed];
+}
+
+- (void)waitForMDMNotificationDisplayed {
+  ConditionBlock condition = ^bool {
+    return [SigninEarlGreyAppInterface wasMDMNotificationDisplayed];
+  };
+  EG_TEST_HELPER_ASSERT_TRUE(
+      WaitUntilConditionOrTimeout(base::test::ios::kWaitForActionTimeout,
+                                  condition),
+      @"The MDM notification was not requested.");
 }
 
 - (GaiaId)primaryAccountGaiaID {
@@ -309,6 +343,10 @@ using base::test::ios::WaitUntilConditionOrTimeout;
   }
 }
 
+- (void)setPreferredAccountForSignin:(FakeSystemIdentity*)fakeIdentity {
+  [SigninEarlGreyAppInterface setPreferredAccountForSignin:fakeIdentity];
+}
+
 // Confirms "Switch and Delete" when the alert dialog that data will be cleared
 // is shown.
 - (void)closeSwitchAndDeleteAlertIfAny {
@@ -322,11 +360,6 @@ using base::test::ios::WaitUntilConditionOrTimeout;
     [[EarlGrey selectElementWithMatcher:switchAndDeleteAlert]
         performAction:grey_tap()];
   }
-}
-
-- (BOOL)areSeparateProfilesForManagedAccountsEnabled {
-  return
-      [SigninEarlGreyAppInterface areSeparateProfilesForManagedAccountsEnabled];
 }
 
 @end

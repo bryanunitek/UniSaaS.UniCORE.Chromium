@@ -7,7 +7,6 @@
 #include <limits>
 #include <sstream>
 
-#include "base/byte_count.h"
 #include "base/rand_util.h"
 #include "base/test/gtest_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -125,32 +124,6 @@ TEST(ByteSizeDeathTest, ConstructionDeltaOutOfRange) {
   }
 }
 
-TEST(ByteSizeTest, ConstructionByteCount) {
-  EXPECT_EQ(ByteSize::FromDeprecatedByteCount(ByteCount()), ByteSize());
-  EXPECT_EQ(ByteCount(), ByteSize().AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSize::FromDeprecatedByteCount(ByteCount(7)), ByteSize(7u));
-  EXPECT_EQ(ByteCount(7), ByteSize(7u).AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSize::FromDeprecatedByteCount(ByteCount::Max()),
-            ByteSize::Max());
-  EXPECT_EQ(ByteCount::Max(), ByteSize::Max().AsDeprecatedByteCount());
-
-  // Make sure non-const expressions are accepted.
-  EXPECT_EQ(ByteSize::FromDeprecatedByteCount(ByteCount(RunTimeNum(3))),
-            ByteSize(3u));
-  EXPECT_EQ(ByteCount(3), ByteSize(RunTimeNum(3u)).AsDeprecatedByteCount());
-}
-
-TEST(ByteSizeDeathTest, ConstructionByteCountOutOfRange) {
-  BASE_EXPECT_DEATH(ByteSize::FromDeprecatedByteCount(ByteCount(-1)), "");
-  if (kRunAllDeathTests) {
-    BASE_EXPECT_DEATH(ByteSize::FromDeprecatedByteCount(
-                          ByteCount(std::numeric_limits<int64_t>::min())),
-                      "");
-  }
-}
-
 TEST(ByteSizeTest, ConstructionMax) {
   EXPECT_EQ(ByteSize::Max().InBytes(), kMaxByteSize);
   EXPECT_DOUBLE_EQ(ByteSize::Max().InBytesF(),
@@ -158,85 +131,85 @@ TEST(ByteSizeTest, ConstructionMax) {
 }
 
 TEST(ByteSizeTest, ConstructionOtherUnitIntegral) {
-  EXPECT_EQ(KiBU(5u).InBytes(), 5u * 1024);
-  EXPECT_EQ(KiBU(5u).InKiB(), 5u);
+  EXPECT_EQ(KiB(5u).InBytes(), 5u * 1024);
+  EXPECT_EQ(KiB(5u).InKiB(), 5u);
 
-  EXPECT_EQ(MiBU(2u).InBytes(), 2u * 1024 * 1024);
-  EXPECT_EQ(MiBU(2u).InMiB(), 2u);
+  EXPECT_EQ(MiB(2u).InBytes(), 2u * 1024 * 1024);
+  EXPECT_EQ(MiB(2u).InMiB(), 2u);
 
-  EXPECT_EQ(GiBU(12u).InBytes(), 12ull * 1024 * 1024 * 1024);
-  EXPECT_EQ(GiBU(12u).InGiB(), 12u);
+  EXPECT_EQ(GiB(12u).InBytes(), 12ull * 1024 * 1024 * 1024);
+  EXPECT_EQ(GiB(12u).InGiB(), 12u);
 
-  EXPECT_EQ(TiBU(39u).InBytes(), 39ull * 1024 * 1024 * 1024 * 1024);
-  EXPECT_EQ(TiBU(39u).InTiB(), 39u);
+  EXPECT_EQ(TiB(39u).InBytes(), 39ull * 1024 * 1024 * 1024 * 1024);
+  EXPECT_EQ(TiB(39u).InTiB(), 39u);
 
-  EXPECT_EQ(PiBU(7u).InBytes(), 7ull * 1024 * 1024 * 1024 * 1024 * 1024);
-  EXPECT_EQ(PiBU(7u).InPiB(), 7u);
+  EXPECT_EQ(PiB(7u).InBytes(), 7ull * 1024 * 1024 * 1024 * 1024 * 1024);
+  EXPECT_EQ(PiB(7u).InPiB(), 7u);
 
-  EXPECT_EQ(EiBU(5u).InBytes(), 5ull * 1024 * 1024 * 1024 * 1024 * 1024 * 1024);
-  EXPECT_EQ(EiBU(5u).InEiB(), 5u);
+  EXPECT_EQ(EiB(5u).InBytes(), 5ull * 1024 * 1024 * 1024 * 1024 * 1024 * 1024);
+  EXPECT_EQ(EiB(5u).InEiB(), 5u);
 
   // Make sure non-const unsigned expressions are accepted.
-  EXPECT_EQ(KiBU(RunTimeNum(1u)).InKiB(), 1);
-  EXPECT_EQ(MiBU(RunTimeNum(1u)).InMiB(), 1);
-  EXPECT_EQ(GiBU(RunTimeNum(1u)).InGiB(), 1);
-  EXPECT_EQ(TiBU(RunTimeNum(1u)).InTiB(), 1);
-  EXPECT_EQ(PiBU(RunTimeNum(1u)).InPiB(), 1);
-  EXPECT_EQ(EiBU(RunTimeNum(1u)).InEiB(), 1);
+  EXPECT_EQ(KiB(RunTimeNum(1u)).InKiB(), 1);
+  EXPECT_EQ(MiB(RunTimeNum(1u)).InMiB(), 1);
+  EXPECT_EQ(GiB(RunTimeNum(1u)).InGiB(), 1);
+  EXPECT_EQ(TiB(RunTimeNum(1u)).InTiB(), 1);
+  EXPECT_EQ(PiB(RunTimeNum(1u)).InPiB(), 1);
+  EXPECT_EQ(EiB(RunTimeNum(1u)).InEiB(), 1);
 
   // Make sure constant positive signed ints are accepted.
   // Non-const signed ints are tested in byte_size_nocompile.nc.
-  EXPECT_EQ(KiBU(1).InKiB(), 1);
-  EXPECT_EQ(MiBU(1).InMiB(), 1);
-  EXPECT_EQ(GiBU(1).InGiB(), 1);
-  EXPECT_EQ(TiBU(1).InTiB(), 1);
-  EXPECT_EQ(PiBU(1).InPiB(), 1);
-  EXPECT_EQ(EiBU(1).InEiB(), 1);
+  EXPECT_EQ(KiB(1).InKiB(), 1);
+  EXPECT_EQ(MiB(1).InMiB(), 1);
+  EXPECT_EQ(GiB(1).InGiB(), 1);
+  EXPECT_EQ(TiB(1).InTiB(), 1);
+  EXPECT_EQ(PiB(1).InPiB(), 1);
+  EXPECT_EQ(EiB(1).InEiB(), 1);
 }
 
 TEST(ByteSizeTest, ConstructionOtherUnitFloat) {
-  EXPECT_EQ(KiBU(5.5).InBytes(), 5632);
-  EXPECT_EQ(KiBU(5.5).InKiB(), 5);
-  EXPECT_DOUBLE_EQ(KiBU(5.5).InBytesF(), 5632.0);
-  EXPECT_DOUBLE_EQ(KiBU(5.5).InKiBF(), 5.5);
+  EXPECT_EQ(KiB(5.5).InBytes(), 5632);
+  EXPECT_EQ(KiB(5.5).InKiB(), 5);
+  EXPECT_DOUBLE_EQ(KiB(5.5).InBytesF(), 5632.0);
+  EXPECT_DOUBLE_EQ(KiB(5.5).InKiBF(), 5.5);
 
   // Round down from 2411724.8 to integral number of bytes.
-  EXPECT_EQ(MiBU(2.3).InBytes(), 2411724);
-  EXPECT_EQ(MiBU(2.3).InMiB(), 2);
-  EXPECT_DOUBLE_EQ(MiBU(2.3).InBytesF(), 2411724.0);
-  EXPECT_NEAR(MiBU(2.3).InMiBF(), 2.299, 0.001);  // Rounded bytes in MiB.
+  EXPECT_EQ(MiB(2.3).InBytes(), 2411724);
+  EXPECT_EQ(MiB(2.3).InMiB(), 2);
+  EXPECT_DOUBLE_EQ(MiB(2.3).InBytesF(), 2411724.0);
+  EXPECT_NEAR(MiB(2.3).InMiBF(), 2.299, 0.001);  // Rounded bytes in MiB.
 
   // Round down from 13754632765.4 to integral number of bytes.
-  EXPECT_EQ(GiBU(12.81).InBytes(), 13754632765);
-  EXPECT_EQ(GiBU(12.81).InGiB(), 12);
-  EXPECT_DOUBLE_EQ(GiBU(12.81).InBytesF(), 13754632765.0);
-  EXPECT_NEAR(GiBU(12.81).InGiBF(), 12.809, 0.001);  // Rounded bytes in GiB.
+  EXPECT_EQ(GiB(12.81).InBytes(), 13754632765);
+  EXPECT_EQ(GiB(12.81).InGiB(), 12);
+  EXPECT_DOUBLE_EQ(GiB(12.81).InBytesF(), 13754632765.0);
+  EXPECT_NEAR(GiB(12.81).InGiBF(), 12.809, 0.001);  // Rounded bytes in GiB.
 
   // Round down from 43760562785484.8 to integral number of bytes.
-  EXPECT_EQ(TiBU(39.8).InBytes(), 43760562785484);
-  EXPECT_EQ(TiBU(39.8).InTiB(), 39);
-  EXPECT_DOUBLE_EQ(TiBU(39.8).InBytesF(), 43760562785484.0);
-  EXPECT_NEAR(TiBU(39.8).InTiBF(), 39.799, 0.001);  // Rounded bytes in TiB.
+  EXPECT_EQ(TiB(39.8).InBytes(), 43760562785484);
+  EXPECT_EQ(TiB(39.8).InTiB(), 39);
+  EXPECT_DOUBLE_EQ(TiB(39.8).InBytesF(), 43760562785484.0);
+  EXPECT_NEAR(TiB(39.8).InTiBF(), 39.799, 0.001);  // Rounded bytes in TiB.
 
   // 7.09 PiB is an integral number of bytes.
-  EXPECT_EQ(PiBU(7.09).InBytes(), 7982630339514204);
-  EXPECT_EQ(PiBU(7.09).InPiB(), 7);
-  EXPECT_DOUBLE_EQ(PiBU(7.09).InBytesF(), 7982630339514204.0);
-  EXPECT_DOUBLE_EQ(PiBU(7.09).InPiBF(), 7.09);
+  EXPECT_EQ(PiB(7.09).InBytes(), 7982630339514204);
+  EXPECT_EQ(PiB(7.09).InPiB(), 7);
+  EXPECT_DOUBLE_EQ(PiB(7.09).InBytesF(), 7982630339514204.0);
+  EXPECT_DOUBLE_EQ(PiB(7.09).InPiBF(), 7.09);
 
   // 5.36 EiB is an integral number of bytes.
-  EXPECT_EQ(EiBU(5.36).InBytes(), 6179659264692700160);
-  EXPECT_EQ(EiBU(5.36).InEiB(), 5);
-  EXPECT_DOUBLE_EQ(EiBU(5.36).InBytesF(), 6179659264692700160.0);
-  EXPECT_DOUBLE_EQ(EiBU(5.36).InEiBF(), 5.36);
+  EXPECT_EQ(EiB(5.36).InBytes(), 6179659264692700160);
+  EXPECT_EQ(EiB(5.36).InEiB(), 5);
+  EXPECT_DOUBLE_EQ(EiB(5.36).InBytesF(), 6179659264692700160.0);
+  EXPECT_DOUBLE_EQ(EiB(5.36).InEiBF(), 5.36);
 
   // Make sure non-const expressions are accepted.
-  EXPECT_DOUBLE_EQ(KiBU(RunTimeNum(1.5)).InKiBF(), 1.5);
-  EXPECT_DOUBLE_EQ(MiBU(RunTimeNum(1.5)).InMiBF(), 1.5);
-  EXPECT_DOUBLE_EQ(GiBU(RunTimeNum(1.5)).InGiBF(), 1.5);
-  EXPECT_DOUBLE_EQ(TiBU(RunTimeNum(1.5)).InTiBF(), 1.5);
-  EXPECT_DOUBLE_EQ(PiBU(RunTimeNum(1.5)).InPiBF(), 1.5);
-  EXPECT_DOUBLE_EQ(EiBU(RunTimeNum(1.5)).InEiBF(), 1.5);
+  EXPECT_DOUBLE_EQ(KiB(RunTimeNum(1.5)).InKiBF(), 1.5);
+  EXPECT_DOUBLE_EQ(MiB(RunTimeNum(1.5)).InMiBF(), 1.5);
+  EXPECT_DOUBLE_EQ(GiB(RunTimeNum(1.5)).InGiBF(), 1.5);
+  EXPECT_DOUBLE_EQ(TiB(RunTimeNum(1.5)).InTiBF(), 1.5);
+  EXPECT_DOUBLE_EQ(PiB(RunTimeNum(1.5)).InPiBF(), 1.5);
+  EXPECT_DOUBLE_EQ(EiB(RunTimeNum(1.5)).InEiBF(), 1.5);
 }
 
 TEST(ByteSizeTest, ConstructionOtherUnitConversionOrder) {
@@ -264,17 +237,17 @@ TEST(ByteSizeTest, ConstructionOtherUnitConversionOrder) {
   static_assert(kExpectedGiB > kMaxU32);
 
   // Make sure both float and int conversions work.
-  EXPECT_EQ(KiBU(kLargeKiB).InBytes(), kExpectedKiB);
-  EXPECT_EQ(KiBU(1.0 * kLargeKiB).InBytes(), kExpectedKiB);
-  EXPECT_DOUBLE_EQ(KiBU(1.0 * kLargeKiB).InBytesF(), 1.0 * kExpectedKiB);
+  EXPECT_EQ(KiB(kLargeKiB).InBytes(), kExpectedKiB);
+  EXPECT_EQ(KiB(1.0 * kLargeKiB).InBytes(), kExpectedKiB);
+  EXPECT_DOUBLE_EQ(KiB(1.0 * kLargeKiB).InBytesF(), 1.0 * kExpectedKiB);
 
-  EXPECT_EQ(MiBU(kLargeMiB).InBytes(), kExpectedMiB);
-  EXPECT_EQ(MiBU(1.0 * kLargeMiB).InBytes(), kExpectedMiB);
-  EXPECT_DOUBLE_EQ(MiBU(1.0 * kLargeMiB).InBytesF(), 1.0 * kExpectedMiB);
+  EXPECT_EQ(MiB(kLargeMiB).InBytes(), kExpectedMiB);
+  EXPECT_EQ(MiB(1.0 * kLargeMiB).InBytes(), kExpectedMiB);
+  EXPECT_DOUBLE_EQ(MiB(1.0 * kLargeMiB).InBytesF(), 1.0 * kExpectedMiB);
 
-  EXPECT_EQ(GiBU(kLargeGiB).InBytes(), kExpectedGiB);
-  EXPECT_EQ(GiBU(1.0 * kLargeGiB).InBytes(), kExpectedGiB);
-  EXPECT_DOUBLE_EQ(GiBU(1.0 * kLargeGiB).InBytesF(), 1.0 * kExpectedGiB);
+  EXPECT_EQ(GiB(kLargeGiB).InBytes(), kExpectedGiB);
+  EXPECT_EQ(GiB(1.0 * kLargeGiB).InBytes(), kExpectedGiB);
+  EXPECT_DOUBLE_EQ(GiB(1.0 * kLargeGiB).InBytesF(), 1.0 * kExpectedGiB);
 }
 
 TEST(ByteSizeDeathTest, ConstructionOtherUnitOutOfRange) {
@@ -284,30 +257,30 @@ TEST(ByteSizeDeathTest, ConstructionOtherUnitOutOfRange) {
   // Out-of-range unsigned ints.
   // TODO(crbug.com/448661443): Detect out-of-range unsigned constants at
   // compile time.
-  BASE_EXPECT_DEATH(KiBU(kMaxByteSize), "");
+  BASE_EXPECT_DEATH(KiB(kMaxByteSize), "");
   if (kRunAllDeathTests) {
-    BASE_EXPECT_DEATH(MiBU(kMaxByteSize), "");
-    BASE_EXPECT_DEATH(GiBU(kMaxByteSize), "");
-    BASE_EXPECT_DEATH(TiBU(kMaxByteSize), "");
-    BASE_EXPECT_DEATH(PiBU(kMaxByteSize), "");
-    BASE_EXPECT_DEATH(EiBU(kMaxByteSize), "");
+    BASE_EXPECT_DEATH(MiB(kMaxByteSize), "");
+    BASE_EXPECT_DEATH(GiB(kMaxByteSize), "");
+    BASE_EXPECT_DEATH(TiB(kMaxByteSize), "");
+    BASE_EXPECT_DEATH(PiB(kMaxByteSize), "");
+    BASE_EXPECT_DEATH(EiB(kMaxByteSize), "");
   }
 
   // Negative and out-of-range floats.
   if (kRunAllDeathTests) {
     constexpr double kLargeFloat = static_cast<double>(kMaxByteSize);
-    BASE_EXPECT_DEATH(KiBU(-1.0), "");
-    BASE_EXPECT_DEATH(MiBU(-1.0), "");
-    BASE_EXPECT_DEATH(GiBU(-1.0), "");
-    BASE_EXPECT_DEATH(TiBU(-1.0), "");
-    BASE_EXPECT_DEATH(PiBU(-1.0), "");
-    BASE_EXPECT_DEATH(EiBU(-1.0), "");
-    BASE_EXPECT_DEATH(KiBU(kLargeFloat), "");
-    BASE_EXPECT_DEATH(MiBU(kLargeFloat), "");
-    BASE_EXPECT_DEATH(GiBU(kLargeFloat), "");
-    BASE_EXPECT_DEATH(TiBU(kLargeFloat), "");
-    BASE_EXPECT_DEATH(PiBU(kLargeFloat), "");
-    BASE_EXPECT_DEATH(EiBU(kLargeFloat), "");
+    BASE_EXPECT_DEATH(KiB(-1.0), "");
+    BASE_EXPECT_DEATH(MiB(-1.0), "");
+    BASE_EXPECT_DEATH(GiB(-1.0), "");
+    BASE_EXPECT_DEATH(TiB(-1.0), "");
+    BASE_EXPECT_DEATH(PiB(-1.0), "");
+    BASE_EXPECT_DEATH(EiB(-1.0), "");
+    BASE_EXPECT_DEATH(KiB(kLargeFloat), "");
+    BASE_EXPECT_DEATH(MiB(kLargeFloat), "");
+    BASE_EXPECT_DEATH(GiB(kLargeFloat), "");
+    BASE_EXPECT_DEATH(TiB(kLargeFloat), "");
+    BASE_EXPECT_DEATH(PiB(kLargeFloat), "");
+    BASE_EXPECT_DEATH(EiB(kLargeFloat), "");
   }
 }
 
@@ -1000,40 +973,6 @@ TEST(ByteSizeDeltaTest, ConstructionByteSize) {
   ByteSize bytes(RunTimeNum(3u));
   EXPECT_EQ(ByteSizeDelta::FromByteSize(bytes), ByteSizeDelta(3));
   EXPECT_EQ(bytes.AsByteSizeDelta(), ByteSizeDelta(3));
-}
-
-TEST(ByteSizeDeltaTest, ConstructionByteCount) {
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(ByteCount()),
-            ByteSizeDelta());
-  EXPECT_EQ(ByteCount(), ByteSizeDelta().AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(ByteCount(7)),
-            ByteSizeDelta(7));
-  EXPECT_EQ(ByteCount(7), ByteSizeDelta(7).AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(ByteCount::Max()),
-            ByteSizeDelta::Max());
-  EXPECT_EQ(ByteCount::Max(), ByteSizeDelta::Max().AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(ByteCount(-7)),
-            ByteSizeDelta(-7));
-  EXPECT_EQ(ByteCount(-7), ByteSizeDelta(-7).AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(
-                ByteCount(std::numeric_limits<int64_t>::min())),
-            ByteSizeDelta::Min());
-  EXPECT_EQ(ByteCount(std::numeric_limits<int64_t>::min()),
-            ByteSizeDelta::Min().AsDeprecatedByteCount());
-
-  // Make sure non-const expressions are accepted.
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(ByteCount(RunTimeNum(3))),
-            ByteSizeDelta(3));
-  EXPECT_EQ(ByteCount(RunTimeNum(3)), ByteSizeDelta(3).AsDeprecatedByteCount());
-
-  EXPECT_EQ(ByteSizeDelta::FromDeprecatedByteCount(ByteCount(RunTimeNum(-3))),
-            ByteSizeDelta(-3));
-  EXPECT_EQ(ByteCount(RunTimeNum(-3)),
-            ByteSizeDelta(-3).AsDeprecatedByteCount());
 }
 
 TEST(ByteSizeDeltaTest, ConstructionMin) {

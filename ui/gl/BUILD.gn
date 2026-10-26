@@ -72,6 +72,7 @@ if (use_angle_stubs) {
     output_name = "libEGL"
     sources = [ "dummy_stub.cc" ]
   }
+
   shared_library("dummy_libGLESv2") {
     output_name = "libGLESv2"
     sources = [ "dummy_stub.cc" ]
@@ -159,8 +160,6 @@ component("gl") {
     "gl_utils.h",
     "gl_version_info.cc",
     "gl_version_info.h",
-    "gpu_switching_manager.cc",
-    "gpu_switching_manager.h",
     "gpu_timing.cc",
     "gpu_timing.h",
     "presenter.cc",
@@ -170,6 +169,8 @@ component("gl") {
     "scoped_binders.h",
     "scoped_egl_image.cc",
     "scoped_egl_image.h",
+    "scoped_gl_framebuffer.cc",
+    "scoped_gl_framebuffer.h",
     "scoped_gl_texture.cc",
     "scoped_gl_texture.h",
     "scoped_make_current.cc",
@@ -189,7 +190,6 @@ component("gl") {
   ]
 
   configs += [
-    "//build/config/compiler:wexit_time_destructors",
     "//build/config/compiler:wglobal_constructors",
     "//build/config:precompiled_headers",
   ]
@@ -198,11 +198,15 @@ component("gl") {
   if (enable_gpu_service_logging) {
     defines += [ "GPU_ENABLE_SERVICE_LOGGING" ]
   }
+  if (ozone_platform == "x11") {
+    defines += [ "OZONE_PLATFORM_IS_X11" ]
+  }
 
   deps = [
     ":buildflags",
     "//build:chromeos_buildflags",
     "//mojo/public/cpp/bindings",
+    "//third_party/re2",
     "//ui/base:ozone_buildflags",
     "//ui/gfx/mojom",
   ]
@@ -239,7 +243,7 @@ component("gl") {
 
   if (use_ozone) {
     if (!is_fuchsia) {
-      if (!use_static_angle) {
+      if (!use_static_angle || is_chromeos) {
         data_deps += [
           "//third_party/angle:libEGL",
           "//third_party/angle:libGLESv2",
@@ -266,7 +270,7 @@ component("gl") {
       "//ui/gfx/linux:gbm_support_x11",
     ]
 
-    if (!use_static_angle) {
+    if (!use_static_angle || is_chromeos) {
       data_deps += [
         "//third_party/angle:libEGL",
         "//third_party/angle:libGLESv2",
@@ -411,8 +415,6 @@ component("gl") {
       "android/scoped_java_surface_control.h",
       "android/surface_texture.cc",
       "android/surface_texture.h",
-      "android/surface_texture_listener.cc",
-      "android/surface_texture_listener.h",
       "gl_surface_egl_surface_control.cc",
       "gl_surface_egl_surface_control.h",
     ]
@@ -427,6 +429,7 @@ component("gl") {
     deps += [
       ":gl_jni_headers",
       "//third_party/angle:angle_gpu_info_util",
+      "//third_party/re2",
     ]
   }
 
@@ -591,11 +594,14 @@ test("gl_unittests") {
   use_xvfb = use_xvfb_in_this_config
 
   sources = [
+    "angle_platform_impl_unittest.cc",
     "egl_api_unittest.cc",
     "gl_api_unittest.cc",
     "gl_display_manager_unittest.cc",
+    "gl_surface_presentation_helper_unittest.cc",
     "gl_version_info_unittest.cc",
     "gpu_timing_unittest.cc",
+    "scoped_gl_framebuffer_unittest.cc",
     "test/egl_initialization_displays_unittest.cc",
   ]
 
@@ -615,6 +621,10 @@ test("gl_unittests") {
     ]
   }
 
+  if (is_android) {
+    sources += [ "gl_surface_egl_surface_control_unittest.cc" ]
+  }
+
   deps = [
     ":gl",
     ":gl_headers",
@@ -622,6 +632,7 @@ test("gl_unittests") {
     ":run_all_unittests",
     ":test_support",
     "//base",
+    "//base/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/angle:includes",

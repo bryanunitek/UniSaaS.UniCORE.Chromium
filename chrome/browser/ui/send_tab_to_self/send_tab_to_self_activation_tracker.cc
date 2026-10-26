@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_util.h"
 #include "components/send_tab_to_self/metrics_util.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/web_contents.h"
 
 namespace send_tab_to_self {
@@ -35,7 +36,8 @@ SendTabToSelfActivationTracker::SendTabToSelfActivationTracker(
 SendTabToSelfActivationTracker::~SendTabToSelfActivationTracker() = default;
 
 void SendTabToSelfActivationTracker::WebContentsDestroyed() {
-  if (!metric_recorded_ && !browser_shutdown::HasShutdownStarted()) {
+  if (!metric_recorded_ && !GetWebContents().WasDiscarded() &&
+      !browser_shutdown::HasShutdownStarted()) {
     send_tab_to_self::MarkEntryMatchingGuidActivated(
         Profile::FromBrowserContext(GetWebContents().GetBrowserContext()),
         entry_guid_,

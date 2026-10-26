@@ -13,6 +13,7 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/glic_pref_names_internal.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
@@ -55,8 +56,8 @@ class GlicPrivateApiTest : public GlicPrivateApiTestBase {
          {extensions_features::kApiGlicAccessFromGoogleWebpage, {}},
          {extensions_features::kApiGlicAccessFromPromotionPage, {}},
          {features::kGlicAnchorEntryPointForOnboardedUsers, {}},
-         {features::kGlicActor,
-          {{"glic_actor_policy_control_exemption", "true"}}}
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}
 #if BUILDFLAG(IS_CHROMEOS)
          ,
          {syncer::kReplaceSyncPromosWithSignInPromos, {}},
@@ -76,7 +77,7 @@ class GlicPrivateApiFullyEnabledTest
     : public glic::GlicBrowserTestMixin<GlicPrivateApiTest> {
  public:
   void SetUpOnMainThread() override {
-    GlicPrivateApiTest::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicPrivateApiTest>::SetUpOnMainThread();
     SetupIdentityAndCapabilities();
   }
 };
@@ -116,7 +117,7 @@ class GlicPrivateApiIneligibleAccountTest
     : public glic::GlicBrowserTestMixin<GlicPrivateApiTest> {
  public:
   void SetUpOnMainThread() override {
-    GlicPrivateApiTest::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicPrivateApiTest>::SetUpOnMainThread();
 
     profile()->GetPrefs()->SetInteger(
         ::glic::prefs::kGlicCompletedFre,
@@ -369,14 +370,14 @@ class GlicPrivateApiUniversalCartOnlyTest
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {{extensions_features::kApiGlicPrivate, {}},
          {extensions_features::kApiGlicAccessFromGoogleWebpage, {}},
-         {features::kGlicActor,
-          {{"glic_actor_policy_control_exemption", "true"}}}},
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}},
         {extensions_features::kApiGlicAccessFromPromotionPage,
          features::kGlicShowForSignedOut});
   }
 
   void SetUpOnMainThread() override {
-    GlicPrivateApiTest::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicPrivateApiTest>::SetUpOnMainThread();
     SetupIdentityAndCapabilities();
   }
 
@@ -433,14 +434,14 @@ class GlicPrivateApiPromotionPageOnlyTest
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {{extensions_features::kApiGlicPrivate, {}},
          {extensions_features::kApiGlicAccessFromPromotionPage, {}},
-         {features::kGlicActor,
-          {{"glic_actor_policy_control_exemption", "true"}}}},
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}},
         {extensions_features::kApiGlicAccessFromGoogleWebpage,
          features::kGlicShowForSignedOut});
   }
 
   void SetUpOnMainThread() override {
-    GlicPrivateApiTest::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicPrivateApiTest>::SetUpOnMainThread();
     SetupIdentityAndCapabilities();
   }
 
@@ -467,15 +468,15 @@ class GlicPrivateApiBothAccessDisabledTest
   GlicPrivateApiBothAccessDisabledTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {{extensions_features::kApiGlicPrivate, {}},
-         {features::kGlicActor,
-          {{"glic_actor_policy_control_exemption", "true"}}}},
+         {features::kGlicActor, {}},
+         {features::kGlicActorPolicyControlExemption, {}}},
         {extensions_features::kApiGlicAccessFromGoogleWebpage,
          extensions_features::kApiGlicAccessFromPromotionPage,
          features::kGlicShowForSignedOut});
   }
 
   void SetUpOnMainThread() override {
-    GlicPrivateApiTest::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicPrivateApiTest>::SetUpOnMainThread();
     SetupIdentityAndCapabilities();
   }
 
@@ -603,7 +604,7 @@ class GlicPrivateApiActuationDisabledTest
   }
 
   void SetUpOnMainThread() override {
-    GlicPrivateApiTestBase::SetUpOnMainThread();
+    glic::GlicBrowserTestMixin<GlicPrivateApiTestBase>::SetUpOnMainThread();
     SetupIdentityAndCapabilities();
   }
 

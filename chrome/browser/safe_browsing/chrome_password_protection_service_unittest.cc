@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -54,7 +55,7 @@
 #include "components/safe_browsing/content/browser/password_protection/password_protection_commit_deferring_condition.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_request_content.h"
 #include "components/safe_browsing/content/browser/ui_manager.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/utils.h"
@@ -66,6 +67,7 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/sync_user_events/fake_user_event_service.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_navigation_handle.h"
@@ -326,9 +328,8 @@ class ChromePasswordProtectionServiceTest
 
     service_ = NewMockPasswordProtectionService();
     fake_user_event_service_ = static_cast<syncer::FakeUserEventService*>(
-        browser_sync::UserEventServiceFactory::GetInstance()
-            ->SetTestingFactoryAndUse(browser_context(),
-                                      GetFakeUserEventServiceFactory()));
+        UserEventServiceFactory::GetInstance()->SetTestingFactoryAndUse(
+            browser_context(), GetFakeUserEventServiceFactory()));
 #if !BUILDFLAG(IS_ANDROID)
     test_event_router_ =
         extensions::CreateAndUseTestEventRouter(browser_context());
@@ -444,7 +445,7 @@ class ChromePasswordProtectionServiceTest
     std::vector<MatchingReusedCredential> credentials;
     credentials.emplace_back("somedomain.com", GURL("https://somedomain.com/"),
                              u"user");
-    request_ = new PasswordProtectionRequestContent(
+    request_ = base::MakeRefCounted<PasswordProtectionRequestContent>(
         /*web_contents=*/web_contents(),
         /*main_frame_url=*/GURL(kPhishingURL),
         /*password_form_action=*/GURL(),

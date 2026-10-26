@@ -31,7 +31,6 @@ bool AllowWebstoreData(InstallPromptData::PromptType type) {
 }  // namespace
 
 InstallPromptData::InstallPromptData(PromptType type) : type_(type) {
-  DCHECK_NE(type_, UNSET_PROMPT_TYPE);
   DCHECK_NE(type_, NUM_PROMPT_TYPES);
 }
 
@@ -123,6 +122,8 @@ std::u16string InstallPromptData::GetDialogTitle() const {
 }
 
 int InstallPromptData::GetDialogButtons() const {
+  DCHECK_NE(type_, UNSET_PROMPT_TYPE);
+
   // Extension pending request dialog doesn't have confirm button because there
   // is no user action required.
   if (type_ == EXTENSION_PENDING_REQUEST_PROMPT) {
@@ -337,8 +338,7 @@ void InstallPromptData::OnDialogCanceled() {
 
 bool InstallPromptData::ShouldWithheldPermissionsOnDialogAccept() const {
   return base::FeatureList::IsEnabled(
-             extensions_features::
-                 kAllowWithholdingExtensionPermissionsOnInstall) &&
+             extensions_features::kExtensionInstallSiteAccessOptions) &&
          util::CanWithholdPermissionsFromExtension(*extension_) &&
          is_requesting_host_permissions_ && type_ == INSTALL_PROMPT;
 }

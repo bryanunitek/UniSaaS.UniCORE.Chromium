@@ -37,14 +37,27 @@ class InitialWebUIManager {
 
   // Requests to defer showing the browser window until the initial WebUI
   // finishes loading. Returns true if the deferral was successful and the state
-  // was updated. In this case, `callback` will be invoked when the WebUI is
-  // ready. Returns false if deferral is not applicable or not needed.
+  // was updated. In this case, `unsafe_callback` will be invoked when the WebUI
+  // is ready. Returns false if deferral is not applicable or not needed.
   // Note: the callback is unsafe since it will be added to the list and maybe
   // invoked after the caller is already destructed. The caller should ensure
   // the safety (e.g. by binding it to a weak pointer).
   bool RequestDeferShow(base::OnceClosure unsafe_callback);
 
+  // Registers `unsafe_callback` to be invoked when the initial WebUI finishes
+  // loading. Returns true if the WebUI is still pending and the callback was
+  // registered. Returns false if the WebUI is not pending or has already
+  // finished loading.
+  //
+  // Note: the callback is unsafe since it will be added to the list and maybe
+  // invoked after the caller is already destructed. The caller should ensure
+  // the safety (e.g. by binding it to a weak pointer).
+  bool RegisterWebUIReadyCallback(base::OnceClosure unsafe_callback);
+
   bool IsShowPending() const;
+
+  // Returns true if the initial WebUI is still loading.
+  bool IsInitialWebUIPending() const;
 
   // Notifies that the web UI toolbar has finished loading. It will also call
   // `Show()` from the `window_` if `is_show_pending_` is true.

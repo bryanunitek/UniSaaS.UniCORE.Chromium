@@ -114,6 +114,7 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
   void TearDown();
 
   // BeginFrameObserverBase
+  void OnBeginFrame(const viz::BeginFrameArgs& args) override;
   void OnBeginFrameSourcePausedChanged(bool paused) override;
   bool OnBeginFrameDerivedImpl(const viz::BeginFrameArgs& args) override;
 
@@ -160,7 +161,7 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
   // happen as the next opportunity. This is useful when main frame updates are
   // running at a lower rate than compositor frames, but we don't want to wait
   // (e.g. there is an input event).
-  void SetNeedsBeginMainFrame(bool now = false);
+  void SetNeedsBeginMainFrame(bool now = false, bool unthrottled = false);
 
   // Requests a single impl frame (after the current frame if there is one
   // active).
@@ -265,6 +266,10 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
   void SetIsScrolling(bool is_scrolling);
   void SetWaitingForScrollEvent(bool waiting_for_scroll_event);
 
+  // When we receive an input event, we may want to back off of throttling, so
+  // we pass this information down to |SchedulerStateMachine|.
+  void NotifyInputEvent();
+
   const viz::BeginFrameSource* begin_frame_source() const {
     return begin_frame_source_;
   }
@@ -286,6 +291,10 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
   size_t CommitDurationSampleCountForTesting() const;
 
   void SetRequestHighFramerate(bool flag);
+
+  int consecutive_no_damage_main_frames() const {
+    return state_machine_->consecutive_no_damage_main_frames();
+  }
 
  protected:
   // Virtual for testing.
@@ -382,6 +391,21 @@ class CC_EXPORT Scheduler : public viz::BeginFrameObserverBase {
 
   // Used to drop the pending begin frame before we go idle.
   void CancelPendingBeginFrameTask();
+
+  // Returns the BeginFrameArgs with the latest frame time that the scheduler
+  // knows about. This includes the last used BeginFrame, which can be later
+  // than the last impl frame (e.g. a MISSED BeginFrame that was dropped because
+  // its deadline passed). Frame ids from different sources (including
+  // `viz::BeginFrameArgs::kManualSourceId`) are not comparable, so the frame
+  // time is used to find the latest one.
+  viz::BeginFrameArgs LatestKnownBeginFrameArgs() const;
+
+  // Returns a sequence number for a manual BeginFrame
+  // (`viz::BeginFrameArgs::kManualSourceId`). It is at least `candidate`, and
+  // larger than the sequence number of every manual BeginFrame that the
+  // scheduler knows about, so that the new BeginFrame is not dropped as a
+  // duplicate.
+  uint64_t NextManualSequenceNumber(uint64_t candidate) const;
 
   void DrawIfPossible();
   void DrawForced();

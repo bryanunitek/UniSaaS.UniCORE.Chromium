@@ -126,7 +126,7 @@ class CORE_EXPORT LayoutBoxModelObject : public LayoutObject {
       PhysicalAxes scroll_axes) const;
 
   PhysicalOffset StickyPositionOffset() const;
-  virtual LayoutBlock* StickyContainer() const;
+  virtual LayoutBox* StickyContainer() const;
 
   StickyPositionScrollingConstraints StickyConstraints() const {
     NOT_DESTROYED();
@@ -189,10 +189,10 @@ class CORE_EXPORT LayoutBoxModelObject : public LayoutObject {
 
   virtual PhysicalBoxStrut BorderOutsets() const {
     NOT_DESTROYED();
-    return {LayoutUnit(StyleRef().BorderTopWidth()),
-            LayoutUnit(StyleRef().BorderRightWidth()),
-            LayoutUnit(StyleRef().BorderBottomWidth()),
-            LayoutUnit(StyleRef().BorderLeftWidth())};
+    return {LayoutUnit(Style().BorderTopWidth()),
+            LayoutUnit(Style().BorderRightWidth()),
+            LayoutUnit(Style().BorderBottomWidth()),
+            LayoutUnit(Style().BorderLeftWidth())};
   }
 
   LayoutUnit BorderPaddingBlockSize() const {
@@ -240,7 +240,8 @@ class CORE_EXPORT LayoutBoxModelObject : public LayoutObject {
       bool enable_composited_background_attachment_fixed);
 
  protected:
-  void WillBeDestroyed() override;
+  void WillBeDestroyed(const ComputedStyle*) override;
+  void ImageChanged(WrappedImagePtr, CanDeferInvalidation) override;
 
   PhysicalOffset OffsetFromContainerInternal(
       const LayoutObject*,
@@ -262,13 +263,15 @@ class CORE_EXPORT LayoutBoxModelObject : public LayoutObject {
   virtual bool ShouldBeHandledAsInline(const ComputedStyle&) const;
   bool ShouldBeHandledAsInline() const {
     NOT_DESTROYED();
-    return ShouldBeHandledAsInline(StyleRef());
+    return ShouldBeHandledAsInline(Style());
   }
   void StyleWillChange(StyleDifference,
+                       const ComputedStyle* old_style,
                        const ComputedStyle& new_style,
                        StyleChangeContext&) override;
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
   virtual bool ComputeCanCompositeBackgroundAttachmentFixed() const {
     NOT_DESTROYED();

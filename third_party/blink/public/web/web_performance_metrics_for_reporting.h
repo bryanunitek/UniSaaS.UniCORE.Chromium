@@ -42,9 +42,9 @@ struct LargestContentfulPaintDetailsForReporting {
   std::optional<WebURLRequest::Priority> image_request_priority = std::nullopt;
   // The unclamped paint time of the largest content (image/text).
   std::optional<base::TimeTicks> merged_unclamped_paint_time = std::nullopt;
-  // The offset of the corresponding soft navigation; 0 otherwise.
-  // See SoftNavigationMetricsForReporting.soft_navigation_offset.
-  uint64_t soft_navigation_offset = 0;
+  // The performance timeline navigation ID of the corresponding soft
+  // navigation; 1 for hard nav.
+  uint64_t performance_timeline_navigation_id = 1;
 };
 
 struct ScriptFontFallbackDetailsForReporting {
@@ -58,9 +58,8 @@ struct ScriptFontFallbackDetailsForReporting {
 
 struct SoftNavigationMetricsForReporting {
   // A unique number assigned to this soft navigation from the start of the
-  // page load, 1, 2, 3, ... n. For the last soft navigation, it is synonymous
-  // with a count of the soft navigations for the page load.
-  uint64_t soft_navigation_offset = 0;
+  // page load, 2, 3, ... n.
+  uint64_t performance_timeline_navigation_id = 0;
 
   // The navigation start (time origin) relative to the start of the
   // navigation. Note that this field is initially sent with an absolute time,
@@ -83,8 +82,9 @@ struct SoftNavigationMetricsForReporting {
   base::UnguessableToken same_document_metrics_token;
 };
 
-// This class is used for reporting purposes (e.g. ukm) of non-web-exposed
-// metrics.
+// This class is used for reporting purposes (e.g. ukm) of performance metrics,
+// including non-web-exposed metrics. Do not use this class to expose values to
+// the web; use `WebPerformanceTimings` instead.
 class BLINK_EXPORT WebPerformanceMetricsForReporting {
  public:
   // The count to record the times on requestAnimationFrame after the page is
@@ -140,9 +140,7 @@ class BLINK_EXPORT WebPerformanceMetricsForReporting {
   double ConnectEnd() const;
   double ResponseStart() const;
   double DomContentLoadedEventStart() const;
-  double DomContentLoadedEventEnd() const;
   double LoadEventStart() const;
-  double LoadEventEnd() const;
   double FirstPaint() const;
   base::TimeTicks FirstPaintAsMonotonicTime() const;
   double FirstImagePaint() const;

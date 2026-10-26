@@ -28,7 +28,6 @@
 #include "chrome/browser/media_galleries/media_file_system_registry.h"
 #include "chrome/browser/media_galleries/media_galleries_preferences.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
@@ -204,7 +203,7 @@ class MediaGalleriesPlatformAppBrowserTest : public PlatformAppBrowserTest {
   MediaGalleriesPreferences* GetAndInitializePreferences() {
     MediaGalleriesPreferences* preferences =
         g_browser_process->media_file_system_registry()->GetPreferences(
-            browser()->profile());
+            browser()->GetProfile());
     base::RunLoop runloop;
     preferences->EnsureInitialized(runloop.QuitClosure());
     runloop.Run();
@@ -286,7 +285,7 @@ IN_PROC_BROWSER_TEST_F(MediaGalleriesPlatformAppBrowserTest, ToURL) {
 
   base::ListValue custom_args;
   custom_args.Append(base::checked_cast<int>(pref_id));
-  custom_args.Append(browser()->profile()->GetBaseName().MaybeAsASCII());
+  custom_args.Append(browser()->GetProfile()->GetBaseName().MaybeAsASCII());
 
   ASSERT_TRUE(RunMediaGalleriesTestWithArg("tourl", custom_args)) << message_;
 }

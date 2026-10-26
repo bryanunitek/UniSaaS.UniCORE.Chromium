@@ -14,8 +14,11 @@
 #include "chrome/browser/contextual_cueing/cue_target.h"
 #include "components/page_content_annotations/core/page_content_annotations_common.h"
 
-class BrowserWindowInterface;
 class OptimizationGuideKeyedService;
+
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
 
 namespace glic {
 
@@ -23,16 +26,17 @@ class GlicKeyedService;
 
 class GlicCueTarget : public contextual_cueing::CueTarget {
  public:
-  static void Register(BrowserWindowInterface& browser_window_interface);
+  static void Register(tabs::TabInterface& tab);
 
   explicit GlicCueTarget(
       GlicKeyedService& glic_keyed_service,
       OptimizationGuideKeyedService* optimization_guide_keyed_service,
-      BrowserWindowInterface& browser_window_interface);
+      tabs::TabInterface& tab);
   ~GlicCueTarget() override;
 
   // contextual_cueing::CueTarget:
   contextual_cueing::CueTargetType GetType() const override;
+  bool RequiresModelExecution() const override;
   bool IsEligible() const override;
   void CheckEligibility(base::WeakPtr<content::WebContents> web_contents,
                         contextual_cueing::CueIntrusiveness intrusiveness,
@@ -40,7 +44,8 @@ class GlicCueTarget : public contextual_cueing::CueTarget {
   bool IsPageEligible(
       const page_content_annotations::PageContentAnnotationsResult& result,
       content::WebContents* active_web_contents) const override;
-  void OnClick(contextual_cueing::CueActionData data) override;
+  void OnAnchoredMessageClicked(contextual_cueing::CueActionData data) override;
+  bool SupportsEditPrompt() const override;
   void OnEditPrompt(contextual_cueing::CueActionData data) override;
   ui::ImageModel GetAnchoredMessageIcon() const override;
   ui::ImageModel GetOmniboxChipIcon() const override;
@@ -63,7 +68,7 @@ class GlicCueTarget : public contextual_cueing::CueTarget {
   // Unowned and guaranteed to outlive this.
   raw_ref<GlicKeyedService> glic_keyed_service_;
   raw_ptr<OptimizationGuideKeyedService> optimization_guide_keyed_service_;
-  raw_ref<BrowserWindowInterface> browser_window_interface_;
+  raw_ref<tabs::TabInterface> tab_;
 
   base::WeakPtrFactory<GlicCueTarget> weak_ptr_factory_{this};
 };

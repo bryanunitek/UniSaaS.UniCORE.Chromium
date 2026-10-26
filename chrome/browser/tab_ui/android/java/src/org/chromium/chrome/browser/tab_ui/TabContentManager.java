@@ -41,6 +41,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.ui.native_page.FrozenNativePage;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
+import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.url.GURL;
@@ -105,7 +106,7 @@ public class TabContentManager {
     private final ArrayList<ThumbnailChangeListener> mListeners = new ArrayList<>();
 
     private final boolean mSnapshotsEnabled;
-    private final TabFinder mTabFinder;
+    private final @Nullable TabFinder mTabFinder;
     private final Context mContext;
     private final TabWindowManager mTabWindowManager;
 
@@ -148,7 +149,7 @@ public class TabContentManager {
             Context context,
             BrowserControlsStateProvider browserControlsStateProvider,
             boolean snapshotsEnabled,
-            TabFinder tabFinder,
+            @Nullable TabFinder tabFinder,
             TabWindowManager tabWindowManager) {
         mContext = context;
         mBrowserControlsStateProvider = browserControlsStateProvider;
@@ -204,6 +205,7 @@ public class TabContentManager {
             TabContentManagerJni.get().destroy(mNativeTabContentManager);
             mNativeTabContentManager = 0;
         }
+        mListeners.clear();
     }
 
     /**
@@ -275,7 +277,8 @@ public class TabContentManager {
         return readbackNativeView(viewToDraw, scale, nativePage);
     }
 
-    private @Nullable Bitmap readbackNativeView(
+    @VisibleForTesting
+    @Nullable Bitmap readbackNativeView(
             View viewToDraw, float scale, @Nullable NativePage nativePage) {
         Bitmap bitmap;
         float overlayTranslateY = mBrowserControlsStateProvider.getTopVisibleContentOffset();
@@ -289,6 +292,11 @@ public class TabContentManager {
             MarginLayoutParams params = (MarginLayoutParams) viewToDraw.getLayoutParams();
             leftMargin = params.leftMargin;
             topMargin = params.topMargin;
+        }
+
+        Context context = viewToDraw.getContext();
+        if (VerticalTabUtils.isVerticalTabsEnabled(context)) {
+            leftMargin = 0.f;
         }
 
         int width = (int) ((viewToDraw.getMeasuredWidth() + leftMargin) * mThumbnailScale);
@@ -768,7 +776,10 @@ public class TabContentManager {
         void invalidateIfChanged(
                 long nativeTabContentManager, int tabId, @JniType("GURL") GURL url);
 
-        void updateVisibleIds(long nativeTabContentManager, int[] priority, int primaryTabId);
+        void updateVisibleIds(
+                long nativeTabContentManager,
+                @JniType("std::vector<int32_t>") int[] priority,
+                int primaryTabId);
 
         void removeTabThumbnail(long nativeTabContentManager, int tabId);
 

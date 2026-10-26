@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -50,10 +51,8 @@
 #include "ash/system/virtual_keyboard/virtual_keyboard_tray.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_pin_util.h"
-#include "ash/wm_mode/wm_mode_button_tray.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
 #include "base/i18n/time_formatting.h"
@@ -137,17 +136,10 @@ void StatusAreaWidget::Initialize() {
 
   media_tray_ = AddTrayButton(std::make_unique<MediaTray>(shelf_));
 
-  if (features::IsEcheSWAEnabled()) {
-    eche_tray_ = AddTrayButton(std::make_unique<EcheTray>(shelf_));
-  }
+  eche_tray_ = AddTrayButton(std::make_unique<EcheTray>(shelf_));
 
   if (features::IsPhoneHubEnabled()) {
     phone_hub_tray_ = AddTrayButton(std::make_unique<PhoneHubTray>(shelf_));
-  }
-
-  if (features::IsWmModeEnabled()) {
-    wm_mode_button_tray_ =
-        AddTrayButton(std::make_unique<WmModeButtonTray>(shelf_));
   }
 
   if (features::IsScalableShelfPodsEnabled()) {
@@ -291,6 +283,9 @@ void StatusAreaWidget::LogVisiblePodCountMetric() {
   int visible_pod_count = 0;
   for (ash::TrayBackgroundView* tray_button : tray_buttons_) {
     switch (tray_button->catalog_name()) {
+      case TrayBackgroundViewCatalogName::kWmMode_DEPRECATED:
+        NOTREACHED();
+
       case TrayBackgroundViewCatalogName::kUnifiedSystem:
       case TrayBackgroundViewCatalogName::kStatusAreaOverflowButton:
       case TrayBackgroundViewCatalogName::kDateTray:
@@ -319,7 +314,6 @@ void StatusAreaWidget::LogVisiblePodCountMetric() {
       case TrayBackgroundViewCatalogName::kPodsOverflow:
       case TrayBackgroundViewCatalogName::kLogoutButton:
       case TrayBackgroundViewCatalogName::kVirtualKeyboardStatusArea:
-      case TrayBackgroundViewCatalogName::kWmMode:
       case TrayBackgroundViewCatalogName::kVideoConferenceTray:
       case TrayBackgroundViewCatalogName::kFocusMode:
       case TrayBackgroundViewCatalogName::kMouseKeysStatusArea:
@@ -419,10 +413,10 @@ void StatusAreaWidget::UpdateTargetBoundsForGesture(int shelf_position) {
 }
 
 void StatusAreaWidget::OnPinnedStateChanged(aura::Window* pinned_window) {
-  // Close all tray bubbles when in locked fullscreen mode to prevent users from
+  // Close all tray bubbles when in trusted pinned mode to prevent users from
   // exiting this mode.
   if (GetWindowPinType(pinned_window) ==
-      chromeos::WindowPinType::kLockedFullscreen) {
+      chromeos::WindowPinType::kTrustedPinned) {
     for (ash::TrayBackgroundView* const tray_button : tray_buttons_) {
       tray_button->CloseBubble(
           TrayBackgroundView::CloseReason::kWindowActivation);
@@ -474,7 +468,7 @@ void StatusAreaWidget::CalculateButtonVisibilityForCollapsedState() {
   TrayBackgroundView* previous_tray = nullptr;
   bool show_overflow_button = false;
   int used_width = 0;
-  for (TrayBackgroundView* tray : base::Reversed(tray_buttons_)) {
+  for (TrayBackgroundView* tray : std::views::reverse(tray_buttons_)) {
     // Skip non-enabled tray buttons.
     if (!tray->visible_preferred()) {
       continue;
@@ -582,7 +576,7 @@ StatusAreaWidget::CollapseState StatusAreaWidget::CalculateCollapseState()
     const int available_width = GetCollapseAvailableWidth(force_collapsible);
 
     int used_width = 0;
-    for (TrayBackgroundView* tray : base::Reversed(tray_buttons_)) {
+    for (TrayBackgroundView* tray : std::views::reverse(tray_buttons_)) {
       // If we reach the final overflow tray button, then all the tray buttons
       // fit and there is no need for a collapse state.
       if (tray == overflow_button_tray_) {

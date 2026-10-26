@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
 
 #include <windows.h>
@@ -19,9 +14,12 @@
 #include <userenv.h>   // For GetUserProfileDirectory()
 #include <wincrypt.h>  // For CryptXXX()
 
+#include <array>
 #include <iomanip>
 #include <memory>
+#include <string_view>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/scoped_native_library.h"
@@ -46,7 +44,7 @@ HRESULT GetDomainControllerServerForDomain(const wchar_t* domain,
   DCHECK(domain);
   std::wstring local_domain = OSUserManager::GetLocalDomain();
   // If the domain is the local domain, then there is no domain controller.
-  if (wcsicmp(local_domain.c_str(), domain) == 0) {
+  if (UNSAFE_TODO(wcsicmp(local_domain.c_str(), domain) == 0)) {
     return S_OK;
   }
 
@@ -106,7 +104,7 @@ HRESULT OSUserManager::GenerateRandomPassword(wchar_t* password, int length) {
   // is for this machine in order to create one that adheres correctly.  For
   // now will generate a random password that fits typical strong password
   // policies on windows.
-  const unsigned char kValidPasswordChars[] =
+  constexpr std::string_view kValidPasswordChars =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
       "abcdefghijklmnopqrstuvwxyz"
       "`1234567890-="
@@ -148,9 +146,8 @@ HRESULT OSUserManager::GenerateRandomPassword(wchar_t* password, int length) {
         return hr;
       }
 
-      unsigned char c =
-          kValidPasswordChars[r % (std::size(kValidPasswordChars) - 1)];
-      *p++ = c;
+      unsigned char c = kValidPasswordChars[r % kValidPasswordChars.size()];
+      UNSAFE_TODO(*p++ = c);
       ++cur_length;
       --remaining_length;
 
@@ -344,7 +341,8 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
   LOGFN(VERBOSE) << "Creating a new user: " << base_username;
 
   wchar_t new_username[kWindowsUsernameBufferLength];
-  errno_t err = wcscpy_s(new_username, std::size(new_username), base_username);
+  errno_t err = UNSAFE_TODO(
+      wcscpy_s(new_username, std::size(new_username), base_username));
   if (err != 0) {
     LOGFN(ERROR) << "wcscpy_s errno=" << err;
     return E_FAIL;
@@ -374,8 +372,8 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
       LOGFN(VERBOSE) << "Username '" << new_username
                      << "' already exists. Trying '" << next_username << "'";
 
-      err = wcscpy_s(new_username, std::size(new_username),
-                     next_username.c_str());
+      err = UNSAFE_TODO(wcscpy_s(new_username, std::size(new_username),
+                                 next_username.c_str()));
       if (err != 0) {
         LOGFN(ERROR) << "wcscpy_s errno=" << err;
         return E_FAIL;
@@ -395,20 +393,50 @@ HRESULT OSUserManager::CreateNewUser(const wchar_t* base_username,
   return HRESULT_FROM_WIN32(NERR_UserExists);
 }
 
-HRESULT OSUserManager::SetDefaultPasswordChangePolicies(
-    const wchar_t* domain,
-    const wchar_t* username) {
+HRESULT OSUserManager::GetUserFlags(const wchar_t* domain,
+                                    const wchar_t* username,
+                                    DWORD* flags) {
+  DCHECK(flags);
+  LPBYTE buffer = nullptr;
+  NET_API_STATUS nsts = ::NetUserGetInfo(domain, username, 1, &buffer);
+  if (nsts != NERR_Success) {
+    LOGFN(ERROR) << "NetUserGetInfo(get user flags) nsts=" << nsts;
+    return HRESULT_FROM_WIN32(nsts);
+  }
+
+  USER_INFO_1* user_info = reinterpret_cast<USER_INFO_1*>(buffer);
+  *flags = user_info->usri1_flags;
+  ::NetApiBufferFree(buffer);
+  return S_OK;
+}
+
+HRESULT OSUserManager::SetUserFlags(const wchar_t* domain,
+                                    const wchar_t* username,
+                                    DWORD flags) {
   USER_INFO_1008 info1008;
   DWORD error;
   memset(&info1008, 0, sizeof(info1008));
-  info1008.usri1008_flags =
-      UF_PASSWD_CANT_CHANGE | UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT;
+  info1008.usri1008_flags = flags;
   NET_API_STATUS nsts = ::NetUserSetInfo(
       domain, username, 1008, reinterpret_cast<LPBYTE>(&info1008), &error);
   if (nsts != NERR_Success) {
     LOGFN(ERROR) << "NetUserSetInfo(set password policies) nsts=" << nsts;
   }
   return HRESULT_FROM_WIN32(nsts);
+}
+
+HRESULT OSUserManager::SetDefaultPasswordChangePolicies(
+    const wchar_t* domain,
+    const wchar_t* username) {
+  DWORD existing_flags = 0;
+  HRESULT hr = GetUserFlags(domain, username, &existing_flags);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  DWORD new_flags = existing_flags | UF_PASSWD_CANT_CHANGE |
+                    UF_DONT_EXPIRE_PASSWD | UF_NORMAL_ACCOUNT;
+  return SetUserFlags(domain, username, new_flags);
 }
 
 HRESULT OSUserManager::ChangeUserPassword(const wchar_t* domain,
@@ -648,7 +676,7 @@ HRESULT OSUserManager::GetUserSID(const wchar_t* domain,
 
   // Check that the domain of the user found with LookupAccountName matches what
   // is requested.
-  if (wcsicmp(domain, user_domain_buffer) != 0) {
+  if (UNSAFE_TODO(wcsicmp(domain, user_domain_buffer) != 0)) {
     LOGFN(ERROR) << "Domain mismatch " << domain << " " << user_domain_buffer;
 
     return HRESULT_FROM_WIN32(ERROR_NONE_MAPPED);
@@ -691,7 +719,7 @@ HRESULT OSUserManager::FindUserBySID(const wchar_t* sid,
   if (domain_size) {
     if (domain_size <= domain_length)
       return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
-    wcscpy_s(domain, domain_size, local_domain_buffer);
+    UNSAFE_TODO(wcscpy_s(domain, domain_size, local_domain_buffer));
   }
 
   std::wstring username_str = (username == nullptr) ? L"" : username;
@@ -798,7 +826,7 @@ HRESULT OSUserManager::ModifyUserAccessWithLogonHours(const wchar_t* domain,
                                                       const wchar_t* username,
                                                       bool allow) {
   BYTE buffer[21] = {0x0};
-  memset(buffer, allow ? 0xff : 0x0, sizeof(buffer));
+  UNSAFE_TODO(memset(buffer, allow ? 0xff : 0x0, sizeof(buffer)));
   USER_INFO_1020 user_info{UNITS_PER_WEEK, buffer};
 
   NET_API_STATUS nsts = ::NetUserSetInfo(

@@ -21,6 +21,7 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.util.Size;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
 import android.widget.ImageView;
@@ -52,12 +53,12 @@ import org.chromium.chrome.browser.compositor.LayerTitleCache;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabFavicon;
 import org.chromium.chrome.browser.tab.TabUtils;
+import org.chromium.chrome.browser.tab_ui.MultiThumbnailCardProvider;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabThumbnailView;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider.MultiThumbnailMetadata;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tasks.tab_management.MultiThumbnailCardProvider;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper.FaviconImageCallback;
 import org.chromium.components.tab_groups.TabGroupColorId;
@@ -65,11 +66,14 @@ import org.chromium.components.tab_groups.TabGroupColorPickerUtils;
 import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.test.util.MockitoHelper;
+import org.chromium.url.JUnitTestGURLs;
 
 /** Unit tests for {@link StripDragShadowView}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @DisableFeatures({TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS})
 public class StripDragShadowViewUnitTest {
+    private static final int TAB_ID = 10;
+
     @Rule
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
             new ActivityScenarioRule<>(TestActivity.class);
@@ -93,8 +97,6 @@ public class StripDragShadowViewUnitTest {
     @Mock private Bitmap mMockOriginalFaviconBitmap;
     @Mock private Bitmap mMockHistoryFaviconBitmap;
 
-    private static final int TAB_ID = 10;
-
     private Activity mActivity;
     private StripDragShadowView mStripDragShadowView;
 
@@ -117,6 +119,7 @@ public class StripDragShadowViewUnitTest {
 
         when(mMockTab.getId()).thenReturn(TAB_ID);
         when(mMockTab.getTabGroupId()).thenReturn(Token.createRandom());
+        when(mMockTab.getUrl()).thenReturn(JUnitTestGURLs.URL_1);
 
         mStripDragShadowView =
                 (StripDragShadowView)
@@ -375,17 +378,107 @@ public class StripDragShadowViewUnitTest {
                 expectedGroupColor,
                 mCardView.getBackgroundTintList().getDefaultColor());
 
-        // Verify thumbnail color
-        verify(mMockMultiThumbnailCardProvider)
-                .setMiniThumbnailPlaceholderColor(
-                        TabUiThemeUtil.getMiniThumbnailPlaceholderColorForGroup(
-                                mActivity, incognito, expectedGroupColor));
-
         // Verify text color
         @ColorInt
         int expectedTextColor =
                 TabGroupColorPickerUtils.getTabGroupColorPickerItemTextColor(
                         mActivity, colorId, incognito);
         assertEquals("Unexpected text color.", expectedTextColor, mTitleView.getCurrentTextColor());
+    }
+
+    @Test
+    public void testPrepareForTabDrag_NullLayerTitleCache() {
+        mStripDragShadowView.initialize(
+                mMockBrowserControlsStateProvider,
+                mMockMultiThumbnailCardProvider,
+                mMockTabContentManager,
+                /* layerTitleCacheSupplier= */ null,
+                mMockTabModelSelector,
+                mMockShadowUpdateHost);
+
+        when(mMockTab.getTitle()).thenReturn("Custom Tab Title");
+        mStripDragShadowView.prepareForTabDrag(mMockTab, /* sourceWidthPx= */ 0);
+
+        assertEquals("Custom Tab Title", mTitleView.getText().toString());
+    }
+
+    @Test
+    public void testPrepareForTabDrag_NullLayerTitleCache_EmptyTabTitle() {
+        mStripDragShadowView.initialize(
+                mMockBrowserControlsStateProvider,
+                mMockMultiThumbnailCardProvider,
+                mMockTabContentManager,
+                /* layerTitleCacheSupplier= */ null,
+                mMockTabModelSelector,
+                mMockShadowUpdateHost);
+
+        when(mMockTab.getTitle()).thenReturn("");
+        mStripDragShadowView.prepareForTabDrag(mMockTab, /* sourceWidthPx= */ 0);
+
+        assertEquals(
+                mActivity.getString(R.string.tab_loading_default_title),
+                mTitleView.getText().toString());
+    }
+
+    @Test
+    public void testPrepareForGroupDrag_NullLayerTitleCache() {
+        mStripDragShadowView.initialize(
+                mMockBrowserControlsStateProvider,
+                mMockMultiThumbnailCardProvider,
+                mMockTabContentManager,
+                /* layerTitleCacheSupplier= */ null,
+                mMockTabModelSelector,
+                mMockShadowUpdateHost);
+
+        Token tabGroupId = Token.createRandom();
+        when(mMockTab.getTabGroupId()).thenReturn(tabGroupId);
+        when(mMockTabModel.getTabGroupColorWithFallback(tabGroupId))
+                .thenReturn(TabGroupColorId.GREY);
+
+        mStripDragShadowView.prepareForGroupDrag(mMockTab, /* sourceWidthPx= */ 0);
+
+        assertNotNull("Group title text should not be null.", mTitleView.getText());
+    }
+
+    @Test
+    public void testPrepareForTabDrag_NullLayoutParams() {
+        StripDragShadowView unattachedShadowView =
+                (StripDragShadowView)
+                        LayoutInflater.from(mActivity)
+                                .inflate(R.layout.strip_drag_shadow_view, null);
+        unattachedShadowView.initialize(
+                mMockBrowserControlsStateProvider,
+                mMockMultiThumbnailCardProvider,
+                mMockTabContentManager,
+                /* layerTitleCacheSupplier= */ null,
+                mMockTabModelSelector,
+                mMockShadowUpdateHost);
+
+        when(mMockTab.getTitle()).thenReturn("Test Title");
+        unattachedShadowView.prepareForTabDrag(mMockTab, /* sourceWidthPx= */ 0);
+
+        assertNotNull(
+                "Layout params should be initialized when null.",
+                unattachedShadowView.getLayoutParams());
+        TextView titleView = unattachedShadowView.findViewById(R.id.tab_title);
+        assertEquals("Test Title", titleView.getText().toString());
+    }
+
+    @Test
+    public void testPrepareForTabDrag_NullLayerTitleCache_DefaultFavicon() {
+        mStripDragShadowView.initialize(
+                mMockBrowserControlsStateProvider,
+                mMockMultiThumbnailCardProvider,
+                mMockTabContentManager,
+                /* layerTitleCacheSupplier= */ null,
+                mMockTabModelSelector,
+                mMockShadowUpdateHost);
+
+        when(mMockTab.getTitle()).thenReturn("Test Title");
+        when(mMockTab.getUrl()).thenReturn(JUnitTestGURLs.NTP_URL);
+        mStripDragShadowView.prepareForTabDrag(mMockTab, /* sourceWidthPx= */ 0);
+
+        ImageView faviconView = mStripDragShadowView.findViewById(R.id.tab_favicon);
+        assertNotNull("Default favicon should be populated.", faviconView.getDrawable());
     }
 }

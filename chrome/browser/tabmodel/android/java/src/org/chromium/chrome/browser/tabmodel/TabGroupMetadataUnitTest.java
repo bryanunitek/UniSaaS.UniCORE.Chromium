@@ -18,7 +18,6 @@ import androidx.annotation.ColorInt;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -31,7 +30,6 @@ import java.util.Map.Entry;
 
 /** Tests for {@link TabGroupMetadata}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupMetadataUnitTest {
 
     private static final ArrayList<Entry<Integer, String>> TAB_IDS_TO_URLS =
@@ -47,7 +45,6 @@ public class TabGroupMetadataUnitTest {
     private static final String TAB_GROUP_TITLE = "Title";
     private static final String MHTML_TAB_TITLE = "mhtml tab";
     private static final boolean TAB_GROUP_COLLAPSED = true;
-    private static final boolean IS_GROUP_SHARED = false;
     private static final boolean IS_INCOGNITO = false;
 
     private final Intent mIntent = new Intent();
@@ -65,7 +62,6 @@ public class TabGroupMetadataUnitTest {
                         TAB_GROUP_TITLE,
                         MHTML_TAB_TITLE,
                         TAB_GROUP_COLLAPSED,
-                        IS_GROUP_SHARED,
                         IS_INCOGNITO);
     }
 

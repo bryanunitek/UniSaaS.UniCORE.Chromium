@@ -21,6 +21,7 @@
 #include "components/omnibox/browser/match_compare.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_triggered_feature_service.h"
+#include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/scoring_functor.h"
 #include "components/omnibox/browser/titled_url_match_utils.h"
 #include "components/prefs/pref_service.h"
@@ -36,7 +37,7 @@ using bookmarks::BookmarkNode;
 using bookmarks::TitledUrlMatch;
 
 BookmarkProvider::BookmarkProvider(AutocompleteProviderClient* client)
-    : AutocompleteProvider(AutocompleteProvider::TYPE_BOOKMARK),
+    : AutocompleteProvider(AutocompleteProvider::Type::kBookmark),
       client_(client),
       bookmark_model_(client ? client_->GetBookmarkModel() : nullptr) {}
 
@@ -44,6 +45,12 @@ void BookmarkProvider::Start(const AutocompleteInput& input,
                              bool minimal_changes) {
   TRACE_EVENT0("omnibox", "BookmarkProvider::Start");
   matches_.clear();
+
+  // Tab search does not support bookmark suggestions.
+  if (input.current_page_classification() ==
+      metrics::OmniboxEventProto::ANDROID_TAB_SEARCH_OVERLAY) {
+    return;
+  }
 
   if (input.IsZeroSuggest() || input.text().empty()) {
     return;
@@ -103,9 +110,9 @@ void BookmarkProvider::DoAutocomplete(const AutocompleteInput& input) {
         CalculateBookmarkMatchRelevance(bookmark_match);
     if (relevance > 0) {
       AutocompleteMatch match = TitledUrlMatchToAutocompleteMatch(
-          bookmark_match, AutocompleteMatchType::BOOKMARK_TITLE, relevance,
-          bookmark_count, this, client_->GetSchemeClassifier(), adjusted_input,
-          fixed_up_input);
+          bookmark_match, omnibox::AutocompleteMatchType::kBookmarkTitle,
+          relevance, bookmark_count, this, client_->GetSchemeClassifier(),
+          adjusted_input, fixed_up_input);
       // If the input was in a starter pack keyword scope, set the `keyword` and
       // `transition` appropriately to avoid popping the user out of keyword
       // mode.
@@ -115,8 +122,8 @@ void BookmarkProvider::DoAutocomplete(const AutocompleteInput& input) {
         match.fill_into_edit.insert(0, match.keyword + u" ");
       }
 
-      if (input.current_page_classification() ==
-          metrics::OmniboxEventProto_PageClassification_ANDROID_HUB) {
+      if (omnibox::IsAndroidHubOrTabSearch(
+              input.current_page_classification())) {
         match.suggestion_group_id = omnibox::GROUP_MOBILE_BOOKMARKS;
       }
 
@@ -135,8 +142,7 @@ void BookmarkProvider::DoAutocomplete(const AutocompleteInput& input) {
   size_t num_matches = std::min(matches_.size(), max_matches);
   std::partial_sort(matches_.begin(), matches_.begin() + num_matches,
                     matches_.end(), AutocompleteMatch::MoreRelevant);
-  if (input.current_page_classification() !=
-      PageClassification::OmniboxEventProto_PageClassification_ANDROID_HUB) {
+  if (!omnibox::IsAndroidHubOrTabSearch(input.current_page_classification())) {
     ResizeMatches(
         num_matches,
         OmniboxFieldTrial::IsMlUrlScoringUnlimitedNumCandidatesEnabled());
@@ -145,8 +151,7 @@ void BookmarkProvider::DoAutocomplete(const AutocompleteInput& input) {
 
 query_parser::MatchingAlgorithm BookmarkProvider::GetMatchingAlgorithm(
     AutocompleteInput input) {
-  if (input.current_page_classification() ==
-      PageClassification::OmniboxEventProto_PageClassification_ANDROID_HUB) {
+  if (omnibox::IsAndroidHubOrTabSearch(input.current_page_classification())) {
     return query_parser::MatchingAlgorithm::ALWAYS_PREFIX_SEARCH;
   }
 

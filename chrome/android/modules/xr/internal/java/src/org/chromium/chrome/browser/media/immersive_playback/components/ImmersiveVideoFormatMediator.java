@@ -6,15 +6,18 @@ package org.chromium.chrome.browser.media.immersive_playback.components;
 
 import android.util.SizeF;
 
+import org.chromium.base.lifetime.DestroyChecker;
+import org.chromium.base.lifetime.Destroyable;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.media.immersive_playback.ImmersiveVideoFormatRadioGroup;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.media.immersive_playback.ImmersiveVideoFormatRadioGroup.FormatOption;
 import org.chromium.content_public.browser.ImmersiveProjectionType;
 import org.chromium.content_public.browser.ImmersiveStereoMode;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Mediator for the format selection panel in immersive video playback. */
 @NullMarked
-public class ImmersiveVideoFormatMediator {
+public class ImmersiveVideoFormatMediator implements Destroyable {
 
     /** Listener for format selection events. */
     public interface FormatListener {
@@ -29,6 +32,7 @@ public class ImmersiveVideoFormatMediator {
 
     private final FormatListener mFormatListener;
     private final PropertyModel mModel;
+    private final DestroyChecker mDestroyChecker = new DestroyChecker();
 
     /**
      * Creates a new {{@link ImmersiveVideoFormatMediator}}.
@@ -41,12 +45,20 @@ public class ImmersiveVideoFormatMediator {
         mModel = model;
     }
 
+    /** Destroys the mediator. */
+    @Override
+    public void destroy() {
+        if (mDestroyChecker.isDestroyed()) return;
+        mDestroyChecker.destroy();
+    }
+
     /**
      * Called when a format is selected in the UI.
      *
-     * @param option The {@link ImmersiveVideoFormatRadioGroup.FormatOption} that was selected.
+     * @param option The {@link FormatOption} that was selected.
      */
-    public void onFormatSelected(ImmersiveVideoFormatRadioGroup.FormatOption option) {
+    public void onFormatSelected(@Nullable FormatOption option) {
+        if (mDestroyChecker.isDestroyed() || option == null) return;
         mModel.set(ImmersiveVideoFormatProperties.SELECTED_STEREO_MODE, option.stereoMode);
         mModel.set(ImmersiveVideoFormatProperties.SELECTED_PROJECTION_TYPE, option.projectionType);
         mFormatListener.onFormatSelected(option.stereoMode, option.projectionType);
@@ -54,6 +66,7 @@ public class ImmersiveVideoFormatMediator {
 
     /** Sets the size of the parent entity in the model. */
     public void setParentSize(SizeF parentSize) {
+        if (mDestroyChecker.isDestroyed()) return;
         mModel.set(ImmersiveVideoFormatProperties.PARENT_WIDTH, parentSize.getWidth());
         mModel.set(ImmersiveVideoFormatProperties.PARENT_HEIGHT, parentSize.getHeight());
     }
@@ -61,12 +74,22 @@ public class ImmersiveVideoFormatMediator {
     /** Sets the selected format options in the model. */
     public void setSelectedFormat(
             @ImmersiveStereoMode int stereoMode, @ImmersiveProjectionType int projectionType) {
+        if (mDestroyChecker.isDestroyed()) return;
         mModel.set(ImmersiveVideoFormatProperties.SELECTED_STEREO_MODE, stereoMode);
         mModel.set(ImmersiveVideoFormatProperties.SELECTED_PROJECTION_TYPE, projectionType);
     }
 
-    /** Sets the spatial height of the format panel in the model. */
-    public void setSpatialHeight(float height) {
-        mModel.set(ImmersiveVideoFormatProperties.SPATIAL_HEIGHT, height);
+    /** Sets the height of the format panel in the model. */
+    public void setHeight(int heightDp) {
+        if (mDestroyChecker.isDestroyed()) return;
+        mModel.set(ImmersiveVideoFormatProperties.HEIGHT_DP, heightDp);
+    }
+
+    /** Sets the recommended format options in the model. */
+    public void setRecommendedFormat(
+            @ImmersiveStereoMode int stereoMode, @ImmersiveProjectionType int projectionType) {
+        if (mDestroyChecker.isDestroyed()) return;
+        mModel.set(ImmersiveVideoFormatProperties.RECOMMENDED_STEREO_MODE, stereoMode);
+        mModel.set(ImmersiveVideoFormatProperties.RECOMMENDED_PROJECTION_TYPE, projectionType);
     }
 }

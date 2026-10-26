@@ -27,10 +27,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_restore_test_helper.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -41,19 +42,24 @@
 #include "components/no_state_prefetch/browser/no_state_prefetch_handle.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/no_state_prefetch/common/no_state_prefetch_final_status.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "media/base/media_switches.h"
+#include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/sessions/session_service_factory.h"
@@ -171,7 +177,7 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
 
   void OpenTab(const GURL& url, ui::PageTransition transition) {
     NavigateParams params(browser(), url, transition);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     // params.opener does not need to be set in the context of this test because
     // it will use the current tab by default.
     Navigate(&params);
@@ -227,7 +233,7 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   void ExecuteScript(const std::string& script) {
@@ -237,14 +243,14 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   void OpenTabAsLink() {
     ui_test_utils::NavigateToURLWithDisposition(
         browser(), GURL("chrome://about"),
-        WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }
 
   void CloseTab() {
-    const int previous_tab_count = browser()->tab_strip_model()->count();
-    browser()->tab_strip_model()->CloseWebContentsAt(0, 0);
-    EXPECT_EQ(previous_tab_count - 1, browser()->tab_strip_model()->count());
+    const int previous_tab_count = browser()->GetTabStripModel()->count();
+    browser()->GetTabStripModel()->CloseWebContentsAt(0, 0);
+    EXPECT_EQ(previous_tab_count - 1, browser()->GetTabStripModel()->count());
   }
 
   void LoadSubFrame(const GURL& url) {
@@ -286,13 +292,14 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   void CloseBrowser() { CloseAllBrowsers(); }
 
   MediaEngagementService* GetService() {
-    return MediaEngagementService::Get(browser()->profile());
+    return MediaEngagementService::Get(browser()->GetProfile());
   }
 
   // To be used only for a service that wasn't the one created by the test
   // class.
   void InjectTimerTaskRunnerToService(MediaEngagementService* service) {
     service->clock_ = &test_clock_;
+    service->task_runner_for_test_ = task_runner_;
 
     for (auto observer : service->contents_observers_)
       observer.second->SetTaskRunnerForTest(task_runner_);
@@ -302,6 +309,7 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   void InjectTimerTaskRunner() {
     if (!injected_clock_) {
       GetService()->clock_ = &test_clock_;
+      GetService()->task_runner_for_test_ = task_runner_;
       injected_clock_ = true;
     }
 
@@ -653,7 +661,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   LoadTestPageAndWaitForPlayAndAudible(url, false);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(2, 2);
 }
@@ -673,7 +681,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest, MAYBE_SessionNewTabSameURL) {
   OpenTabAndWaitForPlayAndAudible(url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(1, 1);
 }
@@ -695,7 +703,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   OpenTabAndWaitForPlayAndAudible(other_url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(1, 1);
 }
@@ -710,7 +718,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest, SessionNewTabCrossOrigin) {
   OpenTabAndWaitForPlayAndAudible(other_url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(http_server().base_url(), 1, 1);
   ExpectScores(http_server_origin2().base_url(), 1, 1);
@@ -740,7 +748,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   OpenTabAndWaitForPlayAndAudible(url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(1, 1);
 }
@@ -776,7 +784,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   WaitForWasRecentlyAudible();
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   // The new tab should only count as the same visit if we visited that tab
   // through a link or reload (duplicate tab).
@@ -801,7 +809,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementPreThirdPartyCookieDeprecationBrowserTest,
 
   prerender::NoStatePrefetchManager* no_state_prefetch_manager =
       prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(no_state_prefetch_manager);
 
   prerender::test_utils::TestNoStatePrefetchContentsFactory*
@@ -818,7 +826,13 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementPreThirdPartyCookieDeprecationBrowserTest,
       no_state_prefetch_manager->StartPrefetchingFromLinkRelPrerender(
           /*process_id=*/-1, /*route_id=*/-1, url,
           blink::mojom::PrerenderTriggerType::kLinkRelPrerender,
-          content::Referrer(), url::Origin::Create(url), gfx::Size(640, 480));
+          content::Referrer(), url::Origin::Create(url),
+          browser()
+              ->GetTabStripModel()
+              ->GetActiveWebContents()
+              ->GetPrimaryMainFrame()
+              ->GetCurrentInitiatorNavigationState(),
+          gfx::Size(640, 480));
 
   ASSERT_EQ(no_state_prefetch_handle->contents(), test_prerender->contents());
 
@@ -834,7 +848,7 @@ class MediaEngagementSessionRestoreBrowserTest
     : public MediaEngagementBrowserTest {
  public:
   BrowserWindowInterface* QuitBrowserAndRestore() {
-    Profile* const profile = browser()->profile();
+    Profile* const profile = browser()->GetProfile();
 
     SessionStartupPref::SetStartupPref(
         profile, SessionStartupPref(SessionStartupPref::LAST));
@@ -1051,107 +1065,3 @@ IN_PROC_BROWSER_TEST_F(
   base::RunLoop().RunUntilIdle();
 }
 
-class MediaEngagementContentsObserverFencedFrameBrowserTest
-    : public MediaEngagementContentsObserverMPArchBrowserTest {
- public:
-  MediaEngagementContentsObserverFencedFrameBrowserTest() = default;
-  ~MediaEngagementContentsObserverFencedFrameBrowserTest() override = default;
-  MediaEngagementContentsObserverFencedFrameBrowserTest(
-      const MediaEngagementContentsObserverFencedFrameBrowserTest&) = delete;
-
-  MediaEngagementContentsObserverFencedFrameBrowserTest& operator=(
-      const MediaEngagementContentsObserverFencedFrameBrowserTest&) = delete;
-
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-    MediaEngagementContentsObserverMPArchBrowserTest::SetUpOnMainThread();
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    MediaEngagementBrowserTest::SetUpCommandLine(command_line);
-    // |fenced_frame_helper_| has a ScopedFeatureList so we needed to delay its
-    // creation until now because MediaEngagementBrowserTest also uses a
-    // ScopedFeatureList and initialization order matters.
-    fenced_frame_helper_ =
-        std::make_unique<content::test::FencedFrameTestHelper>();
-  }
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return *fenced_frame_helper_;
-  }
-
- private:
-  std::unique_ptr<content::test::FencedFrameTestHelper> fenced_frame_helper_;
-};
-
-// TODO(crbug.com/349253812): Flaky on Linux.
-#if BUILDFLAG(IS_LINUX)
-#define MAYBE_SendEngagementLevelToRenderFrameOnFencedFrame \
-  DISABLED_SendEngagementLevelToRenderFrameOnFencedFrame
-#else
-#define MAYBE_SendEngagementLevelToRenderFrameOnFencedFrame \
-  SendEngagementLevelToRenderFrameOnFencedFrame
-#endif
-IN_PROC_BROWSER_TEST_F(MediaEngagementContentsObserverFencedFrameBrowserTest,
-                       MAYBE_SendEngagementLevelToRenderFrameOnFencedFrame) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  const GURL& initial_url =
-      embedded_test_server()->GetURL("a.com", "/empty.html");
-  SetScores(url::Origin::Create(initial_url), 24, 20);
-  content::TestNavigationManager navigation_manager(GetWebContents(),
-                                                    initial_url);
-
-  content::NavigationController::LoadURLParams params(initial_url);
-  params.transition_type = ui::PAGE_TRANSITION_LINK;
-  params.frame_tree_node_id =
-      GetWebContents()->GetPrimaryMainFrame()->GetFrameTreeNodeId();
-  GetWebContents()->GetController().LoadURLWithParams(params);
-
-  EXPECT_TRUE(navigation_manager.WaitForResponse());
-
-  MockAutoplayConfigurationClient client;
-  OverrideInterface(
-      navigation_manager.GetNavigationHandle()->GetRenderFrameHost(), &client);
-  // AddAutoplayFlags should be called once after navigating |initial_url| in
-  // the main frame.
-  EXPECT_CALL(client, AddAutoplayFlags(testing::_, testing::_)).Times(1);
-
-  navigation_manager.ResumeNavigation();
-  EXPECT_TRUE(navigation_manager.WaitForNavigationFinished());
-
-  // Create a fenced frame.
-  GURL fenced_frame_url =
-      embedded_test_server()->GetURL("b.com", "/fenced_frames/title1.html");
-  content::RenderFrameHost* fenced_frame_host =
-      fenced_frame_test_helper().CreateFencedFrame(
-          GetWebContents()->GetPrimaryMainFrame(), fenced_frame_url);
-  EXPECT_NE(nullptr, fenced_frame_host);
-
-  // AddAutoplayFlags should be called on the fenced frame.
-  GURL fenced_frame_navigate_url =
-      embedded_test_server()->GetURL("b.com", "/fenced_frames/title2.html");
-  content::TestNavigationManager navigation_manager2(GetWebContents(),
-                                                     fenced_frame_navigate_url);
-  EXPECT_TRUE(ExecJs(
-      fenced_frame_host,
-      content::JsReplace("location.href = $1;", fenced_frame_navigate_url)));
-
-  EXPECT_TRUE(navigation_manager2.WaitForResponse());
-  MockAutoplayConfigurationClient fenced_frame_client;
-  OverrideInterface(
-      navigation_manager2.GetNavigationHandle()->GetRenderFrameHost(),
-      &fenced_frame_client);
-  // AddAutoplayFlags should be called once after navigating |initial_url| in
-  // the main frame.
-  base::RunLoop run_loop;
-  EXPECT_CALL(fenced_frame_client,
-              AddAutoplayFlags(url::Origin::Create(fenced_frame_navigate_url),
-                               testing::_))
-      .Times(1)
-      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
-
-  navigation_manager2.ResumeNavigation();
-  EXPECT_TRUE(navigation_manager2.WaitForNavigationFinished());
-  run_loop.Run();
-}

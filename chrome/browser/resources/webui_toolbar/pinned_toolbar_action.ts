@@ -2,27 +2,51 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 // <if expr="_google_chrome">
-import './internal/icons.html.js';
-
+import './internal/icons.js';
 // </if>
 
+import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
+
+import type {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import {assertNotReachedCase} from '//resources/js/assert.js';
+import {TrackedElementManager} from '//resources/js/tracked_element/tracked_element_manager.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {IconTable} from '/shared/icon_table.js';
-import {PinnedToolbarAction} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+import {getContextMenuPosition, getContextMenuSourceType} from '/shared/toolbar_button.js';
+import type {OverflowMenuItem} from '/shared/toolbar_ui_api.mojom-webui.js';
+import {ContextMenuType, DownloadProgressRingStatus, PinnedToolbarAction} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
 import type {PinnedToolbarActionState} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
 
 import {BrowserProxyImpl} from './browser_proxy.js';
 import type {BrowserProxy} from './browser_proxy.js';
-import {ContextMenuType} from './browser_proxy.js';
+import {OverflowableToolbarActionMixin} from './overflowable_toolbar_action_mixin.js';
+import {getCss} from './pinned_toolbar_action.css.js';
 import {getHtml} from './pinned_toolbar_action.html.js';
-import {getCss} from './toolbar_button.css.js';
-import {getContextMenuPosition, getContextMenuSourceType, HelpBubbleAnchorMixin, setHasHelpBubble} from './toolbar_button.js';
+import {ToolbarActionMixin} from './toolbar_action_mixin.js';
 
-const PinnedToolbarActionElementBase = HelpBubbleAnchorMixin(CrLitElement);
+const initialState: PinnedToolbarActionState = {
+  action: PinnedToolbarAction.kUnspecified,
+  highlighted: false,
+  enabled: true,
+  activated: false,
+  tooltip: '',
+  accessibilityText: '',
+  elementId: null,
+  icon: {handleId: 0n},
+  progressRing: null,
+  badgeNumber: null,
+};
+
+const PinnedToolbarActionElementBase = OverflowableToolbarActionMixin(
+    ToolbarActionMixin(CrLitElement, initialState));
+
+export interface PinnedToolbarActionElement {
+  $: {
+    button: CrIconButtonElement,
+  };
+}
 
 export class PinnedToolbarActionElement extends PinnedToolbarActionElementBase {
   static get is() {
@@ -37,91 +61,42 @@ export class PinnedToolbarActionElement extends PinnedToolbarActionElementBase {
     return getHtml.bind(this)();
   }
 
-  static override get properties() {
+  override getOverflowMenuItem(): OverflowMenuItem {
     return {
-      ...super.properties,
-      state: {type: Object},
-      trackedHighlighted: {type: Boolean},
+      id: {
+        pinnedAction: this.state.action,
+      },
+      isEnabled: this.state.enabled,
     };
   }
 
-  accessor state: PinnedToolbarActionState = {
-    action: PinnedToolbarAction.kUnspecified,
-    highlighted: false,
-    enabled: true,
-    activated: false,
-    tooltip: '',
-    accessibilityText: '',
-    elementId: null,
-    icon: {handleId: 0n},
-  };
+  static override get properties() {
+    return {
+      poppedOut: {type: Boolean},
+    };
+  }
 
-  private browserProxy_: BrowserProxy = BrowserProxyImpl.getInstance();
+  accessor poppedOut: boolean = false;
+
   private iconTable_: IconTable = IconTable.getInstance();
-  private registerHelpBubbleController_: AbortController|null = null;
 
-  protected accessor trackedHighlighted: boolean = false;
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    if (this.registerHelpBubbleController_) {
-      this.registerHelpBubbleController_.abort();
-      this.registerHelpBubbleController_ = null;
+    if (changedProperties.has('state') ||
+        changedProperties.has('trackedHighlighted')) {
+      // Highlighted actions, which for pinned toolbar actions, generally means
+      // ones with an open side panel, may not be hidden due to overflow.
+      this.preventOverflow = this.state.highlighted || this.trackedHighlighted;
     }
   }
 
-  override updated(changedProperties: PropertyValues<this>) {
-    super.updated(changedProperties);
-
-    if (changedProperties.has('state')) {
-      const oldState = changedProperties.get('state');
-      const oldId = oldState?.elementId;
-      const newId = this.state.elementId;
-
-      if (oldId !== newId) {
-        if (this.registerHelpBubbleController_) {
-          this.registerHelpBubbleController_.abort();
-          this.registerHelpBubbleController_ = null;
-        }
-        if (oldId) {
-          this.unregisterHelpBubble(oldId);
-        }
-        if (newId) {
-          this.registerHelpBubble_(newId);
-        }
-      }
-    }
+  private get browserProxy_(): BrowserProxy {
+    return BrowserProxyImpl.getInstance();
   }
 
-  private async registerHelpBubble_(newId: string) {
-    this.registerHelpBubbleController_ = new AbortController();
-    const signal = this.registerHelpBubbleController_.signal;
-
-    const animations = this.getAnimations().filter(anim => {
-      const timing = anim.effect?.getTiming();
-      // Ignore infinite animations (e.g. pulsing for IPH).
-      return timing?.iterations !== Infinity && timing?.duration !== Infinity;
-    });
-
-    // Wait for any animations to complete, so button is in final location.
-    if (animations.length > 0) {
-      try {
-        await Promise.all(animations.map(a => a.finished));
-      } catch (e) {
-        // Ignore animation cancellation.
-      }
-    }
-
-    if (!signal.aborted) {
-      this.registerHelpBubble(newId, this, {
-        onHighlightChanged: (highlighted: boolean) => {
-          this.trackedHighlighted = highlighted;
-        },
-        onHelpBubbleShown: () => setHasHelpBubble(this, true),
-        onHelpBubbleHidden: () => setHasHelpBubble(this, false),
-      });
-      this.registerHelpBubbleController_ = null;
-    }
+  override getElementId(state: PinnedToolbarActionState): string|undefined {
+    return state.elementId ?? undefined;
   }
 
   protected getIronIcon_(): string|undefined {
@@ -142,9 +117,67 @@ export class PinnedToolbarActionElement extends PinnedToolbarActionElementBase {
     return style.length > 0 ? style : undefined;
   }
 
-  protected onActionClick_() {
-    this.browserProxy_.toolbarUIHandler.invokePinnedToolbarAction(
-        this.state.action);
+  protected onActionClick_(e: PointerEvent) {
+    if (!this.highlightTracker.shouldSkipClick(e)) {
+      TrackedElementManager.getInstance().notifyElementActivated(this);
+      this.browserProxy_.toolbarUIHandler.invokePinnedToolbarAction(
+          this.state.action);
+    }
+  }
+
+  /**
+   * Returns the value of the progress ring's `status` attribute, or undefined
+   * if no ring should be drawn.
+   */
+  protected getProgressRingStatus_(): string|undefined {
+    switch (this.state.progressRing?.status) {
+      case DownloadProgressRingStatus.kDormant:
+        return 'dormant';
+      case DownloadProgressRingStatus.kScanning:
+        return 'scanning';
+      case DownloadProgressRingStatus.kDownloading:
+        return 'downloading';
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * Returns the portion of the ring to fill in. The ring's circles declare
+   * `pathLength="100"`, so the dash lengths are in percent. Only applies to
+   * determinate (downloading) rings; the scanning and dormant dash patterns
+   * are set in CSS.
+   */
+  protected getProgressRingFillStyle_(): string|undefined {
+    const progressRing = this.state.progressRing;
+    if (!progressRing ||
+        progressRing.status !== DownloadProgressRingStatus.kDownloading ||
+        progressRing.progressPercentage === null ||
+        progressRing.progressPercentage === undefined) {
+      return undefined;
+    }
+    const percentage =
+        Math.max(0, Math.min(100, progressRing.progressPercentage));
+    return `stroke-dasharray: ${percentage} 100;`;
+  }
+
+  /**
+   * Returns the text to display in the badge, or undefined if no badge should
+   * be drawn.
+   */
+  protected getBadgeText_(): string|undefined {
+    if (!this.state.badgeNumber) {
+      return undefined;
+    }
+    if (this.state.badgeNumber > 9) {
+      return '9+';
+    }
+    return this.state.badgeNumber.toString();
+  }
+
+  protected isDormant_(): boolean {
+    return this.state.progressRing?.status ===
+        DownloadProgressRingStatus.kDormant;
   }
 
   private getContextMenuType_(): ContextMenuType {
@@ -205,6 +238,16 @@ export class PinnedToolbarActionElement extends PinnedToolbarActionElementBase {
         return ContextMenuType.kPinnedActionSendSharedTabGroupFeedback;
       case PinnedToolbarAction.kSidePanelShowComments:
         return ContextMenuType.kPinnedActionSidePanelShowComments;
+      case PinnedToolbarAction.kShowAiOverlayDialog:
+        return ContextMenuType.kPinnedActionShowAiOverlayDialog;
+      case PinnedToolbarAction.kTtcToolbar:
+        return ContextMenuType.kPinnedActionTtcToolbar;
+      case PinnedToolbarAction.kSidePanelShowHistory:
+        return ContextMenuType.kPinnedActionSidePanelShowHistory;
+      case PinnedToolbarAction.kShowChromeLabs:
+        return ContextMenuType.kPinnedActionShowChromeLabs;
+      case PinnedToolbarAction.kSidePanelShowGlic:
+        return ContextMenuType.kPinnedActionSidePanelShowGlic;
       case PinnedToolbarAction.kUnspecified:
       case PinnedToolbarAction.kDivider:
         return ContextMenuType.kUnspecified;
@@ -217,12 +260,31 @@ export class PinnedToolbarActionElement extends PinnedToolbarActionElementBase {
     return this.adjustTooltipForHelpBubble(this.state.tooltip);
   }
 
+  override getMimeType() {
+    return 'application/x-webui-pinned-action';
+  }
+
+  override getItemId() {
+    return this.state.action.toString();
+  }
+
+  override isDraggable() {
+    return this.state.enabled && !this.poppedOut &&
+        this.state.action !== PinnedToolbarAction.kDivider;
+  }
+
+  override moveItemBy(delta: number) {
+    this.browserProxy_.toolbarUIHandler.movePinnedToolbarActionBy(
+        this.state.action, delta);
+  }
+
   protected onContextmenu_(e: Event) {
     e.preventDefault();
     const type = this.getContextMenuType_();
     if (type !== ContextMenuType.kUnspecified) {
       this.browserProxy_.toolbarUIHandler.showContextMenu(
-          type, getContextMenuPosition(this), getContextMenuSourceType(e));
+          type, getContextMenuPosition(this), getContextMenuSourceType(e),
+          /*showMenuToken=*/ null);
     }
   }
 }

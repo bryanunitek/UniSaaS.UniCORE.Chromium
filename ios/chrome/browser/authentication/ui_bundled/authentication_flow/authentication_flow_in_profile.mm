@@ -294,7 +294,6 @@ enum class AuthenticationFlowInProfileState {
     _accountSwitchingBatchClosureRunner =
         identityManager->StartBatchOfPrimaryAccountChanges();
     [_performer signOutForAccountSwitchWithProfile:profile];
-    return;
   }
   [self continueFlow];
 }
@@ -302,6 +301,15 @@ enum class AuthenticationFlowInProfileState {
 // Sets the primary identity if not already set.
 - (void)signInIfNeededStep {
   ProfileIOS* profile = [self originalProfile];
+  AuthenticationService* authenticationService =
+      AuthenticationServiceFactory::GetForProfile(profile);
+  if (!authenticationService->SigninEnabled()) {
+    // Signin could be disabled at any time. This method being called
+    // asynchronously, it occurs - rarely - that sign-in got disabled.
+    [self handleAuthenticationError:ios::provider::
+                                        CreateUserCancelledSigninError()];
+    return;
+  }
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(profile);
   std::vector<CoreAccountInfo> accountsInProfile =
@@ -313,8 +321,6 @@ enum class AuthenticationFlowInProfileState {
                                         CreateMissingIdentitySigninError()];
     return;
   }
-  AuthenticationService* authenticationService =
-      AuthenticationServiceFactory::GetForProfile(profile);
   id<SystemIdentity> currentIdentity =
       authenticationService->GetPrimaryIdentity();
   if (!currentIdentity) {
@@ -346,7 +352,7 @@ enum class AuthenticationFlowInProfileState {
     [self continueFlow];
     return;
   }
-  CHECK(_isManagedIdentity, base::NotFatalUntil::M140);
+  CHECK(_isManagedIdentity);
   ProfileIOS* profile = [self originalProfile];
   [_performer fetchUserPolicy:profile
                   withDmToken:_dmToken
@@ -416,8 +422,8 @@ enum class AuthenticationFlowInProfileState {
   // None of the steps after signin can fail (except for the case of the browser
   // going away, which is more "abort" than "fail)"). If any failable steps
   // after the signin step get added in the future, then a call to
-  // `[_performer signOutImmediatelyFromProfile:...]` should be added here.
-  CHECK(!_browser || !_didSignIn, base::NotFatalUntil::M140);
+  // `[_performer signOut...]` should be added here.
+  CHECK(!_browser || !_didSignIn);
   CHECK(_signInCompletion);
   signin_ui::SigninCompletionCallback signInCompletion = _signInCompletion;
   _signInCompletion = nil;
@@ -437,15 +443,13 @@ enum class AuthenticationFlowInProfileState {
   [self continueFlow];
 }
 
-#pragma mark - AuthenticationFlowPerformerDelegate
+#pragma mark - AuthenticationFlowPerformerBaseDelegate
 
-- (void)didSignOutForAccountSwitch {
-  CHECK_EQ(AuthenticationFlowInProfileState::kSignOutIfNeeded, _state);
-  [self continueFlow];
-}
-
-- (void)didSwitchToProfileWithNewProfileBrowser:(Browser*)newProfileBrowser
-                                     completion:(base::OnceClosure)completion {
+- (void)authenticationFlowPerformerBase:
+            (AuthenticationFlowPerformerBase*)performer
+    didSwitchToProfileWithNewProfileBrowser:(Browser*)newProfileBrowser
+                                 completion:(base::OnceClosure)completion {
+  CHECK_EQ(performer, _performer);
   CHECK(newProfileBrowser);
   CHECK(completion);
 
@@ -453,6 +457,8 @@ enum class AuthenticationFlowInProfileState {
   _browser = nullptr;
   std::move(completion).Run();
 }
+
+#pragma mark - AuthenticationFlowInProfilePerformerDelegate
 
 - (void)didRegisterForUserPolicyWithDMToken:(NSString*)dmToken
                                    clientID:(NSString*)clientID

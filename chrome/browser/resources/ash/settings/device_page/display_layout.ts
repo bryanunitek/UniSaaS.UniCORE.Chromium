@@ -94,15 +94,14 @@ export class DisplayLayoutElement extends DisplayLayoutElementBase {
     };
   }
 
-  displays: DisplayUnitInfo[];
-  selectedDisplay?: DisplayUnitInfo;
-  visualScale: number;
-  private allowDisplayAlignmentApi_: boolean;
+  declare displays: DisplayUnitInfo[];
+  declare selectedDisplay?: DisplayUnitInfo;
+  declare visualScale: number;
   private browserProxy_: DevicePageBrowserProxy;
   private hasDragStarted_: boolean;
   private invalidDisplayId_: string;
   private lastDragCoordinates_: {x: number, y: number}|null;
-  private mirroringDestinationIds_: string[];
+  declare private mirroringDestinationIds_: string[];
   private visualOffset_: {left: number, top: number};
 
   constructor() {
@@ -118,9 +117,6 @@ export class DisplayLayoutElement extends DisplayLayoutElementBase {
     this.lastDragCoordinates_ = null;
 
     this.browserProxy_ = DevicePageBrowserProxyImpl.getInstance();
-
-    this.allowDisplayAlignmentApi_ =
-        loadTimeData.getBoolean('allowDisplayAlignmentApi');
 
     this.invalidDisplayId_ = loadTimeData.getString('invalidDisplayId');
 
@@ -353,13 +349,7 @@ export class DisplayLayoutElement extends DisplayLayoutElementBase {
       this.lastDragCoordinates_.x = newBounds.left;
       this.lastDragCoordinates_.y = newBounds.top;
 
-      // Only call dragDisplayDelta() when there is a change in position.
       if (deltaX !== 0 || deltaY !== 0) {
-        if (this.allowDisplayAlignmentApi_) {
-          this.browserProxy_.dragDisplayDelta(
-              id, Math.round(deltaX), Math.round(deltaY));
-        }
-
         // Add ChromeVox announcement.
         const announcer = getAnnouncerInstance(this.$.displayArea);
         // Remove "role = alert" to avoid chromevox announcing "alert" before

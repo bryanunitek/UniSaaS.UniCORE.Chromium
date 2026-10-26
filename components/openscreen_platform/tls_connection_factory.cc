@@ -8,17 +8,17 @@
 
 #include <utility>
 
-#include "base/containers/auto_spanification_helper.h"
 #include "base/containers/span.h"
 #include "base/notimplemented.h"
-#include "components/openscreen_platform/network_context.h"
 #include "components/openscreen_platform/network_util.h"
+#include "components/openscreen_platform/socket_factory.h"
 #include "components/openscreen_platform/tls_client_connection.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
+#include "net/cert/x509_util.h"
 #include "net/ssl/ssl_info.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/socket_factory.mojom.h"
 #include "third_party/openscreen/src/platform/api/tls_connection.h"
 #include "third_party/openscreen/src/platform/base/tls_connect_options.h"
 #include "third_party/openscreen/src/platform/base/tls_credentials.h"
@@ -76,9 +76,9 @@ TlsConnectionFactory::~TlsConnectionFactory() = default;
 
 void TlsConnectionFactory::Connect(const IPEndpoint& remote_address,
                                    const TlsConnectOptions& options) {
-  network::mojom::NetworkContext* network_context =
-      openscreen_platform::GetNetworkContext();
-  if (!network_context) {
+  network::mojom::SocketFactory* socket_factory =
+      openscreen_platform::GetSocketFactory();
+  if (!socket_factory) {
     client_->OnError(this, openscreen::Error::Code::kItemNotFound);
     return;
   }
@@ -92,7 +92,7 @@ void TlsConnectionFactory::Connect(const IPEndpoint& remote_address,
   mojo::PendingReceiver<network::mojom::TCPConnectedSocket> receiver =
       request.tcp_socket.BindNewPipeAndPassReceiver();
 
-  network_context->CreateTCPConnectedSocket(
+  socket_factory->CreateTCPConnectedSocket(
       std::nullopt /* local_addr */, address_list,
       nullptr /* tcp_connected_socket_options */,
       net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
@@ -209,7 +209,8 @@ void TlsConnectionFactory::OnTlsUpgrade(
       std::move(request.tls_socket));
 
   CRYPTO_BUFFER* der_buffer = ssl_info.value().unverified_cert->cert_buffer();
-  base::span<const uint8_t> data = UNSAFE_CRYPTO_BUFFER_DATA(der_buffer);
+  base::span<const uint8_t> data =
+      net::x509_util::CryptoBufferAsSpan(der_buffer);
   std::vector<uint8_t> der_x509_certificate(data.begin(), data.end());
   client_->OnConnected(this, std::move(der_x509_certificate),
                        std::move(tls_connection));

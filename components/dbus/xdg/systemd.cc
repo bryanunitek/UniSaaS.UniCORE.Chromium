@@ -14,9 +14,11 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/nix/xdg_util.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/version_info/nix/version_extra_utils.h"
 #include "build/branding_buildflags.h"
 #include "components/dbus/utils/name_has_owner.h"
@@ -192,7 +194,9 @@ void OnNameHasOwnerResponse(scoped_refptr<dbus::Bus> bus,
   // The unit naming format is specified in
   // https://systemd.io/DESKTOP_ENVIRONMENTS/
   auto unit_name = base::ReplaceStringPlaceholders(
-      kUnitNameFormat, {app_name, base::NumberToString(pid)}, nullptr);
+      kUnitNameFormat,
+      {internal::EscapeSystemdUnitName(app_name), base::NumberToString(pid)},
+      nullptr);
 
   auto* systemd = bus->GetObjectProxy(kServiceNameSystemd,
                                       dbus::ObjectPath(kObjectPathSystemd));
@@ -220,6 +224,27 @@ void OnNameHasOwnerResponse(scoped_refptr<dbus::Bus> bus,
 
 namespace internal {
 
+std::string EscapeSystemdUnitName(std::string_view name) {
+  std::string escaped;
+  for (char c : name) {
+    if (c == '/') {
+      escaped.push_back('-');
+    } else if (base::IsAsciiAlphaNumeric(c) || c == ':' || c == '_') {
+      escaped.push_back(c);
+    } else if (c == '.') {
+      if (escaped.empty()) {
+        escaped.append("\\x2e");
+      } else {
+        escaped.push_back(c);
+      }
+    } else {
+      escaped.append(
+          base::StringPrintf("\\x%02x", static_cast<unsigned char>(c)));
+    }
+  }
+  return escaped;
+}
+
 void SetSystemdScopeUnitNameForXdgPortal(dbus::Bus* bus,
                                          SystemdUnitCallback callback) {
 #if DCHECK_IS_ON()
@@ -227,8 +252,7 @@ void SetSystemdScopeUnitNameForXdgPortal(dbus::Bus* bus,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker);
 #endif
 
-  auto env = base::Environment::Create();
-  if (env->HasVar("FLATPAK_SANDBOX_DIR") || env->HasVar("SNAP")) {
+  if (base::nix::GetAppSandbox() != base::nix::AppSandbox::kNone) {
     // xdg-desktop-portal has a separate reliable way of detecting the
     // application name for Flatpak and Snap environments, so the systemd unit
     // is not necessary in these cases.

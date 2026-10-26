@@ -31,7 +31,7 @@
     display: none;
   }
 </style>
-<div id="container" overscrollcontainer="overlay">
+<div id="container" overscrollcontainer style="overscroll-container-type: overlay">
   <div id="refresh" overscrollarea></div>
   <div id="menu" overscrollarea></div>
   <div id="content"></div>
@@ -57,12 +57,14 @@ test(() => {
   assert_equals(content.getBoundingClientRect().top, containerBounds.top, '#content is at top');
 
   const x = containerBounds.left + 50;
+  // Content and covered overscroll areas are inert, so elementsFromPoint
+  // excludes them.
   assert_array_equals(hitIds(x, containerBounds.top + 250),
-      ['content', 'container']);
+      ['container']);
   assert_array_equals(hitIds(x, containerBounds.top + 150),
-      ['menu', 'content', 'container']);
+      ['container']);
   assert_array_equals(hitIds(x, containerBounds.top + 50),
-      ['refresh', 'menu', 'content', 'container']);
+      ['refresh', 'container']);
 }, "overlay overscrollcontainer multiple overscrolls in same direction");
 </script>
 </html>

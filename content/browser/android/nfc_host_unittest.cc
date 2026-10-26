@@ -78,7 +78,8 @@ TEST_F(NFCHostTest, GetNFCTwice) {
                   /*render_process_host=*/nullptr, main_rfh(),
                   main_rfh()->GetMainFrame()->GetLastCommittedOrigin().GetURL(),
                   /*should_include_device_status*/ false, _))
-      .WillOnce(Return(kSubscriptionId));
+      .WillOnce(Return(testing::ByMove(
+          mock_permission_controller().CreateSubscription(kSubscriptionId))));
 
   mojo::Remote<device::mojom::NFC> nfc1, nfc2;
   contents()->GetNFC(static_cast<RenderFrameHostImpl*>(main_rfh()),
@@ -117,6 +118,17 @@ TEST_F(NFCHostTest, GetNFCFromDifferentWebContentsMainFrame) {
 
   EXPECT_EQ("WebNFC not on primary main frame.",
             bad_message_observer.WaitForBadMessage());
+}
+
+TEST_F(NFCHostTest, GetNFCOnOpaqueOriginBlocked) {
+  NavigateAndCommit(GURL("data:text/html,test"));
+
+  mojo::Remote<device::mojom::NFC> nfc;
+  contents()->GetNFC(static_cast<RenderFrameHostImpl*>(main_rfh()),
+                     nfc.BindNewPipeAndPassReceiver());
+
+  nfc.FlushForTesting();
+  EXPECT_FALSE(nfc.is_connected());
 }
 
 }  // namespace content

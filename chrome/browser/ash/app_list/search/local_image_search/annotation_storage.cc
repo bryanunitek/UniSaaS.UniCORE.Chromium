@@ -112,7 +112,32 @@ ImageInfo::ImageInfo(std::set<std::string> annotations,
       file_size(file_size) {}
 
 ImageInfo::~ImageInfo() = default;
-ImageInfo::ImageInfo(const ImageInfo&) = default;
+
+ImageInfo::ImageInfo(const ImageInfo& other)
+    : annotations(other.annotations),
+      annotation_map(other.annotation_map),
+      path(other.path),
+      last_modified(other.last_modified),
+      file_size(other.file_size),
+      width(other.width),
+      height(other.height),
+      region(other.region.IsValid() ? other.region.Duplicate()
+                                    : base::ReadOnlySharedMemoryRegion()) {}
+
+ImageInfo& ImageInfo::operator=(const ImageInfo& other) {
+  if (this != &other) {
+    annotations = other.annotations;
+    annotation_map = other.annotation_map;
+    path = other.path;
+    last_modified = other.last_modified;
+    file_size = other.file_size;
+    width = other.width;
+    height = other.height;
+    region = other.region.IsValid() ? other.region.Duplicate()
+                                    : base::ReadOnlySharedMemoryRegion();
+  }
+  return *this;
+}
 
 AnnotationStorage::AnnotationStorage(
     const base::FilePath& path_to_db,
@@ -343,7 +368,7 @@ std::vector<base::FilePath> AnnotationStorage::SearchByDirectory(
 std::vector<ImageInfo> AnnotationStorage::FindImagePath(
     const base::FilePath& image_path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!image_path.empty());
+  CHECK(!image_path.empty(), base::NotFatalUntil::M160);
   DVLOG(1) << "FindImagePath " << image_path;
 
   static constexpr char kQuery[] =

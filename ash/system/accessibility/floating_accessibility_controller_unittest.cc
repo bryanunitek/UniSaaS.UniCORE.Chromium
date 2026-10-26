@@ -21,6 +21,11 @@
 #include "base/barrier_closure.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/rtl.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_icu_locale.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/run_until.h"
 #include "ui/compositor/layer.h"
@@ -399,23 +404,28 @@ TEST_F(FloatingAccessibilityControllerTest, LocaleChangeObserver) {
   gfx::Rect window_bounds = Shell::GetPrimaryRootWindow()->bounds();
 
   // RTL should position the menu on the bottom left.
-  base::i18n::SetICUDefaultLocale("he");
-  // Trigger the LocaleChangeObserver, which should cause a layout of the menu.
-  ash::LocaleUpdateController::Get()->ConfirmLocaleChange("en", "en", "he",
-                                                          base::DoNothing());
-  EXPECT_TRUE(base::i18n::IsRTL());
-  EXPECT_LT(
-      GetMenuViewBounds().ManhattanDistanceToPoint(window_bounds.bottom_left()),
-      kMenuViewBoundsBuffer);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
+    // Trigger the LocaleChangeObserver, which should cause a layout of the
+    // menu.
+    ash::LocaleUpdateController::Get()->ConfirmLocaleChange("en", "en", "he",
+                                                            base::DoNothing());
+    EXPECT_TRUE(base::i18n::IsRTL());
+    EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
+                  window_bounds.bottom_left()),
+              kMenuViewBoundsBuffer);
+  }
 
   // LTR should position the menu on the bottom right.
-  base::i18n::SetICUDefaultLocale("en");
-  ash::LocaleUpdateController::Get()->ConfirmLocaleChange("he", "he", "en",
-                                                          base::DoNothing());
-  EXPECT_FALSE(base::i18n::IsRTL());
-  EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
-                window_bounds.bottom_right()),
-            kMenuViewBoundsBuffer);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
+    ash::LocaleUpdateController::Get()->ConfirmLocaleChange("he", "he", "en",
+                                                            base::DoNothing());
+    EXPECT_FALSE(base::i18n::IsRTL());
+    EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
+                  window_bounds.bottom_right()),
+              kMenuViewBoundsBuffer);
+  }
 }
 
 TEST_F(FloatingAccessibilityControllerTest,
@@ -424,21 +434,26 @@ TEST_F(FloatingAccessibilityControllerTest,
   gfx::Rect window_bounds = Shell::GetPrimaryRootWindow()->bounds();
 
   // RTL should position the menu on the bottom left.
-  base::i18n::SetICUDefaultLocale("he");
-  // Trigger the LocaleChangeObserver, which should cause a layout of the menu.
-  ash::LocaleUpdateController::Get()->OnLocaleChanged();
-  EXPECT_TRUE(base::i18n::IsRTL());
-  EXPECT_LT(
-      GetMenuViewBounds().ManhattanDistanceToPoint(window_bounds.bottom_left()),
-      kMenuViewBoundsBuffer);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
+    // Trigger the LocaleChangeObserver, which should cause a layout of the
+    // menu.
+    ash::LocaleUpdateController::Get()->OnLocaleChanged();
+    EXPECT_TRUE(base::i18n::IsRTL());
+    EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
+                  window_bounds.bottom_left()),
+              kMenuViewBoundsBuffer);
+  }
 
   // LTR should position the menu on the bottom right.
-  base::i18n::SetICUDefaultLocale("en");
-  ash::LocaleUpdateController::Get()->OnLocaleChanged();
-  EXPECT_FALSE(base::i18n::IsRTL());
-  EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
-                window_bounds.bottom_right()),
-            kMenuViewBoundsBuffer);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
+    ash::LocaleUpdateController::Get()->OnLocaleChanged();
+    EXPECT_FALSE(base::i18n::IsRTL());
+    EXPECT_LT(GetMenuViewBounds().ManhattanDistanceToPoint(
+                  window_bounds.bottom_right()),
+              kMenuViewBoundsBuffer);
+  }
 }
 
 // The detailed view has to be anchored to the floating menu.
@@ -454,7 +469,7 @@ TEST_F(FloatingAccessibilityControllerTest, DetailedViewPosition) {
     SCOPED_TRACE(base::StringPrintf("Testing rtl=#[%d]", test.is_RTL));
     // These positions should be relative to the corners of the screen
     // whether we are in RTL or LTR.
-    base::i18n::SetRTLForTesting(test.is_RTL);
+    base::i18n::ScopedRTLForTesting scoped_rtl(test.is_RTL);
 
     // When the menu is in the top right, the detailed should be directly
     // under it and along the right side of the screen.
@@ -769,6 +784,35 @@ TEST_F(FloatingAccessibilityControllerTest, CheckOpacity) {
 
   controller()->FocusOnMenu();
   EXPECT_EQ(GetMenuOpacity(), 1.0f);
+}
+
+TEST_F(FloatingAccessibilityControllerTest,
+       CheckOpacityOnTrayAndPositionButtonsFocus) {
+  SetSingleAvailableIme();
+  SetUpVisibleMenu();
+  EXPECT_LT(GetMenuOpacity(), 1.0f);
+
+  ASSERT_TRUE(widget());
+  views::FocusManager* focus_manager = widget()->GetFocusManager();
+
+  // With a single IME and no other features enabled, FocusOnMenu() focuses the
+  // accessibility tray (settings list) button.
+  controller()->FocusOnMenu();
+  EXPECT_EQ(focus_manager->GetFocusedView(),
+            GetMenuButton(FloatingAccessibilityView::ButtonId::kSettingsList));
+  EXPECT_EQ(GetMenuOpacity(), 1.0f);
+
+  focus_manager->ClearFocus();
+  EXPECT_LT(GetMenuOpacity(), 1.0f);
+
+  // Focusing the position button should also make the menu opaque.
+  GetMenuButton(FloatingAccessibilityView::ButtonId::kPosition)->RequestFocus();
+  EXPECT_EQ(focus_manager->GetFocusedView(),
+            GetMenuButton(FloatingAccessibilityView::ButtonId::kPosition));
+  EXPECT_EQ(GetMenuOpacity(), 1.0f);
+
+  focus_manager->ClearFocus();
+  EXPECT_LT(GetMenuOpacity(), 1.0f);
 }
 
 }  // namespace ash

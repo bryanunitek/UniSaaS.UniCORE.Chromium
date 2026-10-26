@@ -5,6 +5,8 @@
 #import "ios/chrome/browser/settings/manage_sync/ui/manage_sync_settings_table_view_controller.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/metrics/user_metrics.h"
+#import "base/metrics/user_metrics_action.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/central_account_view.h"
 #import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/policy/model/management_state.h"
@@ -34,9 +36,12 @@ constexpr CGFloat kDefaultSectionFooterHeightPointSize = 10.;
 }  // namespace
 
 @interface ManageSyncSettingsTableViewController () <
+    CentralAccountViewDelegate,
     PopoverLabelViewControllerDelegate>
 @end
 
+// TODO(crbug.com/556090278): Migrate the class to inherits
+// `ChromeTableViewController`.
 @implementation ManageSyncSettingsTableViewController
 
 #pragma mark - UIViewController
@@ -92,39 +97,6 @@ constexpr CGFloat kDefaultSectionFooterHeightPointSize = 10.;
 
 #pragma mark - ManageSyncSettingsConsumer
 
-- (void)insertSections:(NSIndexSet*)sections rowAnimation:(BOOL)rowAnimation {
-  if (!self.tableViewModel) {
-    // No need to reload since the model has not been loaded yet.
-    return;
-  }
-  if (rowAnimation) {
-    [self.tableView insertSections:sections
-                  withRowAnimation:UITableViewRowAnimationMiddle];
-  } else {
-    [UIView performWithoutAnimation:^{
-      [self.tableView insertSections:sections
-                    withRowAnimation:UITableViewRowAnimationNone];
-    }];
-  }
-}
-
-- (void)deleteSections:(NSIndexSet*)sections rowAnimation:(BOOL)rowAnimation {
-  if (!self.tableViewModel) {
-    // No need to reload since the model has not been loaded yet.
-    return;
-  }
-  if (rowAnimation) {
-    [self.tableView deleteSections:sections
-                  withRowAnimation:UITableViewRowAnimationMiddle];
-  } else {
-    // To avoid animation glitches related to crbug.com/1469539.
-    [UIView performWithoutAnimation:^{
-      [self.tableView deleteSections:sections
-                    withRowAnimation:UITableViewRowAnimationNone];
-    }];
-  }
-}
-
 - (void)reloadItem:(TableViewItem*)item {
   if (!self.tableViewModel) {
     // No need to reload since the model has not been loaded yet.
@@ -150,19 +122,12 @@ constexpr CGFloat kDefaultSectionFooterHeightPointSize = 10.;
   }];
 }
 
-- (void)reloadSections:(NSIndexSet*)sections {
-  if (!self.tableViewModel) {
-    // No need to reload since the model has not been loaded yet.
-    return;
-  }
-  [self.tableView reloadSections:sections
-                withRowAnimation:UITableViewRowAnimationNone];
-}
-
-- (void)updatePrimaryAccountWithAvatarImage:(UIImage*)avatarImage
-                                       name:(NSString*)name
-                                      email:(NSString*)email
-                      managementDescription:(NSString*)managementDescription {
+- (void)updateAndReloadPrimaryAccountWithAvatarImage:(UIImage*)avatarImage
+                                     displayedAiTier:(NSInteger)displayedAiTier
+                                                name:(NSString*)name
+                                               email:(NSString*)email
+                               managementDescription:
+                                   (NSString*)managementDescription {
   CHECK(email);
   CHECK(avatarImage);
   // Put a small non-empty frame to avoid layout constraint error during
@@ -170,10 +135,12 @@ constexpr CGFloat kDefaultSectionFooterHeightPointSize = 10.;
   CentralAccountView* identityAccountItem =
       [[CentralAccountView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)
                                     avatarImage:avatarImage
+                                displayedAiTier:displayedAiTier
                                            name:name
                                           email:email
                           managementDescription:managementDescription
                                 useLargeMargins:YES];
+  identityAccountItem.delegate = self;
   self.tableView.tableHeaderView = identityAccountItem;
   [self.tableView reloadData];
 }
@@ -188,6 +155,13 @@ constexpr CGFloat kDefaultSectionFooterHeightPointSize = 10.;
     return;
   }
   [self.tableView reloadData];
+}
+
+#pragma mark - CentralAccountViewDelegate
+
+- (void)centralAccountViewDidTapAISubscriptionChip:(CentralAccountView*)view {
+  base::RecordAction(
+      base::UserMetricsAction("Signin_AccountSettings_SubscriptionChip"));
 }
 
 #pragma mark - UITableViewDelegate

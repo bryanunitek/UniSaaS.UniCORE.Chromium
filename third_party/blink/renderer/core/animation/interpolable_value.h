@@ -54,11 +54,9 @@ class CORE_EXPORT InterpolableValue
   virtual bool IsGridTrackSize() const { return false; }
   virtual bool IsFontPalette() const { return false; }
   virtual bool IsDynamicRangeLimit() const { return false; }
-  virtual bool IsGapColorRepeater() const { return false; }
   virtual bool IsGapLengthAutoRepeater() const { return false; }
   virtual bool IsGapColorAutoRepeater() const { return false; }
 
-  bool IsGapDataRepeater() const { return IsGapColorRepeater(); }
   bool IsGapDataAutoRepeater() const {
     return IsGapLengthAutoRepeater() || IsGapColorAutoRepeater();
   }
@@ -189,6 +187,7 @@ class CORE_EXPORT InterpolableList final : public InterpolableValue {
   void Set(wtf_size_t position, InterpolableValue* value) {
     values_[position] = std::move(value);
   }
+  void RepeatTo(wtf_size_t new_length);
 
   InterpolableList* Clone() const { return RawClone(); }
   InterpolableList* CloneAndZero() const { return RawCloneAndZero(); }

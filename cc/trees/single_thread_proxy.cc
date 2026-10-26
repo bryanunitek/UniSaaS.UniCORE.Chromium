@@ -333,6 +333,12 @@ void SingleThreadProxy::SetTargetLocalSurfaceId(
   host_impl_->SetTargetLocalSurfaceId(target_local_surface_id);
 }
 
+void SingleThreadProxy::SetMemoryPolicy(const ManagedMemoryPolicy& policy) {
+  DCHECK(task_runner_provider_->IsMainThread());
+  DebugScopedSetImplThread impl(task_runner_provider_);
+  host_impl_->SetMemoryPolicy(policy);
+}
+
 void SingleThreadProxy::SetUnboundedFrameSink(
     std::unique_ptr<LayerTreeFrameSink> unbounded_frame_sink,
     const viz::LocalSurfaceId& local_surface_id) {
@@ -341,6 +347,16 @@ void SingleThreadProxy::SetUnboundedFrameSink(
   DebugScopedSetImplThread impl(task_runner_provider_);
   host_impl_->SetUnboundedFrameSink(std::move(unbounded_frame_sink),
                                     local_surface_id);
+}
+
+void SingleThreadProxy::SetUnboundedFrameSinkId(
+    const viz::FrameSinkId& frame_sink_id,
+    const viz::LocalSurfaceId& local_surface_id) {
+  DCHECK(task_runner_provider_->IsMainThread());
+  DCHECK(layer_tree_host_->GetSettings().enable_unbounded_element);
+  CHECK(base::FeatureList::IsEnabled(features::kTreesInViz));
+  DebugScopedSetImplThread impl(task_runner_provider_);
+  host_impl_->SetUnboundedFrameSinkId(frame_sink_id, local_surface_id);
 }
 
 void SingleThreadProxy::DismissUnboundedFrameSink() {
@@ -567,6 +583,14 @@ void SingleThreadProxy::SetNeedsOneBeginImplFrameOnImplThread() {
   needs_impl_frame_ = true;
 }
 
+void SingleThreadProxy::NotifyInputEvent() {
+  DCHECK(!task_runner_provider_->HasImplThread() ||
+         task_runner_provider_->IsImplThread());
+  if (scheduler_on_impl_thread_) {
+    scheduler_on_impl_thread_->NotifyInputEvent();
+  }
+}
+
 void SingleThreadProxy::SetNeedsPrepareTilesOnImplThread() {
   DCHECK(!task_runner_provider_->HasImplThread() ||
          task_runner_provider_->IsImplThread());
@@ -576,12 +600,13 @@ void SingleThreadProxy::SetNeedsPrepareTilesOnImplThread() {
 }
 
 void SingleThreadProxy::SetNeedsCommitOnImplThread(BeginMainFrameReason reason,
-                                                   bool urgent) {
+                                                   bool urgent,
+                                                   bool unthrottled) {
   DCHECK(!task_runner_provider_->HasImplThread() ||
          task_runner_provider_->IsImplThread());
   single_thread_delegate_->ScheduleAnimationForWebTests();
   if (scheduler_on_impl_thread_)
-    scheduler_on_impl_thread_->SetNeedsBeginMainFrame(urgent);
+    scheduler_on_impl_thread_->SetNeedsBeginMainFrame(urgent, unthrottled);
   commit_requested_ = true;
 }
 
@@ -710,7 +735,7 @@ void SingleThreadProxy::NotifyImageDecodeRequestFinished(
       IssueImageDecodeFinishedCallbacks();
     } else {
       SetNeedsCommitOnImplThread(BeginMainFrameReason::kOther,
-                                 /* urgent = */ false);
+                                 /* urgent = */ false, false);
     }
   }
 }

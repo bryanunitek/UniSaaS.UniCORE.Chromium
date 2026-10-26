@@ -19,12 +19,15 @@ export function getHtml(this: AppElement) {
     <cr-button title="Export requests in JSON format"
         @click="${this.onExportClick_}">
       Export
-      <cr-icon icon="cr:file-download" slot="suffix-icon"></cr-icon>
+      <cr-icon icon="cr:download" slot="suffix-icon"></cr-icon>
     </cr-button>
     <cr-button title="Import requests in JSON format"
         @click="${this.onImportClick_}">
       Import
-      <cr-icon icon="suggest:file-upload" slot="suffix-icon"></cr-icon>
+      <cr-icon
+          icon="${this.webuiRoundedIconsEnabled_
+              ? 'suggest:upload-2-filled'
+              : 'suggest:file-upload-old'}" slot="suffix-icon"></cr-icon>
     </cr-button>
     <input id="fileInput" type="file" accept=".json" style="display: none;"
       @change="${this.onImportFileChange_}">

@@ -5,8 +5,8 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_PASSWORD_MANAGER_PASSWORD_MANAGER_UI_H_
 #define CHROME_BROWSER_UI_WEBUI_PASSWORD_MANAGER_PASSWORD_MANAGER_UI_H_
 
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/ui/webui/password_manager/password_manager.mojom.h"
-#include "chrome/browser/ui/webui/password_manager/password_manager_ui_handler.h"
 #include "components/password_manager/content/common/web_ui_constants.h"
 #include "components/user_education/webui/help_bubble_handler.h"
 #include "content/public/browser/web_ui_controller.h"
@@ -27,6 +27,7 @@ class PasswordsPrivateDelegate;
 }
 
 class PasswordManagerUI;
+class PasswordManagerUIHandler;
 
 class PasswordManagerUIConfig
     : public content::DefaultWebUIConfig<PasswordManagerUI> {
@@ -51,14 +52,13 @@ class PasswordManagerUI : public ui::MojoWebUIController,
   PasswordManagerUI(const PasswordManagerUI&) = delete;
   PasswordManagerUI& operator=(const PasswordManagerUI&) = delete;
 
-  static base::RefCountedMemory* GetFaviconResourceBytes(
+  static scoped_refptr<base::RefCountedMemory> GetFaviconResourceBytes(
       ui::ResourceScaleFactor scale_factor);
 
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSettingsMenuItemElementId);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAddShortcutElementId);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kOverflowMenuElementId);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kSharePasswordElementId);
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAccountStoreToggleElementId);
   DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kAddShortcutCustomEventId);
 
   void BindInterface(

@@ -22,7 +22,6 @@
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "components/history/core/browser/download_row.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/test/mock_download_manager.h"
 #include "content/public/test/navigation_simulator.h"
@@ -417,10 +416,9 @@ TEST_F(DownloadUIControllerTest, DownloadUIController_HistoryDownload) {
     MockDownloadItem* download_item = item.get();
     EXPECT_CALL(*manager(), MockCreateDownloadItem(_))
         .WillOnce(testing::DoAll(
-            testing::InvokeWithoutArgs(
-                [observer, download_manager, download_item]() {
-                  observer->OnDownloadCreated(download_manager, download_item);
-                }),
+            [observer, download_manager, download_item]() {
+              observer->OnDownloadCreated(download_manager, download_item);
+            },
             Return(item.get())));
     EXPECT_CALL(mock_function, Call());
 

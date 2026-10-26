@@ -21,6 +21,7 @@
 #include "cc/test/test_task_graph_runner.h"
 #include "components/viz/common/performance_hint_utils.h"
 #include "components/viz/common/quads/compositor_frame.h"
+#include "components/viz/common/quads/frame_interval_inputs.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
 #include "services/viz/public/mojom/compositing/layer_context.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -47,11 +48,18 @@ class FakeLayerContext : public mojom::LayerContext {
   void UpdateDisplayTiling(mojom::TilingPtr tiling) override;
   void SetTargetLocalSurfaceId(
       const LocalSurfaceId& target_local_surface_id) override;
+  void SetUnboundedFrameSinkId(const FrameSinkId& frame_sink_id,
+                               const LocalSurfaceId& local_surface_id) override;
+  void SetUnboundedLocalSurfaceId(
+      const LocalSurfaceId& local_surface_id) override;
+  void DismissUnboundedFrameSink() override;
 
   mojom::LayerTreeUpdatePtr last_update_;
   base::OnceClosure on_update_display_tree_;
   mojom::TilingPtr last_tiling_;
   base::OnceClosure on_update_display_tiling_;
+  LocalSurfaceId last_target_local_surface_id_;
+  base::OnceClosure on_set_target_local_surface_id_;
 
   mojo::AssociatedRemote<mojom::LayerContextClient> client_;
 
@@ -102,7 +110,8 @@ class VizLayerContextTest : public testing::Test {
   cc::LayerImpl* SetupRootLayer();
   cc::FakePictureLayerImpl* SetupPictureLayer();
 
-  void UpdateDisplayTreeAndWait();
+  void UpdateDisplayTreeAndWait(
+      std::optional<FrameIntervalInputs> frame_interval_inputs = std::nullopt);
 
   static constexpr int kRootLayerId = 1;
   static constexpr int kChildLayerId = 2;

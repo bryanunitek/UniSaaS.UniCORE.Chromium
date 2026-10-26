@@ -4,7 +4,10 @@
 
 #include "components/component_updater/installer_policies/trust_token_key_commitments_component_installer_policy.h"
 
+#include <stdint.h>
+
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -27,12 +30,12 @@ namespace {
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the extension.
 // The extension id is: kiabhabjdbkjdpjbpigfodbdjmbglcoo
-const uint8_t kTrustTokenKeyCommitmentsPublicKeySHA256[32] = {
+constexpr uint8_t kTrustTokenKeyCommitmentsPublicKeySHA256[32] = {
     0xa8, 0x01, 0x70, 0x19, 0x31, 0xa9, 0x3f, 0x91, 0xf8, 0x65, 0xe3,
     0x13, 0x9c, 0x16, 0xb2, 0xee, 0xb4, 0xc7, 0xc2, 0x8e, 0xdb, 0x04,
     0xd3, 0xaf, 0xeb, 0x07, 0x18, 0x15, 0x89, 0x23, 0x81, 0xad};
 
-const char kTrustTokenKeyCommitmentsManifestName[] =
+constexpr char kTrustTokenKeyCommitmentsManifestName[] =
     "Trust Token Key Commitments";
 
 // Attempts to load key commitments as raw JSON from their storage file,
@@ -148,8 +151,7 @@ TrustTokenKeyCommitmentsComponentInstallerPolicy::GetInstallerAttributes()
 void TrustTokenKeyCommitmentsComponentInstallerPolicy::GetPublicKeyHash(
     std::vector<uint8_t>* hash) {
   DCHECK(hash);
-  hash->assign(std::begin(kTrustTokenKeyCommitmentsPublicKeySHA256),
-               std::end(kTrustTokenKeyCommitmentsPublicKeySHA256));
+  hash->assign_range(kTrustTokenKeyCommitmentsPublicKeySHA256);
 }
 
 // static

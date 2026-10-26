@@ -10,6 +10,7 @@ import android.content.Context;
 import android.os.SystemClock;
 
 import org.chromium.base.Callback;
+import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
@@ -34,6 +35,8 @@ import java.util.function.Supplier;
 /** Glue code for the Paint Preview show-on-startup feature. */
 @NullMarked
 public class StartupPaintPreviewHelper implements Destroyable {
+    private static final String TAG = "StartupPaintPreview";
+
     /**
      * Tracks whether a paint preview should be shown on tab restore. We use this to only attempt to
      * display a paint preview on the first tab restoration that happens on Chrome startup when
@@ -45,10 +48,12 @@ public class StartupPaintPreviewHelper implements Destroyable {
     private final long mActivityCreationTime;
 
     private final BrowserControlsManager mBrowserControlsManager;
-    private final Supplier<LoadProgressCoordinator> mProgressBarCoordinatorSupplier;
+    private final Supplier<@Nullable LoadProgressCoordinator> mProgressBarCoordinatorSupplier;
     private final ObserverList<PaintPreviewMetricsObserver> mMetricsObservers =
             new ObserverList<>();
+    private final TabModelSelector mTabModelSelector;
 
+    private @Nullable TabModelSelectorObserver mTabModelSelectorObserver;
     private @Nullable Destroyable mServiceObserver;
 
     /**
@@ -58,19 +63,20 @@ public class StartupPaintPreviewHelper implements Destroyable {
      * @param windowAndroid The WindowAndroid that corresponds to the tabModelSelector.
      * @param activityCreationTime The time the ChromeActivity was created.
      * @param browserControlsManager The BrowserControlsManager which is used to fetch the browser
-     *     visibility delegate
-     * @param tabModelSelector The TabModelSelector to observe.
-     * @param progressBarCoordinatorSupplier Supplier for the progress bar.
+     *     controls layout height.
+     * @param tabModelSelector The TabModelSelector for the activity.
+     * @param progressBarCoordinatorSupplier Supplier for the LoadProgressCoordinator.
      */
     public StartupPaintPreviewHelper(
             WindowAndroid windowAndroid,
             long activityCreationTime,
             BrowserControlsManager browserControlsManager,
             TabModelSelector tabModelSelector,
-            Supplier<LoadProgressCoordinator> progressBarCoordinatorSupplier) {
+            Supplier<@Nullable LoadProgressCoordinator> progressBarCoordinatorSupplier) {
         mActivityCreationTime = activityCreationTime;
         mBrowserControlsManager = browserControlsManager;
         mProgressBarCoordinatorSupplier = progressBarCoordinatorSupplier;
+        mTabModelSelector = tabModelSelector;
 
         assumeNonNull(windowAndroid.getContext().get());
         if (MultiWindowUtils.getInstance()
@@ -78,16 +84,13 @@ public class StartupPaintPreviewHelper implements Destroyable {
             sShouldShowOnRestore = false;
         }
 
-        // TODO(crbug.com/40686845): verify this doesn't cause a memory leak if the user exits
-        // Chrome
-        // prior to onTabStateInitialized being called.
-        tabModelSelector.addObserver(
+        mTabModelSelectorObserver =
                 new TabModelSelectorObserver() {
                     @Override
                     public void onTabStateInitialized() {
                         // If the first tab shown is not a normal tab, then prevent showing previews
                         // in the future.
-                        if (preventShowOnRestore(tabModelSelector.getCurrentTab())) {
+                        if (preventShowOnRestore(mTabModelSelector.getCurrentTab())) {
                             sShouldShowOnRestore = false;
                         }
 
@@ -101,8 +104,11 @@ public class StartupPaintPreviewHelper implements Destroyable {
                         assert mServiceObserver == null;
                         mServiceObserver =
                                 PaintPreviewTabServiceFactory.getServiceInstance()
-                                        .onRestoreCompleted(tabModelSelector, runAudit);
-                        tabModelSelector.removeObserver(this);
+                                        .onRestoreCompleted(mTabModelSelector, runAudit);
+                        if (mTabModelSelectorObserver != null) {
+                            mTabModelSelector.removeObserver(mTabModelSelectorObserver);
+                            mTabModelSelectorObserver = null;
+                        }
                     }
 
                     private boolean preventShowOnRestore(@Nullable Tab tab) {
@@ -114,7 +120,8 @@ public class StartupPaintPreviewHelper implements Destroyable {
                         boolean httpOrHttps = scheme.equals("http") || scheme.equals("https");
                         return !httpOrHttps;
                     }
-                });
+                };
+        mTabModelSelector.addObserver(mTabModelSelectorObserver);
     }
 
     /** Enables Paint Preview show attempt on restoration of a tab. */
@@ -125,13 +132,21 @@ public class StartupPaintPreviewHelper implements Destroyable {
     /** Attempts to display the Paint Preview representation for the given Tab. */
     public static void showPaintPreviewOnRestore(Tab tab) {
         WindowAndroid windowAndroid = tab.getWindowAndroid();
-        assumeNonNull(windowAndroid);
+        if (windowAndroid == null) {
+            Log.e(TAG, "showPaintPreviewOnRestore: windowAndroid is unexpectedly null");
+            return;
+        }
         MonotonicObservableSupplier<StartupPaintPreviewHelper> paintPreviewSupplier =
                 StartupPaintPreviewHelperSupplier.from(windowAndroid);
-        if (paintPreviewSupplier == null) return;
+        if (paintPreviewSupplier == null) {
+            Log.e(TAG, "showPaintPreviewOnRestore: paintPreviewSupplier is unexpectedly null");
+            return;
+        }
 
         StartupPaintPreviewHelper paintPreviewHelper = paintPreviewSupplier.get();
         if (paintPreviewHelper == null || !sShouldShowOnRestore) {
+            // This case is expected as often we either do not have a paint preview or we no longer
+            // need to show paint preview in this session.
             return;
         }
 
@@ -190,8 +205,13 @@ public class StartupPaintPreviewHelper implements Destroyable {
 
     @Override
     public void destroy() {
+        if (mTabModelSelectorObserver != null) {
+            mTabModelSelector.removeObserver(mTabModelSelectorObserver);
+            mTabModelSelectorObserver = null;
+        }
         if (mServiceObserver != null) {
             mServiceObserver.destroy();
+            mServiceObserver = null;
         }
     }
 }

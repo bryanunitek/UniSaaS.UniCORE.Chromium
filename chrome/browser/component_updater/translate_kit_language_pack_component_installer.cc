@@ -4,9 +4,12 @@
 
 #include "chrome/browser/component_updater/translate_kit_language_pack_component_installer.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -106,8 +109,7 @@ TranslateKitLanguagePackComponentInstallerPolicy::GetRelativeInstallDir()
 void TranslateKitLanguagePackComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
   auto const& config = GetConfig();
-  hash->assign(std::begin(config.public_key_sha),
-               std::end(config.public_key_sha));
+  hash->assign_range(config.public_key_sha);
 }
 
 std::string TranslateKitLanguagePackComponentInstallerPolicy::GetName() const {
@@ -119,7 +121,12 @@ std::string TranslateKitLanguagePackComponentInstallerPolicy::GetName() const {
 update_client::InstallerAttributes
 TranslateKitLanguagePackComponentInstallerPolicy::GetInstallerAttributes()
     const {
-  return update_client::InstallerAttributes();
+  update_client::InstallerAttributes attributes;
+  if (base::FeatureList::IsEnabled(
+          on_device_translation::kTranslateKitV3Models)) {
+    attributes["model_version"] = "v3";
+  }
+  return attributes;
 }
 
 const on_device_translation::LanguagePackComponentConfig&
@@ -208,7 +215,7 @@ void RegisterTranslateKitLanguagePackComponentsForAutoDownload(
   }
 
   base::flat_set<LanguagePackKey> keys_to_register;
-  for (const std::string_view& pair :
+  for (std::string_view pair :
        base::SplitStringPiece(language_pairs_str, ",", base::TRIM_WHITESPACE,
                               base::SPLIT_WANT_NONEMPTY)) {
     std::vector<std::string_view> languages = base::SplitStringPiece(

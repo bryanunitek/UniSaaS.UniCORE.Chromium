@@ -24,6 +24,7 @@ import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerType;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel.StateChangeReason;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
@@ -245,7 +246,7 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
         return mContext;
     }
 
-    /** Tracks whether the panel has been hidden. {@See #showPanel, #hidePanel}. */
+    /** Tracks whether the panel has been hidden. See {@link #showPanel} and {@link #hidePanel}. */
     protected boolean mPanelHidden;
 
     /**
@@ -266,7 +267,7 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
     /** Temporarily hides a peeking panel for the given reason. Does nothing if not peeking. */
     public abstract void hidePanel(@StateChangeReason int reason);
 
-    /** Shows a previously hidden panel again. {@See #hidePanel}. */
+    /** Shows a previously hidden panel again. See {@link #hidePanel}. */
     public abstract void showPanel(@StateChangeReason int reason);
 
     /**
@@ -776,6 +777,10 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
      * @return The brightness of the base page.
      */
     public float getBasePageBrightness() {
+        if (ChromeFeatureList.sContextualPanelCloseButton.isEnabled()) {
+            // Disable the scrim.
+            return BASE_PAGE_BRIGHTNESS_STATE_PEEKED;
+        }
         return mBasePageBrightness;
     }
 
@@ -915,16 +920,12 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
      * @return The height of the Overlay Panel in dps for a given |state|.
      */
     public float getPanelHeightFromState(@Nullable @PanelState Integer state) {
-        if (state == null) {
-            return 0;
-        } else if (state == PanelState.PEEKED) {
-            return getPeekedHeight();
-        } else if (state == PanelState.EXPANDED) {
-            return getExpandedHeight();
-        } else if (state == PanelState.MAXIMIZED) {
-            return getMaximizedHeight();
-        }
-        return 0;
+        return switch (state) {
+            case PanelState.PEEKED -> getPeekedHeight();
+            case PanelState.EXPANDED -> getExpandedHeight();
+            case PanelState.MAXIMIZED -> getMaximizedHeight();
+            case null, default -> 0;
+        };
     }
 
     /**
@@ -1266,6 +1267,14 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
         mBasePageTargetY = calculateBasePageTargetY();
     }
 
+    /** Returns whether the top controls are locked in place and cannot scroll off-screen. */
+    private boolean areTopControlsLocked() {
+        return mBrowserControlsStateProvider.isVisibilityForced()
+                || (mBrowserControlsStateProvider.getTopControlsHeight() > 0
+                        && mBrowserControlsStateProvider.getTopControlsMinHeight()
+                                == mBrowserControlsStateProvider.getTopControlsHeight());
+    }
+
     /**
      * Calculates the target offset of the Base Page in order to achieve the desired offset
      * specified by {@link #calculateBasePageDesiredOffset} while assuring that the Base Page will
@@ -1281,7 +1290,10 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
         // base page.
         // A small panel should always return zero to ensure the Base Page remains in the same
         // position.
-        if (!isFullWidthSizePanel() || mAppHeaderHeightDp > 0) return 0.f;
+        // If top controls are locked, do not offset the base page.
+        if (!isFullWidthSizePanel() || mAppHeaderHeightDp > 0 || areTopControlsLocked()) {
+            return 0.f;
+        }
 
         // Start with the desired offset taking viewport offset into consideration and make sure
         // the result is <= 0 so the page moves up and not down.
@@ -1298,7 +1310,8 @@ abstract class OverlayPanelBase implements OverlayPanelStateProvider, AppHeaderO
      * @return The Y coordinate to apply to the Base Page in order to keep the selection in view
      *     when the Overlay Panel is in EXPANDED state.
      */
-    private float getBasePageTargetY() {
+    @VisibleForTesting
+    float getBasePageTargetY() {
         return mBasePageTargetY;
     }
 

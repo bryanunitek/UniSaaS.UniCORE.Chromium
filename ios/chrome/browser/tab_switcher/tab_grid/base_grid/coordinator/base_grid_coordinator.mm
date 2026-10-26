@@ -312,8 +312,13 @@ using collaboration::CollaborationControllerDelegate;
 }
 
 - (void)showTabGroupEditionForGroup:(base::WeakPtr<const TabGroup>)tabGroup {
-  CHECK(!_tabGroupCreator) << "There is an attempt to edit a tab group when a "
-                              "creation process is still running.";
+  if (_tabGroupCreator) {
+    // Gracefully exit if the user double-taps the title button too quickly,
+    // which can trigger this flow twice before the UI has time to disable
+    // the entry point.
+    return;
+  }
+
   if (!tabGroup) {
     return;
   }
@@ -424,6 +429,9 @@ using collaboration::CollaborationControllerDelegate;
 }
 
 - (void)showRecentActivityForGroup:(base::WeakPtr<const TabGroup>)tabGroup {
+  if (!tabGroup) {
+    return;
+  }
   _tabGroupRecentActivityCoordinator = [[RecentActivityCoordinator alloc]
       initWithBaseViewController:self.baseViewController
                          browser:self.browser

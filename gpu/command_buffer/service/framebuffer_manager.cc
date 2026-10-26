@@ -294,7 +294,8 @@ class TextureAttachment
   }
 
   size_t GetSignatureSize(TextureManager* texture_manager) const override {
-    return texture_manager->GetSignatureSize();
+    return texture_manager->GetSignatureSize() + sizeof(samples_) +
+           sizeof(layer_);
   }
 
   void AddToSignature(TextureManager* texture_manager,
@@ -302,6 +303,9 @@ class TextureAttachment
     DCHECK(signature);
     texture_manager->AddToSignature(
         texture_ref_.get(), target_, level_, signature);
+    signature->append(reinterpret_cast<const char*>(&samples_),
+                      sizeof(samples_));
+    signature->append(reinterpret_cast<const char*>(&layer_), sizeof(layer_));
   }
 
   bool FormsFeedbackLoop(TextureRef* texture,
@@ -458,7 +462,7 @@ bool Framebuffer::HasUnclearedIntRenderbufferAttachments() const {
   return false;
 }
 
-void Framebuffer::ClearUnclearedIntRenderbufferAttachments(
+GLenum Framebuffer::ClearUnclearedIntRenderbufferAttachments(
     RenderbufferManager* renderbuffer_manager) {
   // glClearBuffer*iv(GL_COLOR, i, ...) targets DRAW_BUFFERi, not
   // COLOR_ATTACHMENTi (ES3 4.2.3): when DRAW_BUFFERi == GL_NONE the clear is a
@@ -470,6 +474,7 @@ void Framebuffer::ClearUnclearedIntRenderbufferAttachments(
     buffers[i] = GL_NONE;
   }
   bool need_clear = false;
+  bool has_unaddressable_attachment = false;
   for (auto const& it : attachments_) {
     if (!it.second->IsRenderbufferAttachment() || it.second->cleared() ||
         !GLES2Util::IsIntegerFormat(it.second->internal_format())) {
@@ -477,16 +482,21 @@ void Framebuffer::ClearUnclearedIntRenderbufferAttachments(
     }
     if (it.first < GL_COLOR_ATTACHMENT0 ||
         it.first >= GL_COLOR_ATTACHMENT0 + manager_->max_draw_buffers_) {
+      // Not reachable via glClearBuffer*iv below, so it cannot be cleared
+      // here. Report failure so the caller does not mark it cleared.
+      has_unaddressable_attachment = true;
       continue;
     }
     buffers[it.first - GL_COLOR_ATTACHMENT0] = it.first;
     need_clear = true;
   }
   if (!need_clear) {
-    return;
+    return has_unaddressable_attachment ? GL_INVALID_OPERATION : GL_NO_ERROR;
   }
   glDrawBuffersARB(manager_->max_draw_buffers_, buffers.data());
 
+  GLenum result =
+      has_unaddressable_attachment ? GL_INVALID_OPERATION : GL_NO_ERROR;
   for (AttachmentMap::const_iterator it = attachments_.begin();
        it != attachments_.end(); ++it) {
     if (!it->second->IsRenderbufferAttachment() || it->second->cleared())
@@ -497,7 +507,8 @@ void Framebuffer::ClearUnclearedIntRenderbufferAttachments(
       DCHECK_LE(static_cast<GLenum>(GL_COLOR_ATTACHMENT0), attaching_point);
       if (attaching_point >=
           GL_COLOR_ATTACHMENT0 + manager_->max_draw_buffers_) {
-        // Can't be addressed via glClearBuffer*iv; leave it marked uncleared.
+        // Can't be addressed via glClearBuffer*iv; already accounted for by
+        // |has_unaddressable_attachment| above, so it stays uncleared.
         continue;
       }
       GLint drawbuffer = it->first - GL_COLOR_ATTACHMENT0;
@@ -509,11 +520,23 @@ void Framebuffer::ClearUnclearedIntRenderbufferAttachments(
         const static GLint kZero[] = { 0, 0, 0, 0 };
         glClearBufferiv(GL_COLOR, drawbuffer, kZero);
       }
+      // GL_OUT_OF_MEMORY can be raised by any command (ES 3.2 section 2.3.1),
+      // and a clear that failed leaves the renderbuffer holding whatever was
+      // previously in that GPU memory - e.g. drivers that defer physical
+      // allocation until first use can fail here under VRAM pressure. Only
+      // record the attachment as cleared when the clear actually succeeded,
+      // otherwise a later read would hand that memory to the client.
+      GLenum error = glGetError();
+      if (error != GL_NO_ERROR) {
+        result = error;
+        continue;
+      }
       it->second->SetCleared(renderbuffer_manager, nullptr, true);
     }
   }
 
   RestoreDrawBuffers();
+  return result;
 }
 
 bool Framebuffer::HasSRGBAttachments() const {
@@ -544,11 +567,12 @@ bool Framebuffer::PrepareDrawBuffersForClearingUninitializedAttachments(
         it.first < GL_COLOR_ATTACHMENT0 + manager_->max_draw_buffers_ &&
         !it.second->cleared()) {
       // There should be no partially cleared images, uncleared int/3d images.
-      // This is because ClearUnclearedIntOr3DImagesOrPartiallyClearedImages()
-      // is called before this.
-      DCHECK(!GLES2Util::IsIntegerFormat(it.second->internal_format()));
-      DCHECK(!it.second->IsPartiallyCleared());
-      DCHECK(!it.second->Is3D());
+      // This is because
+      // ClearUnclearedIntOr3DTexturesOrPartiallyClearedTextures() and
+      // ClearUnclearedIntRenderbufferAttachments() are called before this.
+      CHECK(!GLES2Util::IsIntegerFormat(it.second->internal_format()));
+      CHECK(!it.second->IsPartiallyCleared());
+      CHECK(!it.second->Is3D());
       buffers[it.first - GL_COLOR_ATTACHMENT0] = it.first;
     }
   }
@@ -1047,38 +1071,35 @@ void Framebuffer::DoUnbindGLAttachmentsForWorkaround(GLenum target) {
   }
 }
 
-void Framebuffer::ReattachAttachments(GLenum framebuffer_target) {
-  for (auto const& it : attachments_) {
-    GLenum attachment_point = it.first;
-    Attachment* attachment = it.second.get();
-
-    if (attachment->IsRenderbufferAttachment()) {
-      RenderbufferAttachment* rb_att =
-          static_cast<RenderbufferAttachment*>(attachment);
-      glFramebufferRenderbufferEXT(framebuffer_target, attachment_point,
-                                   GL_RENDERBUFFER,
-                                   rb_att->renderbuffer()->service_id());
-    } else if (attachment->IsTextureAttachment()) {
-      TextureAttachment* tex_att = static_cast<TextureAttachment*>(attachment);
-      if (tex_att->Is3D()) {
-        glFramebufferTextureLayer(framebuffer_target, attachment_point,
-                                  tex_att->texture()->service_id(),
-                                  tex_att->level(), tex_att->layer());
-      } else {
-        if (tex_att->samples() > 0) {
-          glFramebufferTexture2DMultisampleEXT(
-              framebuffer_target, attachment_point, tex_att->target(),
-              tex_att->texture()->service_id(), tex_att->level(),
-              tex_att->samples());
-        } else {
-          glFramebufferTexture2DEXT(
-              framebuffer_target, attachment_point, tex_att->target(),
-              tex_att->texture()->service_id(), tex_att->level());
-        }
-      }
+// static
+void Framebuffer::BindAttachmentToPoint(GLenum target,
+                                        GLenum attachment_point,
+                                        const Attachment* attachment) {
+  if (!attachment) {
+    glFramebufferRenderbufferEXT(target, attachment_point, GL_RENDERBUFFER, 0);
+    return;
+  }
+  if (attachment->IsRenderbufferAttachment()) {
+    const RenderbufferAttachment* rb =
+        static_cast<const RenderbufferAttachment*>(attachment);
+    glFramebufferRenderbufferEXT(target, attachment_point, GL_RENDERBUFFER,
+                                 rb->renderbuffer()->service_id());
+  } else if (attachment->IsTextureAttachment()) {
+    const TextureAttachment* tex =
+        static_cast<const TextureAttachment*>(attachment);
+    if (tex->Is3D()) {
+      glFramebufferTextureLayer(target, attachment_point,
+                                tex->texture()->service_id(), tex->level(),
+                                tex->layer());
+    } else if (tex->samples() > 0) {
+      glFramebufferTexture2DMultisampleEXT(
+          target, attachment_point, tex->target(), tex->texture()->service_id(),
+          tex->level(), tex->samples());
+    } else {
+      glFramebufferTexture2DEXT(target, attachment_point, tex->target(),
+                                tex->texture()->service_id(), tex->level());
     }
   }
-  RestoreDrawBuffers();
 }
 
 void Framebuffer::OnInsertUpdateLastColorAttachmentId(GLenum attachment) {
@@ -1203,18 +1224,6 @@ bool FramebufferManager::GetClientId(
   return false;
 }
 
-void FramebufferManager::RecreateFramebufferServiceId(
-    Framebuffer* framebuffer) {
-  DCHECK(framebuffer);
-  GLuint old_service_id = framebuffer->service_id();
-  GLuint new_service_id = 0;
-
-  glGenFramebuffersEXT(1, &new_service_id);
-  glDeleteFramebuffersEXT(1, &old_service_id);
-
-  framebuffer->set_service_id(new_service_id);
-}
-
 void FramebufferManager::MarkAttachmentsAsCleared(
     Framebuffer* framebuffer,
     RenderbufferManager* renderbuffer_manager,
@@ -1239,15 +1248,23 @@ bool FramebufferManager::IsComplete(const Framebuffer* framebuffer) {
 }
 
 std::vector<std::pair<scoped_refptr<Framebuffer>, GLenum>>
-FramebufferManager::GetBindingFramebuffersForTexture(TextureRef* texture_ref) {
+FramebufferManager::GetBindingFramebuffersForTexture(
+    TextureRef* texture_ref,
+    bool include_color_attachments) {
   std::vector<std::pair<scoped_refptr<Framebuffer>, GLenum>> result;
   if (!texture_ref) {
     return result;
   }
   for (const auto& pair : framebuffers_) {
     Framebuffer* framebuffer = pair.second.get();
-    for (GLenum attachment_point :
-         {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT}) {
+    std::vector<GLenum> attachment_points = {GL_DEPTH_ATTACHMENT,
+                                             GL_STENCIL_ATTACHMENT};
+    if (include_color_attachments) {
+      for (uint32_t i = 0; i < max_color_attachments_; ++i) {
+        attachment_points.push_back(GL_COLOR_ATTACHMENT0 + i);
+      }
+    }
+    for (GLenum attachment_point : attachment_points) {
       const Framebuffer::Attachment* attachment =
           framebuffer->GetAttachment(attachment_point);
       if (attachment && attachment->IsTexture(texture_ref)) {

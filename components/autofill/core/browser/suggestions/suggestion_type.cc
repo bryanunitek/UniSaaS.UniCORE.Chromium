@@ -41,6 +41,8 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kManageIban";
     case SuggestionType::kManageLoyaltyCard:
       return "kManageLoyaltyCard";
+    case SuggestionType::kManageOffers:
+      return "kManageOffers";
     case SuggestionType::kComposeResumeNudge:
       return "kComposeResumeNudge";
     case SuggestionType::kComposeDisable:
@@ -91,8 +93,6 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kBnplEntry";
     case SuggestionType::kMerchantPromoCodeEntry:
       return "kMerchantPromoCodeEntry";
-    case SuggestionType::kSeePromoCodeDetails:
-      return "kSeePromoCodeDetails";
     case SuggestionType::kWebauthnCredential:
       return "kWebauthnCredential";
     case SuggestionType::kWebauthnSignInWithAnotherDevice:
@@ -105,10 +105,8 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kTitle";
     case SuggestionType::kSeparator:
       return "kSeparator";
-    case SuggestionType::kUndoOrClear:
-      return "kUndoOrClear";
-    case SuggestionType::kMixedFormMessage:
-      return "kMixedFormMessage";
+    case SuggestionType::kUndo:
+      return "kUndo";
     case SuggestionType::kDevtoolsTestAddresses:
       return "kDevtoolsTestAddresses";
     case SuggestionType::kDevtoolsTestAddressByCountry:
@@ -135,10 +133,10 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kBnplFootnote";
     case SuggestionType::kAutocompleteAtMemoryButton:
       return "kAutocompleteAtMemoryButton";
-    case SuggestionType::kOpenGemini:
-      return "kOpenGemini";
     case SuggestionType::kAtMemoryNoConnection:
       return "kAtMemoryNoConnection";
+    case SuggestionType::kAtMemoryOpenGemini:
+      return "kAtMemoryOpenGemini";
     case SuggestionType::kAtMemorySearchAffordance:
       return "kAtMemorySearchAffordance";
     case SuggestionType::kPersonalContextNotice:
@@ -151,10 +149,26 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kMaximizeCreditCardBenefitsEntry";
     case SuggestionType::kAutofillAiOtherOrders:
       return "kAutofillAiOtherOrders";
+    case SuggestionType::kAutofillAiOtherShipments:
+      return "kAutofillAiOtherShipments";
     case SuggestionType::kAutofillAiPrivateInferenceNotice:
       return "kAutofillAiPrivateInferenceNotice";
     case SuggestionType::kAtMemoryAiDisclosure:
       return "kAtMemoryAiDisclosure";
+    case SuggestionType::kAtMemorySourceAttribution:
+      return "kAtMemorySourceAttribution";
+    case SuggestionType::kAtMemoryFetching:
+      return "kAtMemoryFetching";
+    case SuggestionType::kRemoveAutofillAi:
+      return "kRemoveAutofillAi";
+    case SuggestionType::kAutofillAiSourceAttribution:
+      return "kAutofillAiSourceAttribution";
+    case SuggestionType::kGmailOneTimePasswordEntry:
+      return "kGmailOneTimePasswordEntry";
+    case SuggestionType::kOpenGmailForOtps:
+      return "kOpenGmailForOtps";
+    case SuggestionType::kAtMemoryShortcutSettingsPromo:
+      return "kAtMemoryShortcutSettingsPromo";
   }
   NOTREACHED();
 }

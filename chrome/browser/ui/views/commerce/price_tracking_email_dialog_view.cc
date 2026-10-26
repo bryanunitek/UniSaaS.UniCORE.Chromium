@@ -28,6 +28,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/flex_layout_view.h"
@@ -134,11 +135,11 @@ PriceTrackingEmailDialogView::~PriceTrackingEmailDialogView() = default;
 
 void PriceTrackingEmailDialogView::OpenHelpArticle() {
   // Open web page with help article.
-  web_contents()->OpenURL(
-      content::OpenURLParams(GURL(kPriceTrackingHelpLink), content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false),
-      /*navigation_handle_callback=*/{});
+  web_contents()->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                              GURL(kPriceTrackingHelpLink),
+                              WindowOpenDisposition::kNewForegroundTab,
+                              ui::PAGE_TRANSITION_AUTO_TOPLEVEL),
+                          /*navigation_handle_callback=*/{});
   base::RecordAction(base::UserMetricsAction(
       "Commerce.PriceTracking.EmailConsentDialog.HelpLinkClicked"));
 }
@@ -194,7 +195,8 @@ PriceTrackingEmailDialogCoordinator::~PriceTrackingEmailDialogCoordinator() =
 
 void PriceTrackingEmailDialogCoordinator::OnWidgetDestroying(
     views::Widget* widget) {
-  DCHECK(bubble_widget_observation_.IsObservingSource(widget));
+  CHECK(bubble_widget_observation_.IsObservingSource(widget),
+        base::NotFatalUntil::M162);
   bubble_widget_observation_.Reset();
 
   std::move(on_dialog_closing_callback_).Run();
@@ -204,7 +206,7 @@ void PriceTrackingEmailDialogCoordinator::Show(
     content::WebContents* web_contents,
     Profile* profile,
     base::OnceClosure on_dialog_closing_callback) {
-  DCHECK(!tracker_.view());
+  CHECK(!tracker_.view(), base::NotFatalUntil::M162);
   on_dialog_closing_callback_ = std::move(on_dialog_closing_callback);
 
   base::RecordAction(base::UserMetricsAction(

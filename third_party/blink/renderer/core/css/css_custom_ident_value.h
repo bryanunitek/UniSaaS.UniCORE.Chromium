@@ -26,6 +26,10 @@ class CORE_EXPORT CSSCustomIdentValue : public CSSValue {
   explicit CSSCustomIdentValue(const CSSFunctionValue& ident_function);
 
   const TreeScope* GetTreeScope() const { return tree_scope_.Get(); }
+  const TreeScope* GetPopulatedTreeScope() const {
+    CHECK(IsScopedValue());
+    return GetTreeScope();
+  }
   const AtomicString& Value() const {
     DCHECK(!IsKnownPropertyID());
     return string_;
@@ -46,7 +50,7 @@ class CORE_EXPORT CSSCustomIdentValue : public CSSValue {
   }
 
   String CustomCSSText() const;
-  unsigned CustomHash() const;
+  uint32_t CustomHash() const;
 
   const CSSCustomIdentValue& PopulateWithTreeScope(const TreeScope*) const;
 

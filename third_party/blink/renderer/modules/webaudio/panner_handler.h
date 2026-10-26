@@ -31,6 +31,9 @@ class PannerHandler final : public AudioHandler {
     kDistanceConeGainDirty = 0x2,
   };
 
+  // Note: After calling Create, you must call InitializeSampleAccurateArrays()
+  // to complete initialization and handle potential allocation failures,
+  // regardless of IsInitialized().
   static scoped_refptr<PannerHandler> Create(AudioNode&,
                                              float sample_rate,
                                              AudioParamHandler& position_x,
@@ -84,6 +87,10 @@ class PannerHandler final : public AudioHandler {
 
   void MarkPannerAsDirty(unsigned);
 
+  // Allocates sample-accurate value arrays. Returns true on success or false
+  // if memory allocation failed.
+  bool InitializeSampleAccurateArrays();
+
  private:
   PannerHandler(AudioNode&,
                 float sample_rate,
@@ -114,14 +121,9 @@ class PannerHandler final : public AudioHandler {
                                   const gfx::Vector3dF& orientation,
                                   const gfx::Point3F& listener_position);
 
-  // The in-place version of `CalculateAzimuthElevation` above for k-rate.
-  void AzimuthElevation(double* out_azimuth, double* out_elevation);
-
   // Returns a combined gain attenuation for distance and sound cone in k-rate.
   float DistanceConeGain();
 
-  bool IsAzimuthElevationDirty() const { return is_azimuth_elevation_dirty_; }
-  bool IsDistanceConeGainDirty() const { return is_distance_cone_gain_dirty_; }
   void UpdateDirtyState();
 
   // True if any of this panner's AudioParams have automations.

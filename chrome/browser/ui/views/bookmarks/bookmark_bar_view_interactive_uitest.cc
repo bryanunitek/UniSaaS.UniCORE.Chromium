@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
+
 #include <string>
 
 #include "base/feature_list.h"
@@ -9,10 +11,8 @@
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
-#include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
@@ -26,6 +26,7 @@
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ozone_buildflags.h"
+#include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/submenu_view.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
@@ -33,8 +34,7 @@
 #include "ui/views/view_utils.h"
 
 // TODO(crbug.com/448993919): Re-enable this test on Mac and ChromeOS.
-// TODO(crbug.com/388531778): DND tests fail on Windows.
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 
 namespace {
 
@@ -47,11 +47,11 @@ class BookmarkBarDragAndDropInteractiveTest : public InteractiveBrowserTest {
     InteractiveBrowserTest::SetUpOnMainThread();
     if (base::FeatureList::IsEnabled(
             ntp_features::kNtpSimplificationBookmarkBar)) {
-      browser()->profile()->GetPrefs()->SetInteger(
+      browser()->GetProfile()->GetPrefs()->SetInteger(
           bookmarks::prefs::kBookmarkBarVisibilityState,
           static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
     } else {
-      browser()->profile()->GetPrefs()->SetBoolean(
+      browser()->GetProfile()->GetPrefs()->SetBoolean(
           bookmarks::prefs::kShowBookmarkBar, true);
     }
   }
@@ -71,11 +71,20 @@ class BookmarkBarDragAndDropInteractiveTest : public InteractiveBrowserTest {
   }
 
   auto TopCenter() {
-    return base::BindOnce([](ui::TrackedElement* el) {
-      auto* const view =
-          views::test::InteractiveViewsTestApi::AsView<views::View>(el);
+    return base::BindLambdaForTesting([this](ui::TrackedElement* el) {
+      auto* const view = AsView<views::View>(el);
       return view->GetBoundsInScreen().top_center() + gfx::Vector2d(0, 5);
     });
+  }
+
+  // On Linux, dropping a bookmark closes the bookmark folder menu, so re-open
+  // it. On other platforms the menu stays open.
+  auto EnsureFolderOpenAfterDrop(ElementSpecifier folder_button) {
+#if BUILDFLAG(IS_LINUX)
+    return Steps(PressButton(folder_button));
+#else
+    return Steps();
+#endif
   }
 
   static views::MenuItemView* FindMenuItemInSubmenu(views::MenuItemView* menu,
@@ -97,7 +106,8 @@ class BookmarkBarDragAndDropInteractiveTest : public InteractiveBrowserTest {
   auto NameBarMenuChildByTitle(std::string name, std::u16string title) {
     return NameView(
         name, base::BindLambdaForTesting([this, title]() -> views::View* {
-          auto* const bar = browser()->GetBrowserView().bookmark_bar();
+          auto* const bar =
+              BrowserView::GetBrowserViewForBrowser(browser())->bookmark_bar();
           if (!bar || !bar->GetMenu()) {
             return nullptr;
           }
@@ -154,7 +164,8 @@ IN_PROC_BROWSER_TEST_F(BookmarkBarDragAndDropInteractiveTest,
       DragMouseTo(kANodeMenuId, CenterPoint(), /*release=*/false)
           .SetMustRemainVisible(false),
       MoveMouseTo(kANodeMenuId, TopCenter()), ReleaseMouse(),
-      PressButton(kFolderButtonId), NameBarMenuChildByTitle(kANodeMenuId, u"a"),
+      EnsureFolderOpenAfterDrop(kFolderButtonId),
+      NameBarMenuChildByTitle(kANodeMenuId, u"a"),
       NameBarMenuChildByTitle(kBNodeMenuId, u"b"),
       CheckMenuItemBefore(kANodeMenuId, u"b"));
 }
@@ -186,7 +197,8 @@ IN_PROC_BROWSER_TEST_F(BookmarkBarDragAndDropInteractiveTest,
       CheckViewProperty(kBNodeMenuId, &views::MenuItemView::title, u"b"),
       MoveMouseTo(kANodeMenuId),
       DragMouseTo(kBNodeMenuId, CenterPoint()).SetMustRemainVisible(false),
-      PressButton(kFolderButtonId), NameBarMenuChildByTitle(kBNodeMenuId, u"b"),
+      EnsureFolderOpenAfterDrop(kFolderButtonId),
+      NameBarMenuChildByTitle(kBNodeMenuId, u"b"),
       CheckViewProperty(kBNodeMenuId, &views::MenuItemView::title, u"b"),
       SelectMenuItem(kBNodeMenuId), NameBarMenuChildByTitle("a_in_b", u"a"),
       CheckViewProperty("a_in_b", &views::MenuItemView::title, u"a"));
@@ -222,7 +234,8 @@ IN_PROC_BROWSER_TEST_F(BookmarkBarDragAndDropInteractiveTest,
       DragMouseTo(kANodeMenuId, CenterPoint(), /*release=*/false)
           .SetMustRemainVisible(false),
       MoveMouseTo(kANodeMenuId, TopCenter()), ReleaseMouse(),
-      PressButton(kFolderButtonId), NameBarMenuChildByTitle(kBNodeMenuId, u"b"),
+      EnsureFolderOpenAfterDrop(kFolderButtonId),
+      NameBarMenuChildByTitle(kBNodeMenuId, u"b"),
       CheckViewProperty(kBNodeMenuId, &views::MenuItemView::title, u"b"),
       NameBarMenuChildByTitle(kANodeMenuId, u"a"),
       CheckViewProperty(kANodeMenuId, &views::MenuItemView::title, u"a"),
@@ -231,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkBarDragAndDropInteractiveTest,
 
 }  // namespace
 
-#endif  // BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 
 namespace {
 
@@ -247,7 +260,7 @@ class BookmarkBarSimplifiedIPHInteractiveTest
     InteractiveFeaturePromoTest::SetUpOnMainThread();
     // Simulate the state where the bookmark bar has been auto-hidden
     // due to inactivity.
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         bookmarks::prefs::kBookmarkBarVisibilityState,
         static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysHide));
   }
@@ -262,7 +275,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkBarSimplifiedIPHInteractiveTest,
       PressNonDefaultPromoButton(),
       CheckResult(
           [this]() {
-            return browser()->profile()->GetPrefs()->GetInteger(
+            return browser()->GetProfile()->GetPrefs()->GetInteger(
                 bookmarks::prefs::kBookmarkBarVisibilityState);
           },
           static_cast<int>(

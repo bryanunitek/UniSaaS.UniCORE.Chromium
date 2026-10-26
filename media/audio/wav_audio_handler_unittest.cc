@@ -9,11 +9,11 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 
 #include "base/containers/span.h"
-#include "base/types/zip.h"
 #include "media/audio/test_data.h"
 #include "media/base/audio_bus.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -54,7 +54,7 @@ TEST(WavAudioHandlerTest, SampleDataTest) {
   ASSERT_EQ(20u, handler->GetDuration().InMicroseconds());
 
   ASSERT_EQ(4U, handler->data().size());
-  const char kData[] = "\x01\x00\x01\x00";
+  constexpr char kData[] = "\x01\x00\x01\x00";
   ASSERT_EQ(base::byte_span_from_cstring(kData), handler->data());
 
   std::unique_ptr<AudioBus> bus =
@@ -80,7 +80,7 @@ TEST(WavAudioHandlerTest, SampleFloatDataTest) {
   ASSERT_EQ(20u, handler->GetDuration().InMicroseconds());
 
   ASSERT_EQ(8U, handler->data().size());
-  const char kData[] = "\x00\x01\x00\x00\x01\x00\x00\x00";
+  constexpr char kData[] = "\x00\x01\x00\x00\x01\x00\x00\x00";
   ASSERT_EQ(base::byte_span_from_cstring(kData), handler->data());
 
   std::unique_ptr<AudioBus> bus =
@@ -106,7 +106,7 @@ TEST(WavAudioHandlerTest, SampleExtensibleDataTest) {
   ASSERT_EQ(20u, handler->GetDuration().InMicroseconds());
 
   ASSERT_EQ(8U, handler->data().size());
-  const char kData[] = "\x01\x00\x00\x00\x01\x00\x00\x00";
+  constexpr char kData[] = "\x01\x00\x00\x00\x01\x00\x00\x00";
   ASSERT_EQ(base::byte_span_from_cstring(kData), handler->data());
 
   std::unique_ptr<AudioBus> bus =
@@ -907,8 +907,8 @@ TEST(WavAudioHandlerTest, CopyPartialFramesTo) {
   ASSERT_EQ(frames_written, 2u);
 
   // Compare the contents of the two buses.
-  for (auto [channel_actual, channel_expected] :
-       base::zip(bus_actual->AllChannels(), bus_expected->AllChannels())) {
+  for (auto [channel_actual, channel_expected] : std::views::zip(
+           bus_actual->AllChannels(), bus_expected->AllChannels())) {
     EXPECT_EQ(channel_actual, channel_expected);
   }
 }

@@ -4,6 +4,7 @@
 
 #include "ui/views/background.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -20,7 +21,7 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_variant.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -42,7 +43,7 @@ DEFINE_SAFE_CAST_TARGET(Background)
 // background in a solid color.
 class SolidBackground : public Background {
  public:
-  explicit SolidBackground(ui::ColorVariant color) { SetColor(color); }
+  explicit SolidBackground(ui::ColorVariant color) { set_color(color); }
 
   SolidBackground(const SolidBackground&) = delete;
   SolidBackground& operator=(const SolidBackground&) = delete;
@@ -60,28 +61,26 @@ class SolidBackground : public Background {
   }
 };
 
-// Shared class for RoundedRectBackground and ThemedRoundedRectBackground.
+// Fills the view with a rounded rect.
 class RoundedRectBackground : public Background {
  public:
   RoundedRectBackground(ui::ColorVariant color,
-                        const gfx::RoundedCornersF& radii,
+                        const std::optional<gfx::RoundedCornersF>& radii,
                         const gfx::Insets& insets)
       : radii_(radii), insets_(insets) {
-    SetColor(color);
+    set_color(color);
   }
 
   RoundedRectBackground(const RoundedRectBackground&) = delete;
   RoundedRectBackground& operator=(const RoundedRectBackground&) = delete;
 
   void Paint(gfx::Canvas* canvas, View* view) const override {
-    gfx::Rect rect(view->GetLocalBounds());
-    rect.Inset(insets_);
-    const SkVector radii[4] = {{radii_.upper_left(),  radii_.upper_left()},
-                               {radii_.upper_right(), radii_.upper_right()},
-                               {radii_.lower_right(), radii_.lower_right()},
-                               {radii_.lower_left(),  radii_.lower_left()}};
-    const SkPath path =
-        SkPath::RRect(SkRRect::MakeRectRadii(gfx::RectToSkRect(rect), radii));
+    gfx::Rect bounds(view->GetLocalBounds());
+    bounds.Inset(insets_);
+
+    const gfx::RoundedCornersF radii = radii_.value_or(
+        gfx::RoundedCornersF(std::min(bounds.width(), bounds.height()) / 2.0f));
+    const SkPath path = SkPath::RRect(gfx::RoundedRectToSkRRect(bounds, radii));
 
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
@@ -101,7 +100,9 @@ class RoundedRectBackground : public Background {
   }
 
  private:
-  const gfx::RoundedCornersF radii_;
+  // std::nullopt requests a pill, whose radius is computed at paint time as
+  // half the filled region's minor axis.
+  const std::optional<gfx::RoundedCornersF> radii_;
   const gfx::Insets insets_;
 };
 
@@ -110,7 +111,7 @@ class LayerBasedSolidBackground : public Background {
   LayerBasedSolidBackground(ui::ColorVariant color,
                             const std::optional<gfx::RoundedCornersF>& radii)
       : radii_(radii) {
-    SetColor(color);
+    set_color(color);
   }
 
   LayerBasedSolidBackground(const LayerBasedSolidBackground&) = delete;
@@ -121,12 +122,12 @@ class LayerBasedSolidBackground : public Background {
 
   void OnViewThemeChanged(View* view) override {
     if (auto* layer = view->layer()) {
-      CHECK_EQ(layer->type(), ui::LAYER_SOLID_COLOR);
+      CHECK(layer->AsSolidColor());
     } else {
       view->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
     }
 
-    auto* layer = view->layer();
+    auto* layer = view->layer()->AsSolidColor();
     const auto radii = GetRoundedCornerRadii();
     if (radii && radii != layer->rounded_corner_radii()) {
       layer->SetRoundedCornerRadius(*radii);
@@ -137,8 +138,8 @@ class LayerBasedSolidBackground : public Background {
       layer->SetName(*internal_name_);
     }
 
-    const SkColor resolved_color =
-        color().ResolveToSkColor(view->GetColorProvider());
+    const SkColor4f resolved_color = SkColor4f::FromColor(
+        color().ResolveToSkColor(view->GetColorProvider()));
     if (resolved_color != layer->background_color()) {
       layer->SetColor(resolved_color);
     }
@@ -196,11 +197,6 @@ class BackgroundPainter : public Background {
     Painter::PaintPainterAt(canvas, painter_.get(), view->GetLocalBounds());
   }
 
-  void SetColor(ui::ColorVariant color) override {
-    NOTREACHED() << "It does not make sense to `SetColor()` for a painter "
-                    "based background.";
-  }
-
  private:
   std::unique_ptr<Painter> painter_;
 };
@@ -209,7 +205,7 @@ Background::Background() = default;
 
 Background::~Background() = default;
 
-void Background::SetColor(ui::ColorVariant color) {
+void Background::set_color(ui::ColorVariant color) {
   color_ = color;
 }
 
@@ -278,6 +274,17 @@ std::unique_ptr<Background> CreateRoundedRectBackground(
     return CreateSolidBackground(color);
   }
   return std::make_unique<RoundedRectBackground>(color, radii, insets);
+}
+
+std::unique_ptr<Background> CreatePillBackground(ui::ColorVariant color,
+                                                 int for_border_thickness) {
+  return CreatePillBackground(color, gfx::Insets(for_border_thickness / 2.0f));
+}
+
+std::unique_ptr<Background> CreatePillBackground(ui::ColorVariant color,
+                                                 const gfx::Insets& insets) {
+  return std::make_unique<RoundedRectBackground>(color, /*radii=*/std::nullopt,
+                                                 insets);
 }
 
 std::unique_ptr<Background> CreateThemedVectorIconBackground(

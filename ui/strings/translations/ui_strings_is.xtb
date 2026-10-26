@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Snertimið fært efst til hægri. Ýttu hér.</translation>
 <translation id="1266864766717917324">Ekki tókst að deila <ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Prófaðu að deila textanum í smærri hluta.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Frá vinstri til hægri</translation>
 <translation id="1383876407941801731">Leita</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">Velja &amp;allt</translation>
 <translation id="19085484004813472">Þetta er nýr eiginleiki</translation>
 <translation id="2006524834898217237">Gakktu úr skugga um að tækið sé tengt við internetið.</translation>
-<translation id="208586643495776849">Reyndu aftur</translation>
 <translation id="2111134541987263231">Kveiktu á <ph name="BEGIN_BOLD" />Leyfa í huliðsstillingu<ph name="END_BOLD" /></translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1d}one{#d}other{#d}}</translation>
 <translation id="2148716181193084225">Í dag</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Innbyggður skjár</translation>
 <translation id="335581015389089642">Tal</translation>
 <translation id="3372635229069101468">Smelltu á <ph name="BEGIN_BOLD" />Upplýsingar<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Textinn er of stór</translation>
 <translation id="3406306243914553062">HTML-efni</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 dagur eftir}one{# dagur eftir}other{# dagar eftir}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" />-skrá</translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Ýttu hér</translation>
 <translation id="5076340679995252485">Líma</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">Sending mistókst</translation>
 <translation id="5283101102242354279">Kveiktu á viðbót í huliðsstillingu:</translation>
 <translation id="528468243742722775">Ljúka</translation>
 <translation id="5329858601952122676">Eyða</translation>

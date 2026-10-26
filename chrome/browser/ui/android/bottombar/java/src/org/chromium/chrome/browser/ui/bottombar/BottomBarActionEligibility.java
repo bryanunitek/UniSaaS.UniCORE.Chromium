@@ -4,89 +4,116 @@
 
 package org.chromium.chrome.browser.ui.bottombar;
 
-import org.chromium.base.LocaleUtils;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.ui.actions.ActionId;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarMetrics.GlicIneligibilityReason;
 
-import java.util.Locale;
-import java.util.function.Supplier;
-
-/** Helper class to resolve the eligibility of bottom bar actions based on profile and country. */
+/** Helper class to resolve the eligibility of bottom bar actions based on profile. */
 @NullMarked
 public class BottomBarActionEligibility {
 
     /** Represents a sentinel value indicating that no action is eligible. */
-    static final int ACTION_NONE = -1;
+    public static final @ActionId int ACTION_NONE = ActionId.NONE;
 
-    private static @Nullable Supplier<String> sCountrySupplier;
+    private static @Nullable @ActionId Integer sCachedCandidateExtraAction;
 
-    /** Sets the supplier for obtaining the latest variations country code. */
-    public static void setCountrySupplier(@Nullable Supplier<String> supplier) {
-        sCountrySupplier = supplier;
+    /** Returns the currently cached candidate extra action, or null if uninitialized. */
+    public static @Nullable @ActionId Integer getCachedCandidateExtraAction() {
+        return sCachedCandidateExtraAction;
+    }
+
+    /** Sets the cached candidate extra action for testing. */
+    public static void setCachedCandidateExtraActionForTesting(
+            @Nullable @ActionId Integer candidate) {
+        sCachedCandidateExtraAction = candidate;
+        ResettersForTesting.register(() -> sCachedCandidateExtraAction = null);
     }
 
     /**
-     * Resolves which action (if any) should be displayed in the bottom bar's shared extra
-     * container.
+     * Returns whether the GLIC bottom bar setting toggle should be shown for the given profile.
+     *
+     * <p>The toggle is only shown if candidate resolution has already resolved GLIC as the
+     * candidate extra action for the bottom bar. If candidate resolution has not occurred yet or
+     * resolved to another action / none, returns false.
      *
      * @param profile The current user profile.
-     * @return The eligible {@link ActionId} (either {@link ActionId#GLIC} or {@link
-     *     ActionId#AI_MODE}), or {@link #ACTION_NONE} if no action is eligible.
+     * @return True if the setting toggle should be shown.
      */
-    /* package-private */ static int getEligibleExtraAction(@Nullable Profile profile) {
+    public static boolean shouldShowBottomBarGlicSetting(@Nullable Profile profile) {
+        if (profile == null) {
+            return false;
+        }
+        if (sCachedCandidateExtraAction == null || sCachedCandidateExtraAction != ActionId.GLIC) {
+            return false;
+        }
+        Profile originalProfile = profile.getOriginalProfile();
+        return BottomBarConfigUtils.isGlicSettingToggleParamEnabled()
+                && GlicEnabling.shouldShowSettingsPage(originalProfile);
+    }
+
+    /**
+     * Resolves and caches the static candidate action (if any) that can be displayed in the bottom
+     * bar's shared extra container for the given profile.
+     *
+     * <p>This is a pure resolver and does not record eligibility metrics; callers that need to emit
+     * startup ineligibility metrics should call {@link
+     * #recordGlicIneligibilityReasonIfNeeded(Profile)}.
+     *
+     * @param profile The current user profile.
+     * @return The candidate {@link ActionId} ({@link ActionId#GLIC}), or {@link #ACTION_NONE} if no
+     *     action is eligible.
+     */
+    @ActionId
+    public static int getCandidateExtraAction(@Nullable Profile profile) {
         if (profile == null) {
             return ACTION_NONE;
         }
 
-        String country = getCountryCode();
+        Profile originalProfile = profile.getOriginalProfile();
+        boolean isGlicProfileEnabled = GlicEnabling.isEnabledForProfile(originalProfile);
 
-        boolean isGlicEligible = GlicEnabling.isEnabledForProfile(profile);
-
-        // 1. GLIC (Gemini): If GlicEnabling is true AND (country is GLIC Allowed OR bypass is true)
-        // -> Show GLIC.
-        boolean bypassGlic = BottomBarConfigUtils.bypassGlicGeofencing();
-        if (isGlicEligible
-                && (bypassGlic
-                        || BottomBarGeofencingConfig.GLIC_ALLOWED_COUNTRIES.contains(country))) {
-            return ActionId.GLIC;
-        }
-
-        // 2. Soon to be Launched: If country is GLIC Soon to be Launched (and not bypassed) -> Show
-        // nothing.
-        if (!bypassGlic && BottomBarGeofencingConfig.GLIC_SOON_COUNTRIES.contains(country)) {
+        // Check if GLIC is enabled for this profile.
+        if (isGlicProfileEnabled) {
+            sCachedCandidateExtraAction = ActionId.GLIC;
+            if (GlicEnabling.isPolicyEnforced(originalProfile)) {
+                return ActionId.GLIC;
+            }
+            if (BottomBarConfigUtils.isGlicButtonEnabled()) {
+                return ActionId.GLIC;
+            }
             return ACTION_NONE;
         }
 
-        // 3. AI Mode Fallback: If DSE is Google AND (country is AIM Allowed OR bypass is true) ->
-        // Show AI Mode.
-        boolean bypassAim = BottomBarConfigUtils.bypassAimGeofencing();
-        boolean isDseGoogle = isDefaultSearchEngineGoogle(profile);
-        if (isDseGoogle
-                && (bypassAim
-                        || BottomBarGeofencingConfig.AIM_ALLOWED_COUNTRIES.contains(country))) {
-            return ActionId.AI_MODE;
-        }
-
-        // 4. Otherwise: Show nothing.
+        sCachedCandidateExtraAction = ACTION_NONE;
         return ACTION_NONE;
     }
 
-    private static String getCountryCode() {
-        String country = null;
-        if (sCountrySupplier != null) {
-            country = sCountrySupplier.get();
+    /**
+     * Records the reason why GLIC is ineligible to be shown in the bottom bar for the given
+     * profile, if GLIC is not currently eligible.
+     *
+     * @param profile The current user profile.
+     */
+    public static void recordGlicIneligibilityReasonIfNeeded(@Nullable Profile profile) {
+        if (profile == null) {
+            return;
         }
-        if (country == null || country.isEmpty()) {
-            country = LocaleUtils.getDefaultCountryCode();
-        }
-        return country != null ? country.toLowerCase(Locale.US) : "";
-    }
 
-    private static boolean isDefaultSearchEngineGoogle(Profile profile) {
-        return TemplateUrlServiceFactory.getForProfile(profile).isDefaultSearchEngineGoogle();
+        Profile originalProfile = profile.getOriginalProfile();
+        if (!GlicEnabling.isEnabledForProfile(originalProfile)) {
+            BottomBarMetrics.recordGlicIneligibilityReason(
+                    GlicIneligibilityReason.PROFILE_INELIGIBLE);
+            return;
+        }
+
+        if (!GlicEnabling.isPolicyEnforced(originalProfile)
+                && !BottomBarConfigUtils.isGlicButtonEnabled()) {
+            BottomBarMetrics.recordGlicIneligibilityReason(
+                    GlicIneligibilityReason.USER_DISABLED_IN_SETTINGS);
+        }
     }
 }

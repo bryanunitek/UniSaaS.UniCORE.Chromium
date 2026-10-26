@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #import "ios/chrome/browser/assistant/ui/assistant_container_constants.h"
+#import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/composebox/shared/ui/composebox_ui_constants.h"
 #import "ios/chrome/browser/scene/ui/scene_ui_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -64,13 +65,11 @@ void OpenAssistantFromOmnibox() {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
 
-  // When `kAssistantContainerParamDebug` is set, the assistant container should
-  // always be shown. If this test suite fails in the future, avoid adding new
-  // flags or workarounds to make it pass; instead, ensure the debug behavior is
-  // correctly preserved.
+  config.features_enabled.push_back(kAimCobrowse);
   config.features_enabled_and_params.push_back(
       {kAssistantContainer,
        {{kAssistantContainerParam, kAssistantContainerParamDebug}}});
+  config.features_disabled.push_back(kComposeboxServerSideState);
   return config;
 }
 
@@ -124,7 +123,8 @@ void OpenAssistantFromOmnibox() {
   [[EarlGrey
       selectElementWithMatcher:grey_accessibilityID(
                                    kAssistantContainerAccessibilityIdentifier)]
-      performAction:grey_swipeFastInDirection(kGREYDirectionDown)];
+      performAction:grey_swipeFastInDirectionWithStartPoint(kGREYDirectionDown,
+                                                            0.5, 0.1)];
 
   // Verify the composebox is no longer the first responder (meaning the
   // keyboard is dismissed).
@@ -150,9 +150,6 @@ void OpenAssistantFromOmnibox() {
   config.features_enabled.push_back(kAssistantSidePanel);
   config.features_enabled.push_back(kChromeNextIa);
   config.features_enabled.push_back(kFullscreenRefactoring);
-  if (![self isRunningTest:@selector(testOmniboxVisibleInSidePanel)]) {
-    config.features_enabled.push_back(kComposeboxIpad);
-  }
 
   return config;
 }

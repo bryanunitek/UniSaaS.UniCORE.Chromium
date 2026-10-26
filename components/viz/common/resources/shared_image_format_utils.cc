@@ -43,8 +43,6 @@ SharedImageFormatUMA GetSharedImageFormatUMA(SharedImageFormat format) {
       return SharedImageFormatUMA::kRGBA_4444;
     } else if (format == SinglePlaneFormat::kBGRA_8888) {
       return SharedImageFormatUMA::kBGRA_8888;
-    } else if (format == SinglePlaneFormat::kALPHA_8) {
-      return SharedImageFormatUMA::kALPHA_8;
     } else if (format == SinglePlaneFormat::kBGR_565) {
       return SharedImageFormatUMA::kBGR_565;
     } else if (format == SinglePlaneFormat::kETC1) {
@@ -53,8 +51,6 @@ SharedImageFormatUMA GetSharedImageFormatUMA(SharedImageFormat format) {
       return SharedImageFormatUMA::kR_8;
     } else if (format == SinglePlaneFormat::kRG_88) {
       return SharedImageFormatUMA::kRG_88;
-    } else if (format == SinglePlaneFormat::kLUMINANCE_F16) {
-      return SharedImageFormatUMA::kLUMINANCE_F16;
     } else if (format == SinglePlaneFormat::kRGBA_F16) {
       return SharedImageFormatUMA::kRGBA_F16;
     } else if (format == SinglePlaneFormat::kR_16) {
@@ -144,8 +140,6 @@ SkColorType ToClosestSkColorType(SharedImageFormat format) {
     return kRGBA_8888_SkColorType;
   } else if (format == SinglePlaneFormat::kBGRA_8888) {
     return kBGRA_8888_SkColorType;
-  } else if (format == SinglePlaneFormat::kALPHA_8) {
-    return kAlpha_8_SkColorType;
   } else if (format == SinglePlaneFormat::kBGR_565) {
     return kRGB_565_SkColorType;
   } else if (format == SinglePlaneFormat::kRGBX_8888 ||
@@ -165,8 +159,7 @@ SkColorType ToClosestSkColorType(SharedImageFormat format) {
     return kR16_unorm_SkColorType;
   } else if (format == SinglePlaneFormat::kRG_1616) {
     return kR16G16_unorm_SkColorType;
-  } else if (format == SinglePlaneFormat::kLUMINANCE_F16 ||
-             format == SinglePlaneFormat::kR_F16) {
+  } else if (format == SinglePlaneFormat::kR_F16) {
     return kA16_float_SkColorType;
   } else if (format == SinglePlaneFormat::kRG_88) {
     return kR8G8_unorm_SkColorType;
@@ -212,8 +205,6 @@ SharedImageFormat SkColorTypeToSinglePlaneSharedImageFormat(
       return SinglePlaneFormat::kRGBA_8888;
     case kRGBA_F16_SkColorType:
       return SinglePlaneFormat::kRGBA_F16;
-    case kAlpha_8_SkColorType:
-      return SinglePlaneFormat::kALPHA_8;
     case kRGB_565_SkColorType:
       return SinglePlaneFormat::kBGR_565;
     case kRGB_888x_SkColorType:
@@ -252,13 +243,9 @@ SharedImageFormat SkColorTypeToSinglePlaneSharedImageFormat(
 
 bool CanCreateNativeBufferForFormat(SharedImageFormat format) {
   return (format == SinglePlaneFormat::kBGRA_8888 ||
-          format == SinglePlaneFormat::kR_8 ||
-          format == SinglePlaneFormat::kRG_88 ||
 #if BUILDFLAG(IS_APPLE)
           format == SinglePlaneFormat::kBGRX_8888 ||
           format == SinglePlaneFormat::kRGBX_8888 ||
-          format == SinglePlaneFormat::kR_16 ||
-          format == SinglePlaneFormat::kRG_1616 ||
 #endif
           format == SinglePlaneFormat::kRGBA_4444 ||
           format == SinglePlaneFormat::kRGBA_8888 ||

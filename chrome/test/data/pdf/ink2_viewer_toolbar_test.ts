@@ -102,6 +102,67 @@ chrome.test.runTests([
     chrome.test.assertEq(AnnotationMode.OFF, viewerToolbar.annotationMode);
     chrome.test.succeed();
   },
+  // Test that clicking the signature button toggles signature mode.
+  async function testSignatureButton() {
+    // No button if feature param is not enabled.
+    loadTimeData.overrideValues({'pdfSignaturesEnabled': false});
+    viewerToolbar.strings = Object.assign({}, viewerToolbar.strings);
+    await microtasksFinished();
+    chrome.test.assertFalse(
+        !!viewerToolbar.shadowRoot.querySelector('#signature'));
+
+    // Set the feature params in loadTimeData and trigger Lit binding.
+    loadTimeData.overrideValues({
+      'pdfSignaturesEnabled': true,
+      'pdfTextAnnotationsEnabled': true,
+    });
+    viewerToolbar.strings = Object.assign({}, viewerToolbar.strings);
+    await microtasksFinished();
+
+    // Button should now exist. Clicking the signature button enables
+    // signature mode.
+    chrome.test.assertEq(AnnotationMode.OFF, viewerToolbar.annotationMode);
+    const signatureButton = getRequiredElement(viewerToolbar, '#signature');
+    signatureButton.click();
+    await microtasksFinished();
+    chrome.test.assertEq(
+        AnnotationMode.SIGNATURE, viewerToolbar.annotationMode);
+
+    // Clicking the draw annotation button while signature is enabled switches
+    // to draw mode.
+    const annotateButton = getRequiredElement(viewerToolbar, '#annotate');
+    annotateButton.click();
+    await microtasksFinished();
+    chrome.test.assertEq(AnnotationMode.DRAW, viewerToolbar.annotationMode);
+
+    // Clicking signature button while drawing is enabled switches to
+    // signature mode.
+    signatureButton.click();
+    await microtasksFinished();
+    chrome.test.assertEq(
+        AnnotationMode.SIGNATURE, viewerToolbar.annotationMode);
+
+    // Clicking the text annotation button while signature is enabled switches
+    // to text mode.
+    const textButton = getRequiredElement(viewerToolbar, '#text-annotate');
+    textButton.click();
+    await microtasksFinished();
+    chrome.test.assertEq(AnnotationMode.TEXT, viewerToolbar.annotationMode);
+
+    // Clicking signature button while in text mode switches back to
+    // signature mode.
+    signatureButton.click();
+    await microtasksFinished();
+    chrome.test.assertEq(
+        AnnotationMode.SIGNATURE, viewerToolbar.annotationMode);
+
+    // Clicking the signature button while in signature mode exits annotation
+    // mode.
+    signatureButton.click();
+    await microtasksFinished();
+    chrome.test.assertEq(AnnotationMode.OFF, viewerToolbar.annotationMode);
+    chrome.test.succeed();
+  },
   // Test that toggling annotation mode does not affect displaying annotations.
   async function testTogglingAnnotationModeDoesNotAffectDisplayAnnotations() {
     // The menu needs to be open to check for visible menu elements.
@@ -211,7 +272,32 @@ chrome.test.runTests([
     // Exiting presentation mode should re-enable annotation mode.
     document.exitFullscreen();
     await eventToPromise('fullscreenchange', viewer.$.scroller);
+    await microtasksFinished();
     chrome.test.assertEq(AnnotationMode.DRAW, viewerToolbar.annotationMode);
+
+    chrome.test.succeed();
+  },
+  async function testPresentationModeExitsTextAnnotationMode() {
+    // Check toggling presentation mode when text annotation mode is enabled.
+    viewerToolbar.setAnnotationMode(AnnotationMode.TEXT);
+    await microtasksFinished();
+    chrome.test.assertEq(AnnotationMode.TEXT, viewerToolbar.annotationMode);
+
+    // Entering presentation mode should disable text annotation mode.
+    await enterFullscreenWithUserGesture();
+    chrome.test.assertEq(AnnotationMode.OFF, viewerToolbar.annotationMode);
+
+    // Exiting presentation mode should re-enable text annotation mode.
+    document.exitFullscreen();
+    await eventToPromise('fullscreenchange', viewer.$.scroller);
+    await microtasksFinished();
+    chrome.test.assertEq(AnnotationMode.TEXT, viewerToolbar.annotationMode);
+
+    // Re-enable draw mode for subsequent tests.
+    viewerToolbar.setAnnotationMode(AnnotationMode.DRAW);
+    await microtasksFinished();
+    chrome.test.assertEq(AnnotationMode.DRAW, viewerToolbar.annotationMode);
+
     chrome.test.succeed();
   },
   // Test the behavior of the undo and redo buttons.
@@ -607,6 +693,26 @@ chrome.test.runTests([
     mockMetricsPrivate.assertCount(UserAction.UNDO_INK2, 1);
     mockMetricsPrivate.assertCount(UserAction.REDO_INK2, 1);
 
+    if (!isMac) {
+      sendUndoShortcutKey(viewerToolbar);
+      mockPlugin.clearMessages();
+
+      keyDownOn(viewerToolbar, 0, ['ctrl', 'shift'], 'z');
+      chrome.test.assertTrue(
+          mockPlugin.findMessage('annotationRedo') !== undefined);
+      mockMetricsPrivate.assertCount(UserAction.UNDO_INK2, 2);
+      mockMetricsPrivate.assertCount(UserAction.REDO_INK2, 2);
+
+      sendUndoShortcutKey(viewerToolbar);
+      mockPlugin.clearMessages();
+
+      keyDownOn(viewerToolbar, 0, ['ctrl', 'shift'], 'Z');
+      chrome.test.assertTrue(
+          mockPlugin.findMessage('annotationRedo') !== undefined);
+      mockMetricsPrivate.assertCount(UserAction.UNDO_INK2, 3);
+      mockMetricsPrivate.assertCount(UserAction.REDO_INK2, 3);
+    }
+
     Ink2Manager.getInstance().resetStackForTesting();
     chrome.test.succeed();
   },
@@ -846,6 +952,57 @@ chrome.test.runTests([
         mockPlugin.findMessage('annotationRedo') !== undefined);
     mockMetricsPrivate.assertCount(UserAction.UNDO_INK2, 2);
     mockMetricsPrivate.assertCount(UserAction.REDO_INK2, 1);
+
+    Ink2Manager.getInstance().resetStackForTesting();
+    chrome.test.succeed();
+  },
+
+  // Test that announcements are read by screen readers when undoing and redoing
+  // annotations via buttons or keyboard shortcuts.
+  async function testUndoRedoAnnouncements() {
+    mockPlugin.clearMessages();
+    mockMetricsPrivate.reset();
+
+    const undoButton =
+        getRequiredElement<HTMLButtonElement>(viewerToolbar, '#undo');
+    const redoButton =
+        getRequiredElement<HTMLButtonElement>(viewerToolbar, '#redo');
+
+    // Draw a stroke.
+    startFinishModifiedInkStroke(controller);
+    await microtasksFinished();
+
+    // Undo via button click.
+    let whenAnnounced = eventToPromise<CustomEvent<{messages: string[]}>>(
+        'cr-a11y-announcer-messages-sent', document.body);
+    undoButton.click();
+    let event = await whenAnnounced;
+    chrome.test.assertTrue(event.detail.messages.includes(
+        loadTimeData.getString('ink2AnnotationUndone')));
+
+    // Redo via button click.
+    whenAnnounced = eventToPromise<CustomEvent<{messages: string[]}>>(
+        'cr-a11y-announcer-messages-sent', document.body);
+    redoButton.click();
+    event = await whenAnnounced;
+    chrome.test.assertTrue(event.detail.messages.includes(
+        loadTimeData.getString('ink2AnnotationRedone')));
+
+    // Undo via shortcut key.
+    whenAnnounced = eventToPromise<CustomEvent<{messages: string[]}>>(
+        'cr-a11y-announcer-messages-sent', document.body);
+    sendUndoShortcutKey(viewerToolbar);
+    event = await whenAnnounced;
+    chrome.test.assertTrue(event.detail.messages.includes(
+        loadTimeData.getString('ink2AnnotationUndone')));
+
+    // Redo via shortcut key.
+    whenAnnounced = eventToPromise<CustomEvent<{messages: string[]}>>(
+        'cr-a11y-announcer-messages-sent', document.body);
+    sendRedoShortcutKey(viewerToolbar);
+    event = await whenAnnounced;
+    chrome.test.assertTrue(event.detail.messages.includes(
+        loadTimeData.getString('ink2AnnotationRedone')));
 
     Ink2Manager.getInstance().resetStackForTesting();
     chrome.test.succeed();

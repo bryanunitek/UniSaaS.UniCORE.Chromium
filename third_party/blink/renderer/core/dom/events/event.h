@@ -38,6 +38,7 @@
 
 namespace blink {
 
+class Animation;
 class DOMOrigin;
 class DOMWrapperWorld;
 class EventDispatcher;
@@ -45,7 +46,6 @@ class EventInit;
 class EventPath;
 class EventTarget;
 class Node;
-class Element;
 class PseudoElement;
 class CSSPseudoElement;
 class ScriptState;
@@ -172,6 +172,7 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
 
   virtual EventTarget* relatedTarget() const { return nullptr; }
   virtual void SetRelatedTarget(EventTarget*) {}
+  virtual Animation* GetAnimation() const { return nullptr; }
 
   PhaseType eventPhase() const { return event_phase_; }
   void SetEventPhase(PhaseType event_phase) { event_phase_ = event_phase; }
@@ -251,7 +252,6 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
   virtual bool IsErrorEvent() const;
 
   virtual bool IsPatchEvent() const;
-  virtual bool IsRouteEvent() const;
 
   bool PropagationStopped() const {
     return propagation_stopped_ || immediate_propagation_stopped_;
@@ -288,6 +288,12 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
 
   // Events that must not leak across isolated world, similar to how
   // ErrorEvent behaves, can override this method.
+  //
+  // Every path that surfaces an `Event` to script must consult this. Ordinary
+  // event listeners do so in `JSBasedEventListener::Invoke()`, but
+  // `EventTarget::FireEventListeners()` itself does not, so a
+  // `NativeEventListener` that forwards the raw `Event` on to script (e.g. the
+  // one backing `EventTarget#when()`) is responsible for checking it directly.
   virtual bool CanBeDispatchedInWorld(const DOMWrapperWorld&) const {
     return true;
   }
@@ -356,13 +362,12 @@ class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
 
   PassiveMode HandlingPassive() const { return handling_passive_; }
 
-  // Retargets the provided `element` to prevent it from being leaked when this
+  // Retargets the provided `node` to prevent it from being leaked when this
   // event is fired on a node inside a ShadowRoot. If this is called during
-  // event dispatching, where currentTarget() has a value, `element` is
-  // retargeted against currentTarget(). Otherwise, it is retargeted against
-  // target().  target() may be null after event dispatch to prevent leaking,
-  // and in that case, this method will return null as well.
-  Element* Retarget(Element* element) const;
+  // event dispatching, where currentTarget() has a value, `node` is retargeted
+  // against currentTarget(). Otherwise, it is retargeted against the node's
+  // document.
+  Node* Retarget(Node* node) const;
 
  private:
   AtomicString type_;

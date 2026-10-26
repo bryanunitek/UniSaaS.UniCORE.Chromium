@@ -5,8 +5,11 @@
 #ifndef CHROME_BROWSER_DICTATION_FEATURES_H_
 #define CHROME_BROWSER_DICTATION_FEATURES_H_
 
+#include <string>
+
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/time/time.h"
 
 namespace dictation {
 
@@ -28,6 +31,31 @@ extern const base::FeatureParam<bool> kUseComponentExtension;
 // started. If false dictation context blocks stream creation and context is
 // provided in the StartStream message.
 extern const base::FeatureParam<bool> kSendContextAsync;
+
+// If true, partial transcription text will be included in the composition as it
+// comes in rather than only updating the composition for final text.
+extern const base::FeatureParam<bool> kShowPartials;
+
+// If true, uses the Web Speech API backend instead of the cloud backend.
+extern const base::FeatureParam<bool> kWebSpeechApiBackend;
+
+// If true, the session will end when a dictation stream ends, rather than
+// allowing multiple streams in a single session.
+extern const base::FeatureParam<bool> kSessionEndsOnStreamEnd;
+
+// The delay before ending a session after a stream ends when
+// `kSessionEndsOnStreamEnd` is enabled.
+extern const base::FeatureParam<base::TimeDelta> kAutoSessionEndDelay;
+
+// Omaha release cohort tag for the connector component extension (e.g.,
+// "canary"). If non-empty, this tag is passed to the component updater
+// so Omaha can serve pre-release or canary extension cohorts.
+extern const base::FeatureParam<std::string> kDictationConnectorTag;
+
+// Comma-separated list of hosts (a host also matches its subdomains) whose
+// editors are asked to populate their EditContext when dictation starts, by
+// sending them one-time IME input. See DictationAgent.PopulateEditContext.
+extern const base::FeatureParam<std::string> kPopulateEditContextHosts;
 
 }  // namespace dictation
 

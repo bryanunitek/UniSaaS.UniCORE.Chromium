@@ -16,6 +16,7 @@ from util import run_jj
 
 
 def main():
+  logging.basicConfig(level=logging.DEBUG)
   script_dir = pathlib.Path(__file__).resolve().parent
   repo_root = script_dir.parent.parent
   os.chdir(repo_root)
@@ -25,8 +26,10 @@ def main():
 
   # Link the shared jj config into the repo.
   config_path = pathlib.Path(
-      run_jj(['config', 'path', '--repo'], stdout=subprocess.PIPE,
-             text=True).stdout.strip())
+    run_jj(
+      ['config', 'path', '--repo'], stdout=subprocess.PIPE, text=True
+    ).stdout.strip()
+  )
   config_path.unlink(missing_ok=True)
   config_source = (script_dir / 'config.toml').resolve()
   try:
@@ -34,12 +37,14 @@ def main():
   except OSError:
     shutil.copy2(str(config_source), str(config_path))
     logging.warning(
-        'Could not create symlink; copied config.toml instead. Future changes '
-        'to tools/jj/config.toml will need to be re-copied manually.')
+      'Could not create symlink; copied config.toml instead. Future changes '
+      'to tools/jj/config.toml will need to be re-copied manually.'
+    )
     if sys.platform == 'win32':
       logging.warning(
-          'On Windows, symlinks require Developer Mode to be enabled or '
-          'administrator privileges.')
+        'On Windows, symlinks require Developer Mode to be enabled or '
+        'administrator privileges.'
+      )
 
   # Ensure that jj snapshots the current commit so it doesn't get lost
   # with git switch.
@@ -51,8 +56,10 @@ def main():
   run_jj(['abandon'])
   run_command(['git', 'add', '-A'])
 
-  print('Reminder: If you haven\'t already, we recommend joining '
-        'https://groups.google.com/g/chromium-jj-users')
+  print(
+    'Reminder: If you haven\'t already, we recommend joining '
+    'https://groups.google.com/g/chromium-jj-users'
+  )
 
 
 if __name__ == '__main__':

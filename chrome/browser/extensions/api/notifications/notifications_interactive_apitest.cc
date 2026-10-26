@@ -10,8 +10,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
-#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper_factory.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_handler.h"
@@ -39,6 +37,7 @@
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 
@@ -55,8 +54,10 @@
 #endif
 
 #if BUILDFLAG(ENABLE_PLATFORM_APPS)
+#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
@@ -150,7 +151,7 @@ class NotificationsApiTest : public extensions::ExtensionApiTest {
   void SetUpOnMainThread() override {
     extensions::ExtensionApiTest::SetUpOnMainThread();
 
-    DCHECK(profile());
+    CHECK(profile(), base::NotFatalUntil::M161);
     display_service_tester_ =
         std::make_unique<NotificationDisplayServiceTester>(profile());
   }
@@ -166,7 +167,7 @@ class NotificationsApiTest : public extensions::ExtensionApiTest {
   // made to continue to be able to access the underlying information.
   message_center::Notification* GetNotificationForExtension(
       const extensions::Extension* extension) {
-    DCHECK(extension);
+    CHECK(extension, base::NotFatalUntil::M161);
 
     std::set<std::string> notifications =
         GetDisplayHelper()->GetNotificationIdsForExtension(extension->url());
@@ -186,7 +187,7 @@ class NotificationsApiTest : public extensions::ExtensionApiTest {
     apps::AppServiceProxyFactory::GetForProfile(profile())->LaunchAppWithParams(
         apps::AppLaunchParams(
             extension->id(), apps::LaunchContainer::kLaunchContainerNone,
-            WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest));
+            WindowOpenDisposition::kNewWindow, apps::LaunchSource::kFromTest));
   }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 

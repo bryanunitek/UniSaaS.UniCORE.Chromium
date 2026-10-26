@@ -29,7 +29,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/app_access/app_access_notifier.h"
-#include "chromeos/ash/components/camera_presence_notifier/camera_presence_notifier.h"
 #include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
@@ -182,24 +181,6 @@ bool ShouldForceDisableCameraSwitch() {
   return controller->camera_controller()->IsCameraAccessForceDisabled();
 }
 
-void SetUpCameraCountObserver() {
-  auto* camera_controller = CameraPrivacySwitchController::Get();
-  CHECK(camera_controller);
-
-  base::RepeatingCallback<void(int)> update_camera_count_in_privacy_hub =
-      base::BindRepeating(
-          [](CameraPrivacySwitchController* controller, int camera_count) {
-            controller->OnCameraCountChanged(camera_count);
-          },
-          camera_controller);
-  auto notifier = std::make_unique<CameraPresenceNotifier>(
-      std::move(update_camera_count_in_privacy_hub));
-  notifier->Start();
-
-  static const char kUserDataKey = '\0';
-  camera_controller->SetUserData(&kUserDataKey, std::move(notifier));
-}
-
 // Notifies the Privacy Hub controller.
 void TrackGeolocationAttempted(const std::string& name) {
   if (!features::IsCrosPrivacyHubLocationEnabled()) {
@@ -342,6 +323,10 @@ bool ContentBlocked(ContentType type) {
       }
       auto* const controller = GeolocationPrivacySwitchController::Get();
       CHECK(controller);
+      if (!controller->IsReady()) {
+        // Default to blocked if the controller is not yet initialized.
+        return true;
+      }
       return !controller->IsGeolocationUsageAllowedForApps();
     }
     default: {
@@ -406,6 +391,20 @@ void OpenSystemSettings(ContentType type) {
       CHECK_DEREF(
           user_manager::UserManager::Get()->FindUser(session->account_id())),
       {.sub_page = settings_path});
+}
+
+bool IsPrivacyHubAvailable() {
+  if (!ash::Shell::HasInstance()) {
+    return false;
+  }
+
+  auto* session_controller = ash::Shell::Get()->session_controller();
+  if (!session_controller ||
+      !session_controller->IsActiveUserSessionStarted()) {
+    return false;
+  }
+
+  return true;
 }
 
 ScopedUserPermissionPrefForTest::ScopedUserPermissionPrefForTest(

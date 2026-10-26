@@ -15,6 +15,7 @@ import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.actor.BackgroundTabRestorationHelper;
 import org.chromium.chrome.browser.tab.ScopedStorageBatch;
 import org.chromium.chrome.browser.tab.StorageLoadedData;
 import org.chromium.chrome.browser.tab.StorageLoadedData.LoadedTabState;
@@ -23,20 +24,22 @@ import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabState;
 import org.chromium.chrome.browser.tab.TabStateStorageFlagHelper;
-import org.chromium.chrome.browser.tab.WebContentsState;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabGroupVisualDataStore;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
+import org.chromium.chrome.browser.tabmodel.TabOrchestratorType;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -112,8 +115,9 @@ class TabRestorer {
         void onActiveTabRestored(boolean incognito);
 
         /**
-         * Called when the details of a tab have been read {@see
-         * TabPersistentStoreObserver#onDetailsRead}.
+         * Called when the details of a tab have been read.
+         *
+         * @see TabPersistentStoreObserver#onDetailsRead
          */
         void onDetailsRead(
                 int index,
@@ -125,12 +129,16 @@ class TabRestorer {
                 boolean fromMerge);
     }
 
+    private final @TabOrchestratorType int mOrchestratorType;
     private final boolean mIncognito;
+    private final boolean mIsAuthoritative;
     private final TabRestorerDelegate mDelegate;
     private final TabCreator mTabCreator;
     private final Supplier<ScopedStorageBatch> mBatchFactory;
     private final TabModelSelector mTabModelSelector;
     private final Set<@TabId Integer> mTabIdsToIgnore = new HashSet<>();
+    private Set<@TabId Integer> mBackgroundTabIds = Collections.emptySet();
+    private Set<@TabId Integer> mRemainingBackgroundTabIds = Collections.emptySet();
     private final boolean mIsFromRecreating;
 
     private @State int mState = State.EMPTY;
@@ -147,26 +155,32 @@ class TabRestorer {
     private int mIndex;
 
     /**
+     * @param orchestratorType The orchestrator type for this restorer.
      * @param incognito Whether the tab restorer is for incognito tabs.
      * @param delegate The delegate to notify when the tab restorer for certain events.
      * @param tabCreator The tab creator to use to create tabs.
      * @param batchFactory The factory to create scoped storage batches.
      * @param tabModelSelector The tab model selector.
      * @param isFromRecreating Whether the current activity is launched from recreating.
+     * @param isAuthoritative Whether this restorer is authoritative.
      */
     TabRestorer(
+            @TabOrchestratorType int orchestratorType,
             boolean incognito,
             TabRestorerDelegate delegate,
             TabCreator tabCreator,
             Supplier<ScopedStorageBatch> batchFactory,
             TabModelSelector tabModelSelector,
-            boolean isFromRecreating) {
+            boolean isFromRecreating,
+            boolean isAuthoritative) {
+        mOrchestratorType = orchestratorType;
         mIncognito = incognito;
         mDelegate = delegate;
         mTabCreator = tabCreator;
         mBatchFactory = batchFactory;
         mTabModelSelector = tabModelSelector;
         mIsFromRecreating = isFromRecreating;
+        mIsAuthoritative = isAuthoritative;
     }
 
     /**
@@ -177,9 +191,10 @@ class TabRestorer {
     public void onCachedActiveTabLoaded(LoadedTabState loadedTabState) {
         TabState tabState = loadedTabState.tabState;
         if (mState == State.CANCELLED) {
-            WebContentsState contentsState = tabState.contentsState;
-            if (contentsState != null) contentsState.destroy();
+            loadedTabState.destroy();
+            return;
         } else if (mState >= State.LOADED) {
+            loadedTabState.destroy();
             return;
         }
 
@@ -198,7 +213,11 @@ class TabRestorer {
                         /* isActiveTab= */ true,
                         mIsFromRecreating);
 
-        if (tab == null) destroyLoadedTabState(loadedTabState);
+        if (tab == null) {
+            loadedTabState.destroy();
+        } else {
+            loadedTabState.claim();
+        }
         mCachedRestoredActiveTabId = loadedTabState.tabId;
     }
 
@@ -210,6 +229,13 @@ class TabRestorer {
     public void onDataLoaded(StorageLoadedData data) {
         mData = data;
         int restoredTabCount = data.getLoadedTabStates().length;
+
+        mBackgroundTabIds =
+                BackgroundTabRestorationHelper.fetchBackgroundTabIds(
+                        mOrchestratorType, mTabModelSelector, mIncognito, mIsAuthoritative);
+        mRemainingBackgroundTabIds =
+                BackgroundTabRestorationHelper.claimRemainingBackgroundTabIds(
+                        mOrchestratorType, mTabModelSelector, mIncognito, mIsAuthoritative);
 
         // Special case for when cancellation happened during loading. In this case we cancel as
         // soon as loading has finished.
@@ -323,6 +349,8 @@ class TabRestorer {
     }
 
     private void cancelInternal() {
+        mBackgroundTabIds = Collections.emptySet();
+        mRemainingBackgroundTabIds = Collections.emptySet();
         if (mData != null) {
             // Delegate still needs access to the StorageLoadedData before it is cleaned up.
             mDelegate.onCancelled(mIncognito);
@@ -342,6 +370,12 @@ class TabRestorer {
         assert mState == State.FINISHING;
         mState = State.FINISHED;
 
+        BackgroundTabRestorationHelper.restoreRemainingBackgroundTabs(
+                mOrchestratorType, mTabModelSelector, mRemainingBackgroundTabIds, mIsAuthoritative);
+
+        mBackgroundTabIds = Collections.emptySet();
+        mRemainingBackgroundTabIds = Collections.emptySet();
+
         // Delegate still needs access to the StorageLoadedData before it is cleaned up.
         mDelegate.onFinished(mIncognito);
         cleanupStorageLoadedData();
@@ -359,9 +393,11 @@ class TabRestorer {
             TabGroupVisualDataStore.removeCachedGroups(mData.getGroupsData());
         }
 
-        for (LoadedTabState loadedTabState : mData.getLoadedTabStates()) {
-            if (mTabIdsToIgnore.contains(loadedTabState.tabId)) continue;
-            destroyLoadedTabState(loadedTabState);
+        if (mState != State.CANCELLED) {
+            for (LoadedTabState loadedTabState : mData.getLoadedTabStates()) {
+                assert loadedTabState.isClaimedOrDestroyed()
+                        : "Not all tabs were claimed or destroyed";
+            }
         }
 
         mData.destroy();
@@ -406,10 +442,7 @@ class TabRestorer {
                         ? activeTabIndex
                         : 0;
         LoadedTabState activeTabState = loadedTabStates[restoredActiveTabIndex];
-        restoreTab(
-                activeTabState,
-                restoredActiveTabIndex,
-                /* isActive= */ true);
+        restoreTab(activeTabState, restoredActiveTabIndex, /* isActive= */ true);
 
         if (loadedTabStates.length == 1) {
             postTaskToFinish();
@@ -427,6 +460,8 @@ class TabRestorer {
      */
     private void restoreTab(LoadedTabState loadedTabState, int index, boolean isActive) {
         assert mState == State.RESTORING;
+        if (loadedTabState.isClaimedOrDestroyed()) return;
+
         @TabId int tabId = loadedTabState.tabId;
 
         if (mTabIdsToIgnore.contains(loadedTabState.tabId)) return;
@@ -438,9 +473,11 @@ class TabRestorer {
         Tab tab =
                 maybeRestoreTab(loadedTabState.tabState, tabId, index, isActive, mIsFromRecreating);
         if (tab == null) {
-            destroyLoadedTabState(loadedTabState);
+            loadedTabState.destroy();
             return;
         }
+
+        loadedTabState.claim();
 
         boolean isIncognito = mIncognito;
         mDelegate.onDetailsRead(
@@ -487,16 +524,27 @@ class TabRestorer {
     }
 
     /**
-     * Restores a tab from the given {@link TabState}. Returns null if the WebContentsState, if
-     * present, was not used to create the tab.
+     * Restores a tab from the given {@link TabState} or via reparenting. Returns null if the tab
+     * could not be restored or if the WebContentsState had an empty buffer.
      */
     private @Nullable Tab maybeRestoreTab(
             TabState tabState, int tabId, int index, boolean isActiveTab, boolean isRecreating) {
         boolean isReparenting = mTabCreator.isReparenting(tabId);
         if (isReparenting) {
-            createTabFromState(tabState, tabId, index);
-            // Reparenting will not use the TabState to create the tab.
-            return null;
+            Tab tab = mTabCreator.createFrozenTab(tabState, tabId, index);
+            if (tab != null) {
+                if (tabState.contentsState != null
+                        && tab.getWebContentsState() != tabState.contentsState) {
+                    tabState.contentsState.destroy();
+                    tabState.contentsState = null;
+                }
+                if (isActiveTab) {
+                    TabModel model = mTabModelSelector.getModel(mIncognito);
+                    TabModelUtils.setIndex(model, model.indexOf(tab));
+                    mDelegate.onActiveTabRestored(mIncognito);
+                }
+            }
+            return tab;
         }
 
         if (!isActiveTab) {
@@ -511,12 +559,24 @@ class TabRestorer {
         }
 
         Tab tab = null;
+        if (BackgroundTabRestorationHelper.shouldIntercept(
+                        mOrchestratorType, mIncognito, mIsAuthoritative)
+                && mBackgroundTabIds.contains(tabId)) {
+            tab =
+                    BackgroundTabRestorationHelper.maybeRestoreBackgroundTab(
+                            mOrchestratorType,
+                            mTabModelSelector,
+                            tabId,
+                            index,
+                            tabState,
+                            mIsAuthoritative);
+        }
         GURL url = tabState.url;
         boolean hasEmptyBuffer =
                 tabState.contentsState != null && tabState.contentsState.buffer().limit() == 0;
-        if (tabState.contentsState != null && !hasEmptyBuffer) {
+        if (tab == null && tabState.contentsState != null && !hasEmptyBuffer) {
             tab = createFrozenTab(tabState, tabId, index);
-        } else if (url != null) {
+        } else if (tab == null && url != null) {
             tab = createTabWithoutContentsState(url, index);
         }
 
@@ -538,8 +598,11 @@ class TabRestorer {
 
     /** Creates a Tab from the given URL when tabState.contentsState is null. */
     private @Nullable Tab createTabWithoutContentsState(GURL url, int index) {
+        LoadUrlParams params = new LoadUrlParams(url);
+        params.setIsRendererInitiated(true);
+        params.setInitiatorOrigin(Origin.createOpaqueOrigin());
         return mTabCreator.createNewTab(
-                new LoadUrlParams(url), TabLaunchType.FROM_RESTORE, null, index);
+                params, TabLaunchType.FROM_RESTORE, /* parent= */ null, index);
     }
 
     /** Creates a frozen Tab from a non-null contentsState. */
@@ -561,19 +624,11 @@ class TabRestorer {
         LoadedTabState[] loadedTabStates = mData.getLoadedTabStates();
         if (loadedTabStates.length == 0) return;
 
-        int activeTabIndex = mData.getActiveTabIndex();
-        if (activeTabIndex < 0 || activeTabIndex >= loadedTabStates.length) return;
-
         for (LoadedTabState loadedTabState : loadedTabStates) {
             if (loadedTabState.tabId != mCachedRestoredActiveTabId) continue;
-            destroyLoadedTabState(loadedTabState);
+            loadedTabState.destroy();
             break;
         }
-    }
-
-    private void destroyLoadedTabState(LoadedTabState loadedTabState) {
-        WebContentsState state = loadedTabState.tabState.contentsState;
-        if (state != null) state.destroy();
     }
 
     @EnsuresNonNullIf({"mCachedRestoredActiveTabId"})

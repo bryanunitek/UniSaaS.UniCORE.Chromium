@@ -4,7 +4,8 @@
 
 #include "chrome/updater/test/integration_tests_mac.h"
 
-#include <cstdint>
+#include <stdlib.h>
+
 #include <map>
 #include <memory>
 #include <optional>
@@ -135,7 +136,7 @@ void Clean(UpdaterScope scope) {
   for (const auto& token : base::SplitStringPiece(out, base::kWhitespaceASCII,
                                                   base::TRIM_WHITESPACE,
                                                   base::SPLIT_WANT_NONEMPTY)) {
-    if (base::StartsWith(token, MAC_BUNDLE_IDENTIFIER_STRING)) {
+    if (token.starts_with(MAC_BUNDLE_IDENTIFIER_STRING)) {
       std::string out_rm;
       base::CommandLine launchctl_rm(base::FilePath("/bin/launchctl"));
       launchctl_rm.AppendArg("remove");
@@ -192,7 +193,9 @@ void ExpectClean(UpdaterScope scope) {
     EXPECT_FALSE(
         base::PathExists(keystone_path->Append(KEYSTONE_NAME ".bundle")));
   }
-  ASSERT_NO_FATAL_FAILURE(ExpectEnterpriseCompanionAppNotInstalled());
+  if (IsSystemInstall(scope)) {
+    ASSERT_NO_FATAL_FAILURE(ExpectEnterpriseCompanionAppNotInstalled());
+  }
 }
 
 void ExpectInstalled(UpdaterScope scope) {

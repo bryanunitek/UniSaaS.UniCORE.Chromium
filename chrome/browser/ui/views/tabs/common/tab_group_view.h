@@ -10,29 +10,31 @@
 #include "chrome/browser/ui/views/frame/browser_root_view.h"
 #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
 #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+#include "chrome/browser/ui/views/tabs/common/tab_collection_z_order_manager.h"
 #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
 #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/layout/delegating_layout_manager.h"
+#include "ui/views/layout/layout_manager_base.h"
 #include "ui/views/view.h"
 
 class TabCollectionNode;
 class TabGroupHeaderView;
+class TabGroupLineView;
+class TabGroupUnfocusButton;
 
 namespace tabs {
 class TabGroupDataObserver;
 }
 
-// The view class for vertical tab group container. It manages layout
-// of the group header, underline and all the tabs within the group. It also
-// handles serves as the drag target for tab dragging.
-class TabGroupView : public views::View,
-                     public views::LayoutDelegate,
+// The view class for the tab group container. It hosts the group header,
+// underline and all the tabs within the group, and serves as the drag target
+// for tab dragging.
+class TabGroupView : public TabCollectionZOrderManager,
                      public TabGroupHeaderView::Delegate,
                      public DraggedTabsContainer,
                      public TabCollectionAnimatingLayoutManager::Delegate {
-  METADATA_HEADER(TabGroupView, views::View)
+  METADATA_HEADER(TabGroupView, TabCollectionZOrderManager)
 
  public:
   static constexpr int kTabLeadingPadding = 10;
@@ -42,19 +44,29 @@ class TabGroupView : public views::View,
   TabGroupView& operator=(const TabGroupView&) = delete;
   ~TabGroupView() override;
 
+  class LayoutManager : public views::LayoutManagerBase {
+   public:
+    virtual int GetCrossoverWidth() const;
+
+   protected:
+    // views::LayoutManagerBase:
+    void OnInstalled(views::View* host) override;
+
+    // Casts host_view() to a TabGroupView const ref, using static_cast. Avoids
+    // views::AsViewClass as it incurs overhead when checking metadata.
+    const class TabGroupView& TabGroupView() const;
+  };
+
   // views::View:
+  void AddedToWidget() override;
+  void RemovedFromWidget() override;
   void OnThemeChanged() override;
   void OnGestureEvent(ui::GestureEvent* event) override;
-
-  // views::LayoutDelegate:
-  views::ProposedLayout CalculateProposedLayout(
-      const views::SizeBounds& size_bounds) const override;
 
   // TabGroupHeaderView::Delegate:
   void ToggleCollapsedState(ToggleTabGroupCollapsedStateOrigin origin) override;
   std::unique_ptr<views::Widget> ShowGroupEditorBubble(
       bool stop_context_menu_propagation) override;
-  std::u16string GetGroupContentString() const override;
   bool IsValid() const override;
   void InitHeaderDrag(const ui::LocatedEvent& event) override;
   bool ContinueHeaderDrag(const ui::LocatedEvent& event) override;
@@ -65,8 +77,14 @@ class TabGroupView : public views::View,
   void HideHoverCard(int update_type) const override;
   bool IsFocusInTabStrip() override;
   std::unique_ptr<ExpandOnHoverLock> AcquireExpandOnHoverLock() override;
+  std::unique_ptr<TabHoverCardController::ScopedHideHoverCardLock>
+  AcquireHoverCardHideLock() override;
   void ShiftGroupUp() override;
   void ShiftGroupDown() override;
+  bool IsGroupFocused() const override;
+  bool IsUnfocusButtonFocused() const override;
+  bool CanShowEditorBubbleButton() const override;
+  HorizontalTabClosingHelper* GetTabClosingHelper() const override;
 
   // TabCollectionAnimatingLayoutManager::Delegate:
   bool IsDragging() const override;
@@ -75,6 +93,7 @@ class TabGroupView : public views::View,
       const views::View& child_view) const override;
   bool ShouldSnapToTarget(const views::View& child_view) const override;
   void OnAnimationEnded() override;
+  bool ShouldAnimateLayout() override;
 
   bool IsCollapsed() const;
 
@@ -82,11 +101,31 @@ class TabGroupView : public views::View,
       const gfx::Point& point_in_local_coords);
 
   const TabCollectionNode* collection_node() const { return collection_node_; }
+  TabStripOrientation orientation() const { return orientation_; }
+  const tab_groups::TabGroupVisualData& tab_group_visual_data() const {
+    return tab_group_visual_data_;
+  }
+
+  TabGroupUnfocusButton* unfocus_header() { return unfocus_header_; }
+  const TabGroupUnfocusButton* unfocus_header() const {
+    return unfocus_header_;
+  }
 
   TabGroupHeaderView* group_header() { return group_header_; }
   const TabGroupHeaderView* group_header() const { return group_header_; }
 
+  TabGroupLineView* group_line() { return group_line_; }
+  const TabGroupLineView* group_line() const { return group_line_; }
+
+  // Returns the minimum width for the group in horizontal orientation where all
+  // child tabs have the same size. Below this width, an active tab has a larger
+  // size than inactive tabs before the container scrolls.
+  int GetCrossoverWidth() const;
+
  private:
+  friend class TabGroupViewVerticalLayout;
+  friend class TabGroupViewHorizontalLayout;
+
   // DraggedTabsContainer:
   views::ScrollView* GetScrollViewForContainer() const override;
   void UpdateTargetLayoutForDrag(
@@ -99,22 +138,35 @@ class TabGroupView : public views::View,
                        const gfx::Rect& previous_bounds_in_screen);
   std::unique_ptr<views::View> DetachChildView(views::View* child_view);
 
+  bool is_collapsed() const { return is_collapsed_; }
+
+  void SetIsCollapsed(bool is_collapsed);
+
   void ResetCollectionNode();
   void OnDataChanged();
+  void OnCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
   void UpdateChildVisibilityForCollapseState(bool collapsed);
+  void ExitFocusMode();
 
+  const TabStripOrientation orientation_;
   raw_ptr<TabCollectionNode> collection_node_ = nullptr;
-
-  base::CallbackListSubscription node_destroyed_subscription_;
-
   tab_groups::TabGroupVisualData tab_group_visual_data_;
-  const raw_ptr<TabGroupHeaderView> group_header_ = nullptr;
-  const raw_ptr<views::View> group_line_ = nullptr;
+  bool is_ephemeral_ = false;
+  // Tracked separately for layout purposes so child/underline visibility
+  // updates occur only when collapse/expand animations complete, rather than
+  // reacting immediately to visual data updates during animation.
+  bool is_collapsed_ = false;
 
+  const raw_ptr<TabGroupUnfocusButton> unfocus_header_ = nullptr;
+  const raw_ptr<TabGroupHeaderView> group_header_ = nullptr;
+  const raw_ptr<TabGroupLineView> group_line_ = nullptr;
   const raw_ref<TabCollectionAnimatingLayoutManager> layout_manager_;
 
   std::unique_ptr<tabs::TabGroupDataObserver> tab_group_data_observer_;
   base::CallbackListSubscription tab_group_data_changed_subscription_;
+  base::CallbackListSubscription node_destroyed_subscription_;
+  base::CallbackListSubscription collapsed_state_changed_subscription_;
+  base::CallbackListSubscription paint_as_active_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_GROUP_VIEW_H_

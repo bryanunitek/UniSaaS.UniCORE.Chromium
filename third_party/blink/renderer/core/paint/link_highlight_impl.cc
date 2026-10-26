@@ -87,7 +87,8 @@ EffectPaintPropertyNode::State LinkHighlightEffectNodeState(
   // EffectPaintPropertyNode::Update does not pay attention to changes in
   // direct_compositing_reasons so we assume that the effect node is always
   // animating.
-  state.direct_compositing_reasons = CompositingReason::kActiveOpacityAnimation;
+  state.direct_compositing_reasons = {
+      CompositingReason::kActiveOpacityAnimation};
   return state;
 }
 
@@ -287,7 +288,7 @@ void LinkHighlightImpl::Paint(GraphicsContext& context) {
   DCHECK(object->GetFrameView());
   DCHECK(!object->GetFrameView()->ShouldThrottleRendering());
 
-  auto color = object->StyleRef().VisitedDependentColor(
+  auto color = object->Style().VisitedDependentColor(
       GetCSSPropertyWebkitTapHighlightColor());
 
   // For now, we'll only use rounded rects if we have a single rect because

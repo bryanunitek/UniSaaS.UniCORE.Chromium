@@ -20,6 +20,10 @@
 #include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
+namespace cppgc {
+class StackStartMarker;
+}  // namespace cppgc
+
 namespace blink {
 class BlinkGCMemoryDumpProvider;
 class ThreadScheduler;
@@ -59,6 +63,14 @@ class PLATFORM_EXPORT NonMainThreadImpl : public NonMainThread {
   // when we cannot wait until the underlying SimpleThreadImpl finishes, see
   // WorkerBackingThread::ShutdownOnBackingThread().
   void ShutdownOnThread() override;
+
+  // These allow observers such as
+  // AnimationFrameTimingMonitor to watch the worker thread's task loop, which
+  // is how Long Animation Frame (LoAF) reporting is extended to Web Workers.
+  void AddTaskTimeObserver(
+      base::sequence_manager::TaskTimeObserver* task_time_observer) override;
+  void RemoveTaskTimeObserver(
+      base::sequence_manager::TaskTimeObserver* task_time_observer) override;
 
  protected:
   virtual std::unique_ptr<NonMainThreadSchedulerBase>
@@ -138,7 +150,8 @@ class PLATFORM_EXPORT NonMainThreadImpl : public NonMainThread {
 
   class GCSupport final {
    public:
-    explicit GCSupport(NonMainThreadImpl* thread);
+    GCSupport(NonMainThreadImpl* thread,
+              cppgc::StackStartMarker stack_start_marker);
     ~GCSupport();
 
    private:

@@ -12,13 +12,13 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
@@ -48,6 +48,7 @@
 #include "base/thread_annotations.h"
 #include "base/types/expected.h"
 #include "base/types/expected_macros.h"
+#include "base/types/pass_key.h"
 #include "components/reporting/compression/compression_module.h"
 #include "components/reporting/encryption/encryption_module_interface.h"
 #include "components/reporting/proto/synced/record.pb.h"
@@ -75,6 +76,8 @@ namespace reporting {
 BASE_FEATURE(kReportingStorageDegradationFeature,
              "ReportingStorageDegradation",
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEraseLegacyQueueOnDataLoss, base::FEATURE_DISABLED_BY_DEFAULT);
 
 namespace {
 
@@ -184,12 +187,11 @@ void StorageQueue::Create(
       {base::TaskPriority::BEST_EFFORT, base::MayBlock()});
 
   // Create StorageQueue object.
-  // Cannot use base::MakeRefCounted<StorageQueue>, because constructor is
-  // private.
-  scoped_refptr<StorageQueue> storage_queue = base::WrapRefCounted(
-      new StorageQueue(std::move(sequenced_task_runner), options,
-                       std::move(async_start_upload_cb), encryption_module,
-                       compression_module));
+  scoped_refptr<StorageQueue> storage_queue =
+      base::MakeRefCounted<StorageQueue>(
+          base::PassKey<StorageQueue>(), std::move(sequenced_task_runner),
+          options, std::move(async_start_upload_cb), encryption_module,
+          compression_module);
 
   // Asynchronously run initialization.
   Start<StorageQueueInitContext>(std::move(storage_queue),
@@ -197,6 +199,7 @@ void StorageQueue::Create(
 }
 
 StorageQueue::StorageQueue(
+    base::PassKey<StorageQueue>,
     scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner,
     const QueueOptions& options,
     UploaderInterface::AsyncStartUploaderCb async_start_upload_cb,
@@ -282,8 +285,23 @@ Status StorageQueue::Init() {
       // If generation id is also unknown, reset all parameters as they were
       // at the beginning of Init(). Some of them might have been changed
       // earlier.
-      if (generation_id_ <= 0) {
-        LOG(ERROR) << "Unable to retrieve generation id, performing full reset";
+      //
+      // Additionally, perform a full reset if a legacy queue encounters
+      // unrecoverable DATA_LOSS, as it would otherwise be stuck indefinitely
+      // blocking migration (see b/458321208).
+      const bool is_legacy_directory = options_.directory().Extension().empty();
+
+      const bool force_legacy_reset =
+          base::FeatureList::IsEnabled(kEraseLegacyQueueOnDataLoss) &&
+          status.error_code() == error::DATA_LOSS && is_legacy_directory;
+
+      if (generation_id_ <= 0 || force_legacy_reset) {
+        if (generation_id_ <= 0) {
+          LOG(ERROR) << "Unable to retrieve generation id, performing full reset";
+        } else {
+          LOG(ERROR) << "Legacy queue encountered DATA_LOSS, performing full "
+                        "reset to unblock migration";
+        }
         next_sequencing_id_ = 0;
         first_sequencing_id_ = 0;
         first_unconfirmed_sequencing_id_ = std::nullopt;
@@ -301,8 +319,8 @@ Status StorageQueue::Init() {
   }
   // Delete all files except used ones.
   DeleteUnusedFiles(used_files_set);
-  // Initiate periodic uploading, if needed (IMMEDIATE, SECURITY and MANUAL
-  // priorities do not need it - they are created with 0, 0 and infinite period
+  // Initiate periodic uploading, if needed (IMMEDIATE and MANUAL
+  // priorities do not need it - they are created with 0 and infinite period
   // respectively).
   //
   if (!options_.upload_period().is_zero() &&
@@ -888,7 +906,7 @@ Status StorageQueue::RestoreMetadata(
   // latest to earilest) and use generation from there (last record digest is
   // useless in that case).
   for (const auto& [sequencing_id, path_and_size] :
-       base::Reversed(meta_files)) {
+       std::views::reverse(meta_files)) {
     const auto& [path, size] = path_and_size;
     const auto status = ReadMetadata(path, size, sequencing_id, used_files_set);
     if (status.ok()) {

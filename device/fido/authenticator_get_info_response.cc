@@ -7,10 +7,10 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/containers/to_array.h"
 #include "base/numerics/safe_conversions.h"
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
-#include "device/fido/fido_parsing_utils.h"
 
 namespace device {
 
@@ -34,7 +34,7 @@ AuthenticatorGetInfoResponse::AuthenticatorGetInfoResponse(
     base::span<const uint8_t, kAaguidLength> in_aaguid)
     : versions(std::move(in_versions)),
       ctap2_versions(std::move(in_ctap2_versions)),
-      aaguid(fido_parsing_utils::Materialize(in_aaguid)) {
+      aaguid(base::ToArray(in_aaguid)) {
   DCHECK_NE(versions.contains(ProtocolVersion::kCtap2), ctap2_versions.empty());
 }
 
@@ -130,7 +130,7 @@ std::vector<uint8_t> AuthenticatorGetInfoResponse::EncodeToCBOR(
       cbor::Value::MapValue entry;
       entry.emplace("type", "public-key");
       entry.emplace("alg", algorithm);
-      algorithms_cbor.emplace_back(cbor::Value(entry));
+      algorithms_cbor.emplace_back(std::move(entry));
     }
     device_info_map.emplace(0x0a, std::move(algorithms_cbor));
   }
@@ -156,10 +156,9 @@ std::vector<uint8_t> AuthenticatorGetInfoResponse::EncodeToCBOR(
                                       *response.options.max_cred_blob_length));
   }
 
-  auto encoded_bytes =
-      cbor::Writer::Write(cbor::Value(std::move(device_info_map)));
+  auto encoded_bytes = cbor::Writer::Write(device_info_map);
   DCHECK(encoded_bytes);
-  return *encoded_bytes;
+  return *std::move(encoded_bytes);
 }
 
 bool AuthenticatorGetInfoResponse::SupportsAtLeast(

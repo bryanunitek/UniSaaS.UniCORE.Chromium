@@ -17,12 +17,11 @@
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "gpu/ipc/client/client_shared_image_interface.h"
-#include "media/renderers/video_resource_updater.h"
+#include "media/gfx/video_resource_updater.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/layer.h"
-#include "ui/compositor/layer_type.h"
+#include "ui/compositor/layer_surface.h"
 #include "ui/gfx/geometry/dip_util.h"
 #include "ui/gfx/geometry/size_conversions.h"
 
@@ -48,8 +47,9 @@ CameraVideoFrameRenderer::CameraVideoFrameRenderer(
           GetContextFactory()->SharedMainThreadRasterContextProvider()),
       should_flip_frames_horizontally_(should_flip_frames_horizontally) {
   host_window_.set_owned_by_parent(false);
-  host_window_.Init(ui::LAYER_SOLID_COLOR);
-  host_window_.layer()->SetColor(SK_ColorDKGRAY);
+  host_window_.Init(ui::LAYER_SURFACE);
+  host_window_.layer()->AsSurface()->SetFallbackBackgroundColor(
+      SkColors::kDkGray);
   host_window_.SetName("CameraVideoFramesHost");
 }
 
@@ -185,10 +185,6 @@ viz::CompositorFrame CameraVideoFrameRenderer::CreateCompositorFrame(
   viz::CompositorFrame compositor_frame;
   compositor_frame.metadata.frame_token = ++compositor_frame_token_generator_;
   compositor_frame.metadata.begin_frame_ack = begin_frame_ack;
-  if (video_frame->ColorSpace().IsValid()) {
-    compositor_frame.metadata.content_color_usage =
-        video_frame->ColorSpace().GetContentColorUsage();
-  }
   compositor_frame.metadata.begin_frame_ack.has_damage = true;
   compositor_frame.metadata.may_contain_video = true;
   const float dsf = host_window_.GetHost()->device_scale_factor();

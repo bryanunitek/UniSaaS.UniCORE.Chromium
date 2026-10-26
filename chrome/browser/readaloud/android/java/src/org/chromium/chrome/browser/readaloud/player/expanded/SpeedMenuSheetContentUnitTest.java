@@ -21,7 +21,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.readaloud.player.InteractionHandler;
@@ -32,7 +31,6 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link SpeedMenuSheetContent}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SpeedMenuSheetContentUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private BottomSheetController mBottomSheetController;
@@ -69,17 +67,17 @@ public class SpeedMenuSheetContentUnitTest {
     @Test
     public void testOnClick() {
         mContent.setInteractionHandler(mHandler);
-        assertTrue(mMenu.getItem(0).getChildAt(0).performClick());
+        assertTrue(mMenu.getItem(0).findViewById(R.id.readaloud_menu_item_row).performClick());
         verify(mHandler).onSpeedChange(0.5f);
 
-        assertTrue(mMenu.getItem(7).getChildAt(0).performClick());
+        assertTrue(mMenu.getItem(7).findViewById(R.id.readaloud_menu_item_row).performClick());
         verify(mHandler).onSpeedChange(4.0f);
     }
 
     @Test
     public void testSetInteractionHandler() {
         mContent.setInteractionHandler(mHandler);
-        assertTrue(mMenu.getItem(0).getChildAt(0).performClick());
+        assertTrue(mMenu.getItem(0).findViewById(R.id.readaloud_menu_item_row).performClick());
         verify(mHandler).onSpeedChange(0.5f);
     }
 

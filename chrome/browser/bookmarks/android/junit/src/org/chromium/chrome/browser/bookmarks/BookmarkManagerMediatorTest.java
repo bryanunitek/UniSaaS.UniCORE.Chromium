@@ -16,6 +16,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
@@ -30,13 +31,19 @@ import static org.chromium.ui.test.util.MockitoHelper.doCallback;
 import static org.chromium.ui.test.util.MockitoHelper.doRunnable;
 
 import android.app.Activity;
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
+import android.os.Bundle;
 import android.util.Pair;
+import android.view.View;
+import android.view.View.MeasureSpec;
+import android.view.ViewGroup;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.StringRes;
 import androidx.lifecycle.LifecycleOwner;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.RecyclerView.OnScrollListener;
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
@@ -56,11 +63,14 @@ import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.FeatureOverrides;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.UserActionTester;
@@ -104,6 +114,7 @@ import org.chromium.components.browser_ui.widget.dragreorder.DragStateDelegate;
 import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler;
 import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler.DragListener;
 import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler.DraggabilityProvider;
+import org.chromium.components.browser_ui.widget.search.SearchBoxProperties;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListLayout;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate.SelectionObserver;
@@ -127,6 +138,7 @@ import org.chromium.components.sync.SyncService.SyncStateChangedListener;
 import org.chromium.components.url_formatter.SchemeDisplay;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.ui.base.Clipboard;
+import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.listmenu.BasicListMenu;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
@@ -160,19 +172,50 @@ import java.util.function.Consumer;
  * https://crrev.com/c/7637775/comment/33ae0a47_b5b73afc
  */
 @RunWith(ParameterizedRobolectricTestRunner.class)
-@EnableFeatures(ChromeFeatureList.ENABLE_ESCAPE_HANDLING_FOR_SECONDARY_ACTIVITIES)
+@DisableFeatures({
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_POPUP,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG
+})
 public class BookmarkManagerMediatorTest {
+    /**
+     * Minimal subclass to control back-press supplier and handling without needing to inflate and
+     * configure a full {@link SelectableListToolbar}.
+     */
+    private static class TestSelectableListLayout extends SelectableListLayout<BookmarkId> {
+        private final SettableNonNullObservableSupplier<Boolean> mBackPressSupplier =
+                ObservableSuppliers.createNonNull(false);
 
-    @Rule(order = Rule.DEFAULT_ORDER - 1)
-    public final BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
+        TestSelectableListLayout(Context context) {
+            super(context, /* attrs= */ null);
+        }
+
+        void setHandleBackPress(boolean handleBackPress) {
+            mBackPressSupplier.set(handleBackPress);
+        }
+
+        @Override
+        public boolean onBackPressed() {
+            if (mBackPressSupplier.get()) {
+                mBackPressSupplier.set(false);
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        public NonNullObservableSupplier<Boolean> getHandleBackPressChangedSupplier() {
+            return mBackPressSupplier;
+        }
+    }
 
     @Parameters(name = "{index}_isIdentityMgr={0}")
     public static Collection parameters() {
         return Arrays.asList(false, true);
     }
 
-    private GURL mExampleUrl;
-    private String mExampleUrlFormatted;
+    @Rule(order = Rule.DEFAULT_ORDER - 1)
+    public final BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
     @Rule
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
@@ -185,9 +228,7 @@ public class BookmarkManagerMediatorTest {
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private BookmarkModel mBookmarkModel;
     @Mock private BookmarkOpener mBookmarkOpener;
-    @Mock private SelectableListLayout<BookmarkId> mSelectableListLayout;
     @Mock private SelectionDelegate<BookmarkId> mSelectionDelegate;
-    @Mock private RecyclerView mRecyclerView;
     @Mock private BookmarkUiObserver mBookmarkUiObserver;
     @Mock private Profile mProfile;
     @Mock private ProfileResolver.Natives mProfileResolverNatives;
@@ -224,12 +265,11 @@ public class BookmarkManagerMediatorTest {
     @Captor private ArgumentCaptor<OnScrollListener> mOnScrollListenerCaptor;
     @Captor private ArgumentCaptor<SubscriptionsObserver> mSubscriptionsObserver;
 
+    private GURL mExampleUrl;
+    private String mExampleUrlFormatted;
     private int mId = 1;
     private final SettableNonNullObservableSupplier<Boolean> mBackPressStateSupplier =
             ObservableSuppliers.createNonNull(false);
-    private final SettableNonNullObservableSupplier<Boolean>
-            mSelectableListLayoutHandleBackPressChangedSupplier =
-                    ObservableSuppliers.createNonNull(false);
     private final BookmarkId mRootFolderId = new BookmarkId(mId++, BookmarkType.NORMAL);
     private final BookmarkId mDesktopFolderId = new BookmarkId(mId++, BookmarkType.NORMAL);
     private final BookmarkId mMobileFolderId = new BookmarkId(mId++, BookmarkType.NORMAL);
@@ -261,6 +301,9 @@ public class BookmarkManagerMediatorTest {
 
     private BookmarkUiPrefs mBookmarkUiPrefs;
     private Activity mActivity;
+    private TestSelectableListLayout mSelectableListLayout;
+    private RecyclerView mRecyclerView;
+    private LinearLayoutManager mLayoutManager;
     private BookmarkManagerMediator mMediator;
     private DragReorderableRecyclerViewAdapter mDragReorderableRecyclerViewAdapter;
     private DragTouchHandler mDragTouchHandler;
@@ -434,7 +477,7 @@ public class BookmarkManagerMediatorTest {
     private void onActivity(Activity activity) {
         IncognitoUtilsJni.setInstanceForTesting(mIncognitoUtilsNatives);
         doReturn(false).when(mIncognitoUtilsNatives).getIncognitoModeEnabled(any());
-        mActivity = spy(activity);
+        mActivity = activity;
 
         // Setup CurrencyFormatter.
         CurrencyFormatterJni.setInstanceForTesting(mCurrencyFormatterJniMock);
@@ -454,6 +497,7 @@ public class BookmarkManagerMediatorTest {
         // Setup BookmarkModel.
         doReturn(false).when(mBookmarkModel).areAccountBookmarkFoldersActive();
         doReturn(mRootFolderId).when(mBookmarkModel).getRootFolderId();
+        doReturn(mRootFolderId).when(mBookmarkModel).getDefaultFolderViewLocation();
         doReturn(mDesktopFolderId).when(mBookmarkModel).getDesktopFolderId();
         doReturn(mDesktopFolderItem).when(mBookmarkModel).getBookmarkById(mDesktopFolderId);
         doReturn(mMobileFolderId).when(mBookmarkModel).getMobileFolderId();
@@ -500,11 +544,12 @@ public class BookmarkManagerMediatorTest {
                 .when(mBookmarkModel)
                 .getTopLevelFolderIds(/* forceVisibleMask= */ anyInt());
 
-        // Setup SelectableListLayout.
-        doReturn(mActivity).when(mSelectableListLayout).getContext();
-        doReturn(mSelectableListLayoutHandleBackPressChangedSupplier)
-                .when(mSelectableListLayout)
-                .getHandleBackPressChangedSupplier();
+        // Setup SelectableListLayout and RecyclerView.
+        mSelectableListLayout = new TestSelectableListLayout(mActivity);
+        mRecyclerView = new RecyclerView(mActivity);
+        mLayoutManager = spy(new LinearLayoutManager(mActivity));
+        mRecyclerView.setLayoutManager(mLayoutManager);
+        mActivity.setContentView(mRecyclerView);
 
         // Setup BookmarkUIObserver.
         doRunnable(() -> mMediator.removeUiObserver(mBookmarkUiObserver))
@@ -625,6 +670,34 @@ public class BookmarkManagerMediatorTest {
                 mFinishLoadingBookmarkModelCaptor.getAllValues()) {
             finishLoadingBookmarkModel.run();
         }
+    }
+
+    private void layoutRecyclerView() {
+        mRecyclerView.setAdapter(
+                new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+                    @Override
+                    public RecyclerView.ViewHolder onCreateViewHolder(
+                            ViewGroup parent, int viewType) {
+                        View rowView = new View(parent.getContext());
+                        rowView.setLayoutParams(
+                                new ViewGroup.LayoutParams(/* width= */ 100, /* height= */ 50));
+                        rowView.setFocusable(true);
+                        rowView.setFocusableInTouchMode(true);
+                        return new RecyclerView.ViewHolder(rowView) {};
+                    }
+
+                    @Override
+                    public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {}
+
+                    @Override
+                    public int getItemCount() {
+                        return mModelList.size();
+                    }
+                });
+        mRecyclerView.measure(
+                MeasureSpec.makeMeasureSpec(/* size= */ 500, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(/* size= */ 1000, MeasureSpec.EXACTLY));
+        mRecyclerView.layout(/* left= */ 0, /* top= */ 0, /* right= */ 500, /* bottom= */ 1000);
     }
 
     private void verifyBookmarkListMenuItem(
@@ -761,10 +834,26 @@ public class BookmarkManagerMediatorTest {
     }
 
     @Test
+    public void testDestroy_RemovesRegisteredListeners() {
+        finishLoading();
+        verify(mShoppingService).addSubscriptionsObserver(mSubscriptionsObserver.capture());
+        verify(mDragTouchHandler).addDragListener(mDragListenerArgumentCaptor.capture());
+        assertTrue(mSelectableListLayout.getHandleBackPressChangedSupplier().hasObservers());
+
+        // Eligibility at teardown must not decide whether the registered observer is removed.
+        doReturn(false).when(mCommerceFeatureUtilsJniMock).isShoppingListEligible(anyLong());
+        mMediator.onDestroy();
+
+        verify(mShoppingService).removeSubscriptionsObserver(mSubscriptionsObserver.getValue());
+        verify(mDragTouchHandler).removeDragListener(mDragListenerArgumentCaptor.getValue());
+        assertFalse(mSelectableListLayout.getHandleBackPressChangedSupplier().hasObservers());
+    }
+
+    @Test
     public void onBackPressed_SelectableListLayoutIntercepts() {
         finishLoading();
 
-        doReturn(true).when(mSelectableListLayout).onBackPressed();
+        mSelectableListLayout.setHandleBackPress(true);
 
         assertTrue(mMediator.onBackPressed());
     }
@@ -795,7 +884,8 @@ public class BookmarkManagerMediatorTest {
 
     @Test
     public void onBackPressed_AndThenModelEvent() {
-        initAndLoadBookmarkModel();
+        finishLoading();
+        assertEquals(BookmarkUiMode.LOADING, mMediator.getCurrentUiMode());
         assertFalse(mMediator.onBackPressed());
 
         verify(mBookmarkModel).addObserver(mBookmarkModelObserverArgumentCaptor.capture());
@@ -895,10 +985,7 @@ public class BookmarkManagerMediatorTest {
 
         // Get the search text change callback from the search box row.
         Callback<String> searchTextChangeCallback =
-                mModelList
-                        .get(0)
-                        .model
-                        .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
 
         // Start a search on the tablet (in-place filter, stays in FOLDER mode).
         searchTextChangeCallback.onResult("3");
@@ -916,6 +1003,108 @@ public class BookmarkManagerMediatorTest {
         assertTrue(
                 "Drag should be re-enabled after clearing tablet search.",
                 dragStateDelegate.getDragEnabled());
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    public void testListMenuAndReorderable_DuringTabletSearch() {
+        mBookmarkUiPrefs.setBookmarkRowSortOrder(BookmarkRowSortOrder.MANUAL);
+        when(mBookmarkModel.searchBookmarks(anyString(), anyInt()))
+                .thenReturn(Arrays.asList(mFolderId2, mFolderId3));
+
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        BookmarkListEntry entry =
+                mModelList.get(1).model.get(BookmarkManagerProperties.BOOKMARK_LIST_ENTRY);
+        assertTrue(
+                "Entry should be reorderable in folder mode before search.",
+                mMediator.isReorderable(entry));
+
+        Callback<String> searchTextChangeCallback =
+                mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
+        searchTextChangeCallback.onResult("Folder");
+
+        assertEquals(
+                "UI mode should remain FOLDER on tablet during search.",
+                BookmarkUiMode.FOLDER,
+                mMediator.getCurrentUiMode());
+
+        entry = mModelList.get(1).model.get(BookmarkManagerProperties.BOOKMARK_LIST_ENTRY);
+        assertFalse(
+                "Entry should not be reorderable during tablet search.",
+                mMediator.isReorderable(entry));
+
+        ModelList menuModelList = mMediator.createListMenuModelList(entry, Location.MIDDLE);
+        verifyMenuListItemTitles(
+                menuModelList,
+                R.string.bookmark_item_select,
+                R.string.bookmark_item_edit,
+                R.string.bookmark_item_move,
+                R.string.bookmark_item_delete,
+                R.string.bookmark_show_in_folder);
+
+        // Clearing search should restore reorderability and Move up / Move down menu items.
+        searchTextChangeCallback.onResult("");
+        entry = mModelList.get(1).model.get(BookmarkManagerProperties.BOOKMARK_LIST_ENTRY);
+        assertTrue(
+                "Entry should be reorderable again after clearing tablet search.",
+                mMediator.isReorderable(entry));
+
+        menuModelList = mMediator.createListMenuModelList(entry, Location.MIDDLE);
+        verifyMenuListItemTitles(
+                menuModelList,
+                R.string.bookmark_item_select,
+                R.string.bookmark_item_edit,
+                R.string.bookmark_item_move,
+                R.string.bookmark_item_delete,
+                R.string.menu_item_move_up,
+                R.string.menu_item_move_down);
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    public void testShowInFolder_DuringTabletSearch_SameFolder() {
+        mBookmarkUiPrefs.setBookmarkRowSortOrder(BookmarkRowSortOrder.MANUAL);
+        when(mBookmarkModel.searchBookmarks(eq("3"), anyInt()))
+                .thenReturn(Collections.singletonList(mFolderId3));
+
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        verifyCurrentBookmarkIds(null, mFolderId2, mFolderId3);
+        assertFalse(
+                "Back press should be disabled when state stack has 1 folder and no search.",
+                mBackPressStateSupplier.get());
+
+        Callback<String> searchTextChangeCallback =
+                mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
+        searchTextChangeCallback.onResult("3");
+
+        assertEquals(BookmarkUiMode.FOLDER, mMediator.getCurrentUiMode());
+        verifyCurrentBookmarkIds(null, mFolderId3);
+        assertTrue(
+                "Back press should be enabled during tablet search.",
+                mBackPressStateSupplier.get());
+        assertFalse(mModelList.get(1).model.get(ImprovedBookmarkRowProperties.IS_DRAG_ENABLED));
+
+        BasicListMenu menu =
+                (BasicListMenu) mMediator.createListMenuForBookmark(mModelList.get(1).model);
+        assertNotNull(menu);
+        assertFalse(mModelList.get(1).model.get(BookmarkManagerProperties.IS_HIGHLIGHTED));
+
+        // Click "Show in folder" (index 4 for a folder item: Select, Edit, Move, Delete, Show in
+        // folder).
+        clickChildAt(menu, 4);
+
+        assertEquals("", mModelList.get(0).model.get(SearchBoxProperties.SEARCH_TEXT));
+        assertFalse(
+                "Back press should be disabled after Show in folder clears tablet search.",
+                mBackPressStateSupplier.get());
+        verifyCurrentBookmarkIds(null, mFolderId2, mFolderId3);
+        assertTrue(mModelList.get(1).model.get(ImprovedBookmarkRowProperties.IS_DRAG_ENABLED));
+        assertTrue(mModelList.get(2).model.get(ImprovedBookmarkRowProperties.IS_DRAG_ENABLED));
+        assertFalse(mModelList.get(1).model.get(BookmarkManagerProperties.IS_HIGHLIGHTED));
+        assertTrue(mModelList.get(2).model.get(BookmarkManagerProperties.IS_HIGHLIGHTED));
     }
 
     @Test
@@ -991,6 +1180,9 @@ public class BookmarkManagerMediatorTest {
         mMediator.openFolder(mFolderId1);
         mBookmarkUiPrefs.setBookmarkRowDisplayPref(BookmarkRowDisplayPref.VISUAL);
         assertEquals(ViewType.IMPROVED_BOOKMARK_VISUAL, mModelList.get(1).type);
+
+        mBookmarkUiPrefs.setBookmarkRowDisplayPref(BookmarkRowDisplayPref.COMPACT);
+        assertEquals(ViewType.IMPROVED_BOOKMARK_COMPACT, mModelList.get(1).type);
     }
 
     @Test
@@ -1221,6 +1413,9 @@ public class BookmarkManagerMediatorTest {
         assertEquals(mFolderId2, model.get(BookmarkManagerProperties.BOOKMARK_ID));
         assertEquals(mFolderItem2.getTitle(), model.get(ImprovedBookmarkRowProperties.TITLE));
         assertFalse(model.get(ImprovedBookmarkRowProperties.DESCRIPTION_VISIBLE));
+        assertEquals(
+                ImageVisibility.FOLDER_DRAWABLE,
+                model.get(ImprovedBookmarkRowProperties.START_IMAGE_VISIBILITY));
         assertNotNull(model.get(ImprovedBookmarkRowProperties.START_ICON_DRAWABLE));
         assertNotNull(model.get(ImprovedBookmarkRowProperties.POPUP_LISTENER));
         assertEquals(false, model.get(ImprovedBookmarkRowProperties.SELECTION_ACTIVE));
@@ -1455,12 +1650,16 @@ public class BookmarkManagerMediatorTest {
 
         // Delete.
         clickChildAt(menu, 4);
-        verify(mBookmarkModel).deleteBookmarks(mBookmarkId21);
+        verify(mBookmarkModel).deleteBookmarks(mBookmarkUndoController, mBookmarkId21);
 
         // Open in new tab.
         clickChildAt(menu, 5);
         verify(mBookmarkOpener)
-                .openBookmarksInNewTabs(Collections.singletonList(mBookmarkId21), false);
+                .openBookmarksInNewTabs(
+                        eq(Collections.singletonList(mBookmarkId21)),
+                        eq(false),
+                        eq(null),
+                        any(Bundle.class));
     }
 
     @Test
@@ -1493,12 +1692,17 @@ public class BookmarkManagerMediatorTest {
         // Open in new tab.
         clickChildAt(menu, 5);
         verify(mBookmarkOpener)
-                .openBookmarksInNewTabs(Collections.singletonList(mBookmarkId21), true);
+                .openBookmarksInNewTabs(
+                        eq(Collections.singletonList(mBookmarkId21)),
+                        eq(true),
+                        eq(null),
+                        any(Bundle.class));
 
         // Open in other window.
         clickChildAt(menu, 6);
         verify(mBookmarkOpener)
-                .openBookmarksInNewWindow(Collections.singletonList(mBookmarkId21), true);
+                .openBookmarksInNewWindow(
+                        eq(Collections.singletonList(mBookmarkId21)), eq(true), any(Bundle.class));
     }
 
     @Test
@@ -1598,16 +1802,129 @@ public class BookmarkManagerMediatorTest {
                 ViewType.IMPROVED_BOOKMARK_COMPACT);
 
         mModelList.addObserver(mListObserver);
-        mModelList
-                .get(0)
-                .model
-                .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK)
-                .onResult("3");
+        mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK).onResult("3");
         verifyCurrentViewTypes(ViewType.SEARCH_BOX, ViewType.IMPROVED_BOOKMARK_COMPACT);
         verify(mListObserver, never()).onItemRangeChanged(any(), eq(0), anyInt(), any());
         verify(mListObserver, never()).onItemRangeRemoved(any(), eq(0), anyInt());
         verify(mListObserver, never()).onItemRangeInserted(any(), eq(0), anyInt());
         verify(mListObserver).onItemRangeChanged(any(), eq(1), anyInt(), any());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testSearchBox_Desktop() {
+        when(mBookmarkModel.searchBookmarks(eq("3"), anyInt()))
+                .thenReturn(Collections.singletonList(mFolderId3));
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        verifyCurrentViewTypes(
+                ViewType.IMPROVED_BOOKMARK_COMPACT, ViewType.IMPROVED_BOOKMARK_COMPACT);
+
+        PropertyModel searchBoxModel = mMediator.getOrCreateSearchBoxPropertyModel();
+        assertNotNull(searchBoxModel);
+
+        mModelList.addObserver(mListObserver);
+        searchBoxModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK).onResult("3");
+        verifyCurrentViewTypes(ViewType.IMPROVED_BOOKMARK_COMPACT);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testSetSearchBoxInline() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        // By default on desktop, search box is NOT inline.
+        verifyCurrentViewTypes(
+                ViewType.IMPROVED_BOOKMARK_COMPACT, ViewType.IMPROVED_BOOKMARK_COMPACT);
+        verify(mLayoutManager, times(1)).scrollToPosition(0);
+
+        // Enable inline search box.
+        mMediator.setSearchBoxInline(true);
+        verifyCurrentViewTypes(
+                ViewType.SEARCH_BOX,
+                ViewType.IMPROVED_BOOKMARK_COMPACT,
+                ViewType.IMPROVED_BOOKMARK_COMPACT);
+        verify(mLayoutManager, times(2)).scrollToPosition(0);
+
+        // Hide inline search box.
+        mMediator.setSearchBoxInline(false);
+        verifyCurrentViewTypes(
+                ViewType.IMPROVED_BOOKMARK_COMPACT, ViewType.IMPROVED_BOOKMARK_COMPACT);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testSetSearchBoxInline_emptyFolder() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        finishLoading();
+        mMediator.openFolder(mFolderId3);
+        // By default on desktop, search box is NOT inline.
+        verifyCurrentViewTypes(ViewType.EMPTY_STATE);
+
+        // Enable inline search box.
+        mMediator.setSearchBoxInline(true);
+        verifyCurrentViewTypes(ViewType.SEARCH_BOX, ViewType.EMPTY_STATE);
+
+        // Hide inline search box.
+        mMediator.setSearchBoxInline(false);
+        verifyCurrentViewTypes(ViewType.EMPTY_STATE);
+    }
+
+    @Test
+    public void testSetSearchBoxInline_nonDesktopDoesNothing() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        verifyCurrentViewTypes(
+                ViewType.SEARCH_BOX,
+                ViewType.IMPROVED_BOOKMARK_COMPACT,
+                ViewType.IMPROVED_BOOKMARK_COMPACT);
+
+        // Calling setSearchBoxInline(false) on non-desktop should be a no-op.
+        mMediator.setSearchBoxInline(false);
+        verifyCurrentViewTypes(
+                ViewType.SEARCH_BOX,
+                ViewType.IMPROVED_BOOKMARK_COMPACT,
+                ViewType.IMPROVED_BOOKMARK_COMPACT);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testSetSearchBoxInline_scrolledDownDoesNotScrollToTop() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        verify(mLayoutManager, times(1)).scrollToPosition(0);
+
+        // Hide inline search box.
+        mMediator.setSearchBoxInline(false);
+
+        // Simulate that the RecyclerView is scrolled down (can scroll up).
+        doReturn(10).when(mLayoutManager).computeVerticalScrollOffset(any());
+        doReturn(100).when(mLayoutManager).computeVerticalScrollRange(any());
+        doReturn(50).when(mLayoutManager).computeVerticalScrollExtent(any());
+
+        // Re-enable inline search box while scrolled down.
+        mMediator.setSearchBoxInline(true);
+        verifyCurrentViewTypes(
+                ViewType.SEARCH_BOX,
+                ViewType.IMPROVED_BOOKMARK_COMPACT,
+                ViewType.IMPROVED_BOOKMARK_COMPACT);
+        // scrollToPosition(0) should NOT have been called again.
+        verify(mLayoutManager, times(1)).scrollToPosition(0);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testIsSearchBoxInline() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        finishLoading();
+
+        mMediator.setSearchBoxInline(false);
+        assertFalse(mMediator.isSearchBoxInline());
+
+        mMediator.setSearchBoxInline(true);
+        assertTrue(mMediator.isSearchBoxInline());
     }
 
     @Test
@@ -1648,9 +1965,7 @@ public class BookmarkManagerMediatorTest {
         finishLoading();
         mMediator.openFolder(mFolderId1);
         PropertyModel searchBoxModel = mModelList.get(0).model;
-        searchBoxModel
-                .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK)
-                .onResult(queryString);
+        searchBoxModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK).onResult(queryString);
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
         verifyCurrentBookmarkIds(null, mFolderId2, mFolderId3, mBookmarkId21);
 
@@ -1693,36 +2008,30 @@ public class BookmarkManagerMediatorTest {
 
         PropertyModel searchBoxModel = mModelList.get(0).model;
         Callback<String> searchTextChangeCallback =
-                searchBoxModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                searchBoxModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
         assertNotNull(searchTextChangeCallback);
 
         String searchText = "foo";
         searchTextChangeCallback.onResult(searchText);
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
-        assertEquals(searchText, searchBoxModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT));
+        assertEquals(searchText, searchBoxModel.get(SearchBoxProperties.SEARCH_TEXT));
         verify(mBookmarkModel).searchBookmarks(eq(searchText), anyInt());
-        assertTrue(
-                searchBoxModel.get(
-                        BookmarkSearchBoxRowProperties.CLEAR_SEARCH_TEXT_BUTTON_VISIBILITY));
+        assertTrue(searchBoxModel.get(SearchBoxProperties.CLEAR_BUTTON_VISIBILITY));
         verifyNoInteractions(mHideKeyboardRunnable);
 
         searchText = "";
         searchTextChangeCallback.onResult(searchText);
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
-        assertEquals(searchText, searchBoxModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT));
+        assertEquals(searchText, searchBoxModel.get(SearchBoxProperties.SEARCH_TEXT));
         verify(mBookmarkModel, never()).searchBookmarks(eq(searchText), anyInt());
-        assertFalse(
-                searchBoxModel.get(
-                        BookmarkSearchBoxRowProperties.CLEAR_SEARCH_TEXT_BUTTON_VISIBILITY));
+        assertFalse(searchBoxModel.get(SearchBoxProperties.CLEAR_BUTTON_VISIBILITY));
         verifyNoInteractions(mHideKeyboardRunnable);
 
         searchTextChangeCallback.onResult("bar");
         mMediator.onBackPressed();
         assertEquals(BookmarkUiMode.FOLDER, mMediator.getCurrentUiMode());
-        assertEquals("", searchBoxModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT));
-        assertFalse(
-                searchBoxModel.get(
-                        BookmarkSearchBoxRowProperties.CLEAR_SEARCH_TEXT_BUTTON_VISIBILITY));
+        assertEquals("", searchBoxModel.get(SearchBoxProperties.SEARCH_TEXT));
+        assertFalse(searchBoxModel.get(SearchBoxProperties.CLEAR_BUTTON_VISIBILITY));
         verify(mHideKeyboardRunnable).run();
     }
 
@@ -2151,6 +2460,248 @@ public class BookmarkManagerMediatorTest {
     }
 
     @Test
+    public void testChangeSelectionMode_announcesContextOnEnterAndExit() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        when(mSelectionDelegate.getSelectedItems()).thenReturn(Collections.singleton(mFolderId2));
+
+        mMediator.changeSelectionMode(true);
+        assertEquals(
+                mActivity.getString(R.string.accessibility_toolbar_screen_position, "1"),
+                mSelectableListLayout.getContentDescription());
+
+        // Subsequent call while already in selection mode should not announce again.
+        mSelectableListLayout.setContentDescription(null);
+        mMediator.changeSelectionMode(true);
+        assertNull(mSelectableListLayout.getContentDescription());
+
+        mMediator.changeSelectionMode(false);
+        assertEquals(
+                mActivity.getString(R.string.accessibility_toolbar_exit_select),
+                mSelectableListLayout.getContentDescription());
+    }
+
+    @Test
+    public void testChangeSelectionMode_emptyFolder_announcesExit() {
+        finishLoading();
+        // Clear all items so model list has no bookmark items.
+        mModelList.clear();
+
+        when(mSelectionDelegate.getSelectedItems()).thenReturn(Collections.singleton(mFolderId2));
+        mMediator.changeSelectionMode(true);
+        assertEquals(
+                mActivity.getString(R.string.accessibility_toolbar_screen_position, "1"),
+                mSelectableListLayout.getContentDescription());
+
+        mMediator.changeSelectionMode(false);
+        assertEquals(
+                mActivity.getString(R.string.accessibility_toolbar_exit_select),
+                mSelectableListLayout.getContentDescription());
+    }
+
+    @Test
+    public void testChangeSelectionMode_multipleItems_announcesCount() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        when(mSelectionDelegate.getSelectedItems()).thenReturn(Set.of(mFolderId2, mFolderId3));
+
+        mMediator.changeSelectionMode(true);
+        assertEquals(
+                mActivity.getString(R.string.accessibility_toolbar_screen_position, "2"),
+                mSelectableListLayout.getContentDescription());
+    }
+
+    @Test
+    public void testChangeSelectionMode_alreadyDisabled_noAnnouncement() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        // Selection is already disabled (false -> false): should not make any announcement.
+        mMediator.changeSelectionMode(false);
+        assertNull(mSelectableListLayout.getContentDescription());
+    }
+
+    @Test
+    public void testChangeSelectionMode_focusesSelectedRow() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        layoutRecyclerView();
+
+        when(mSelectionDelegate.isItemSelected(mFolderId2)).thenReturn(true);
+        when(mSelectionDelegate.getSelectedItems()).thenReturn(Collections.singleton(mFolderId2));
+        when(mSelectionDelegate.getSelectedItemsAsList())
+                .thenReturn(Collections.singletonList(mFolderId2));
+
+        mMediator.changeSelectionMode(true);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        int expectedPosition = mMediator.getPositionForBookmark(mFolderId2);
+        assertTrue(expectedPosition >= 0);
+        assertTrue(
+                mRecyclerView
+                        .findViewHolderForAdapterPosition(expectedPosition)
+                        .itemView
+                        .isFocused());
+    }
+
+    @Test
+    public void testFocusRowForBookmark_scrollsAndAttachesListenerWhenViewHolderNull() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        when(mSelectionDelegate.isItemSelected(mFolderId2)).thenReturn(true);
+        mMediator.changeSelectionMode(true);
+
+        int expectedPosition = mMediator.getPositionForBookmark(mFolderId2);
+        assertTrue(expectedPosition >= 0);
+        assertNull(mRecyclerView.findViewHolderForAdapterPosition(expectedPosition));
+
+        mMediator.focusRowForBookmark(mFolderId2);
+        verify(mLayoutManager).scrollToPosition(expectedPosition);
+
+        layoutRecyclerView();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        assertTrue(
+                mRecyclerView
+                        .findViewHolderForAdapterPosition(expectedPosition)
+                        .itemView
+                        .isFocused());
+    }
+
+    @Test
+    public void testFocusRowForBookmark_invalidPosition_noScrollOrFocus() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        layoutRecyclerView();
+        clearInvocations(mLayoutManager);
+
+        BookmarkId unknownId = new BookmarkId(9999, BookmarkType.NORMAL);
+        when(mSelectionDelegate.isItemSelected(unknownId)).thenReturn(true);
+        mMediator.changeSelectionMode(true);
+
+        mMediator.focusRowForBookmark(unknownId);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        verify(mLayoutManager, never()).scrollToPosition(anyInt());
+        assertFalse(mRecyclerView.hasFocus());
+    }
+
+    @Test
+    public void testFocusRowForBookmark_selectionCancelledBeforeExecution_noFocus() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        layoutRecyclerView();
+
+        when(mSelectionDelegate.isItemSelected(mFolderId2)).thenReturn(true);
+        when(mSelectionDelegate.getSelectedItems()).thenReturn(Collections.singleton(mFolderId2));
+        when(mSelectionDelegate.getSelectedItemsAsList())
+                .thenReturn(Collections.singletonList(mFolderId2));
+
+        mMediator.changeSelectionMode(true);
+
+        // Cancel selection before runnable executes.
+        when(mSelectionDelegate.isItemSelected(mFolderId2)).thenReturn(false);
+        mMediator.changeSelectionMode(false);
+
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        int expectedPosition = mMediator.getPositionForBookmark(mFolderId2);
+        assertFalse(
+                mRecyclerView
+                        .findViewHolderForAdapterPosition(expectedPosition)
+                        .itemView
+                        .isFocused());
+    }
+
+    @Test
+    public void testChangeSelectionMode_emptySelectionList_doesNotPostFocus() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        layoutRecyclerView();
+
+        when(mSelectionDelegate.getSelectedItems()).thenReturn(Collections.singleton(mFolderId2));
+        when(mSelectionDelegate.getSelectedItemsAsList()).thenReturn(Collections.emptyList());
+
+        mMediator.changeSelectionMode(true);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        int expectedPosition = mMediator.getPositionForBookmark(mFolderId2);
+        assertFalse(
+                mRecyclerView
+                        .findViewHolderForAdapterPosition(expectedPosition)
+                        .itemView
+                        .isFocused());
+    }
+
+    @Test
+    public void testChangeSelectionMode_doesNotPostFocusWhenExiting() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        layoutRecyclerView();
+
+        mMediator.changeSelectionMode(false);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        int expectedPosition = mMediator.getPositionForBookmark(mFolderId2);
+        assertFalse(
+                mRecyclerView
+                        .findViewHolderForAdapterPosition(expectedPosition)
+                        .itemView
+                        .isFocused());
+    }
+
+    @Test
+    public void testDestroy_removesChildAttachListener() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        when(mSelectionDelegate.isItemSelected(mFolderId2)).thenReturn(true);
+        mMediator.changeSelectionMode(true);
+
+        int expectedPosition = mMediator.getPositionForBookmark(mFolderId2);
+        assertTrue(expectedPosition >= 0);
+        assertNull(mRecyclerView.findViewHolderForAdapterPosition(expectedPosition));
+
+        mMediator.focusRowForBookmark(mFolderId2);
+        mMediator.onDestroy();
+
+        layoutRecyclerView();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        assertFalse(
+                mRecyclerView
+                        .findViewHolderForAdapterPosition(expectedPosition)
+                        .itemView
+                        .isFocused());
+    }
+
+    @Test
+    public void testChangeSelectionMode_SkipsNonBookmarkRows() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+
+        // Add a non-bookmark row (e.g. ViewType.DIVIDER) in the middle of bookmark list.
+        PropertyModel nonBookmarkModel = new PropertyModel();
+        mModelList.add(2, new ListItem(ViewType.DIVIDER, nonBookmarkModel));
+
+        // Now mModelList has:
+        // Index 0: SEARCH_BOX
+        // Index 1: Bookmark A (mFolderId2)
+        // Index 2: DIVIDER
+        // Index 3: Bookmark B (mFolderId3)
+
+        // This should not crash when iterating through the list.
+        mMediator.changeSelectionMode(true);
+
+        // Verify bookmark rows were updated successfully.
+        assertTrue(mModelList.get(1).model.get(ImprovedBookmarkRowProperties.SELECTION_ACTIVE));
+        assertTrue(mModelList.get(3).model.get(ImprovedBookmarkRowProperties.SELECTION_ACTIVE));
+    }
+
+    @Test
     public void testClearFocusOnScroll() {
         finishLoading();
         mMediator.openFolder(mFolderId1);
@@ -2161,17 +2712,15 @@ public class BookmarkManagerMediatorTest {
         OnScrollListener onScrollListener = mOnScrollListenerCaptor.getValue();
 
         PropertyModel searchBoxRowPropertyModel = mModelList.get(0).model;
-        searchBoxRowPropertyModel
-                .get(BookmarkSearchBoxRowProperties.FOCUS_CHANGE_CALLBACK)
-                .onResult(true);
-        assertTrue(searchBoxRowPropertyModel.get(BookmarkSearchBoxRowProperties.HAS_FOCUS));
+        searchBoxRowPropertyModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(true);
+        assertTrue(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
 
         onScrollListener.onScrolled(mRecyclerView, 0, -1);
         verifyNoInteractions(mHideKeyboardRunnable);
-        assertTrue(searchBoxRowPropertyModel.get(BookmarkSearchBoxRowProperties.HAS_FOCUS));
+        assertTrue(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
 
         onScrollListener.onScrolled(mRecyclerView, 0, 1);
-        assertFalse(searchBoxRowPropertyModel.get(BookmarkSearchBoxRowProperties.HAS_FOCUS));
+        assertFalse(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
         verify(mHideKeyboardRunnable).run();
     }
 
@@ -2184,16 +2733,12 @@ public class BookmarkManagerMediatorTest {
         assertEquals(ViewType.SEARCH_BOX, mModelList.get(0).type);
         PropertyModel searchBoxRowPropertyModel = mModelList.get(0).model;
 
-        searchBoxRowPropertyModel
-                .get(BookmarkSearchBoxRowProperties.FOCUS_CHANGE_CALLBACK)
-                .onResult(true);
-        assertTrue(searchBoxRowPropertyModel.get(BookmarkSearchBoxRowProperties.HAS_FOCUS));
+        searchBoxRowPropertyModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(true);
+        assertTrue(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
         verifyNoInteractions(mHideKeyboardRunnable);
 
-        searchBoxRowPropertyModel
-                .get(BookmarkSearchBoxRowProperties.FOCUS_CHANGE_CALLBACK)
-                .onResult(false);
-        assertFalse(searchBoxRowPropertyModel.get(BookmarkSearchBoxRowProperties.HAS_FOCUS));
+        searchBoxRowPropertyModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(false);
+        assertFalse(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
         verify(mHideKeyboardRunnable).run();
     }
 
@@ -2219,26 +2764,22 @@ public class BookmarkManagerMediatorTest {
 
         PropertyModel propertyModel = mModelList.get(0).model;
         Callback<String> searchTextCallback =
-                propertyModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                propertyModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
         assertNotNull(searchTextCallback);
         Runnable clearSearchTextRunnable =
-                propertyModel.get(BookmarkSearchBoxRowProperties.CLEAR_SEARCH_TEXT_RUNNABLE);
+                propertyModel.get(SearchBoxProperties.CLEAR_SEARCH_TEXT_RUNNABLE);
         assertNotNull(clearSearchTextRunnable);
 
         String searchText = "foo";
         searchTextCallback.onResult(searchText);
-        assertEquals(searchText, propertyModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT));
-        assertTrue(
-                propertyModel.get(
-                        BookmarkSearchBoxRowProperties.CLEAR_SEARCH_TEXT_BUTTON_VISIBILITY));
+        assertEquals(searchText, propertyModel.get(SearchBoxProperties.SEARCH_TEXT));
+        assertTrue(propertyModel.get(SearchBoxProperties.CLEAR_BUTTON_VISIBILITY));
         verify(mBookmarkModel, times(1)).searchBookmarks(anyString(), anyInt());
         verifyCurrentBookmarkIds(null, mFolderId1);
 
         clearSearchTextRunnable.run();
-        assertEquals("", propertyModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT));
-        assertFalse(
-                propertyModel.get(
-                        BookmarkSearchBoxRowProperties.CLEAR_SEARCH_TEXT_BUTTON_VISIBILITY));
+        assertEquals("", propertyModel.get(SearchBoxProperties.SEARCH_TEXT));
+        assertFalse(propertyModel.get(SearchBoxProperties.CLEAR_BUTTON_VISIBILITY));
         // It shouldn't search again.
         verify(mBookmarkModel, times(1)).searchBookmarks(anyString(), anyInt());
         assertBookmarkListEmpty();
@@ -2252,10 +2793,7 @@ public class BookmarkManagerMediatorTest {
         verifyCurrentBookmarkIds(null, mFolderId2, mFolderId3);
 
         Callback<String> searchTextChangeCallback =
-                mModelList
-                        .get(0)
-                        .model
-                        .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
         searchTextChangeCallback.onResult("foo");
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
 
@@ -2341,7 +2879,7 @@ public class BookmarkManagerMediatorTest {
         // Focusing the searchbox will start a search which will clear out existing bookmarks.
         when(mBookmarkModel.searchBookmarks(anyString(), anyInt()))
                 .thenReturn(Collections.singletonList(mFolderId1));
-        searchBoxModel.get(BookmarkSearchBoxRowProperties.FOCUS_CHANGE_CALLBACK).onResult(true);
+        searchBoxModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(true);
 
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
         assertBookmarkListEmpty();
@@ -2433,14 +2971,13 @@ public class BookmarkManagerMediatorTest {
 
         PropertyModel propertyModel = mModelList.get(0).model;
         Callback<String> searchTextCallback =
-                propertyModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                propertyModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
         assertNotNull(searchTextCallback);
 
         String queryWithWhitespace = " foo ";
         searchTextCallback.onResult(queryWithWhitespace);
         // Model queries should be trimmed, but the View property should still have whitespace.
-        assertEquals(
-                queryWithWhitespace, propertyModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT));
+        assertEquals(queryWithWhitespace, propertyModel.get(SearchBoxProperties.SEARCH_TEXT));
         verify(mBookmarkModel).searchBookmarks(eq("foo"), anyInt());
     }
 
@@ -2452,10 +2989,8 @@ public class BookmarkManagerMediatorTest {
 
         when(mBookmarkModel.searchBookmarks(anyString(), anyInt()))
                 .thenReturn(Collections.singletonList(mFolderId1));
-        searchBoxModel
-                .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK)
-                .onResult("test");
-        searchBoxModel.get(BookmarkSearchBoxRowProperties.FOCUS_CHANGE_CALLBACK).onResult(true);
+        searchBoxModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK).onResult("test");
+        searchBoxModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(true);
 
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
         verifyCurrentBookmarkIds(null, mFolderId1);
@@ -2479,8 +3014,8 @@ public class BookmarkManagerMediatorTest {
 
         when(mBookmarkModel.searchBookmarks(anyString(), anyInt()))
                 .thenReturn(Collections.singletonList(mFolderId1));
-        searchBoxModel.get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK).onResult("");
-        searchBoxModel.get(BookmarkSearchBoxRowProperties.FOCUS_CHANGE_CALLBACK).onResult(true);
+        searchBoxModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK).onResult("");
+        searchBoxModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(true);
 
         assertEquals(BookmarkUiMode.SEARCHING, mMediator.getCurrentUiMode());
         assertBookmarkListEmpty();
@@ -2585,6 +3120,24 @@ public class BookmarkManagerMediatorTest {
     }
 
     @Test
+    public void testRefreshWithDeletedCurrentFolder_fallsBackToDefaultFolder() {
+        finishLoading();
+        mMediator.openFolder(mFolderId1);
+        verify(mBookmarkModel, times(1)).getChildIds(mFolderId1);
+
+        // Simulate folder 1 being deleted (e.g. on sign out).
+        when(mBookmarkModel.doesBookmarkExist(mFolderId1)).thenReturn(false);
+
+        verify(mBookmarkModel).addObserver(mBookmarkModelObserverArgumentCaptor.capture());
+        BookmarkModelObserver observer = mBookmarkModelObserverArgumentCaptor.getValue();
+        observer.bookmarkModelChanged();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        // Should fall back to defaultFolder (root folder).
+        assertEquals(mRootFolderId, mMediator.getCurrentFolderId());
+    }
+
+    @Test
     public void testBackPressStateSupplier_initialState() {
         finishLoading();
         mMediator.openFolder(mRootFolderId);
@@ -2617,12 +3170,12 @@ public class BookmarkManagerMediatorTest {
         assertFalse("Supplier should be false initially.", mBackPressStateSupplier.get());
 
         // Simulate selection starting by updating the supplier the Mediator is observing.
-        mSelectableListLayoutHandleBackPressChangedSupplier.set(true);
+        mSelectableListLayout.setHandleBackPress(true);
         assertTrue(
                 "Supplier should be true when selection is active.", mBackPressStateSupplier.get());
 
         // Simulate selection ending.
-        mSelectableListLayoutHandleBackPressChangedSupplier.set(false);
+        mSelectableListLayout.setHandleBackPress(false);
         assertFalse(
                 "Supplier should be false when selection is inactive.",
                 mBackPressStateSupplier.get());
@@ -2635,7 +3188,7 @@ public class BookmarkManagerMediatorTest {
         assertFalse("Supplier should be false initially.", mBackPressStateSupplier.get());
 
         // Simulate selection starting by updating the supplier the Mediator is observing.
-        mSelectableListLayoutHandleBackPressChangedSupplier.set(true);
+        mSelectableListLayout.setHandleBackPress(true);
         assertTrue(
                 "Supplier should be true when selection is active.", mBackPressStateSupplier.get());
 
@@ -2658,13 +3211,13 @@ public class BookmarkManagerMediatorTest {
         mMediator.openFolder(mFolderId1);
 
         // Simulate selection being active, which makes the layout's handler return true.
-        doReturn(true).when(mSelectableListLayout).onBackPressed();
+        mSelectableListLayout.setHandleBackPress(true);
 
         // Perform the back press.
         boolean result = mMediator.onBackPressed();
 
         // Verify that the layout's handler was called and that the event was consumed.
-        verify(mSelectableListLayout).onBackPressed();
+        assertFalse(mSelectableListLayout.getHandleBackPressChangedSupplier().get());
         assertTrue("onBackPressed should return true when selection is cleared.", result);
 
         // Verify folder navigation did NOT happen.
@@ -2683,10 +3236,7 @@ public class BookmarkManagerMediatorTest {
 
         // Get the callback from the currently displayed search box model.
         Callback<String> searchTextChangeCallback =
-                mModelList
-                        .get(0)
-                        .model
-                        .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
 
         // Starting a search should enable back press.
         searchTextChangeCallback.onResult("test");
@@ -2711,10 +3261,7 @@ public class BookmarkManagerMediatorTest {
         assertTrue("Supplier should be true in a subfolder.", mBackPressStateSupplier.get());
 
         Callback<String> searchTextChangeCallback =
-                mModelList
-                        .get(0)
-                        .model
-                        .get(BookmarkSearchBoxRowProperties.SEARCH_TEXT_CHANGE_CALLBACK);
+                mModelList.get(0).model.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
         searchTextChangeCallback.onResult("test");
         assertTrue(
                 "Supplier should remain true when searching in a subfolder.",
@@ -2741,7 +3288,26 @@ public class BookmarkManagerMediatorTest {
 
         doReturn("chrome://bookmarks/").when(mNativePage).getUrl();
         mMediator.openFolder(mFolderId2);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mNativePage).onStateChange("chrome-native://bookmarks/folder/6", true);
+    }
+
+    @Test
+    public void testUpdateForUrl_popsStateStack() {
+        finishLoading();
+        mMediator.openFolder(mMobileFolderId);
+        mMediator.openFolder(mFolderId1);
+        mMediator.openFolder(mFolderId2);
+        // Initially, the stack should contain root folder (MobileBookmarks), Folder1, and Folder2.
+        assertEquals(3, mMediator.getStateStackForTesting().size());
+
+        // Simulate tab back navigation to Folder1 by calling updateForUrl.
+        mMediator.updateForUrl("chrome-native://bookmarks/folder/" + mFolderId1.getId());
+
+        // The stack should now contain root folder and Folder1. Folder2 should be popped.
+        assertEquals(2, mMediator.getStateStackForTesting().size());
+        assertEquals(BookmarkUiMode.FOLDER, mMediator.getCurrentUiMode());
+        assertEquals(mFolderId1, mMediator.getStateStackForTesting().peekLast().mFolder);
     }
 
     private void verifyMenuListItemTitles(ModelList modelList, int... expectedTitleIds) {
@@ -2766,5 +3332,28 @@ public class BookmarkManagerMediatorTest {
 
     private void clickChildAt(BasicListMenu menu, int i) {
         menu.clickItemForTesting(i);
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    @EnableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
+    public void testClearSearchTextKeepsFocus_DesktopLayout() {
+        DeviceInput.setSupportsKeyboardForTesting(true);
+
+        finishLoading();
+        mMediator.openFolder(mRootFolderId);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        PropertyModel searchBoxRowPropertyModel = mMediator.getOrCreateSearchBoxPropertyModel();
+        searchBoxRowPropertyModel.get(SearchBoxProperties.FOCUS_CHANGED_CALLBACK).onResult(true);
+        assertTrue(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
+
+        Callback<String> searchTextChangeCallback =
+                searchBoxRowPropertyModel.get(SearchBoxProperties.TEXT_CHANGED_CALLBACK);
+        searchTextChangeCallback.onResult("test");
+        searchTextChangeCallback.onResult("");
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        assertTrue(searchBoxRowPropertyModel.get(SearchBoxProperties.HAS_FOCUS));
     }
 }

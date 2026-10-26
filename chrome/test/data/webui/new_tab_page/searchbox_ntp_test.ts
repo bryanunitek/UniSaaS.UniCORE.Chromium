@@ -5,17 +5,21 @@
 import 'chrome://new-tab-page/new_tab_page.js';
 
 import type {NtpSearchboxElement, SearchboxIconElement, SearchboxMatchElement} from 'chrome://new-tab-page/new_tab_page.js';
-import {BrowserProxyImpl, MetricsReporterImpl, SearchboxBrowserProxy} from 'chrome://new-tab-page/new_tab_page.js';
+import {BrowserProxyImpl, InputSource, MetricsReporterImpl, SearchboxBrowserProxy, SearchboxOverride} from 'chrome://new-tab-page/new_tab_page.js';
+import type {ContextualEntrypointAndMenuElement} from 'chrome://resources/cr_components/composebox/contextual_entrypoint_and_menu.js';
 import {createAutocompleteResultForTesting, createSearchMatchForTesting} from 'chrome://resources/cr_components/searchbox/searchbox_browser_proxy.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PageMetricsCallbackRouter} from 'chrome://resources/js/metrics_reporter.mojom-webui.js';
 import {getDeepActiveElement} from 'chrome://resources/js/util.js';
 import {DriveDisclaimerStatus, RenderType, SideType} from 'chrome://resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {SecondaryTextPlacement} from 'chrome://resources/mojo/components/omnibox/browser/suggest_template_info.mojom-webui.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {assertIconMaskImageUrl, assertStyle, createClipboardEvent, createUrlMatch, MockInputState} from 'chrome://webui-test/cr_components/searchbox/searchbox_test_utils.js';
+import {assertIconMaskImageUrl, assertStyle, createClipboardEvent, createSuggestTemplateInfo, createUrlMatch, MockInputState} from 'chrome://webui-test/cr_components/searchbox/searchbox_test_utils.js';
 import {TestSearchboxBrowserProxy} from 'chrome://webui-test/cr_components/searchbox/test_searchbox_browser_proxy.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
+
+import {createFuseboxAction} from './test_support.js';
 
 enum Attributes {
   SELECTED = 'selected',
@@ -168,12 +172,8 @@ suite('SearchboxTest', () => {
     realbox = await createAndAppendRealbox();
     await microtasksFinished();
 
-    const inputWrapper =
-        realbox.shadowRoot.querySelector<HTMLElement>('#inputWrapper');
-    assertTrue(!!inputWrapper);
-    const searchboxInput =
-        realbox.shadowRoot.querySelector<HTMLElement>('#input');
-    assertTrue(!!searchboxInput);
+    const inputWrapper = realbox.$.inputWrapper;
+    const searchboxInput = realbox.$.input;
     const dropdownContainer =
         realbox.shadowRoot.querySelector<HTMLElement>('.dropdownContainer');
 
@@ -220,7 +220,6 @@ suite('SearchboxTest', () => {
     realbox = await createAndAppendRealbox();
 
     const faviconImage = realbox.$.input.$.icon.$.faviconImage;
-    assertTrue(!!faviconImage);
 
     const loadPromise = eventToPromise('load', faviconImage);
     faviconImage.dispatchEvent(new Event('load'));
@@ -264,8 +263,10 @@ suite('SearchboxTest', () => {
       const buttonsToTest = [
         {
           selector: '#voiceSearchButton',
-          iconUrl:
-              'url("chrome://resources/cr_components/searchbox/icons/mic.svg")',
+          iconUrl: `url("chrome://resources/cr_components/searchbox/icons/${
+              document.documentElement.hasAttribute('webui-rounded-icons') ?
+                  'mic.svg' :
+                  'mic_old.svg'}")`,
         },
         {
           selector: '#lensSearchButton',
@@ -602,9 +603,10 @@ suite('SearchboxTest', () => {
           createUrlMatch({iconPath: 'page.svg'}),
           createSearchMatchForTesting({
             iconPath: 'clock.svg',
-            imageUrl: 'https://gstatic.com/',
-            imageDominantColor: '#757575',
-            isRichSuggestion: true,
+            suggestTemplate: createSuggestTemplateInfo({
+              secondaryTextPlacement: SecondaryTextPlacement.kBelowPrimaryText,
+              image: {url: 'https://gstatic.com/', dominantColor: '#757575'},
+            }),
           }),
         ];
         testProxy.callbackRouterRemote.autocompleteResultChanged(
@@ -658,11 +660,23 @@ suite('SearchboxTest', () => {
         assertEquals(
             matchEls[1]!.$.icon.$.image.getAttribute('src'),
             `//image?staticEncode=true&encodeType=webp&url=${
-                encodeURIComponent(matches[1]!.imageUrl)}`);
+                encodeURIComponent(matches[1]!.suggestTemplate.image!.url)}`);
 
         // Mock image finishing loading, which should remove the temporary
         // background color.
-        matchEls[1]!.$.icon.$.image.dispatchEvent(new Event('load'));
+        const image = matchEls[1]!.$.icon.$.image;
+        // The real image request may still be pending; it fails in browser
+        // tests, which have no external network access. Let it settle first so
+        // that its result can't override the mocked load below.
+        if (!image.hidden && !image.naturalWidth) {
+          await Promise.race([
+            eventToPromise('load', image),
+            eventToPromise('error', image),
+          ]);
+        }
+        const loadPromise = eventToPromise('load', image);
+        image.dispatchEvent(new Event('load'));
+        await loadPromise;
         await microtasksFinished();
         assertStyle(containerEl, 'background-color', 'rgba(0, 0, 0, 0)');
         // Realbox icon is not updated as the input does not feature images.
@@ -711,12 +725,10 @@ suite('SearchboxTest', () => {
             hasEntityImage: boolean, expectUseIconImg: boolean,
             expectedSrc: string|null) {
           const icon = getIcon(element!);
-          assertTrue(!!icon.$.icon, 'Icon element does not exists');
           assertEquals(
               isVisible(icon.$.icon), !expectUseIconImg && !hasEntityImage,
               'Icon visibility is incorrect');
 
-          assertTrue(!!icon.$.iconImg, 'Icon image element does not exist');
           assertEquals(
               isVisible(icon.$.iconImg), expectUseIconImg && !hasEntityImage,
               'Icon image visibility is incorrect');
@@ -739,7 +751,6 @@ suite('SearchboxTest', () => {
 
           const icon = getIcon(element!);
           const iconImg = icon.$.iconImg;
-          assertTrue(!!iconImg);
           const loadPromise = eventToPromise('load', iconImg);
           iconImg.dispatchEvent(new Event('load'));
           await loadPromise;
@@ -761,9 +772,10 @@ suite('SearchboxTest', () => {
           createSearchMatchForTesting({
             iconUrl: 'https://helloworld.com/search.png',
             iconPath: 'clock.svg',
-            imageUrl: 'https://gstatic.com/',
-            imageDominantColor: '#757575',
-            isRichSuggestion: true,
+            suggestTemplate: createSuggestTemplateInfo({
+              secondaryTextPlacement: SecondaryTextPlacement.kBelowPrimaryText,
+              image: {url: 'https://gstatic.com/', dominantColor: '#757575'},
+            }),
           }),
         ];
         testProxy.callbackRouterRemote.autocompleteResultChanged(
@@ -890,7 +902,8 @@ suite('SearchboxTest', () => {
         iconUrl: 'https://helloworld-2.com/url.png',
         iconPath: fallbackIconPath,
         isEnterpriseSearchAggregatorPeopleType: true,
-        contents: 'helloworld-2.com',
+        suggestTemplate:
+            createSuggestTemplateInfo({primaryText: 'helloworld-2.com'}),
         destinationUrl: 'https://helloworld-2.com/',
         fillIntoEdit: 'https://helloworld-2.com',
       }),
@@ -908,10 +921,8 @@ suite('SearchboxTest', () => {
     assertEquals(2, matchEls.length);
 
     let faviconImage = matchEls[0]!.$.icon.$.faviconImage;
-    assertTrue(!!faviconImage);
 
     let vectorIcon = matchEls[0]!.$.icon.$.icon;
-    assertTrue(!!vectorIcon);
 
     let loadPromise = eventToPromise('load', faviconImage);
     faviconImage.dispatchEvent(new Event('load'));
@@ -924,10 +935,8 @@ suite('SearchboxTest', () => {
     assertFalse(isVisible(vectorIcon));
 
     faviconImage = matchEls[1]!.$.icon.$.faviconImage;
-    assertTrue(!!faviconImage);
 
     vectorIcon = matchEls[1]!.$.icon.$.icon;
-    assertTrue(!!vectorIcon);
 
     loadPromise = eventToPromise('load', faviconImage);
     faviconImage.dispatchEvent(new Event('load'));
@@ -950,7 +959,6 @@ suite('SearchboxTest', () => {
     assertEquals('https://helloworld.com', realbox.$.input.inputElement.value);
 
     const realboxIcon = realbox.$.input.$.icon;
-    assertTrue(!!realboxIcon);
 
     loadPromise = eventToPromise('load', realboxIcon.$.faviconImage);
     realboxIcon.$.faviconImage.dispatchEvent(new Event('load'));
@@ -1231,4 +1239,126 @@ suite('SearchboxTest', () => {
     assertFalse(openComposeboxCalled);
     assertEquals(1, testProxy.handler.getCallCount('onDriveUploadClicked'));
   });
+
+  test(
+      'openComposebox_ does not close menu when' +
+          'keepMenuOpenOnTabSelectForRealbox is enabled',
+      async () => {
+        loadTimeData.overrideValues({
+          keepMenuOpenOnTabSelectForRealbox: true,
+          contextManagementInComposeboxEnabled: true,
+        });
+        const realbox = await createAndAppendRealbox({
+          ntpRealboxNextEnabled: true,
+          keepMenuOpenOnTabSelectForRealbox: true,
+          contextManagementInComposeboxEnabled: true,
+        });
+        const context =
+            realbox.shadowRoot.querySelector<HTMLElement>('#context');
+        assertTrue(!!context);
+
+        let closeMenuCalled = false;
+        (context as unknown as {closeMenu: () => void}).closeMenu = () => {
+          closeMenuCalled = true;
+        };
+
+        await (realbox as unknown as {
+          openComposebox_: () => void,
+        }).openComposebox_();
+
+        assertFalse(closeMenuCalled);
+      });
+
+  test(
+      'openComposebox_ closes menu when' +
+          'keepMenuOpenOnTabSelectForRealbox is disabled',
+      async () => {
+        loadTimeData.overrideValues({});
+        const realbox = await createAndAppendRealbox({
+          ntpRealboxNextEnabled: true,
+          keepMenuOpenOnTabSelectForRealbox: false,
+        });
+        const context =
+            realbox.shadowRoot.querySelector<HTMLElement>('#context')!;
+        assertTrue(!!context);
+
+        let closeMenuCalled = false;
+        (context as unknown as {closeMenu: () => void}).closeMenu = () => {
+          closeMenuCalled = true;
+        };
+
+        await (realbox as unknown as {
+          openComposebox_: () => void,
+        }).openComposebox_();
+
+        assertTrue(closeMenuCalled);
+      });
+
+  test(
+      'openComposebox_ closes menu when' +
+          'contextManagementInComposeboxEnabled is disabled',
+      async () => {
+        const realbox = await createAndAppendRealbox({
+          ntpRealboxNextEnabled: true,
+          keepMenuOpenOnTabSelectForRealbox: true,
+          contextManagementInComposeboxEnabled: false,
+        });
+        const context =
+            realbox.shadowRoot.querySelector<HTMLElement>('#context');
+        assertTrue(!!context);
+
+        let closeMenuCalled = false;
+        (context as unknown as {closeMenu: () => void}).closeMenu = () => {
+          closeMenuCalled = true;
+        };
+
+        await (realbox as unknown as {
+          openComposebox_: () => void,
+        }).openComposebox_();
+
+        assertTrue(closeMenuCalled);
+      });
+
+  test('closeContextMenu closes context menu', async () => {
+    const realbox = await createAndAppendRealbox({
+      ntpRealboxNextEnabled: true,
+    });
+    const context =
+        realbox.shadowRoot.querySelector<ContextualEntrypointAndMenuElement>(
+            '#context');
+    assertTrue(!!context);
+
+    let closeMenuCalled = false;
+    context.closeMenu = () => {
+      closeMenuCalled = true;
+    };
+
+    realbox.closeContextMenu();
+    assertTrue(closeMenuCalled);
+  });
+
+  test(
+      'handleFuseboxAction opens tab picker for kInputSourceTabPicker',
+      async () => {
+        const realbox = await createAndAppendRealbox({
+          ntpRealboxNextEnabled: true,
+        });
+        const context =
+            realbox.shadowRoot
+                .querySelector<ContextualEntrypointAndMenuElement>('#context');
+        assertTrue(!!context);
+
+        assertFalse(realbox.shareTabsFlyoutOpen);
+
+        // `openTabPicker()` opens the context menu, and an OS-generated window
+        // blur or resize would close it and reset `shareTabsFlyoutOpen`, so
+        // assert right away instead of yielding to the event loop first.
+        await realbox.handleFuseboxAction(createFuseboxAction({
+          preselectedInputSource: InputSource.kInputSourceTabPicker,
+          searchboxOverride: SearchboxOverride.kRealbox,
+        }));
+
+        assertTrue(realbox.shareTabsFlyoutOpen);
+      });
+
 });

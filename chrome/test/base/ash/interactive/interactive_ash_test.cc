@@ -21,16 +21,19 @@
 #include "base/test/test_switches.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_restore/full_restore_app_launch_handler.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/test/base/ash/interactive/settings/interactive_uitest_elements.h"
 #include "chrome/test/base/chromeos/crosier/aura_window_title_observer.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/event_constants.h"
 #include "url/gurl.h"
 
@@ -216,9 +219,7 @@ ui::ElementContext InteractiveAshTest::FindSystemWebApp(
   ash::BrowserDelegate* browser =
       ash::FindSystemWebAppBrowser(profile, type, ash::BrowserType::kApp);
   CHECK(browser);
-  return BrowserElements::From(
-             browser->GetBrowser().GetBrowserForMigrationOnly())
-      ->GetContext();
+  return BrowserElements::From(&browser->GetBrowser())->GetContext();
 }
 
 void InteractiveAshTest::CloseSystemWebApp(ash::SystemWebAppType type) {
@@ -519,7 +520,7 @@ InteractiveAshTest::CreateBrowserWindow(const GURL& url) {
   Profile* profile = GetActiveUserProfile();
   CHECK(profile);
   NavigateParams params(profile, url, ui::PAGE_TRANSITION_TYPED);
-  params.disposition = WindowOpenDisposition::NEW_WINDOW;
+  params.disposition = WindowOpenDisposition::kNewWindow;
   params.window_action = NavigateParams::WindowAction::kShowWindow;
   return Navigate(&params);
 }

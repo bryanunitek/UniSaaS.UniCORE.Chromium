@@ -5,9 +5,8 @@
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_ACTOR_LOGIN_AUTOMATED_PASSWORD_CHANGE_CREDENTIAL_FILLER_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_ACTOR_LOGIN_AUTOMATED_PASSWORD_CHANGE_CREDENTIAL_FILLER_H_
 
-#include <string>
-#include <vector>
-
+#include "base/memory/scoped_refptr.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_quality_logger_interface.h"
 #include "components/password_manager/core/browser/actor_login/internal/actor_login_credential_filler.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
 
@@ -22,12 +21,11 @@ class AutomatedPasswordChangeCredentialFiller
       const url::Origin& main_frame_origin,
       const Credential& credential,
       password_manager::PasswordManagerClient* client,
-      base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+      scoped_refptr<ActorLoginQualityLoggerInterface> mqls_logger,
       base::TimeTicks attempt_login_start_time,
       IsTaskInFocus is_task_in_focus,
       LoginStatusResultOrErrorReply callback,
-      std::u16string username,
-      std::u16string password);
+      password_manager::StoredCredential stored_credential);
 
   ~AutomatedPasswordChangeCredentialFiller() override;
 
@@ -43,9 +41,7 @@ class AutomatedPasswordChangeCredentialFiller
   bool IsReauthBeforeFillingRequired() override;
 
  private:
-  std::u16string username_;
-  std::u16string password_;
-  password_manager::StoredCredential automated_form_;
+  password_manager::StoredCredential stored_credential_;
 };
 
 }  // namespace actor_login

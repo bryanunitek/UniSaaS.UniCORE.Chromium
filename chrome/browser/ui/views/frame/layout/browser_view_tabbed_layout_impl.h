@@ -10,12 +10,11 @@
 
 #include "chrome/browser/ui/animation/browser_animation_types.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
+#include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/layout/flex_layout_types.h"
-
-class Browser;
 
 namespace views {
 class View;
@@ -27,7 +26,6 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
  public:
   BrowserViewTabbedLayoutImpl(
       std::unique_ptr<BrowserViewLayoutDelegate> delegate,
-      Browser* browser,
       BrowserViewLayoutViews views);
   ~BrowserViewTabbedLayoutImpl() override;
 
@@ -41,6 +39,7 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
                                         bool needs_exclusion) const override;
   void OnLayoutParamsChanged(const BrowserLayoutParams& old_params,
                              const BrowserLayoutParams& new_params) override;
+  void OnGlassModeChanged() override;
   void ConfigureTopContainerBackground(
       const BrowserLayoutParams& params,
       CustomCornersBackground* background) override;
@@ -52,10 +51,10 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
  private:
   struct HorizontalLayout;
   struct SeparatorInfo;
+  struct SidePanelContentAnimation;
   struct TransientLayoutData;
+  struct OrganizerPanelAnimation;
   struct VerticalTabStripAnimation;
-
-  enum class TabStripType { kNone, kVertical, kHorizontal };
 
   enum class VerticalTabStripCollapsedState {
     kExpanded,
@@ -79,14 +78,9 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
   int GetHorizontalTabStripLeadingMargin(
       const BrowserLayoutParams& params) const;
 
-  // Returns whether to make small adjustments to avoid visual "cracking" due to
-  // discrepancies between pixel and dip scaling; see
-  // https://crbug.com/436278099 for more information on the Pixel Canvas
-  // project which aims to permanently avoid this issue.
-  bool AvoidCrackingForFractionalDisplay() const;
-
-  // Returns the type of tabstrip present.
-  TabStripType GetTabStripType() const;
+  // Returns the overlap in DIPs between the vertical tab strip and the content
+  // area to prevent subpixel seams on fractional displays.
+  int GetVerticalTabStripContentOverlap() const;
 
   // Returns the current state of the vertical tabstrip.
   VerticalTabStripCollapsedState GetVerticalTabStripCollapsedState() const;
@@ -94,9 +88,11 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
   // These helper functions are called during `DoPreLayoutCalculations()` to set
   // up `layout_data_`.
   HorizontalLayout CalculateHorizontalLayout(BrowserLayoutParams& params) const;
+  OrganizerPanelAnimation CalculateOrganizerPanelAnimation() const;
   VerticalTabStripAnimation CalculateVerticalTabStripAnimation();
   int GetCollapsedVerticalTabStripRelativeTop() const;
   SeparatorInfo CalculateSeparatorInfo() const;
+  SidePanelContentAnimation CalculateSidePanelContentAnimation() const;
 
   std::unique_ptr<TransientLayoutData> layout_data_;
 

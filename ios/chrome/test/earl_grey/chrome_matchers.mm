@@ -97,10 +97,10 @@ id<GREYMatcher> ImageViewWithImageNamed(NSString* imageName) {
   return [ChromeMatchersAppInterface imageViewWithImageNamed:imageName];
 }
 
-id<GREYMatcher> ImageViewWithCustomSymbolNameAndPointSize(NSString* symbolName,
-                                                          CGFloat pointSize) {
-  return [ChromeMatchersAppInterface imageViewWithCustomSymbolNamed:symbolName
-                                                          pointSize:pointSize];
+id<GREYMatcher> ImageViewWithSymbolAndPointSize(Symbol symbol,
+                                                CGFloat pointSize) {
+  return [ChromeMatchersAppInterface imageViewWithSymbol:symbol
+                                               pointSize:pointSize];
 }
 
 id<GREYMatcher> ImageViewWithImage(UIImage* image) {
@@ -366,6 +366,10 @@ id<GREYMatcher> NavigationBarDoneButton() {
   return [ChromeMatchersAppInterface navigationBarDoneButton];
 }
 
+id<GREYMatcher> NavigationBarEditButton() {
+  return [ChromeMatchersAppInterface navigationBarEditButton];
+}
+
 id<GREYMatcher> BookmarksNavigationBarDoneButton() {
   return [ChromeMatchersAppInterface bookmarksNavigationBarDoneButton];
 }
@@ -546,10 +550,6 @@ id<GREYMatcher> SettingsMenuSafetyCheckButton() {
 
 id<GREYMatcher> VoiceSearchButton() {
   return [ChromeMatchersAppInterface voiceSearchButton];
-}
-
-id<GREYMatcher> VoiceSearchInputAccessoryButton() {
-  return [ChromeMatchersAppInterface voiceSearchInputAccessoryButton];
 }
 
 id<GREYMatcher> SettingsCollectionView() {
@@ -781,10 +781,6 @@ id<GREYMatcher> TabGroupActivityLabelOnGridCellAtIndex(unsigned int index) {
 
 id<GREYMatcher> TabGridDoneButton() {
   return [ChromeMatchersAppInterface tabGridDoneButton];
-}
-
-id<GREYMatcher> TabGridUndoCloseAllButton() {
-  return [ChromeMatchersAppInterface tabGridUndoCloseAllButton];
 }
 
 id<GREYMatcher> TabGridSelectShowHistoryCell() {
@@ -1040,14 +1036,6 @@ id<GREYMatcher> IncognitoInterstitialCancelButton() {
 
 id<GREYMatcher> TabGridOverflowMenuButton() {
   return [ChromeMatchersAppInterface tabGridOverflowMenuButton];
-}
-
-id<GREYMatcher> TabGridEditButton() {
-  return [ChromeMatchersAppInterface tabGridEditButton];
-}
-
-id<GREYMatcher> TabGridEditMenuCloseAllButton() {
-  return [ChromeMatchersAppInterface tabGridEditMenuCloseAllButton];
 }
 
 id<GREYMatcher> TabGridOverflowMenuCloseAllButton() {

@@ -19,6 +19,7 @@
 #include "components/metrics/client_info.h"
 #include "components/metrics/cloned_install_detector.h"
 #include "components/metrics/entropy_state.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/variations/entropy_provider.h"
 
 class PrefService;
@@ -32,21 +33,6 @@ namespace metrics {
 
 class EnabledStateProvider;
 class MetricsProvider;
-
-// Denotes whether this session is a background or foreground session at
-// startup. May be unknown. A background session refers to the situation in
-// which the browser process starts; does some work, e.g. servicing a sync; and
-// ends without ever becoming visible. Note that the point in startup at which
-// this value is determined is likely before the UI is visible.
-//
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class StartupVisibility {
-  kUnknown = 0,
-  kBackground = 1,
-  kForeground = 2,
-  kMaxValue = kForeground,
-};
 
 // Denotes the type of EntropyProvider to use for default one-time
 // randomization.
@@ -120,6 +106,8 @@ class MetricsStateManager final {
   const CleanExitBeacon* clean_exit_beacon() const {
     return &clean_exit_beacon_;
   }
+
+  StartupVisibility startup_visibility() const { return startup_visibility_; }
 
   // Returns true if the session was deemed a background session during startup.
   // Note that this is not equivalent to !is_foreground_session() because the
@@ -331,12 +319,12 @@ class MetricsStateManager final {
   // multiple instances of this class at a given time.
   static bool instance_exists_;
 
-  // Weak pointer to the local state prefs store.
-  const raw_ptr<PrefService, DanglingUntriaged> local_state_;
+  // Pointer to the local state prefs store.
+  const raw_ptr<PrefService> local_state_;
 
-  // Weak pointer to an enabled state provider. Used to know whether the user
+  // Pointer to an enabled state provider. Used to know whether the user
   // has consented to reporting, and if reporting should be done.
-  raw_ptr<EnabledStateProvider, DanglingUntriaged> enabled_state_provider_;
+  raw_ptr<EnabledStateProvider> enabled_state_provider_;
 
   // Specified options for controlling trial randomization.
   const EntropyParams entropy_params_;

@@ -13,8 +13,8 @@
 #include "base/auto_reset.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
+#include "components/apps/link_capturing/intent_picker_info.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/views/animation/ink_drop_state.h"
@@ -25,6 +25,10 @@
 namespace content {
 class WebContents;
 }  // namespace content
+
+namespace ui {
+class Event;
+}  // namespace ui
 
 namespace views {
 class Checkbox;
@@ -136,12 +140,15 @@ class IntentPickerBubbleView : public LocationBarBubbleDelegateView {
 
   // views::BubbleDialogDelegateView overrides:
   void OnWidgetDestroying(views::Widget* widget) override;
+  bool ShouldAllowKeyEventsDuringInputProtection() const override;
 
   // Called when the app at |index| is selected in the app list. If
   // |accepted| is true, the dialog should be immediately accepted with that app
   // selected. If |index| is nullopt, no app is selected, and the Accept button
   // will be disabled
-  void OnAppSelected(std::optional<size_t> index, bool accepted);
+  void OnAppSelected(std::optional<size_t> index,
+                     bool accepted,
+                     const ui::Event* event);
 
   void Initialize();
 

@@ -3,6 +3,7 @@
     "gtest_tests": [
       {
         "args": [
+          "--test-launcher-filter-file=../../testing/buildbot/filters/android.phone.android_browsertests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
@@ -42,6 +43,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -77,6 +79,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -151,6 +154,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -185,6 +189,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -238,7 +243,8 @@
         "precommit_args": [
           "--gerrit-issue=${patch_issue}",
           "--gerrit-patchset=${patch_set}",
-          "--buildbucket-id=${buildbucket_build_id}"
+          "--buildbucket-id=${buildbucket_build_id}",
+          "--bypass-skia-gold-functionality"
         ],
         "resultdb": {
           "enable": true,
@@ -263,6 +269,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [

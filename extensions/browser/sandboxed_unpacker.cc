@@ -23,6 +23,7 @@
 #include "base/i18n/rtl.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
@@ -287,7 +288,6 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
   // We assume that we are started on the thread that the client wants us
   // to do file IO on.
   DCHECK(unpacker_io_task_runner_->RunsTasksInCurrentSequence());
-  client_->OnStageChanged(InstallationStage::kVerification);
   std::string expected_hash;
   if (!crx_info.expected_hash.empty() &&
       base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -302,15 +302,15 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
   // Initialize the path that will eventually contain the unpacked extension.
   extension_root_ = temp_dir_.GetPath().AppendASCII(kTempExtensionName);
 
-  // Extract the public key and validate the package.
-  if (!ValidateSignature(
-          crx_info.path, expected_hash,
-          format_verifier_override_.value_or(crx_info.required_format))) {
-    return;  // ValidateSignature() already reported the error.
-  }
-
   client_->OnStageChanged(InstallationStage::kCopying);
-  // Copy the crx file into our working directory.
+  // Copy the crx file into our working directory before validating its
+  // signature so that the bytes that are validated are the same bytes that
+  // are subsequently unzipped, even if the source path is modified
+  // concurrently.
+  // Note: Copying prior to signature validation incurs a file copy for invalid
+  // or corrupt CRX files, but guarantees that validation operates on the
+  // isolated working copy. Since verification failing is an uncommon case,
+  // this isn't a major performance concern.
   base::FilePath temp_crx_path =
       temp_dir_.GetPath().Append(crx_info.path.BaseName());
 
@@ -322,6 +322,14 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
                       IDS_EXTENSION_PACKAGE_INSTALL_ERROR,
                       u"FAILED_TO_COPY_EXTENSION_FILE_TO_TEMP_DIRECTORY"));
     return;
+  }
+
+  client_->OnStageChanged(InstallationStage::kVerification);
+  // Extract the public key and validate the package.
+  if (!ValidateSignature(
+          temp_crx_path, expected_hash,
+          format_verifier_override_.value_or(crx_info.required_format))) {
+    return;  // ValidateSignature() already reported the error.
   }
 
   base::FilePath normalized_crx_path = NormalizeFilePath(temp_crx_path);
@@ -1022,7 +1030,12 @@ std::optional<base::DictValue> SandboxedUnpacker::RewriteManifestFile(
   }
 
   base::FilePath manifest_path = extension_root_.Append(kManifestFilename);
-  if (!base::WriteFile(manifest_path, *manifest_json)) {
+  // Unlink the existing manifest before writing the sanitized version so that a
+  // new inode is created, preventing any process that still holds an open file
+  // descriptor to the original unpacked file from modifying the rewritten
+  // manifest in place.
+  if (!base::DeleteFile(manifest_path) ||
+      !base::WriteFile(manifest_path, *manifest_json)) {
     // Error saving manifest.json.
     ReportFailure(
         SandboxedUnpackerFailureReason::ERROR_SAVING_MANIFEST_JSON,

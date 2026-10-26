@@ -126,12 +126,6 @@
       depends_on: ["AriaNotify"],
     },
     {
-      name: "AttributionReporting",
-      permissions_policy_name: "attribution-reporting",
-      feature_default: "EnableForAll",
-      depends_on: ["AttributionReporting"],
-    },
-    {
       name: "Autofill",
       permissions_policy_name: "autofill",
       depends_on: ["Autofill"],
@@ -378,6 +372,11 @@
       permissions_policy_name: "gyroscope",
     },
     {
+      name: "Haptics",
+      permissions_policy_name: "haptics",
+      depends_on: ["WebHaptics"],
+    },
+    {
       name: "Hid",
       permissions_policy_name: "hid",
       depends_on: ["WebHID"],
@@ -389,15 +388,6 @@
     {
       name: "IdleDetection",
       permissions_policy_name: "idle-detection",
-    },
-    {
-      name: "JoinAdInterestGroup",
-      permissions_policy_name: "join-ad-interest-group",
-      feature_default: "EnableForAll",
-      depends_on: ["AdInterestGroupAPI"],
-      default_value_behind_flag: [
-        ["AdInterestGroupAPIRestrictedPolicyByDefault", "EnableForSelf"],
-      ],
     },
     {
       name: "KeyboardMap",
@@ -492,12 +482,6 @@
       feature_default: "EnableForAll",
     },
     {
-      name: "PrivateAggregation",
-      permissions_policy_name: "private-aggregation",
-      feature_default: "EnableForAll",
-      depends_on: ["SharedStorageAPI", "Fledge"],
-    },
-    {
       name: "PrivateStateTokenIssuance",
       permissions_policy_name: "private-state-token-issuance",
       feature_default: "EnableForAll",
@@ -512,24 +496,16 @@
       permissions_policy_name: "publickey-credentials-get",
     },
     {
-      name: "RecordAdAuctionEvents",
-      permissions_policy_name: "record-ad-auction-events",
-      feature_default: "EnableForAll",
-      depends_on: ["FledgeClickiness"],
+      // TODO(crbug.com/506062130): Use EnableForNone when it is standardized.
+      name: "PublicKeyCredentialsRemoteClientDataJson",
+      permissions_policy_name: "publickey-credentials-remote-client-data-json",
+      feature_default: "EnableForSelf",
+      depends_on: ["WebAuthenticationRemoteClientDataJson"],
     },
     {
       name: "Rewriter",
       permissions_policy_name: "rewriter",
       depends_on: ["AIRewriterAPI"],
-    },
-    {
-      name: "RunAdAuction",
-      permissions_policy_name: "run-ad-auction",
-      feature_default: "EnableForAll",
-      depends_on: ["Fledge"],
-      default_value_behind_flag: [
-        ["AdInterestGroupAPIRestrictedPolicyByDefault", "EnableForSelf"],
-      ],
     },
     {
       name: "ScreenWakeLock",
@@ -543,18 +519,6 @@
       privacy_sensitive: true,
     },
     {
-      name: "SharedStorage",
-      permissions_policy_name: "shared-storage",
-      feature_default: "EnableForAll",
-      depends_on: ["SharedStorageAPI"],
-    },
-    {
-      name: "SharedStorageSelectUrl",
-      permissions_policy_name: "shared-storage-select-url",
-      feature_default: "EnableForAll",
-      depends_on: ["SharedStorageAPI"],
-    },
-    {
       name: "SmartCard",
       permissions_policy_name: "smart-card",
       depends_on: ["SmartCard"],
@@ -563,7 +527,6 @@
     {
       name: "SpeakerSelection",
       permissions_policy_name: "speaker-selection",
-      depends_on: ["SpeakerSelection"],
     },
     {
       name: "StorageAccessAPI",
@@ -608,6 +571,15 @@
       permissions_policy_name: "usb-unrestricted",
       depends_on: ["UnrestrictedUsb"],
       visibility: "IsolatedContext",
+    },
+    {
+      // TODO(crbug.com/508672616): This is currently only usable by
+      // privileged (e.g. WebUI) content. If it is exposed to the open web, add
+      // it to https://github.com/w3c/webappsec-permissions-policy/blob/main/features.md.
+      name: "UnboundedElement",
+      permissions_policy_name: "unbounded-element",
+      depends_on: ["UnboundedElement"],
+      feature_default: "EnableForSelf",
     },
     {
       // Unload is special and can default to being disabled by default based

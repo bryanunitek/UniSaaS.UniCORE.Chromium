@@ -8,10 +8,12 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
 #include "chrome/browser/child_process_host_flags.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
 #include "chrome/services/mac_notifications/mac_notification_provider_impl.h"
 #include "chrome/services/mac_notifications/public/mojom/mac_notifications.mojom.h"
@@ -80,6 +82,20 @@ MacNotificationProviderFactory::LaunchProvider() {
     case mac_notifications::NotificationStyle::kAppShim:
       return apps::AppShimManager::Get()->LaunchNotificationProvider(
           web_app_id_);
+  }
+  NOTREACHED();
+}
+
+bool MacNotificationProviderFactory::ShouldRetryIndefinitely() const {
+  switch (notification_style_) {
+    case mac_notifications::NotificationStyle::kBanner:
+    case mac_notifications::NotificationStyle::kAlert:
+      return true;
+    case mac_notifications::NotificationStyle::kAppShim:
+      // There is no need to keep restarting an app shim: macOS relaunches it
+      // when the user interacts with one of its notifications, and
+      // Display/Get/Close calls relaunch it on demand.
+      return false;
   }
   NOTREACHED();
 }

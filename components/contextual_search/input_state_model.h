@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_CONTEXTUAL_SEARCH_INPUT_STATE_MODEL_H_
 #define COMPONENTS_CONTEXTUAL_SEARCH_INPUT_STATE_MODEL_H_
 
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -46,11 +48,12 @@ class InputStateModel {
 
   // Constructor takes in a `ContextualSearchSessionHandle` to get uploaded file
   // info.
-  explicit InputStateModel(
+  InputStateModel(
       contextual_search::ContextualSearchSessionHandle& session_handle,
       const SearchboxConfig& config,
       const GURL& active_url,
       bool is_off_the_record,
+      bool is_signed_in,
       bool browser_identity_matches_aim_identity);
   InputStateModel(
       const InputStateModel& other,
@@ -61,25 +64,56 @@ class InputStateModel {
     return weak_ptr_factory_.GetWeakPtr();
   }
 
+  // Returns true if this model was initialized with a valid, non-empty
+  // searchbox config.
+  bool has_valid_config() const { return has_valid_config_; }
+
+  // Returns true if `config` is non-null and contains rules or configuration
+  // entries for tools, models, or input types.
+  static bool IsConfigPopulated(const omnibox::SearchboxConfig* config);
+
+  // Returns the tools from `config` that should be offered to the user, i.e.
+  // the tools that end up in `InputState::allowed_tools`. This is independent
+  // of any session state, so it can be used by surfaces that need to know
+  // which tools are available before a session is started.
+  static std::vector<ToolMode> GetAllowedTools(
+      const omnibox::SearchboxConfig& config,
+      bool is_off_the_record);
+
   // Returns the current input types from the session handle.
   static std::vector<InputType> GetCurrentInputTypes(
       const contextual_search::ContextualSearchSessionHandle* session_handle);
 
   // Add a subscriber to this model.
-  base::CallbackListSubscription subscribe(Subscriber callback);
+  base::CallbackListSubscription Subscribe(Subscriber callback);
 
   // Initializes the model and notifies subscribers of the initial state.
   void Initialize();
 
+  // Updates the searchbox configuration. If `config` contains new or updated
+  // configuration, repopulates allowed tools, models, and inputs, and notifies
+  // subscribers. Returns true if the configuration changed and subscribers
+  // were notified.
+  bool UpdateConfig(const omnibox::SearchboxConfig& config);
+
+  // Updates the identity state and re-evaluates allowed and disabled inputs.
+  void SetIdentityState(bool is_signed_in,
+                        bool browser_identity_matches_aim_identity);
+
   // Set a new tool.
-  void setActiveTool(ToolMode tool);
+  void SetActiveTool(ToolMode tool);
 
   // Set a new model.
-  void setActiveModel(ModelMode model);
+  void SetActiveModel(ModelMode model);
   void UpdateStateFromUrl(const GURL& url);
 
   // Called when an input of type `InputType` is added or deleted.
   void OnContextChanged();
+
+  // Set whether smart tab sharing is active.
+  void SetSmartTabSharingActive(bool active);
+
+  bool IsSmartTabSharingActive() const { return is_smart_tab_sharing_active_; }
 
   // Sets the tools that should be forced to be disabled.
   void SetPermanentlyDisabledTools(const std::vector<ToolMode>& tools);
@@ -88,6 +122,8 @@ class InputStateModel {
   void SetPermanentlyDisabledInputTypes(
       const std::vector<InputType>& input_types);
 
+  // Enables or disables an input type based on parameters.
+  void TogglePermanentlyDisabledInputType(InputType input_type, bool disabled);
 
   // Gets additional query params for the current state.
   std::map<std::string, std::string> GetAdditionalQueryParams();
@@ -102,26 +138,41 @@ class InputStateModel {
   // Methods for testing.
   void set_state_for_testing(const InputState& state) { state_ = state; }
   const InputState& get_state_for_testing() { return state_; }
+  bool is_signed_in_for_testing() const { return is_signed_in_; }
   bool browser_identity_matches_aim_identity_for_testing() const {
     return browser_identity_matches_aim_identity_;
   }
 
-  DriveConsentState drive_consent_state_for_testing() const {
-    return drive_consent_state_;
-  }
+  struct LensCrop {
+    std::string data_uri;
+    bool operator==(const LensCrop&) const = default;
+  };
+
+  // Lens region crop storage.
+  // There is only ever one region crop; setting a crop clears any existing
+  // crop.
+  void SetLensCrop(const std::string& data_uri);
+  std::optional<std::string> GetLensCrop() const;
+  void RemoveLensCrop();
+  const std::optional<LensCrop>& lens_crop() const { return lens_crop_; }
 
   // Gets the `PrefService`.
   void SetPrefService(PrefService* pref_service);
 
+  // Returns the effective input types. This includes explicitly uploaded
+  // inputs from the session, and the implicit browser tab input if Smart Tab
+  // Sharing is active and allowed by the current tool/model rules.
+  std::vector<InputType> GetEffectiveInputTypes() const;
+
  private:
   // Notify all subscribers of the current `state_`.
-  void notifySubscribers();
+  void NotifySubscribers();
 
   // Update the current value of `state_` based on new tool or model.
-  void updateSelectedState(ToolMode tool, ModelMode model);
+  void UpdateSelectedState(ToolMode tool, ModelMode model);
 
   // Update the currently disabled tools, models, and inputs.
-  void updateDisabledState();
+  void UpdateDisabledState();
 
   //  Helper method to update `disabled_tools` based on `rule_set_`.
   void UpdateDisabledTools();
@@ -153,8 +204,12 @@ class InputStateModel {
   // Returns a rule for a given `tool`.
   const omnibox::ToolRule* GetToolRule(ToolMode tool) const;
 
+  // Repopulates rules, tools, and models from `config`.
+  void PopulateConfig(const omnibox::SearchboxConfig& config);
+
   InputState state_;
   omnibox::RuleSet rule_set_;
+  std::string serialized_config_;
   base::WeakPtr<contextual_search::ContextualSearchSessionHandle>
       session_handle_;
   base::RepeatingCallbackList<void(const InputState&)> subscribers_;
@@ -162,7 +217,9 @@ class InputStateModel {
   raw_ptr<PrefService> pref_service_ = nullptr;
   PrefChangeRegistrar pref_change_registrar_;
   const bool is_off_the_record_;
-  const bool browser_identity_matches_aim_identity_;
+  bool is_signed_in_;
+  bool browser_identity_matches_aim_identity_;
+  bool has_valid_config_ = false;
   GURL current_url_;
 
   // Configured input types from the searchbox configuration.
@@ -175,7 +232,21 @@ class InputStateModel {
   // must persist through state updates. Persists after Initialize() is called.
   std::vector<InputType> permanently_disabled_input_types_;
 
-  DriveConsentState drive_consent_state_ = DriveConsentState::kNotReady;
+
+  bool is_smart_tab_sharing_active_ = false;
+
+  // Each URL change causes `UpdateStateFromUrl()` to run.
+  // Only changing threads requires reading tool param from URL to initialize
+  // tool state. Once the user modifies the tool, the initial tool state is
+  // invalid, and therefore, this flag is set to `true` so Chrome knows to no
+  // longer read and set the initial tool from the URL. Cannot just read tool
+  // from URL when thread URL is changed (to change threads), since tool URL
+  // param is added a few URL changes AFTER the thread URL is changed (to change
+  // threads).
+  bool user_modified_tool_in_thread_ = false;
+
+  // Stores the active region crop preview, if any.
+  std::optional<LensCrop> lens_crop_;
 
   base::WeakPtrFactory<InputStateModel> weak_ptr_factory_{this};
 };

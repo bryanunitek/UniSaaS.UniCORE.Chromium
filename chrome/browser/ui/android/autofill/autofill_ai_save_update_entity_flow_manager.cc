@@ -22,7 +22,7 @@
 #include "chrome/browser/ui/autofill/autofill_message_model.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/ui/autofill_resource_utils.h"
+#include "components/autofill/core/browser/ui/autofill_resource_util.h"
 #include "components/messages/android/message_enums.h"
 #include "components/resources/android/theme_resources.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -50,7 +50,7 @@ std::u16string GetMessageDescription(content::WebContents* web_contents,
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   return l10n_util::GetStringFUTF16(
       IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_MESSAGE_SUBTITLE,
-      google_wallet_text, base::UTF8ToUTF16(account->email));
+      google_wallet_text, base::UTF8ToUTF16(account->GetEmail()));
 }
 
 int GetMessageIconResourceId(const EntityInstance& entity) {
@@ -85,11 +85,11 @@ int GetMessageIconResourceId(const EntityInstance& entity) {
 AutofillAiSaveUpdateEntityFlowManager::AutofillAiSaveUpdateEntityFlowManager(
     content::WebContents* web_contents,
     AutofillMessageController* autofill_message_controller,
+    AutofillDialogController* autofill_dialog_controller,
     std::string app_locale)
     : web_contents_(web_contents),
       autofill_message_controller_(CHECK_DEREF(autofill_message_controller)),
-      autofill_dialog_controller_(
-          std::make_unique<AutofillDialogControllerImpl>(web_contents_)),
+      autofill_dialog_controller_(CHECK_DEREF(autofill_dialog_controller)),
       app_locale_(std::move(app_locale)) {}
 
 AutofillAiSaveUpdateEntityFlowManager::
@@ -98,13 +98,15 @@ AutofillAiSaveUpdateEntityFlowManager::
 void AutofillAiSaveUpdateEntityFlowManager::OfferSave(
     EntityInstance entity,
     std::optional<EntityInstance> old_entity,
-    AutofillClient::EntityImportPromptResultCallback prompt_result_callback) {
+    AutofillClient::EntityImportPromptResultCallback prompt_result_callback,
+    LegalMessageLines public_passes_notice) {
   if (prompt_result_callback_) {
     return;
   }
   prompt_result_callback_ = std::move(prompt_result_callback);
   autofill_message_controller_->Show(
-      CreateMessageModel(std::move(entity), std::move(old_entity)));
+      CreateMessageModel(std::move(entity), std::move(old_entity),
+                         std::move(public_passes_notice)));
 }
 
 void AutofillAiSaveUpdateEntityFlowManager::ShowLocalSaveNotification() {
@@ -116,15 +118,17 @@ void AutofillAiSaveUpdateEntityFlowManager::ShowLocalSaveNotification() {
       l10n_util::GetStringFUTF16(
           IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_DESCRIPTION,
           std::move(google_wallet_text)),
+      /*positive_button_text=*/
       l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_CONFIRMATION_BUTTON_LABEL),
-      base::DoNothing());
+          IDS_AUTOFILL_AI_SNACK_BAR_CONFIRMATION_BUTTON_LABEL),
+      /*negative_button_text=*/std::u16string(), base::DoNothing());
 }
 
 std::unique_ptr<AutofillMessageModel>
 AutofillAiSaveUpdateEntityFlowManager::CreateMessageModel(
     EntityInstance entity,
-    std::optional<EntityInstance> old_entity) {
+    std::optional<EntityInstance> old_entity,
+    LegalMessageLines public_passes_notice) {
   // Binding with base::Unretained(this) is safe here because
   // AutofillAiSaveUpdateEntityMessageController owns message_. Callbacks won't
   // be called after the current object is destroyed.
@@ -152,21 +156,22 @@ AutofillAiSaveUpdateEntityFlowManager::CreateMessageModel(
       base::BindOnce(
           &AutofillAiSaveUpdateEntityFlowManager::OnMessagePrimaryAction,
           weak_ptr_factory_.GetWeakPtr(), std::move(entity),
-          std::move(old_entity)),
+          std::move(old_entity), std::move(public_passes_notice)),
       base::BindOnce(&AutofillAiSaveUpdateEntityFlowManager::OnMessageDismissed,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void AutofillAiSaveUpdateEntityFlowManager::OnMessagePrimaryAction(
     EntityInstance entity,
-    std::optional<EntityInstance> old_entity) {
+    std::optional<EntityInstance> old_entity,
+    LegalMessageLines public_passes_notice) {
   auto prompt_view_android =
       std::make_unique<AutofillAiSaveUpdateEntityPromptViewAndroid>(
           web_contents_);
   save_update_entity_prompt_controller_ =
       std::make_unique<AutofillAiSaveUpdateEntityPromptController>(
           web_contents_, std::move(prompt_view_android), std::move(entity),
-          std::move(old_entity), app_locale_,
+          std::move(old_entity), std::move(public_passes_notice), app_locale_,
           std::move(prompt_result_callback_));
   save_update_entity_prompt_controller_->DisplayPrompt();
 }

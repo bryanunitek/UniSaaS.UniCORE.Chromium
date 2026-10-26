@@ -18,6 +18,7 @@
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/features.h"
 
 namespace viz {
 namespace {
@@ -71,12 +72,18 @@ void RecordVSyncCallbackDelay(base::TimeDelta delay) {
 ExternalBeginFrameSourceMac::ExternalBeginFrameSourceMac(
     uint32_t restart_id,
     int64_t display_id,
+    float refresh_rate,
     OutputSurface* output_surface)
     : ExternalBeginFrameSource(this, restart_id),
       create_time_(base::TimeTicks::Now()),
       output_surface_(output_surface) {
   VLOG(kOutputLevel) << "ExternalBeginFrameSourceMac(" << this << ")"
                      << "::ExternalBeginFrameSourceMac() ID:" << display_id;
+
+  // Set the default refresh interval.
+  min_refresh_interval_ = (refresh_rate > 0)
+                              ? base::Hertz(refresh_rate)
+                              : BeginFrameArgs::DefaultInterval();
 
   // TODO(crbug.com/345275139): Remove this suspend observer once
   // RecordFirstFrameHistograms() is no longer required.
@@ -113,25 +120,23 @@ void ExternalBeginFrameSourceMac::CreateDelayBasedTimeSourceIfNeeded() {
   time_source_->SetTimebaseAndInterval(last_frame_time_, preferred_interval_);
 }
 
-// Forces an update of the DisplayLinkMac for the specified display. This is
-// called when the browser-side CADisplayLink state changes (e.g., becomes
-// valid or invalid) or when a display is added or removed.
-void ExternalBeginFrameSourceMac::UpdateVSyncDisplay(
-    int64_t display_id,
-    bool is_browser_vsync_supported) {
-  if (display_id_ == display_id) {
-    // Defer the transition to the browser-side DisplayLink if we are currently
-    // active (needing begin frames) to avoid rendering jank.
-    if (is_browser_vsync_supported && needs_begin_frames_) {
-      vsync_display_id_update_deferred_ = true;
+// Forces this frame sink to destroy and recreate its DisplayLinkMac. Called by
+// FrameSinkManagerImpl::UpdateVSyncDisplays() in two cases:
+// (1) The browser-side CADisplayLink for `display_id` changed validity (e.g.
+//     a display was added or removed). Only the frame sink on that display
+//     needs to update. (This will be removed with the feature flag
+//     kCADisplayLinkInBrowser.)
+// (2) The GPU-side WindowServerEventPumpThread failed and CADisplayLink can
+//     no longer be used. In this case `display_id` is meaningless and every
+//     frame sink must update so that it falls back to a timer.
+void ExternalBeginFrameSourceMac::UpdateVSyncDisplay(int64_t display_id) {
+  if (ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
+    if (display_id_ != display_id) {
       return;
     }
-
-    // If the browser-side DisplayLink is unsupported, or active rendering
-    // has stopped, apply the VSync display id update immediately.
-    vsync_display_id_update_deferred_ = false;
-    SetVSyncDisplayID(display_id_, /*force_update=*/true);
   }
+
+  SetVSyncDisplayID(display_id_, /*force_update=*/true);
 }
 
 void ExternalBeginFrameSourceMac::SetVSyncDisplayID(int64_t display_id,
@@ -146,7 +151,6 @@ void ExternalBeginFrameSourceMac::SetVSyncDisplayID(int64_t display_id,
   // Forward the |display_id| to output surface for frame presentation.
   output_surface_->SetVSyncDisplayID(display_id, force_update);
 
-  vsync_display_id_update_deferred_ = false;
   // Remove the current callback from display_link_mac_ or from the timer.
   if (needs_begin_frames_ || vsync_callback_mac_) {
     StopBeginFrame(/*force_stop=*/true);
@@ -210,7 +214,7 @@ void ExternalBeginFrameSourceMac::SetVSyncDisplayID(int64_t display_id,
 
     if (update_vsync_params_callback_ &&
         last_min_interval != min_refresh_interval_) {
-      update_vsync_params_callback_.Run(base::TimeTicks::Now(),
+      update_vsync_params_callback_.Run(last_frame_time_,
                                         min_refresh_interval_);
     }
 
@@ -305,14 +309,6 @@ void ExternalBeginFrameSourceMac::OnNeedsBeginFrames(bool needs_begin_frames) {
     StartBeginFrame(/*display_link_keep_alive_only=*/false);
   } else {
     StopBeginFrame(/*force_stop=*/false);
-
-    // |update_vsync_params_callback_| is set in RootCompositorFrameSinkImpl().
-    // A null update_vsync_params_callback_ indicates
-    // RootCompositorFrameSinkImpl is being destroyed.
-    if (vsync_display_id_update_deferred_ && update_vsync_params_callback_) {
-      vsync_display_id_update_deferred_ = false;
-      SetVSyncDisplayID(display_id_, /*force_update=*/true);
-    }
   }
 }
 
@@ -477,18 +473,18 @@ void ExternalBeginFrameSourceMac::OnTimerTick() {
 void ExternalBeginFrameSourceMac::SetPreferredInterval(
     base::TimeDelta interval) {
   if (interval.is_zero()) {
-    if (ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
+    if (display_link_mac_ || base::FeatureList::IsEnabled(
+                                 features::kUseDisplayRefreshRateForTimer)) {
       interval = min_refresh_interval_;
     } else {
-      interval = display_link_mac_ ? min_refresh_interval_
-                                   : BeginFrameArgs::DefaultInterval();
+      interval = BeginFrameArgs::DefaultInterval();
     }
   }
   preferred_interval_ = interval;
 
   VLOG(kOutputLevel) << "ExternalBeginFrameSourceMac(" << this << ")"
                      << "::SetPreferredInterval: ID: " << display_id_
-                     << ", Interval: " << interval;
+                     << ", preferred_interval_: " << preferred_interval_;
 
   if (!display_link_mac_) {
     DCHECK(time_source_);
@@ -525,22 +521,30 @@ scoped_refptr<ui::DisplayLinkMac> ExternalBeginFrameSourceMac::GetForDisplay(
 }
 
 base::TimeDelta ExternalBeginFrameSourceMac::GetMinimumFrameInterval() {
-  if (ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
+  base::TimeDelta min_interval;
+
+  if (display_link_mac_) {
     // Calling CoreGraphics to get the refresh rate is expensive, so we return
     // the last known or default refresh interval instead. If the refresh rate
     // has changed, OnDisplayLinkCallback() will receive the updated interval
     // and invoke update_vsync_params_callback_ to update FrameIntervalDecider.
-    return min_refresh_interval_;
-  }
-
-  if (display_link_mac_) {
-    min_refresh_interval_ = display_link_mac_->GetRefreshInterval();
+    if (ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser() ||
+        ui::DisplayLinkMac::SupportsCADisplayLinkInGPU()) {
+      min_interval = min_refresh_interval_;
+    } else {
+      min_interval = display_link_mac_->GetRefreshInterval();
+    }
   } else {
-    // If no display link is active, fall back to a timer-based interval.
-    min_refresh_interval_ = BeginFrameArgs::DefaultInterval();
+    // fall back to a timer-based interval.
+    if (base::FeatureList::IsEnabled(
+            features::kUseDisplayRefreshRateForTimer)) {
+      min_interval = min_refresh_interval_;
+    } else {
+      min_interval = BeginFrameArgs::DefaultInterval();
+    }
   }
 
-  return min_refresh_interval_;
+  return min_interval;
 }
 
 void ExternalBeginFrameSourceMac::SetUpdateVSyncParametersCallback(
@@ -637,6 +641,26 @@ void ExternalBeginFrameSourceMac::OnSuspend() {
 
   if (display_link_mac_) {
     display_link_mac_->OnSuspend();
+  }
+}
+
+void ExternalBeginFrameSourceMac::UpdateRefreshRate(float refresh_rate) {
+  // Only for the timer. Just exit for DisplayLink as it updates the refresh
+  // rate in OnDisplayLinkCallback().
+  if (display_link_mac_ || !time_source_ || refresh_rate <= 0 ||
+      !base::FeatureList::IsEnabled(features::kUseDisplayRefreshRateForTimer)) {
+    return;
+  }
+
+  base::TimeDelta min_refresh_interval = base::Hertz(refresh_rate);
+  if (AlmostEqual(min_refresh_interval_, min_refresh_interval)) {
+    return;
+  }
+
+  min_refresh_interval_ = min_refresh_interval;
+
+  if (update_vsync_params_callback_) {
+    update_vsync_params_callback_.Run(last_frame_time_, min_refresh_interval_);
   }
 }
 

@@ -14,7 +14,6 @@
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/fakes/fake_ui_view_controller.h"
@@ -29,16 +28,13 @@ namespace {
 class AddAccountSigninCoordinatorTest : public PlatformTest {
  public:
   AddAccountSigninCoordinatorTest() {
-    // The profile state will receive UI blocker request. They are not tested
-    // here, so it’s a non-strict mock.
-    profile_state_ = OCMClassMock([ProfileState class]);
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    profile_state_ = [[ProfileState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     scene_state_.profileState = profile_state_;
     TestProfileIOS::Builder builder = TestProfileIOS::Builder();
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
@@ -99,11 +95,10 @@ TEST_F(AddAccountSigninCoordinatorTest, StopCoordinatorWhileShowingErrorAlert) {
   OCMExpect([add_account_signin_manager_mock_
       showSigninWithIntent:AddAccountSigninIntent::kAddAccount]);
   __block BOOL signinCompletionCalled = NO;
-  coordinator_.signinCompletion =
-      ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-        id<SystemIdentity> identity) {
-        signinCompletionCalled = YES;
-      };
+  coordinator_.signinCompletion = ^(SigninCoordinator* coordinator,
+                                    SigninCoordinatorResultOrIdentity result) {
+    signinCompletionCalled = YES;
+  };
   [coordinator_ start];
   // Generate an error from AddAccountSigninManager.
   base::RunLoop run_loop1;

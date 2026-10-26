@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_AUTOFILL_MANUAL_FILLING_VIEW_INTERFACE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/types/strong_alias.h"
@@ -28,9 +29,10 @@ class WebContents;
 class ManualFillingViewInterface {
  public:
   using WaitForKeyboard = base::StrongAlias<struct WaitForKeyboardTag, bool>;
-  using IsCredentialFieldOrHasAutofillSuggestions =
-      base::StrongAlias<struct IsCredentialFieldOrHasAutofillSuggestionsTag,
-                        bool>;
+  using ShouldShowOnLargeFormFactor =
+      base::StrongAlias<struct ShouldShowOnLargeFormFactorTag, bool>;
+  using IsUnstructuredField =
+      base::StrongAlias<struct IsUnstructuredFieldTag, bool>;
   using ShouldShowAction = base::StrongAlias<struct ShouldShowActionTag, bool>;
 
   virtual ~ManualFillingViewInterface() = default;
@@ -51,11 +53,15 @@ class ManualFillingViewInterface {
   virtual void SwapSheetWithKeyboard() = 0;
 
   // Shows the accessory bar. If `wait_for_keyboard`, shows the bar when the
-  // keyboard is also shown. On Large Form Factors, shows the accessory when the
-  // field is a credential field or has autofill suggestions.
-  virtual void Show(WaitForKeyboard wait_for_keyboard,
-                    IsCredentialFieldOrHasAutofillSuggestions
-                        is_credential_field_or_has_autofill_suggestions) = 0;
+  // keyboard is also shown. `should_show_on_large_form_factor` controls whether
+  // the accessory should be displayed on Large Form Factors (where it is
+  // otherwise suppressed on empty fields). `is_unstructured_field` controls
+  // whether the focused field is an unstructured field like contenteditable or
+  // textarea (where only the AtMemory icon is shown).
+  virtual void Show(
+      WaitForKeyboard wait_for_keyboard,
+      ShouldShowOnLargeFormFactor should_show_on_large_form_factor,
+      IsUnstructuredField is_unstructured_field) = 0;
 
   // Hides the accessory bar and the accessory sheet (if open).
   virtual void Hide() = 0;
@@ -64,8 +70,18 @@ class ManualFillingViewInterface {
   virtual void ShowAccessorySheetTab(
       const autofill::AccessoryTabType& tab_type) = 0;
 
-  // Returns true if the device is a large form factor.
-  virtual bool IsLargeFormFactor() const = 0;
+  // Highlights a suggestion visually when navigated via keyboard or selection.
+  // Passing `std::nullopt` clears the selection.
+  virtual void SetSelectedSuggestion(std::optional<int> suggestion_index) = 0;
+
+  // Performs the keyboard navigation `action` in the accessory bar. Returns
+  // whether the action was handled, i.e. whether the triggering key event
+  // should be consumed.
+  virtual bool Navigate(autofill::NavigationAction action) = 0;
+
+  // Clicks the keyboard-selected manual fallback icon. Returns whether one was
+  // selected.
+  virtual bool AcceptFallback() = 0;
 
  private:
   friend class ManualFillingControllerImpl;

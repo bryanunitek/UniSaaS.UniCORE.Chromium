@@ -11,14 +11,41 @@
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/sync/browser_synced_tab_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sync/base/features.h"
+#include "components/tabs/public/tab_interface.h"
+
+namespace {
+
+// Resets the cached last-active time of `contents`' tab, if `contents` is
+// non-null and belongs to a tab.
+void ResetTabCachedLastActiveTimeForContents(content::WebContents* contents) {
+  tabs::TabInterface* tab =
+      contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
+  BrowserSyncedTabDelegate* delegate =
+      tab ? BrowserSyncedTabDelegate::From(tab) : nullptr;
+  if (delegate) {
+    delegate->ResetCachedLastActiveTime();
+  }
+}
+
+}  // namespace
+
+DEFINE_USER_DATA(BrowserSyncedWindowDelegate);
+
+// static
+BrowserSyncedWindowDelegate* BrowserSyncedWindowDelegate::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
 
 BrowserSyncedWindowDelegate::BrowserSyncedWindowDelegate(
     BrowserWindowInterface* browser,
     TabStripModel* tab_strip_model,
     SessionID session_id,
     BrowserWindowInterface::Type type)
-    : browser_(CHECK_DEREF(browser)),
+    : scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this),
+      browser_(CHECK_DEREF(browser)),
       tab_strip_model_(CHECK_DEREF(tab_strip_model)),
       session_id_(session_id),
       type_(type) {
@@ -34,25 +61,16 @@ void BrowserSyncedWindowDelegate::OnTabStripModelChanged(
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
   if (selection.active_tab_changed()) {
-    if (selection.old_contents &&
-        BrowserSyncedTabDelegate::FromWebContents(selection.old_contents)) {
-      BrowserSyncedTabDelegate::FromWebContents(selection.old_contents)
-          ->ResetCachedLastActiveTime();
-    }
-
-    if (selection.new_contents &&
-        BrowserSyncedTabDelegate::FromWebContents(selection.new_contents)) {
-      BrowserSyncedTabDelegate::FromWebContents(selection.new_contents)
-          ->ResetCachedLastActiveTime();
-    }
+    ResetTabCachedLastActiveTimeForContents(selection.old_contents);
+    ResetTabCachedLastActiveTimeForContents(selection.new_contents);
   }
 }
 
 bool BrowserSyncedWindowDelegate::IsTabPinned(
     const sync_sessions::SyncedTabDelegate* tab) const {
-  for (const tabs::TabInterface* tab_interface : *tab_strip_model_) {
+  for (tabs::TabInterface* tab_interface : *tab_strip_model_) {
     sync_sessions::SyncedTabDelegate* current =
-        BrowserSyncedTabDelegate::FromWebContents(tab_interface->GetContents());
+        BrowserSyncedTabDelegate::From(tab_interface);
     if (tab == current) {
       return tab_interface->IsPinned();
     }
@@ -64,8 +82,7 @@ bool BrowserSyncedWindowDelegate::IsTabPinned(
 
 sync_sessions::SyncedTabDelegate* BrowserSyncedWindowDelegate::GetTabAt(
     int index) const {
-  return BrowserSyncedTabDelegate::FromWebContents(
-      tab_strip_model_->GetWebContentsAt(index));
+  return BrowserSyncedTabDelegate::From(tab_strip_model_->GetTabAtIndex(index));
 }
 
 SessionID BrowserSyncedWindowDelegate::GetTabIdAt(int index) const {

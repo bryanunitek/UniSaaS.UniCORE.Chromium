@@ -11,6 +11,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import androidx.browser.customtabs.CustomTabsCallback;
+import androidx.browser.customtabs.CustomTabsSessionToken;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -21,7 +22,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -31,11 +31,12 @@ import org.chromium.net.NetError;
 
 /** Tests for some parts of {@link CustomTabNavigationEventObserver}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 public class CustomTabNavigationEventObserverUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private CustomTabsConnection mConnection;
-    @Mock private SessionHolder<?> mSessionHolder;
+
+    private final SessionHolder mSessionHolder =
+            SessionHolder.of(CustomTabsSessionToken.createMockSessionTokenForTesting());
 
     @Before
     public void setup() {

@@ -31,6 +31,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_background_services_context.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
@@ -108,8 +109,8 @@ void PaymentAppProviderImpl::InvokePaymentApp(
     const url::Origin& sw_origin,
     PaymentRequestEventDataPtr event_data,
     InvokePaymentAppCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_request_web_contents_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_request_web_contents_, base::NotFatalUntil::M160);
 
   if (DevToolsBackgroundServicesContextImpl* dev_tools =
           GetDevTools(sw_origin)) {
@@ -141,6 +142,7 @@ void PaymentAppProviderImpl::InvokePaymentApp(
 }
 
 void PaymentAppProviderImpl::InstallAndInvokePaymentApp(
+    GlobalRenderFrameHostId requesting_frame_id,
     PaymentRequestEventDataPtr event_data,
     const std::string& app_name,
     const SkBitmap& app_icon,
@@ -151,8 +153,8 @@ void PaymentAppProviderImpl::InstallAndInvokePaymentApp(
     const SupportedDelegations& supported_delegations,
     RegistrationIdCallback registration_id_callback,
     InvokePaymentAppCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_request_web_contents_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_request_web_contents_, base::NotFatalUntil::M160);
 
   if (!sw_js_url.is_valid() || !sw_scope.is_valid() || method.empty()) {
     GetUIThreadTaskRunner({})->PostTask(
@@ -185,8 +187,9 @@ void PaymentAppProviderImpl::InstallAndInvokePaymentApp(
   }
 
   PaymentAppInstaller::Install(
-      payment_request_web_contents_, app_name, EncodeIcon(app_icon), sw_js_url,
-      sw_scope, sw_use_cache, method, supported_delegations,
+      payment_request_web_contents_, requesting_frame_id, app_name,
+      EncodeIcon(app_icon), sw_js_url, sw_scope, sw_use_cache, method,
+      supported_delegations,
       base::BindOnce(&PaymentAppProviderImpl::OnInstallPaymentApp,
                      weak_ptr_factory_.GetWeakPtr(), sw_origin,
                      std::move(event_data), std::move(registration_id_callback),
@@ -219,8 +222,8 @@ void PaymentAppProviderImpl::CanMakePayment(
     const std::string& payment_request_id,
     CanMakePaymentEventDataPtr event_data,
     CanMakePaymentCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_request_web_contents_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_request_web_contents_, base::NotFatalUntil::M160);
 
   if (DevToolsBackgroundServicesContextImpl* dev_tools =
           GetDevTools(sw_origin)) {
@@ -252,8 +255,8 @@ void PaymentAppProviderImpl::AbortPayment(int64_t registration_id,
                                           const url::Origin& sw_origin,
                                           const std::string& payment_request_id,
                                           AbortCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_request_web_contents_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_request_web_contents_, base::NotFatalUntil::M160);
 
   if (DevToolsBackgroundServicesContextImpl* dev_tools =
           GetDevTools(sw_origin)) {
@@ -276,11 +279,11 @@ void PaymentAppProviderImpl::AbortPayment(int64_t registration_id,
 
 void PaymentAppProviderImpl::SetOpenedWindow(
     WebContents* payment_handler_web_contents) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_handler_web_contents);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_handler_web_contents, base::NotFatalUntil::M160);
 
   CloseOpenedWindow();
-  DCHECK(!payment_handler_window_);
+  CHECK(!payment_handler_window_, base::NotFatalUntil::M160);
 
   payment_handler_window_ = payment_handler_web_contents->GetWeakPtr();
 
@@ -293,7 +296,7 @@ void PaymentAppProviderImpl::SetOpenedWindow(
 }
 
 void PaymentAppProviderImpl::CloseOpenedWindow() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   payment_handler_web_contents_observer_.reset();
 
@@ -305,7 +308,7 @@ void PaymentAppProviderImpl::CloseOpenedWindow() {
 
 void PaymentAppProviderImpl::OnClosingOpenedWindow(
     PaymentEventResponseType reason) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   event_dispatcher_->OnClosingOpenedWindow(reason);
 }
@@ -315,15 +318,17 @@ void PaymentAppProviderImpl::InstallPaymentAppForTesting(
     const GURL& service_worker_javascript_file_url,
     const GURL& service_worker_scope,
     const std::string& payment_method_identifier,
+    GlobalRenderFrameHostId requesting_frame_id,
     base::OnceCallback<void(bool success)> callback) {
   CHECK(service_worker_javascript_file_url.is_valid());
   CHECK(service_worker_scope.is_valid());
   CHECK(!payment_method_identifier.empty());
 
   PaymentAppInstaller::Install(
-      payment_request_web_contents_, /*app_name=*/"Test App Name",
-      EncodeIcon(app_icon), service_worker_javascript_file_url,
-      service_worker_scope, /*use_cache=*/false, payment_method_identifier,
+      payment_request_web_contents_, requesting_frame_id,
+      /*app_name=*/"Test App Name", EncodeIcon(app_icon),
+      service_worker_javascript_file_url, service_worker_scope,
+      /*use_cache=*/false, payment_method_identifier,
       content::SupportedDelegations(),
       base::BindOnce(&CheckRegistrationSuccess, std::move(callback)));
 }
@@ -333,7 +338,7 @@ void PaymentAppProviderImpl::SetRegistrationId(int64_t registration_id) {
 }
 
 void PaymentAppProviderImpl::OnPaymentHandlerDisconnected() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   payment_handler_disconnected_for_test_ = true;
   payment_handler_web_contents_observer_.reset();
@@ -354,8 +359,8 @@ void PaymentAppProviderImpl::OnPaymentHandlerDisconnected() {
 
 DevToolsBackgroundServicesContextImpl* PaymentAppProviderImpl::GetDevTools(
     const url::Origin& sw_origin) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_request_web_contents_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_request_web_contents_, base::NotFatalUntil::M160);
   auto* storage_partition =
       payment_request_web_contents_->GetBrowserContext()
           ->GetStoragePartitionForUrl(sw_origin.GetURL(),
@@ -375,7 +380,7 @@ DevToolsBackgroundServicesContextImpl* PaymentAppProviderImpl::GetDevTools(
 void PaymentAppProviderImpl::StartServiceWorkerForDispatch(
     int64_t registration_id,
     PaymentEventDispatcher::ServiceWorkerStartCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   StoragePartitionImpl* partition = static_cast<StoragePartitionImpl*>(
       payment_request_web_contents_->GetBrowserContext()
@@ -393,8 +398,8 @@ void PaymentAppProviderImpl::OnInstallPaymentApp(
     RegistrationIdCallback registration_id_callback,
     InvokePaymentAppCallback callback,
     int64_t registration_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(payment_request_web_contents_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(payment_request_web_contents_, base::NotFatalUntil::M160);
 
   if (DevToolsBackgroundServicesContextImpl* dev_tools =
           GetDevTools(sw_origin)) {

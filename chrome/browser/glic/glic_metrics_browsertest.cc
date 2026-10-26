@@ -5,6 +5,7 @@
 #include "chrome/browser/glic/glic_metrics.h"
 
 #include "base/command_line.h"
+#include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/run_until.h"
@@ -19,13 +20,14 @@
 #include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 #include "chrome/browser/glic/service/glic_instance_impl.h"
 #include "chrome/browser/glic/service/glic_ui_types.h"
+#include "chrome/browser/glic/service/metrics/metrics_types.h"
+#include "chrome/browser/glic/test_support/glic_api_test_passkeys.h"
 #include "chrome/browser/glic/test_support/glic_browser_test.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/tab_list/tab_list_interface_observer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -33,6 +35,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -218,6 +221,71 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(user_action_tester.GetActionCount("Glic.Instance.Toggle"), 2);
 }
 
+IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest, SubmitQueryCuiOutcome_Failure) {
+  base::HistogramTester histogram_tester;
+
+  auto* glic_service = GlicKeyedServiceFactory::GetGlicKeyedService(
+      PlatformBrowserTest::browser()->GetProfile());
+  glic_service->ToggleUI(PlatformBrowserTest::browser(),
+                         /*prevent_close=*/false,
+                         mojom::InvocationSource::kOsButton);
+  ASSERT_OK(WaitForWebUiState(mojom::WebUiState::kReady));
+
+  tabs::TabInterface* tab =
+      PlatformBrowserTest::browser()->GetActiveTabInterface();
+  auto* instance =
+      static_cast<GlicInstanceImpl*>(glic_service->GetInstanceForTab(tab));
+  ASSERT_TRUE(instance);
+
+  instance->instance_metrics().OnUserInputSubmitted(
+      mojom::WebClientMode::kText, mojom::PromptType::kUnspecified);
+  instance->WebUiStateChanged(mojom::WebUiState::kError);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount("Glic.CUI.SubmitQuery.Outcome",
+                                           GlicCuiOutcome::kFailed) == 1;
+  }));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount(
+               "Glic.CUI.ResponseCompletion.Outcome",
+               GlicCuiOutcome::kFailed) == 1;
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
+                       SubmitQueryCuiOutcome_Abandoned) {
+  base::HistogramTester histogram_tester;
+
+  auto* glic_service = GlicKeyedServiceFactory::GetGlicKeyedService(
+      PlatformBrowserTest::browser()->GetProfile());
+  glic_service->ToggleUI(PlatformBrowserTest::browser(),
+                         /*prevent_close=*/false,
+                         mojom::InvocationSource::kOsButton);
+  ASSERT_OK(WaitForWebUiState(mojom::WebUiState::kReady));
+
+  tabs::TabInterface* tab =
+      PlatformBrowserTest::browser()->GetActiveTabInterface();
+  auto* instance =
+      static_cast<GlicInstanceImpl*>(glic_service->GetInstanceForTab(tab));
+  ASSERT_TRUE(instance);
+
+  instance->instance_metrics().OnUserInputSubmitted(
+      mojom::WebClientMode::kText, mojom::PromptType::kUnspecified);
+  glic_service->ToggleUI(PlatformBrowserTest::browser(),
+                         /*prevent_close=*/false,
+                         mojom::InvocationSource::kOsButton);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount("Glic.CUI.SubmitQuery.Outcome",
+                                           GlicCuiOutcome::kAbandoned) == 1;
+  }));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount(
+               "Glic.CUI.ResponseCompletion.Outcome",
+               GlicCuiOutcome::kAbandoned) == 1;
+  }));
+}
+
 // Test with message first FRE enabled.
 // Expected behavior:
 // 1. The first call to ToggleUI() (to open the panel) is intercepted because
@@ -281,6 +349,7 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest, InvokeAndOpenSourceMetrics) {
       mojom::InvocationSource::kDetachAttachButton,
       mojom::InvocationSource::kTabRestore,
       mojom::InvocationSource::kNavigationCapture,
+      mojom::InvocationSource::kPdfSummarizeButton,
   };
 
   for (mojom::InvocationSource source : kSources) {
@@ -298,6 +367,18 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest, InvokeAndOpenSourceMetrics) {
                                         source, 1);
     histogram_tester.ExpectUniqueSample("Glic.Instance.InitialInvocationSource",
                                         source, 1);
+    const std::string source_str = GetInvocationSourceString(source);
+    const std::string event_counts_histogram =
+        base::StrCat({"Glic.InvocationSource.", source_str, ".EventCounts"});
+    const std::string had_event_histogram =
+        base::StrCat({"Glic.InvocationSource.", source_str, ".HadEvent"});
+    for (GlicInstanceEvent event :
+         {GlicInstanceEvent::kInstanceCreated,
+          GlicInstanceEvent::kInstanceCreatedWithoutWarming,
+          GlicInstanceEvent::kTabBound, GlicInstanceEvent::kOpen}) {
+      histogram_tester.ExpectBucketCount(event_counts_histogram, event, 1);
+      histogram_tester.ExpectBucketCount(had_event_histogram, event, 1);
+    }
   }
 }
 
@@ -373,6 +454,28 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
 
   // 3. Verify that Glic.Instance.Open is NOT incremented.
   EXPECT_EQ(user_action_tester.GetActionCount("Glic.Instance.Open"), 1);
+
+  // 4. Verify CUI tracking. We simulate a query submission from the active
+  // instance.
+  auto* instance =
+      static_cast<GlicInstanceImpl*>(glic_service->GetInstanceForTab(tab));
+  ASSERT_TRUE(instance);
+  instance->instance_metrics().OnUserInputSubmitted(
+      mojom::WebClientMode::kText, mojom::PromptType::kUnspecified);
+  instance->instance_metrics().OnResponseStarted();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount("Glic.CUI.SubmitQuery.Outcome",
+                                           GlicCuiOutcome::kSuccess) == 1;
+  }));
+
+  // Log response stopped to verify ResponseCompletion CUI tracking.
+  instance->instance_metrics().OnResponseStopped(
+      mojom::ResponseStopCause::kUnknown);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return histogram_tester.GetBucketCount(
+               "Glic.CUI.ResponseCompletion.Outcome",
+               GlicCuiOutcome::kSuccess) == 1;
+  }));
 }
 
 IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
@@ -407,7 +510,7 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest, ZoomLevel_OnOpen) {
   base::HistogramTester histogram_tester;
 
   // Set zoom level for profile.
-  PlatformBrowserTest::browser()->profile()->GetPrefs()->SetInteger(
+  PlatformBrowserTest::browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kGlicZoomLevel, 150);
 
   // Open the side panel.
@@ -499,7 +602,8 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest, TabSwitchingSuppressesOnOpen) {
   auto* instance =
       static_cast<GlicInstanceImpl*>(glic_service->GetInstanceForTab(tab1));
   ASSERT_TRUE(instance);
-  instance->OnUserInputSubmitted(mojom::WebClientMode::kText);
+  instance->OnUserInputSubmitted(mojom::WebClientMode::kText,
+                                 mojom::PromptType::kUnspecified);
   ASSERT_TRUE(
       base::test::RunUntil([&]() { return coordinator1->IsShowing(); }));
 
@@ -625,7 +729,8 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
   auto* instance =
       static_cast<GlicInstanceImpl*>(glic_service->GetInstanceForTab(tab1));
   ASSERT_TRUE(instance);
-  instance->OnUserInputSubmitted(mojom::WebClientMode::kText);
+  instance->OnUserInputSubmitted(mojom::WebClientMode::kText,
+                                 mojom::PromptType::kUnspecified);
 
   // 2. Create a background tab (Tab 2).
   int initial_tab_count =
@@ -731,6 +836,191 @@ IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
   histogram_tester.ExpectBucketCount(
       "Glic.Instance.Floaty.OpenSource",
       mojom::InvocationSource::kConversationSwitch, 1);
+}
+
+class GlicMetricsBrowserTestWithTabGroups : public GlicMetricsBrowserTest {
+ public:
+  GlicMetricsBrowserTestWithTabGroups()
+      : GlicMetricsBrowserTest({features::kGlicTabGroups}, {}) {}
+};
+
+// Verifies that when switching conversations in a tab group, the invocation
+// source is set early on the group's shared instance and pre-open events are
+// backfilled.
+IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTestWithTabGroups,
+                       SwitchConversationInTabGroup_InvocationSourceMetrics) {
+  // Set up the tab group:
+  TabListInterface* tab_list = GetTabListInterface();
+  ASSERT_TRUE(tab_list);
+
+  tabs::TabInterface* tab1 = tab_list->GetActiveTab();
+  ASSERT_TRUE(tab1);
+  tabs::TabInterface* tab2 = CreateAndActivateTab(GURL("about:blank"));
+  ASSERT_TRUE(tab2);
+  ASSERT_NE(tab1, tab2);
+
+  std::optional<tab_groups::TabGroupId> group_id =
+      tab_list->CreateTabGroup({tab1->GetHandle(), tab2->GetHandle()});
+  ASSERT_TRUE(group_id.has_value());
+
+  // Register a conversation on the instance so that SwitchConversation()
+  // creates a new target instance.
+  ASSERT_TRUE(coordinator().ShowInstanceForTabGroup(group_id.value()));
+
+  GlicInstanceImpl* first_instance = GetInstanceForTab(tab2);
+  ASSERT_TRUE(first_instance);
+  auto info1 = mojom::ConversationInfo::New();
+  info1->conversation_id = "conv_1";
+  first_instance->RegisterConversation(std::move(info1), base::DoNothing());
+
+  // Keep tab2 active so tab1 (visited first by ShowForTabGroup) is inactive.
+  // This serves as an extra check that the invocation source is properly set
+  // regardless of the position of the tab in the group.
+  ActivateTab(tab2);
+  ASSERT_FALSE(tab1->IsActivated());
+  ASSERT_TRUE(tab2->IsActivated());
+
+  base::HistogramTester histogram_tester;
+  auto info2 = mojom::ConversationInfo::New();
+  info2->conversation_id = "conv_2";
+  first_instance->SwitchConversation(ShowOptions::ForSidePanel(*tab2),
+                                     std::move(info2), base::DoNothing());
+
+  GlicInstanceImpl* second_instance = GetInstanceForTab(tab2);
+  ASSERT_TRUE(second_instance);
+  ASSERT_NE(first_instance, second_instance);
+  EXPECT_EQ(GetInstanceForTab(tab1), second_instance);
+
+  // Check that all expected metrics tied to the initial invocation source are
+  // logged.
+  histogram_tester.ExpectUniqueSample(
+      "Glic.Instance.InitialInvocationSource",
+      mojom::InvocationSource::kConversationSwitch, 1);
+  for (GlicInstanceEvent event :
+       {GlicInstanceEvent::kInstanceCreated,
+        GlicInstanceEvent::kInstanceCreatedWithoutWarming,
+        GlicInstanceEvent::kRegisterConversation, GlicInstanceEvent::kTabBound,
+        GlicInstanceEvent::kOpen}) {
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.ConversationSwitch.HadEvent", event, 1);
+    // ShowForTabGroup setting `Unsupported` for inactive tabs should not affect
+    // the initial invocation source.
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.Unsupported.EventCounts", event, 0);
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.Unsupported.HadEvent", event, 0);
+  }
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.ConversationSwitch.EventCounts",
+      GlicInstanceEvent::kTabBound, 2);
+}
+
+// Verifies that invoking a new instance on a background tab (e.g. via the tab
+// context menu) sets the initial invocation source and backfills pre-open
+// events before the tab is revealed.
+IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
+                       InvokeOnBackgroundTab_InvocationSourceMetrics) {
+  // Create an inactive background tab.
+  tabs::TabInterface* background_tab = CreateBackgroundTab(GURL("about:blank"));
+  ASSERT_TRUE(background_tab);
+  ASSERT_FALSE(background_tab->IsActivated());
+
+  // Simulate tab strip context menu's "Start new chat" action by invoking a new
+  // conversation targeting the background tab.
+  base::HistogramTester histogram_tester;
+  GlicInvokeOptions options(Target(*background_tab, NewConversation{}),
+                            mojom::InvocationSource::kTabContextMenu);
+  service()->Invoke(std::move(options));
+
+  GlicInstanceImpl* instance = GetInstanceForTab(background_tab);
+  ASSERT_TRUE(instance);
+  EXPECT_FALSE(instance->HasActiveEmbedder());
+
+  histogram_tester.ExpectTotalCount("Glic.Instance.InitialInvocationSource", 0);
+  for (GlicInstanceEvent event :
+       {GlicInstanceEvent::kInstanceCreated,
+        GlicInstanceEvent::kInstanceCreatedWithoutWarming,
+        GlicInstanceEvent::kTabBound}) {
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.TabContextMenu.EventCounts", event, 1);
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.TabContextMenu.HadEvent", event, 1);
+  }
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.TabContextMenu.EventCounts",
+      GlicInstanceEvent::kOpen, 0);
+
+  // Activate the background tab to reveal the panel - metrics should still be
+  // attributed to TabContextMenu rather than ReshowInactive.
+  ActivateTab(background_tab);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return instance->HasActiveEmbedder(); }));
+
+  histogram_tester.ExpectUniqueSample("Glic.Instance.InitialInvocationSource",
+                                      mojom::InvocationSource::kTabContextMenu,
+                                      1);
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.TabContextMenu.EventCounts",
+      GlicInstanceEvent::kOpen, 1);
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.TabContextMenu.HadEvent", GlicInstanceEvent::kOpen,
+      1);
+  histogram_tester.ExpectTotalCount(
+      "Glic.InvocationSource.ReshowInactive.EventCounts", 0);
+}
+
+// Verifies that a hidden InvokeWithAutoSubmit (e.g. GlicPasswordChangeActuator
+// with show_panel = false) sets the initial invocation source and backfills
+// pre-open events before the panel is actually shown.
+IN_PROC_BROWSER_TEST_F(GlicMetricsBrowserTest,
+                       InvokeWithAutoSubmitHidden_InvocationSourceMetrics) {
+  tabs::TabInterface* tab = GetTabListInterface()->GetActiveTab();
+  ASSERT_TRUE(tab);
+
+  base::HistogramTester histogram_tester;
+  GlicInvokeOptions options(Target(*tab, NewConversation{}),
+                            mojom::InvocationSource::kPasswordChange);
+  GlicInvokeWithAutoSubmitOptions auto_submit_options;
+  auto_submit_options.show_panel = false;
+
+  service()->InvokeWithAutoSubmit(GlicApiTestPasskeys::GetPassKey(),
+                                  std::move(options),
+                                  std::move(auto_submit_options));
+
+  GlicInstanceImpl* instance = GetInstanceForTab(tab);
+  ASSERT_TRUE(instance);
+  EXPECT_FALSE(instance->IsShowing());
+
+  histogram_tester.ExpectTotalCount("Glic.Instance.InitialInvocationSource", 0);
+  for (GlicInstanceEvent event :
+       {GlicInstanceEvent::kInstanceCreated,
+        GlicInstanceEvent::kInstanceCreatedWithoutWarming,
+        GlicInstanceEvent::kTabBound}) {
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.PasswordChange.EventCounts", event, 1);
+    histogram_tester.ExpectBucketCount(
+        "Glic.InvocationSource.PasswordChange.HadEvent", event, 1);
+  }
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.PasswordChange.EventCounts",
+      GlicInstanceEvent::kOpen, 0);
+
+  // Opening the panel later via another source should preserve PasswordChange
+  // as the initial invocation source.
+  service()->ToggleUI(GetBrowser(),
+                      /*prevent_close=*/false,
+                      mojom::InvocationSource::kTopChromeButton);
+  histogram_tester.ExpectUniqueSample("Glic.Instance.InitialInvocationSource",
+                                      mojom::InvocationSource::kPasswordChange,
+                                      1);
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.PasswordChange.EventCounts",
+      GlicInstanceEvent::kOpen, 1);
+  histogram_tester.ExpectBucketCount(
+      "Glic.InvocationSource.PasswordChange.HadEvent", GlicInstanceEvent::kOpen,
+      1);
+  histogram_tester.ExpectTotalCount(
+      "Glic.InvocationSource.TopChromeButton.EventCounts", 0);
 }
 
 }  // namespace

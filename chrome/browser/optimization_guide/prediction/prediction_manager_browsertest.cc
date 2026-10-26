@@ -26,7 +26,7 @@
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -38,8 +38,7 @@
 #include "components/optimization_guide/core/hints/optimization_guide_store.h"
 #include "components/optimization_guide/core/hints/store_update_data.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/variations/hashing.h"
@@ -181,9 +180,9 @@ class PredictionManagerBrowserTestBase : public InProcessBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(switches::kGoogleApiKeyConfigurationCheckOverride);
+    cmd->AppendSwitch(kGoogleApiKeyConfigurationCheckOverrideSwitch);
     cmd->AppendSwitchASCII(
-        switches::kOptimizationGuideServiceGetModelsURL,
+        features::kOptimizationGuideServiceGetModelsURLSwitch,
         models_server_
             ->GetURL(
                 features::GetOptimizationGuideServiceGetModelsURL().GetHost(),
@@ -336,10 +335,6 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
   // Should not have made fetch request.
   histogram_tester.ExpectTotalCount(
       "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status", 0);
-  histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status."
-      "PainfulPageLoad",
-      0);
 }
 
 IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
@@ -382,10 +377,6 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerBrowserTest,
 
   histogram_tester.ExpectBucketCount(
       "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status",
-      net::HTTP_NOT_FOUND, 1);
-  histogram_tester.ExpectBucketCount(
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status."
-      "PainfulPageLoad",
       net::HTTP_NOT_FOUND, 1);
 
   histogram_tester.ExpectTotalCount(
@@ -489,7 +480,8 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
     base::HistogramTester otr_histogram_tester;
     std::unique_ptr<base::RunLoop> run_loop = std::make_unique<base::RunLoop>();
     SetUpValidModelInfoReceival(model_file_observer(), run_loop.get());
-    Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
+    BrowserWindowInterface* otr_browser =
+        CreateIncognitoBrowser(browser()->GetProfile());
     RegisterModelFileObserverWithKeyedService(otr_browser->GetProfile());
 
     run_loop->Run();
@@ -573,10 +565,6 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus",
       PredictionModelDownloadStatus::kSuccess, 1);
-
-  // No error when moving the file so there will be no record.
-  histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.PredictionModelDownloadManager.ReplaceFileError", 0);
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelUpdateVersion.PainfulPageLoad",
       kSuccessfulModelVersion, 1);
@@ -630,10 +618,6 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus",
       PredictionModelDownloadStatus::kSuccess, 1);
-
-  // No error when moving the file so there will be no record.
-  histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.PredictionModelDownloadManager.ReplaceFileError", 0);
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelUpdateVersion.PainfulPageLoad",
       kSuccessfulModelVersion, 1);
@@ -752,15 +736,12 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
       histogram_tester.get(),
       "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status", 1);
   histogram_tester->ExpectUniqueSample(
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status."
-      "PainfulPageLoad",
+      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status",
       net::HTTP_OK, 1);
   histogram_tester->ExpectTotalCount(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus", 0);
   histogram_tester->ExpectTotalCount(
       "OptimizationGuide.PredictionModelUpdateVersion.PainfulPageLoad", 0);
-  histogram_tester->ExpectTotalCount(
-      "OptimizationGuide.PredictionModelRemoved.PainfulPageLoad", 0);
   histogram_tester->ExpectTotalCount(
       "OptimizationGuide.PredictionModelStore.ModelRemovalReason."
       "PainfulPageLoad",
@@ -832,8 +813,7 @@ IN_PROC_BROWSER_TEST_F(PredictionManagerModelDownloadingBrowserTest,
   // The model fetch will happen, and the model will be removed from the store,
   // and the observers notified of null model.
   histogram_tester->ExpectUniqueSample(
-      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status."
-      "PainfulPageLoad",
+      "OptimizationGuide.PredictionModelFetcher.GetModelsResponse.Status",
       net::HTTP_OK, 1);
   histogram_tester->ExpectTotalCount(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus", 0);
@@ -868,7 +848,7 @@ class PredictionManagerModelPackageOverrideTest : public InProcessBrowserTest {
     base::PathService::Get(chrome::DIR_TEST_DATA, &src_dir);
 
     cmd_line->AppendSwitchASCII(
-        switches::kModelOverride,
+        kModelOverrideSwitch,
         base::StrCat({
             "OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD",
             ModelOverrideSeparator(),

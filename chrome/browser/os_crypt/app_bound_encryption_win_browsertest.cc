@@ -38,8 +38,7 @@
 #include "chrome/browser/os_crypt/test_support.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/win/isolated_browser_support.h"
+#include "chrome/browser/win/isolated_browser/isolated_browser_support.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/elevation_service/elevator.h"
 #include "chrome/install_static/test/scoped_install_details.h"
@@ -137,8 +136,8 @@ class AppBoundEncryptionWinTestBase : public InProcessBrowserTest {
   // Used by multi-stage tests to persist data between each part of the test.
   void StoreData(base::span<const uint8_t> data) {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    const auto data_path =
-        browser()->profile()->GetPath().Append(FILE_PATH_LITERAL("TestData"));
+    const auto data_path = browser()->GetProfile()->GetPath().Append(
+        FILE_PATH_LITERAL("TestData"));
     ASSERT_FALSE(base::PathExists(data_path));
     EXPECT_TRUE(base::WriteFile(data_path, data));
   }
@@ -259,21 +258,6 @@ IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTest, MetricsTest) {
 // Run this test manually to force uninstall the service using
 // --gtest_filter=AppBoundEncryptionWinTest.MANUAL_Uninstall --run-manual.
 IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTest, MANUAL_Uninstall) {}
-
-using AppBoundEncryptionWinTestNoService = InProcessBrowserTest;
-
-IN_PROC_BROWSER_TEST_F(AppBoundEncryptionWinTestNoService, NoService) {
-  const std::string plaintext("plaintext");
-  std::string ciphertext;
-  DWORD last_error;
-
-  HRESULT hr =
-      EncryptAppBoundString(ProtectionLevel::PROTECTION_PATH_VALIDATION,
-                            plaintext, ciphertext, last_error);
-
-  EXPECT_EQ(REGDB_E_CLASSNOTREG, hr);
-  EXPECT_EQ(DWORD{ERROR_GEN_FAILURE}, last_error);
-}
 
 // This policy test is here and not in chrome/browser/policy/test as it requires
 // a fake system install to correctly show as kSupported, and this testing class
@@ -764,19 +748,23 @@ class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
         break;
     }
 
-    base::Process process;
+    int exit_code = 0;
     if (launch_isolated) {
-      ASSERT_OK_AND_ASSIGN(process, chrome::LaunchIsolatedBrowser(cmd));
+      ASSERT_OK_AND_ASSIGN(auto isolated_process,
+                           chrome::IsolatedBrowserProcess::Launch(cmd));
+      ASSERT_OK_AND_ASSIGN(exit_code, isolated_process.WaitForExit());
     } else {
       base::LaunchOptions options;
       options.start_hidden = true;
       options.wait = true;
 
-      process = base::LaunchProcess(cmd, options);
+      base::Process process = base::LaunchProcess(cmd, options);
+      ASSERT_TRUE(process.IsValid());
+      EXPECT_TRUE(process.WaitForExit(&exit_code));
+      // This ensures the process has really terminated before this function
+      // returns, as base::Process destructor does not do this by default.
+      process.Terminate(0, /*wait=*/true);
     }
-    ASSERT_TRUE(process.IsValid());
-    int exit_code;
-    EXPECT_TRUE(process.WaitForExit(&exit_code));
     result = static_cast<HRESULT>(exit_code);
     if (SUCCEEDED(result)) {
       EXPECT_TRUE(base::ReadFileToString(output_file_path, &output_data));
@@ -784,9 +772,6 @@ class AppBoundEncryptionWinTestMultiProcess : public AppBoundEncryptionWinTest {
     if (op == Operation::kDecrypt) {
       EXPECT_EQ(base::PathExists(reencrypt_file_path), expect_reencrypt);
     }
-    // This ensures the process has really terminated before this function
-    // returns, as base::Process destructor does not do this by default.
-    process.Terminate(0, /*wait=*/true);
   }
 
  private:

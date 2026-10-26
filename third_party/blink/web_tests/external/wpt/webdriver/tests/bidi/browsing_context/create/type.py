@@ -1,7 +1,11 @@
 import pytest
 
 from webdriver.bidi.modules.script import ContextTarget
-from .. import assert_browsing_context, assert_document_status
+from .. import (
+    assert_browsing_context,
+    assert_document_status,
+    get_visibility_state,
+)
 from ... import get_viewport_dimensions
 
 
@@ -9,22 +13,38 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.mark.parametrize("type_hint", ["tab", "window"])
-async def test_type(bidi_session, wait_for_event, wait_for_future_safe, subscribe_events, top_context, type_hint):
+async def test_type(
+    bidi_session,
+    wait_for_event,
+    wait_for_future_safe,
+    subscribe_events,
+    top_context,
+    get_document_focus,
+    type_hint
+):
     await subscribe_events(["browsingContext.contextCreated"])
     is_window = type_hint == "window"
 
     contexts = await bidi_session.browsing_context.get_tree(max_depth=0)
     assert len(contexts) == 1
 
-    await assert_document_status(bidi_session, top_context, visible=True, focused=True)
+    await assert_document_status(bidi_session, top_context, get_document_focus, visible=True, focused=True)
 
     on_entry = wait_for_event("browsingContext.contextCreated")
     new_context = await bidi_session.browsing_context.create(type_hint=type_hint)
     context_info = await wait_for_future_safe(on_entry)
     assert contexts[0]["context"] != new_context["context"]
 
-    await assert_document_status(bidi_session, new_context, visible=True, focused=True)
-    await assert_document_status(bidi_session, top_context, visible=is_window, focused=False)
+    await assert_document_status(bidi_session, new_context, get_document_focus, visible=True, focused=True)
+    if is_window:
+        # A new window uses a separate OS window, so the previous window stays
+        # "visible". The specs do not prohibit multiple windows from having
+        # system focus simultaneously, so focus is not asserted.
+        assert await get_visibility_state(bidi_session, top_context) == "visible"
+    else:
+        # A new tab reuses the same OS window, so the backgrounded tab becomes
+        # "hidden" and loses system focus.
+        await assert_document_status(bidi_session, top_context, get_document_focus, visible=False, focused=False)
 
     # Check there is an additional browsing context
     contexts = await bidi_session.browsing_context.get_tree(max_depth=0)

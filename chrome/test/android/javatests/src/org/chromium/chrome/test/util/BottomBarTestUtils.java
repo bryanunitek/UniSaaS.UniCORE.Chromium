@@ -15,7 +15,9 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarView;
 
@@ -23,15 +25,13 @@ import org.chromium.chrome.browser.ui.bottombar.BottomBarView;
 public class BottomBarTestUtils {
     /**
      * Whether the bottom bar is currently expected to be visible for the given activity based on
-     * its state and configuration (e.g. not disabled on NTP).
+     * its state and configuration.
      */
     public static boolean isBottomBarVisible(Activity activity) {
         if (!BottomBarConfigUtils.isBottomBarEnabled(activity)) {
             return false;
         }
-        if (isRegularNtp(activity) && BottomBarConfigUtils.shouldDisableOnNtp()) {
-            return false;
-        }
+
         if (activity instanceof ChromeTabbedActivity tabbedActivity
                 && !BottomBarConfigUtils.shouldShowOnGts()
                 && ThreadUtils.runOnUiThreadBlocking(
@@ -52,20 +52,17 @@ public class BottomBarTestUtils {
      * @return The optional button view, or null if not found.
      */
     public static View findOptionalButton(Activity activity) {
-        boolean isMigratedToLocationBar = isBottomBarVisible(activity) && !isRegularNtp(activity);
-
-        if (isMigratedToLocationBar) {
-            View locationBar = activity.findViewById(R.id.location_bar);
-            if (locationBar != null) {
-                View button = locationBar.findViewById(R.id.optional_toolbar_button);
+        if (activity instanceof ChromeActivity chromeActivity) {
+            ToolbarManager toolbarManager = chromeActivity.getToolbarManager();
+            if (toolbarManager != null) {
+                View button =
+                        ThreadUtils.runOnUiThreadBlocking(
+                                () ->
+                                        toolbarManager
+                                                .getToolbarLayoutForTesting()
+                                                .getOptionalButtonViewForTesting());
                 if (button != null) return button;
             }
-        }
-
-        View toolbar = activity.findViewById(R.id.toolbar);
-        if (toolbar != null) {
-            View button = toolbar.findViewById(R.id.optional_toolbar_button);
-            if (button != null) return button;
         }
 
         return activity.findViewById(R.id.optional_toolbar_button);
@@ -154,15 +151,6 @@ public class BottomBarTestUtils {
             return null;
         }
         return fallbackView;
-    }
-
-    /** Returns whether the current tab for the given activity is a regular New Tab Page. */
-    private static boolean isRegularNtp(Activity activity) {
-        if (activity instanceof ChromeTabbedActivity chromeActivity) {
-            return ThreadUtils.runOnUiThreadBlocking(
-                    () -> BottomBarConfigUtils.isRegularNtp(chromeActivity.getActivityTab()));
-        }
-        return false;
     }
 
     private static boolean isChildOf(View child, View potentialParent) {

@@ -93,13 +93,6 @@ BASE_FEATURE(kSegmentationPlatformPasswordManagerUser,
 BASE_FEATURE(kSegmentationPlatformTabResumptionRanker,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSegmentationPlatformIosModuleRanker,
-#if BUILDFLAG(IS_IOS)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
 BASE_FEATURE(kSegmentationPlatformAndroidHomeModuleRanker,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -122,13 +115,6 @@ BASE_FEATURE(kSegmentationPlatformComposePromotion,
 
 BASE_FEATURE(kSegmentationPlatformUmaFromSqlDb,
 #if !BUILDFLAG(IS_CHROMEOS)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
-BASE_FEATURE(kSegmentationPlatformIosModuleRankerSplitBySurface,
-#if BUILDFLAG(IS_IOS)
              base::FEATURE_ENABLED_BY_DEFAULT);
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -177,10 +163,29 @@ constexpr base::FeatureParam<int> kMaxAuxiliarySearchCardImpressions{
     &kAndroidAppIntegrationModule, "max_auxiliary_search_card_impressions",
     /*default_value=*/3};
 
-BASE_FEATURE(kSegmentationPlatformFedCmUser, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kSegmentationPlatformFedCmUser,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#else
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
 
 BASE_FEATURE(kDefaultBrowserPromoPropensityModel,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+constexpr base::FeatureParam<bool>
+    kDefaultBrowserPromoPropensityModelLogModelResultAndShowPromo{
+        &kDefaultBrowserPromoPropensityModel, "log_model_result_and_show_promo",
+        false};
+
+constexpr base::FeatureParam<double>
+    kDefaultBrowserPromoPropensityModelScoreThreshold{
+        &kDefaultBrowserPromoPropensityModel, "score_threshold", 0.8};
+
+constexpr base::FeatureParam<int>
+    kDefaultBrowserPromoPropensityModelExperimentCohort{
+        &kDefaultBrowserPromoPropensityModel, "opportunity_experiment_cohort",
+        1};
 
 BASE_FEATURE(kDefaultBrowserMagicStackIos,
 #if BUILDFLAG(IS_IOS)
@@ -194,43 +199,7 @@ constexpr base::FeatureParam<int> kMaxDefaultBrowserMagicStackIosImpressions{
     "max_default_browser_magic_stack_ios_impressions",
     /*default_value=*/6};
 
-BASE_FEATURE(kAndroidTipsNotifications, base::FEATURE_DISABLED_BY_DEFAULT);
-
-constexpr base::FeatureParam<bool> kTrustAndSafety{&kAndroidTipsNotifications,
-                                                   "trust_and_safety",
-                                                   /*default_value=*/false};
-
-constexpr base::FeatureParam<bool> kEssential{&kAndroidTipsNotifications,
-                                              "essential",
-                                              /*default_value=*/false};
-
-constexpr base::FeatureParam<bool> kNewFeatures{&kAndroidTipsNotifications,
-                                                "new_features",
-                                                /*default_value=*/false};
-
-constexpr base::FeatureParam<int> kStartTimeMinutes{&kAndroidTipsNotifications,
-                                                    "start_time_minutes",
-                                                    /*default_value=*/120};
-
-constexpr base::FeatureParam<int> kWindowTimeMinutes{&kAndroidTipsNotifications,
-                                                     "window_time_minutes",
-                                                     /*default_value=*/120};
-
-constexpr base::FeatureParam<bool> kEnableEnhancedSafeBrowsingTip{
-    &kAndroidTipsNotifications, "enable_enhanced_safe_browsing_tip",
-    /*default_value=*/true};
-
-constexpr base::FeatureParam<bool> kEnableQuickDeleteTip{
-    &kAndroidTipsNotifications, "enable_quick_delete_tip",
-    /*default_value=*/true};
-
-constexpr base::FeatureParam<bool> kEnableGoogleLensTip{
-    &kAndroidTipsNotifications, "enable_google_lens_tip",
-    /*default_value=*/true};
-
-constexpr base::FeatureParam<bool> kEnableBottomOmniboxTip{
-    &kAndroidTipsNotifications, "enable_bottom_omnibox_tip",
-    /*default_value=*/true};
+BASE_FEATURE(kAndroidTipsNotifications, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kAndroidTipsNotificationsV2, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -262,10 +231,10 @@ constexpr base::FeatureParam<bool> kEnableRecentTabsTip{
     &kAndroidTipsNotificationsV2, "enable_recent_tabs_tip",
     /*default_value=*/true};
 
-BASE_FEATURE(kNewTabPageCustomizationV2, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kNewTabPageCustomizationV2, base::FEATURE_ENABLED_BY_DEFAULT);
 constexpr base::FeatureParam<bool> kNewTabPageCustomizationV2ShowPromo{
     &kNewTabPageCustomizationV2, "show_promo",
-    /*default_value=*/false};
+    /*default_value=*/true};
 constexpr base::FeatureParam<int>
     kNewTabPageCustomizationV2PromoDisplayIntervalDays{
         &kNewTabPageCustomizationV2, "promo_display_interval_days",
@@ -279,5 +248,45 @@ constexpr base::FeatureParam<int>
     kNewTabPageCustomizationV2IphDisplayIntervalDays{
         &kNewTabPageCustomizationV2, "iph_display_interval_days",
         /*default_value=*/7};
+
+BASE_FEATURE(kMagicStackNTPThemeTipIos, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kMagicStackNTPCustomizationTipIos,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kMagicStackTipsNotificationTipIos,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const char kMagicStackNTPThemeTipIosActionableParam[] = "actionable_variation";
+constexpr base::FeatureParam<bool> kMagicStackNTPThemeTipIosActionable{
+    &kMagicStackNTPThemeTipIos, kMagicStackNTPThemeTipIosActionableParam,
+    /*default_value=*/false};
+
+const char kMagicStackNTPCustomizationTipIosActionableParam[] =
+    "actionable_variation";
+constexpr base::FeatureParam<bool> kMagicStackNTPCustomizationTipIosActionable{
+    &kMagicStackNTPCustomizationTipIos,
+    kMagicStackNTPCustomizationTipIosActionableParam,
+    /*default_value=*/false};
+
+const char kMagicStackTipsNotificationTipIosActionableParam[] =
+    "actionable_variation";
+constexpr base::FeatureParam<bool> kMagicStackTipsNotificationTipIosActionable{
+    &kMagicStackTipsNotificationTipIos,
+    kMagicStackTipsNotificationTipIosActionableParam,
+    /*default_value=*/false};
+
+bool IsMagicStackNTPThemeTipIosActionableEnabled() {
+  return base::FeatureList::IsEnabled(kMagicStackNTPThemeTipIos) &&
+         kMagicStackNTPThemeTipIosActionable.Get();
+}
+
+bool IsMagicStackNTPCustomizationTipIosActionableEnabled() {
+  return base::FeatureList::IsEnabled(kMagicStackNTPCustomizationTipIos) &&
+         kMagicStackNTPCustomizationTipIosActionable.Get();
+}
+
+bool IsMagicStackTipsNotificationTipIosActionableEnabled() {
+  return base::FeatureList::IsEnabled(kMagicStackTipsNotificationTipIos) &&
+         kMagicStackTipsNotificationTipIosActionable.Get();
+}
 
 }  // namespace segmentation_platform::features

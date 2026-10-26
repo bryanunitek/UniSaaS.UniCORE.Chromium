@@ -228,7 +228,7 @@ PageDiscardingHelper::DiscardMultiplePagesImpl(
       // the average Memory.Renderer.PrivateMemoryFootprint histogram value on
       // Windows in August 2021.
       node_reclaim = page_node_footprint[node].is_zero()
-                         ? base::MiBU(80)
+                         ? base::MiB(80)
                          : page_node_footprint[node];
 
       LOG(WARNING) << "Queueing discard attempt, type="
@@ -301,11 +301,21 @@ bool PageDiscardingHelper::ImmediatelyDiscardMultiplePages(
   DiscardEligibilityPolicy* eligibility_policy =
       DiscardEligibilityPolicy::GetFromGraph(GetOwningGraph());
   DCHECK(eligibility_policy);
+  return ImmediatelyDiscardMultiplePages(
+      page_nodes, discard_reason, ignore_recent_visibility, eligibility_policy);
+}
+
+bool PageDiscardingHelper::ImmediatelyDiscardMultiplePages(
+    const std::vector<const PageNode*>& page_nodes,
+    DiscardEligibilityPolicy::DiscardReason discard_reason,
+    bool ignore_recent_visibility,
+    DiscardEligibilityPolicy* eligibility_policy) {
   std::vector<base::WeakPtr<const PageNode>> eligible_nodes;
   for (const PageNode* node : page_nodes) {
-    if (eligibility_policy->CanDiscard(node, discard_reason,
+    if (!eligibility_policy ||
+        eligibility_policy->CanDiscard(node, discard_reason,
                                        ignore_recent_visibility) ==
-        CanDiscardResult::kEligible) {
+            CanDiscardResult::kEligible) {
       eligible_nodes.emplace_back(node->GetWeakPtr());
     }
   }
@@ -317,6 +327,9 @@ bool PageDiscardingHelper::ImmediatelyDiscardMultiplePages(
     if (!node) {
       continue;
     }
+
+    DiscardEligibilityPolicy::AddDiscardAttemptMarker(
+        PageNodeImpl::FromNode(node.get()));
 
     had_successful_discard |=
         page_discarder_->DiscardPageNode(node.get(), discard_reason)

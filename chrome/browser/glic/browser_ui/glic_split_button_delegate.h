@@ -8,9 +8,9 @@
 #include <optional>
 #include <string>
 
-namespace glic {
+#include "chrome/browser/glic/browser_ui/activity_list_bubble/glic_activity_list_bubble_controller_delegate.h"
 
-class GlicButtonController;
+namespace glic {
 
 // Details needed for showing a nudge.
 struct NudgeParams {
@@ -35,9 +35,9 @@ struct NudgeParams {
 
 // Delegate interface for the UI container that houses GlicButton and
 // GlicActorTaskIcon.
-class GlicSplitButtonDelegate {
+class GlicSplitButtonDelegate : public ActorTaskListBubbleControllerDelegate {
  public:
-  virtual ~GlicSplitButtonDelegate();
+  ~GlicSplitButtonDelegate() override;
 
   // Methods related to glic nudge.
 
@@ -60,26 +60,21 @@ class GlicSplitButtonDelegate {
   // Returns true if the actor icon is showing with nudge text.
   virtual bool GetIsShowingGlicActorTaskIconNudge();
 
-  // Returns true if the glic button and actor button exist.
-  virtual bool IsGlicAdded();
-
   // Update the nudge label.
   virtual void SetGlicActorNudgeLabel(const std::u16string& nudge_label);
 
   // Show the actor nudge with text.
-  virtual void TriggerGlicActorNudge(const std::u16string& nudge_text);
+  virtual void TriggerGlicActorNudge(const std::u16string& nudge_label);
 
   // Update the nudge button "pressed state".
   virtual void SetGlicActorNudgePressedState(bool pressed);
 
-  // Show the task list bubble anchored to the button.
-  virtual void ShowActorTaskListBubble();
+  // ActorTaskListBubbleControllerDelegate:
+  void ShowActorTaskListBubble() override;
+  void CloseActorTaskListBubble() override;
+  bool IsActorTaskListBubbleShowing() override;
 
   // Methods related to glic button visibility and glic panel visibility
-
-  // Sets the button controller.
-  // TODO(crbug.com/511309088): Remove.
-  virtual void SetButtonController(GlicButtonController* controller);
 
   // Set the show state of the button
   virtual void SetGlicShowState(bool show);

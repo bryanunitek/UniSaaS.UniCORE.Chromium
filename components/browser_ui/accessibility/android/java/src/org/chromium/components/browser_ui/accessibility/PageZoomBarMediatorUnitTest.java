@@ -13,8 +13,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.hamcrest.MockitoHamcrest.doubleThat;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -37,7 +35,6 @@ import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link PageZoomBarMediator}. */
-@SmallTest
 @RunWith(BaseRobolectricTestRunner.class)
 @DisableFeatures({ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING})
 public class PageZoomBarMediatorUnitTest {
@@ -88,6 +85,7 @@ public class PageZoomBarMediatorUnitTest {
         when(mPageZoomManagerDelegateMock.getWebContents()).thenReturn(mWebContentsMock);
         when(mPageZoomManagerDelegateMock.getBrowserContextHandle())
                 .thenReturn(mBrowserContextHandleMock);
+        when(mPageZoomManagerDelegateMock.isPageZoomSupported()).thenReturn(true);
 
         mModel = new PropertyModel.Builder(PageZoomProperties.ALL_KEYS).build();
         mModel.set(PageZoomProperties.DEFAULT_ZOOM_FACTOR, 0.0);

@@ -124,6 +124,7 @@ class MEDIA_EXPORT MediaFoundationRenderer
   void SetTargetWindowRect(const gfx::Rect& target_window_rect);
 
   MediaEngineNotifyImpl* GetMediaEngineNotifyForTesting() const;
+  IMFMediaEngine* GetMediaEngineForTesting() const;
 
  private:
   enum class StopSendingStatisticsReason {
@@ -159,6 +160,7 @@ class MEDIA_EXPORT MediaFoundationRenderer
   void OnWaiting();
   void OnFrameStepCompleted();
   void OnTimeUpdate();
+  void OnMFSeekRequested();
 
   // Callback for `content_protection_manager_`.
   void OnProtectionManagerWaiting(WaitingReason reason);
@@ -253,6 +255,10 @@ class MEDIA_EXPORT MediaFoundationRenderer
   Microsoft::WRL::ComPtr<MediaFoundationProtectionManager>
       content_protection_manager_;
 
+  // True between Flush() and StartPlayingFrom(), while the Media Engine is
+  // paused for a seek.
+  bool awaiting_start_playing_from_ = false;
+
   bool has_reported_playing_ = false;
   bool has_reported_significant_playback_ = false;
   bool had_error_ = false;
@@ -272,6 +278,10 @@ class MEDIA_EXPORT MediaFoundationRenderer
 
   // Whether reporting for multi-GPU histogram has been done or not.
   bool has_reported_multi_gpu_histogram_ = false;
+
+  // Number of times the Media Engine asked Chromium to seek. Reported to a
+  // histogram when this MediaFoundationRenderer is destroyed.
+  int mf_seek_requested_count_ = 0;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<MediaFoundationRenderer> weak_factory_{this};

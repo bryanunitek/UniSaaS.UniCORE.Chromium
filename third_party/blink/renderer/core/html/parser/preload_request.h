@@ -139,14 +139,6 @@ class CORE_EXPORT PreloadRequest {
     return render_blocking_behavior_;
   }
 
-  bool IsAttributionReportingEligibleImgOrScript() const {
-    return is_attribution_reporting_eligible_img_or_script_;
-  }
-
-  void SetAttributionReportingEligibleImgOrScript(bool eligible) {
-    is_attribution_reporting_eligible_img_or_script_ = eligible;
-  }
-
   void SetIsPotentiallyLCPElement(bool flag) {
     is_potentially_lcp_element_ = flag;
   }
@@ -155,17 +147,6 @@ class CORE_EXPORT PreloadRequest {
     is_potentially_lcp_influencer_ = flag;
   }
 
-  void SetSharedStorageWritableOptedIn(bool opted_in) {
-    shared_storage_writable_opted_in_ = opted_in;
-  }
-
-  // Set whether the preload request is eligible for the Browsing Topics API.
-  //
-  // See https://github.com/patcg-individual-drafts/topics/blob/main/README.md
-  // for the latest version of the Topics API explainer.
-  void SetBrowsingTopicsEligible(bool flag) {
-    browsing_topics_eligible_ = flag;
-  }
 
   bool IsPotentiallyLCPElement() const { return is_potentially_lcp_element_; }
 
@@ -219,13 +200,9 @@ class CORE_EXPORT PreloadRequest {
       RenderBlockingBehavior::kUnset;
   bool from_insertion_scanner_ = false;
   const ResourceFetcher::IsImageSet is_image_set_;
-  bool is_lazy_load_image_enabled_ = false;
   base::TimeTicks creation_time_ = base::TimeTicks::Now();
-  bool is_attribution_reporting_eligible_img_or_script_ = false;
   bool is_potentially_lcp_element_ = false;
   bool is_potentially_lcp_influencer_ = false;
-  bool shared_storage_writable_opted_in_ = false;
-  bool browsing_topics_eligible_ = false;
 };
 
 typedef Vector<std::unique_ptr<PreloadRequest>> PreloadRequestStream;

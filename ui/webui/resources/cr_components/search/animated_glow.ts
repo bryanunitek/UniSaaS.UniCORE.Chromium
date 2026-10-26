@@ -7,11 +7,11 @@ import './recording_wave.js';
 
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
-import {type PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './animated_glow.css.js';
 import {getHtml} from './animated_glow.html.js';
-import {GlowAnimationState} from './constants.js';
+import {GlowAnimationState, GlowMode} from './constants.js';
 
 /*
  * Animation glow for expanding, submitting, voice, dragging.
@@ -70,7 +70,7 @@ export class SearchAnimatedGlowElement extends CrLitElement {
         type: String,
         reflect: true,
       },
-      entrypointName: {
+      glowMode: {
         type: String,
         reflect: true,
       },
@@ -90,10 +90,6 @@ export class SearchAnimatedGlowElement extends CrLitElement {
         type: Boolean,
         reflect: true,
       },
-      isZeroState: {
-        type: Boolean,
-        reflect: true,
-      },
       darkThemeColorsEnabled: {
         type: Boolean,
       },
@@ -103,7 +99,7 @@ export class SearchAnimatedGlowElement extends CrLitElement {
   accessor animationState: GlowAnimationState = GlowAnimationState.NONE;
   accessor dragDropPlaceholder: string =
       loadTimeData.getString('composeboxDragAndDropHint');
-  accessor entrypointName: string = '';
+  accessor glowMode: GlowMode = GlowMode.OUTER_GLOW;
   accessor requiresVoice: boolean = false;
   accessor isCollapsible: boolean = false;
   accessor transcript: string = '';
@@ -114,8 +110,11 @@ export class SearchAnimatedGlowElement extends CrLitElement {
   accessor showingOnlyCarouselOnTopOfInput: boolean = false;
   accessor isListening: boolean = false;
   accessor energyEffectAnimationEnabled: boolean = false;
-  accessor isZeroState: boolean = false;
   accessor darkThemeColorsEnabled: boolean = true;
+
+  protected useEnergyEffect_(): boolean {
+    return this.glowMode === GlowMode.OUTER_GLOW;
+  }
 
   private targetAngle_: number = 0;
   private maskCurrAngle_: number = 0;
@@ -138,7 +137,9 @@ export class SearchAnimatedGlowElement extends CrLitElement {
   };
 
   private getAngleFromEvent_(e: DragEvent): number {
-    const rect = this.getBoundingClientRect();
+    const backgroundEl = this.shadowRoot.querySelector('.background');
+    const rect = backgroundEl ? backgroundEl.getBoundingClientRect() :
+                                this.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
     const scaleX = 4;
@@ -183,7 +184,7 @@ export class SearchAnimatedGlowElement extends CrLitElement {
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (changedProperties.has('animationState')) {
-      if (this.energyEffectAnimationEnabled &&
+      if (this.useEnergyEffect_() &&
           this.animationState === GlowAnimationState.DRAGGING) {
         this.isDragging_ = true;
         window.addEventListener('dragover', this.onDragOver_);

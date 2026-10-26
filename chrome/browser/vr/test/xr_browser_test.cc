@@ -4,7 +4,10 @@
 
 #include "chrome/browser/vr/test/xr_browser_test.h"
 
+#include <array>
 #include <cstring>
+#include <string_view>
+#include <utility>
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
@@ -36,16 +39,33 @@
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #else
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
 #if BUILDFLAG(ENABLE_VR)
 #include "device/vr/public/cpp/features.h"
 #endif
 namespace vr {
+
+namespace {
+
+#if BUILDFLAG(IS_WIN)
+constexpr std::array<std::string_view, 4> kRequiredTestSwitches = {
+    "enable-gpu", "enable-pixel-output-in-tests",
+    "run-through-xr-wrapper-script", "enable-unsafe-swiftshader"};
+
+constexpr std::array<std::pair<std::string_view, std::string_view>, 1>
+    kRequiredTestSwitchesWithValues = {{{"test-launcher-jobs", "1"}}};
+#else
+constexpr std::array<std::string_view, 0> kRequiredTestSwitches = {};
+constexpr std::array<std::pair<std::string_view, std::string_view>, 0>
+    kRequiredTestSwitchesWithValues = {};
+#endif
+
+}  // namespace
 
 constexpr base::TimeDelta XrBrowserTestBase::kPollCheckIntervalShort;
 constexpr base::TimeDelta XrBrowserTestBase::kPollCheckIntervalLong;
@@ -56,18 +76,6 @@ constexpr char XrBrowserTestBase::kOpenXrConfigPathEnvVar[];
 constexpr char XrBrowserTestBase::kOpenXrConfigPathVal[];
 constexpr char XrBrowserTestBase::kTestFileDir[];
 constexpr char XrBrowserTestBase::kSwitchIgnoreRuntimeRequirements[];
-const std::vector<std::string> XrBrowserTestBase::kRequiredTestSwitches{
-#if BUILDFLAG(IS_WIN)
-    "enable-gpu", "enable-pixel-output-in-tests",
-    "run-through-xr-wrapper-script", "enable-unsafe-swiftshader"
-#endif
-};
-const std::vector<std::pair<std::string, std::string>>
-    XrBrowserTestBase::kRequiredTestSwitchesWithValues{
-#if BUILDFLAG(IS_WIN)
-        std::pair<std::string, std::string>("test-launcher-jobs", "1")
-#endif
-    };
 
 XrBrowserTestBase::XrBrowserTestBase() : env_(base::Environment::Create()) {
   enable_features_.push_back(features::kLogJsConsoleMessages);
@@ -75,6 +83,7 @@ XrBrowserTestBase::XrBrowserTestBase() : env_(base::Environment::Create()) {
   enable_features_.push_back(device::features::kWebXrVisibleBlurred);
 #if BUILDFLAG(IS_ANDROID)
   enable_features_.push_back(device::features::kWebXRLayers);
+  enable_features_.push_back(device::features::kWebXRWebGPUBinding);
   enable_features_.push_back(blink::features::kWebXRMediaBinding);
 #endif
 #endif
@@ -214,10 +223,18 @@ net::EmbeddedTestServer* XrBrowserTestBase::GetEmbeddedServer() {
   if (server_ == nullptr) {
     server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::Type::TYPE_HTTPS);
+    // Use a runtime-generated root CA certificate rather than the static
+    // root_ca_cert.pem so that certificate verification succeeds even if a
+    // test device's system clock is skewed relative to root_ca_cert.pem's
+    // hardcoded validity period.
+    net::EmbeddedTestServer::ServerCertificateConfig cert_config;
+    cert_config.root = net::EmbeddedTestServer::RootType::kUniqueRoot;
+    server_->SetSSLConfig(cert_config);
     // We need to serve from the root in order for the inclusion of the
     // test harness from //third_party to work.
     server_->ServeFilesFromSourceDirectory(".");
     EXPECT_TRUE(server_->Start()) << "Failed to start embedded test server";
+    scoped_test_root_.Reset({server_->GetRoot()});
   }
   return server_.get();
 }
@@ -231,7 +248,7 @@ content::WebContents* XrBrowserTestBase::GetCurrentWebContents() {
   if (incognito_) {
     BrowserWindowInterface* incognito_browser =
         ProfileBrowserCollection::GetForProfile(
-            browser()->profile()->GetPrimaryOTRProfile(
+            browser()->GetProfile()->GetPrimaryOTRProfile(
                 /*create_if_needed=*/false))
             ->FindTabbedBrowser();
     return incognito_browser->GetTabStripModel()->GetActiveWebContents();
@@ -268,7 +285,7 @@ void XrBrowserTestBase::OpenNewTab(const std::string& url, bool incognito) {
                        /*should_pin=*/false);
 #else
   if (incognito) {
-    OpenURLOffTheRecord(browser()->profile(), GURL(url));
+    OpenURLOffTheRecord(browser()->GetProfile(), GURL(url));
   } else {
     // -1 is a special index value used to append to the end of the tab list.
     chrome::AddTabAt(browser(), GURL(url), /*index=*/-1, /*foreground=*/true);
@@ -295,11 +312,19 @@ void XrBrowserTestBase::CloseTab(content::WebContents* web_contents) {
 void XrBrowserTestBase::LoadFileAndAwaitInitialization(
     const std::string& test_name) {
   OnBeforeLoadFile();
-  GURL url = GetUrlForFile(test_name);
-  ASSERT_TRUE(content::NavigateToURL(GetCurrentWebContents(), url));
-  ASSERT_TRUE(PollJavaScriptBoolean("isInitializationComplete()",
-                                    kPollTimeoutMedium,
-                                    GetCurrentWebContents()))
+  const GURL url = GetUrlForFile(test_name);
+  const bool navigated = content::NavigateToURL(GetCurrentWebContents(), url);
+  if (!navigated) {
+    javascript_failed_ = true;
+  }
+  ASSERT_TRUE(navigated);
+  const bool initialized =
+      PollJavaScriptBoolean("isInitializationComplete()", kPollTimeoutMedium,
+                            GetCurrentWebContents());
+  if (!initialized) {
+    javascript_failed_ = true;
+  }
+  ASSERT_TRUE(initialized)
       << "Timed out waiting for JavaScript test initialization.";
 
 #if BUILDFLAG(IS_WIN)
@@ -318,8 +343,12 @@ void XrBrowserTestBase::RunJavaScriptOrFail(
     return;
   }
 
-  ASSERT_TRUE(content::ExecJs(web_contents, js_expression))
-      << "Failed to run given JavaScript: " << js_expression;
+  const testing::AssertionResult result =
+      content::ExecJs(web_contents, js_expression);
+  if (!result) {
+    javascript_failed_ = true;
+  }
+  ASSERT_TRUE(result) << "Failed to run given JavaScript: " << js_expression;
 }
 
 bool XrBrowserTestBase::RunJavaScriptAndExtractBoolOrFail(
@@ -331,7 +360,15 @@ bool XrBrowserTestBase::RunJavaScriptAndExtractBoolOrFail(
   }
 
   DLOG(INFO) << "Run JavaScript: " << js_expression;
-  return content::EvalJs(web_contents, js_expression).ExtractBool();
+  const content::EvalJsResult result =
+      content::EvalJs(web_contents, js_expression);
+  if (!result.is_bool()) {
+    javascript_failed_ = true;
+    ADD_FAILURE() << "Failed to evaluate boolean JavaScript: " << js_expression
+                  << " result: " << result;
+    return false;
+  }
+  return result.ExtractBool();
 }
 
 std::string XrBrowserTestBase::RunJavaScriptAndExtractStringOrFail(
@@ -342,13 +379,25 @@ std::string XrBrowserTestBase::RunJavaScriptAndExtractStringOrFail(
     return "";
   }
 
-  return content::EvalJs(web_contents, js_expression).ExtractString();
+  const content::EvalJsResult result =
+      content::EvalJs(web_contents, js_expression);
+  if (!result.is_string()) {
+    javascript_failed_ = true;
+    ADD_FAILURE() << "Failed to evaluate string JavaScript: " << js_expression
+                  << " result: " << result;
+    return "";
+  }
+  return result.ExtractString();
 }
 
 bool XrBrowserTestBase::PollJavaScriptBoolean(
     const std::string& bool_expression,
     const base::TimeDelta& timeout,
     content::WebContents* web_contents) {
+  if (javascript_failed_) {
+    LogJavaScriptFailure();
+    return false;
+  }
   bool result = false;
   base::RunLoop wait_loop(base::RunLoop::Type::kNestableTasksAllowed);
   // Lambda used because otherwise BindRepeating gets confused about which
@@ -369,8 +418,17 @@ void XrBrowserTestBase::PollJavaScriptBooleanOrFail(
     const std::string& bool_expression,
     const base::TimeDelta& timeout,
     content::WebContents* web_contents) {
-  ASSERT_TRUE(PollJavaScriptBoolean(bool_expression, timeout, web_contents))
-      << "Timed out polling JavaScript boolean expression: " << bool_expression;
+  if (javascript_failed_) {
+    LogJavaScriptFailure();
+    return;
+  }
+  const bool result =
+      PollJavaScriptBoolean(bool_expression, timeout, web_contents);
+  if (!result) {
+    javascript_failed_ = true;
+  }
+  ASSERT_TRUE(result) << "Timed out polling JavaScript boolean expression: "
+                      << bool_expression;
 }
 
 void XrBrowserTestBase::BlockOnCondition(

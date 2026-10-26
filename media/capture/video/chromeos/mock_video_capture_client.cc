@@ -39,8 +39,7 @@ void MockVideoCaptureClient::DumpError(media::VideoCaptureError,
 }
 
 void MockVideoCaptureClient::OnIncomingCapturedData(
-    const uint8_t* data,
-    int length,
+    base::span<const uint8_t> data,
     const VideoCaptureFormat& format,
     const gfx::ColorSpace& color_space,
     int rotation,
@@ -50,8 +49,7 @@ void MockVideoCaptureClient::OnIncomingCapturedData(
     std::optional<base::TimeTicks> capture_begin_time,
     const std::optional<media::VideoFrameMetadata>& metadata,
     int frame_feedback_id) {
-  ASSERT_GT(length, 0);
-  ASSERT_TRUE(data);
+  ASSERT_FALSE(data.empty());
   if (frame_cb_)
     std::move(frame_cb_).Run();
 }
@@ -92,19 +90,10 @@ MockVideoCaptureClient::ReserveOutputBuffer(
     int frame_feedback_id,
     VideoCaptureDevice::Client::Buffer* buffer,
     int* require_new_buffer_id,
-    int* retire_old_buffer_id) {
+    int* retire_old_buffer_id,
+    const gfx::ColorSpace& color_space) {
   DoReserveOutputBuffer();
   NOTREACHED();
-}
-
-void MockVideoCaptureClient::OnIncomingCapturedBuffer(
-    Buffer buffer,
-    const VideoCaptureFormat& format,
-    base::TimeTicks reference_time,
-    base::TimeDelta timestamp,
-    std::optional<base::TimeTicks> capture_begin_time,
-    const std::optional<media::VideoFrameMetadata>& metadata) {
-  DoOnIncomingCapturedBuffer();
 }
 
 void MockVideoCaptureClient::OnIncomingCapturedBufferExt(

@@ -496,9 +496,10 @@ void PasswordReuseManagerImpl::RequestLoginsFromStores() {
 
 void PasswordReuseManagerImpl::OnGetPasswordStoreResultsOrErrorFrom(
     PasswordStoreInterface* store,
-    LoginsResultOrError results_or_error) {
+    base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+        results_or_error) {
   DCHECK(main_task_runner_->RunsTasksInCurrentSequence());
-  if (std::holds_alternative<PasswordStoreBackendError>(results_or_error)) {
+  if (!results_or_error) {
     return;
   }
 
@@ -512,7 +513,7 @@ void PasswordReuseManagerImpl::OnGetPasswordStoreResultsOrErrorFrom(
   if (!reuse_detector_) {
     return;
   }
-  auto results = std::get<LoginsResult>(std::move(results_or_error));
+  std::vector<StoredCredential> results = std::move(*results_or_error);
   ScheduleTask(base::BindOnce(&PasswordReuseDetector::OnGetPasswordStoreResults,
                               base::Unretained(reuse_detector_.get()),
                               std::move(results)));
@@ -694,12 +695,12 @@ void PasswordReuseManagerImpl::MaybeSavePasswordHash(
     username = gaia::CanonicalizeEmail(username);
   }
   bool is_password_change = !submitted_form->new_password_element.empty();
-  const std::u16string password = is_password_change
+  const PasswordString password = is_password_change
                                       ? submitted_form->new_password_value
                                       : submitted_form->password_value;
 
   if (should_save_enterprise_pw) {
-    SaveEnterprisePasswordHash(username, password);
+    SaveEnterprisePasswordHash(username, password.value());
     return;
   }
 
@@ -715,7 +716,7 @@ void PasswordReuseManagerImpl::MaybeSavePasswordHash(
                                       NOT_SYNC_PASSWORD_CHANGE
                                 : metrics_util::GaiaPasswordHashChange::
                                       SAVED_IN_CONTENT_AREA));
-  SaveGaiaPasswordHash(username, password,
+  SaveGaiaPasswordHash(username, password.value(),
                        /*is_sync_password_for_metrics=*/is_sync_account_email,
                        gaia_event);
 }

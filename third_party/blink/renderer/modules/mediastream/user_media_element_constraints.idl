@@ -7,7 +7,7 @@ dictionary HTMLMediaStreamConstraints {
   MediaTrackConstraintSet audio;
 };
 
-[RuntimeEnabled=UserMediaElement, ImplementedAs=UserMediaElementConstraints]
+[ImplementedAs=MediaCaptureElementConstraints]
 partial interface HTMLUserMediaElement {
     void setConstraints(optional HTMLMediaStreamConstraints constraints = {});
 };

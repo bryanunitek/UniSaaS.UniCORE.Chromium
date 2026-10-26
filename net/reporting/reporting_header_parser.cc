@@ -4,7 +4,9 @@
 
 #include "net/reporting/reporting_header_parser.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -12,7 +14,6 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/features.h"
@@ -171,10 +172,10 @@ bool ProcessEndpointGroup(
   std::optional<bool> subdomains_bool = dict->FindBool(kIncludeSubdomainsKey);
   if (subdomains_bool && subdomains_bool.value()) {
     // Disallow eTLDs from setting include_subdomains endpoint groups.
-    if (registry_controlled_domains::GetRegistryLength(
-            origin.GetURL(),
-            registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
-            registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES) == 0) {
+    GURL gurl = origin.GetURL();
+    if (registry_controlled_domains::GetRegistry(
+            gurl, registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
+            registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES) == "") {
       return false;
     }
 
@@ -266,37 +267,26 @@ bool ProcessV1Endpoint(ReportingDelegate* delegate,
 
 std::optional<base::flat_map<std::string, std::string>> ParseReportingEndpoints(
     const std::string& header) {
-  // Ignore empty header values. Skip logging metric to maintain parity with
-  // ReportingHeaderType::kReportToInvalid.
+  // Ignore empty header values.
   if (header.empty())
     return std::nullopt;
   std::optional<structured_headers::Dictionary> header_dict =
       structured_headers::ParseDictionary(header);
   if (!header_dict) {
-    ReportingHeaderParser::RecordReportingHeaderType(
-        ReportingHeaderParser::ReportingHeaderType::kReportingEndpointsInvalid);
     return std::nullopt;
   }
   base::flat_map<std::string, std::string> parsed_header;
   for (const structured_headers::DictionaryMember& entry : *header_dict) {
-    if (entry.second.member_is_inner_list ||
-        !entry.second.member.front().item.is_string()) {
-      ReportingHeaderParser::RecordReportingHeaderType(
-          ReportingHeaderParser::ReportingHeaderType::
-              kReportingEndpointsInvalid);
+    const net::structured_headers::ParameterizedItem* item =
+        entry.second.GetIfItem();
+    const std::string* endpoint_url_string =
+        item ? item->item.GetIfString() : nullptr;
+    if (!endpoint_url_string) {
       return std::nullopt;
     }
-    const std::string& endpoint_url_string =
-        entry.second.member.front().item.GetString();
-    parsed_header[entry.first] = endpoint_url_string;
+    parsed_header[entry.first] = *endpoint_url_string;
   }
   return parsed_header;
-}
-
-// static
-void ReportingHeaderParser::RecordReportingHeaderType(
-    ReportingHeaderType header_type) {
-  base::UmaHistogramEnumeration("Net.Reporting.HeaderType", header_type);
 }
 
 // static
@@ -320,17 +310,11 @@ void ReportingHeaderParser::ParseReportToHeader(
     }
   }
 
-  if (parsed_header.empty() && list.size() > 0) {
-    RecordReportingHeaderType(ReportingHeaderType::kReportToInvalid);
-  }
-
   // Remove the client if it has no valid endpoint groups.
   if (parsed_header.empty()) {
     cache->RemoveClient(network_anonymization_key, origin);
     return;
   }
-
-  RecordReportingHeaderType(ReportingHeaderType::kReportTo);
 
   cache->OnParsedHeader(network_anonymization_key, origin,
                         std::move(parsed_header));
@@ -365,11 +349,9 @@ void ReportingHeaderParser::ProcessParsedReportingEndpointsHeader(
   }
 
   if (parsed_header.empty()) {
-    RecordReportingHeaderType(ReportingHeaderType::kReportingEndpointsInvalid);
     return;
   }
 
-  RecordReportingHeaderType(ReportingHeaderType::kReportingEndpoints);
   cache->OnParsedReportingEndpointsHeader(reporting_source, isolation_info,
                                           std::move(parsed_header));
 }

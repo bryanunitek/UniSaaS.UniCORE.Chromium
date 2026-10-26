@@ -17,10 +17,12 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.autofill.autofill_ai.AutofillAiOptInStatus;
+import org.chromium.components.autofill.autofill_ai.DetailsForUpsertPass;
 import org.chromium.components.autofill.autofill_ai.EntityInstance;
 import org.chromium.components.autofill.autofill_ai.EntityInstanceWithLabels;
 import org.chromium.components.autofill.autofill_ai.EntityType;
 import org.chromium.components.autofill.autofill_ai.EntityTypeName;
+import org.chromium.components.autofill.autofill_ai.RecordType;
 
 import java.text.Collator;
 import java.util.ArrayList;
@@ -94,11 +96,12 @@ public class EntityDataManager implements Destroyable {
         return EntityDataManagerJni.get().getEntityInstance(mNativeEntityDataManagerAndroid, guid);
     }
 
-    /** Saves or update an entity. */
+    /** Saves or update an entity with an optional legal message token. */
     public void addOrUpdateEntityInstance(
             EntityInstance entity,
             int descriptionStringId,
             int acceptButtonStringId,
+            byte @Nullable [] legalMessageToken,
             Runnable onLocalSaveFallback) {
         ThreadUtils.assertOnUiThread();
         EntityDataManagerJni.get()
@@ -107,7 +110,36 @@ public class EntityDataManager implements Destroyable {
                         entity,
                         descriptionStringId,
                         acceptButtonStringId,
+                        legalMessageToken,
                         onLocalSaveFallback);
+    }
+
+    /**
+     * Pre-fetches the details (legal message and legal message token) required to upsert a pass.
+     *
+     * @param entityType The type of the entity to upsert.
+     */
+    public void preloadDetailsForUpsertPass(@EntityTypeName int entityType) {
+        ThreadUtils.assertOnUiThread();
+        EntityDataManagerJni.get()
+                .preloadDetailsForUpsertPass(mNativeEntityDataManagerAndroid, entityType);
+    }
+
+    /**
+     * Synchronously extracts and removes the cached details (legal message and legal message token)
+     * required to upsert a pass from a previous {@link #preloadDetailsForUpsertPass} call.
+     *
+     * @param entityType The type of the entity to upsert.
+     * @return The preloaded details (with empty legal message and legal message token if the user
+     *     does not need to see the legal disclosure notice), or null if saving must fall back to
+     *     local storage (e.g. nothing is cached or required details for an eligible user are
+     *     missing).
+     */
+    public @Nullable DetailsForUpsertPass extractPreloadedDetailsForUpsertPass(
+            @EntityTypeName int entityType) {
+        ThreadUtils.assertOnUiThread();
+        return EntityDataManagerJni.get()
+                .extractPreloadedDetailsForUpsertPass(mNativeEntityDataManagerAndroid, entityType);
     }
 
     /**
@@ -217,7 +249,9 @@ public class EntityDataManager implements Destroyable {
                 .isEligibleToAutofillAiForType(mNativeEntityDataManagerAndroid, entityType);
     }
 
-    /** Returns whether the user might perform `AutofillAiAction::kListEntityInstancesInSettings`. */
+    /**
+     * Returns whether the user might perform `AutofillAiAction::kListEntityInstancesInSettings`.
+     */
     public boolean canListEntityInstancesInSettings() {
         ThreadUtils.assertOnUiThread();
         return EntityDataManagerJni.get()
@@ -256,6 +290,15 @@ public class EntityDataManager implements Destroyable {
                 .getIsAutofillAiDisabledByEnterprisePolicy(mNativeEntityDataManagerAndroid);
     }
 
+    /** Returns whether a specific Autofill AI entity type is disabled by enterprise policy. */
+    public boolean getIsAutofillAiEntityTypeDisabledByEnterprisePolicy(
+            @EntityTypeName int entityTypeName) {
+        ThreadUtils.assertOnUiThread();
+        return EntityDataManagerJni.get()
+                .getIsAutofillAiEntityTypeDisabledByEnterprisePolicy(
+                        mNativeEntityDataManagerAndroid, entityTypeName);
+    }
+
     /** Returns whether Autofill AI is enabled by enterprise policy including logging. */
     public boolean getIsAutofillAiAllowedByEnterprisePolicy() {
         ThreadUtils.assertOnUiThread();
@@ -269,6 +312,24 @@ public class EntityDataManager implements Destroyable {
                 .isWalletPublicPassStorageEnabled(mNativeEntityDataManagerAndroid);
     }
 
+    /**
+     * Checks if an entity with `entityType` and `recordType` is eligible for the Google Wallet
+     * notice.
+     *
+     * @param entityType The entity type.
+     * @param recordType The record type.
+     * @return True if eligible for disclosure notice, false otherwise.
+     */
+    public boolean isEligibleForWalletNotice(
+            @EntityTypeName int entityType, @RecordType int recordType) {
+        ThreadUtils.assertOnUiThread();
+        if (mNativeEntityDataManagerAndroid == 0) {
+            return false;
+        }
+        return EntityDataManagerJni.get()
+                .isEligibleForWalletNotice(mNativeEntityDataManagerAndroid, entityType, recordType);
+    }
+
     public boolean isPersonalContextPreferenceVisible() {
         ThreadUtils.assertOnUiThread();
         return EntityDataManagerJni.get()
@@ -278,6 +339,12 @@ public class EntityDataManager implements Destroyable {
     public boolean isPersonalContextEnabled() {
         ThreadUtils.assertOnUiThread();
         return EntityDataManagerJni.get().isPersonalContextEnabled(mNativeEntityDataManagerAndroid);
+    }
+
+    public boolean isPersonalContextDisabledByEnterprisePolicy() {
+        ThreadUtils.assertOnUiThread();
+        return EntityDataManagerJni.get()
+                .isPersonalContextDisabledByEnterprisePolicy(mNativeEntityDataManagerAndroid);
     }
 
     public void setPersonalContextEnabled(boolean enabled) {
@@ -320,19 +387,28 @@ public class EntityDataManager implements Destroyable {
 
         boolean getIsAutofillAiDisabledByEnterprisePolicy(long nativeEntityDataManagerAndroid);
 
+        boolean getIsAutofillAiEntityTypeDisabledByEnterprisePolicy(
+                long nativeEntityDataManagerAndroid, int entityTypeName);
+
         boolean getIsAutofillAiAllowedByEnterprisePolicy(long nativeEntityDataManagerAndroid);
 
         boolean isWalletPublicPassStorageEnabled(long nativeEntityDataManagerAndroid);
+
+        boolean isEligibleForWalletNotice(
+                long nativeEntityDataManagerAndroid,
+                @EntityTypeName int entityType,
+                @RecordType int recordType);
 
         boolean isPersonalContextPreferenceVisible(long nativeEntityDataManagerAndroid);
 
         boolean isPersonalContextEnabled(long nativeEntityDataManagerAndroid);
 
+        boolean isPersonalContextDisabledByEnterprisePolicy(long nativeEntityDataManagerAndroid);
+
         void setPersonalContextEnabled(long nativeEntityDataManagerAndroid, boolean enabled);
 
         @JniType("std::string")
         String getPersonalContextManageConnectedAppsUrl();
-
 
         void removeEntityInstance(
                 long nativeEntityDataManagerAndroid, @JniType("std::string") String guid);
@@ -347,7 +423,16 @@ public class EntityDataManager implements Destroyable {
                 EntityInstance entity,
                 int descriptionStringId,
                 int acceptButtonStringId,
+                byte @Nullable [] legalMessageToken,
                 @JniType("base::OnceClosure") Runnable onLocalSaveFallback);
+
+        void preloadDetailsForUpsertPass(
+                long nativeEntityDataManagerAndroid, @EntityTypeName int entityType);
+
+        @Nullable
+        @JniType("std::optional<WalletPassAccessManager::GetDetailsForUpsertPassResponse>")
+        DetailsForUpsertPass extractPreloadedDetailsForUpsertPass(
+                long nativeEntityDataManagerAndroid, @EntityTypeName int entityType);
 
         @JniType("std::vector<EntityInstanceWithLabels>")
         List<EntityInstanceWithLabels> getEntitiesWithLabels(long nativeEntityDataManagerAndroid);

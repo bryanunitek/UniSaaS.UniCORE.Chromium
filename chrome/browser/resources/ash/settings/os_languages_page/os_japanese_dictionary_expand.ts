@@ -57,7 +57,18 @@ class OsJapaneseDictionaryExpandElement extends I18nMixin
       dictIndex: {
         type: Number,
       },
+      expanded_: {
+        type: Boolean,
+        value: false,
+      },
     };
+  }
+
+  constructor() {
+    super();
+    this.showingDeleteDialog_ = false;
+    this.statusMessage_ = '';
+    this.dictIndex = 0;
   }
 
   override ready(): void {
@@ -66,21 +77,21 @@ class OsJapaneseDictionaryExpandElement extends I18nMixin
   }
 
   // The Japanese Dictionary that this component displays information on.
-  dict: JapaneseDictionary;
+  declare dict: JapaneseDictionary;
 
   // Any entry beyond this index needs to be added to the dictionary rather than
   // "edited" since it does not exist in the file storage at the moment.
-  syncedEntriesCount: number;
+  declare syncedEntriesCount: number;
 
   // Whether or not this container UI is expanded or folded.
-  private expanded_ = false;
+  declare private expanded_: boolean;
 
-  private showingDeleteDialog_ = false;
+  declare private showingDeleteDialog_: boolean;
 
   // Used for chromevox announcements.
-  private statusMessage_ = '';
+  declare private statusMessage_: string;
 
-  private dictIndex = 0;
+  declare private dictIndex: number;
 
   private onEntryDelete_(event: EntryDeletedCustomEvent): void {
     this.statusMessage_ = '';
@@ -152,13 +163,29 @@ class OsJapaneseDictionaryExpandElement extends I18nMixin
   }
 
   // Export dictionary.
-  private exportDictionary_(): void {
+  private async exportDictionary_(): Promise<void> {
+    const {result} =
+        await UserDataServiceProvider.getRemote().exportJapaneseDictionary(
+            this.dict.id);
+    let bytes: Uint8Array<ArrayBuffer>;
+    if (Array.isArray(result.data.bytes)) {
+      bytes = new Uint8Array(result.data.bytes);
+    } else if (result.data.sharedMemory) {
+      const {bufferHandle, size} = result.data.sharedMemory;
+      const {buffer} = bufferHandle.mapBuffer(0, size);
+      bytes = new Uint8Array(buffer);
+    } else {
+      return;
+    }
+    const blob = new Blob([bytes], {type: 'text/plain'});
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = `jp-export-dictionary/${this.dict.id}`;
+    a.href = url;
     // In case there is no name, use a placeholder name.
     const fileName = this.dict.name || 'unnamed-dictionary';
     a.download = `${fileName}.txt`;
     a.click();
+    URL.revokeObjectURL(url);
   }
 
   // Imports dictionary.

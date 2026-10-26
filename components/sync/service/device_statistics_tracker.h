@@ -14,6 +14,7 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -39,10 +40,11 @@ class DeviceStatisticsTracker {
       DeviceStatisticsRequest>(const CoreAccountInfo&, const GURL&)>;
 
   // `identity_manager` must not be null.
-  DeviceStatisticsTracker(signin::IdentityManager* identity_manager,
-                          const GURL& sync_server_url,
-                          RequestFactory request_factory,
-                          std::vector<std::string> current_device_cache_guids);
+  DeviceStatisticsTracker(
+      signin::IdentityManager* identity_manager,
+      const GURL& sync_server_url,
+      RequestFactory request_factory,
+      base::flat_set<std::string> current_device_cache_guids);
   ~DeviceStatisticsTracker();
 
   // If there was no previous invocation today, sends `DeviceStatisticsRequest`s
@@ -260,6 +262,8 @@ class DeviceStatisticsTracker {
       const std::vector<sync_pb::SyncEntity>& entities,
       const base::flat_set<std::string>& current_device_cache_guids);
 
+  void RunCallback(base::OnceClosure callback);
+
   const raw_ptr<signin::IdentityManager> identity_manager_;
 
   const GURL sync_server_url_;
@@ -293,6 +297,8 @@ class DeviceStatisticsTracker {
   // devices (which may be empty).
   base::flat_map<GaiaId, base::expected<std::vector<DeviceData>, RequestFailed>>
       other_devices_by_gaia_;
+
+  base::WeakPtrFactory<DeviceStatisticsTracker> weak_ptr_factory_{this};
 };
 
 }  // namespace syncer

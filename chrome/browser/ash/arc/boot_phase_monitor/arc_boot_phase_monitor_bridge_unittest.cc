@@ -14,8 +14,9 @@
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
@@ -24,8 +25,8 @@
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
 #include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
+#include "components/session_manager/test/user_session_test_environment.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,11 +36,14 @@ namespace {
 
 class ArcBootPhaseMonitorBridgeTest : public testing::Test {
  public:
-  ArcBootPhaseMonitorBridgeTest()
-      : fake_user_manager_(std::make_unique<ash::FakeChromeUserManager>()) {
+  ArcBootPhaseMonitorBridgeTest() {
     ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
     ash::DlcserviceClient::InitializeFake();
     ash::SessionManagerClient::InitializeFakeInMemory();
+
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(
+            TestingBrowserProcess::GetGlobal()->local_state());
 
     arc_service_manager_ = std::make_unique<ArcServiceManager>();
     arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
@@ -47,15 +51,17 @@ class ArcBootPhaseMonitorBridgeTest : public testing::Test {
         std::make_unique<ArcSessionRunner>(
             base::BindRepeating(FakeArcSession::Create)),
         arc_dlc_installer_.get());
-    testing_profile_ = std::make_unique<TestingProfile>();
-
     SetArcAvailableCommandLineForTesting(
         base::CommandLine::ForCurrentProcess());
 
     const AccountId account_id(AccountId::FromUserEmailGaiaId(
-        testing_profile_->GetProfileUserName(), GaiaId("1234567890")));
-    fake_user_manager_->AddUser(account_id);
-    fake_user_manager_->LoginUser(account_id);
+        TestingProfile::kDefaultProfileUserName, GaiaId("1234567890")));
+    CHECK(user_session_test_environment_->AddRegularUser(account_id));
+    user_session_test_environment_->LogIn(account_id);
+
+    testing_profile_ = std::make_unique<TestingProfile>();
+    // TODO(crbug.com/40225390): Use ProfileUserManagerController.
+    ash::AnnotatedAccountId::Set(testing_profile_.get(), account_id);
   }
 
   ArcBootPhaseMonitorBridgeTest(const ArcBootPhaseMonitorBridgeTest&) = delete;
@@ -64,6 +70,7 @@ class ArcBootPhaseMonitorBridgeTest : public testing::Test {
 
   ~ArcBootPhaseMonitorBridgeTest() override {
     testing_profile_.reset();
+    user_session_test_environment_.reset();
     arc_session_manager_.reset();
     arc_dlc_installer_.reset();
     arc_service_manager_.reset();
@@ -148,8 +155,8 @@ class ArcBootPhaseMonitorBridgeTest : public testing::Test {
   };
 
   content::BrowserTaskEnvironment task_environment_;
-  user_manager::TypedScopedUserManager<ash::FakeChromeUserManager>
-      fake_user_manager_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
   std::unique_ptr<ArcServiceManager> arc_service_manager_;
   std::unique_ptr<ArcDlcInstaller> arc_dlc_installer_;
   std::unique_ptr<ArcSessionManager> arc_session_manager_;
@@ -285,6 +292,47 @@ TEST_F(ArcBootPhaseMonitorBridgeTest, TestRecordUMA_AppRequested) {
 
   EXPECT_EQ(3U, app_requested_in_session_records().size());
   EXPECT_EQ(0, app_requested_in_session_records().back());
+}
+
+// Tests that OnBootCompleted() is idempotent and subsequent calls are ignored.
+TEST_F(ArcBootPhaseMonitorBridgeTest, TestBootCompleted_Idempotent) {
+  TestObserverImpl observer(this);
+  boot_phase_monitor_bridge()->AddObserver(&observer);
+  EXPECT_EQ(0U, on_boot_completed_counter());
+  EXPECT_EQ(0U, record_uma_counter());
+
+  // First call should complete boot and notify observers.
+  boot_phase_monitor_bridge()->OnBootCompleted();
+  EXPECT_EQ(1U, on_boot_completed_counter());
+  EXPECT_EQ(0U, record_uma_counter());
+
+  // Subsequent calls must be ignored.
+  boot_phase_monitor_bridge()->OnBootCompleted();
+  EXPECT_EQ(1U, on_boot_completed_counter());
+  EXPECT_EQ(0U, record_uma_counter());
+
+  boot_phase_monitor_bridge()->RemoveObserver(&observer);
+}
+
+// Tests that OnBootCompleted() idempotency works correctly when UMA recording
+// is pending, and that session reset (e.g. stop/restart) clears the completed
+// state.
+TEST_F(ArcBootPhaseMonitorBridgeTest, TestBootCompleted_IdempotentWithReset) {
+  boot_phase_monitor_bridge()->RecordFirstAppLaunchDelayUMAForTesting();
+  EXPECT_EQ(0U, record_uma_counter());
+
+  boot_phase_monitor_bridge()->OnBootCompleted();
+  EXPECT_EQ(1U, record_uma_counter());
+
+  // Duplicate call should be ignored and not record UMA again.
+  boot_phase_monitor_bridge()->OnBootCompleted();
+  EXPECT_EQ(1U, record_uma_counter());
+
+  // Resetting session state should clear boot_completed_, allowing a new boot
+  // completion.
+  boot_phase_monitor_bridge()->OnArcSessionStopped(ArcStopReason::SHUTDOWN);
+  boot_phase_monitor_bridge()->OnBootCompleted();
+  EXPECT_EQ(1U, record_uma_counter());
 }
 
 }  // namespace

@@ -5,6 +5,8 @@
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 
 #include "base/strings/utf_string_conversions.h"
+#include "components/affiliations/core/browser/match_type.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/signin/public/base/gaia_id_hash.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -27,7 +29,7 @@ PasswordForm CreateFullPasswordForm() {
   form.username_element = u"username";
   form.password_element = u"password";
   form.username_value = u"user";
-  form.password_value = u"pass";
+  form.password_value = PasswordString(u"pass");
   form.all_alternative_usernames = {
       AlternativeElement(AlternativeElement::Value(u"alt_user"))};
   form.date_created = base::Time::FromTimeT(100);
@@ -63,7 +65,7 @@ PasswordForm CreateFullPasswordForm() {
   form.app_display_name = "App Display Name";
   form.app_icon_url = GURL("https://example.com/app_icon.png");
   form.previously_associated_sync_account_email = "test@gmail.com";
-  form.match_type = PasswordForm::MatchType::kAffiliated;
+  form.match_type = affiliations::MatchType::kAffiliated;
   return form;
 }
 
@@ -79,7 +81,7 @@ StoredCredential CreateFullStoredCredential() {
   cred.username_element = u"username";
   cred.password_element = u"password";
   cred.username_value = u"user";
-  cred.password_value = u"pass";
+  cred.password_value = PasswordString(u"pass");
   cred.all_alternative_usernames = {
       AlternativeElement(AlternativeElement::Value(u"alt_user"))};
   cred.date_created = base::Time::FromTimeT(100);
@@ -115,7 +117,7 @@ StoredCredential CreateFullStoredCredential() {
   cred.app_display_name = "App Display Name";
   cred.app_icon_url = GURL("https://example.com/app_icon.png");
   cred.previously_associated_sync_account_email = "test@gmail.com";
-  cred.match_type = PasswordForm::MatchType::kAffiliated;
+  cred.match_type = affiliations::MatchType::kAffiliated;
   return cred;
 }
 

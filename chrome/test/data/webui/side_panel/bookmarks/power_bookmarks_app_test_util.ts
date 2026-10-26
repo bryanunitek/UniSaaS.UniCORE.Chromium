@@ -8,7 +8,10 @@ import type {BookmarksTreeNode} from 'chrome://bookmarks-side-panel.top-chrome/b
 import type {PowerBookmarkRowElement} from 'chrome://bookmarks-side-panel.top-chrome/power_bookmark_row.js';
 import type {PowerBookmarkRowItemElement} from 'chrome://bookmarks-side-panel.top-chrome/power_bookmark_row_item.js';
 import type {PowerBookmarksAppElement} from 'chrome://bookmarks-side-panel.top-chrome/power_bookmarks_app.js';
+import type {DisplayItem, PowerBookmarksListElement} from 'chrome://bookmarks-side-panel.top-chrome/power_bookmarks_list.js';
+import type {CrLazyListElement} from 'chrome://resources/cr_elements/cr_lazy_list/cr_lazy_list.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import type {TestBookmarksApiProxy} from './test_bookmarks_api_proxy.js';
@@ -86,6 +89,15 @@ export function createTestBookmarks(): BookmarksTreeNode[] {
   ];
 }
 
+export function getActiveList(bookmarksList: PowerBookmarksListElement):
+    CrLazyListElement<DisplayItem> {
+  const activeList =
+      bookmarksList.shadowRoot.querySelector<CrLazyListElement<DisplayItem>>(
+          '.list-wrapper.active cr-lazy-list');
+  assertTrue(!!activeList);
+  return activeList;
+}
+
 export function getBookmarks(app: PowerBookmarksAppElement):
     BookmarksTreeNode[] {
   return getBookmarksInList(app, 0).concat(getBookmarksInList(app, 1));
@@ -93,12 +105,14 @@ export function getBookmarks(app: PowerBookmarksAppElement):
 
 export function getBookmarksInList(
     app: PowerBookmarksAppElement, listIndex: number): BookmarksTreeNode[] {
-  const listItems = app.$.bookmarksList.$.list.items;
+  const listEl = getActiveList(app.$.bookmarksList);
+  const listItems = listEl.items;
   const items = listItems.map(item => item.bookmark);
-  const elements =
-      app.$.bookmarksList.shadowRoot.querySelectorAll('power-bookmark-row');
+  const elements = app.$.bookmarksList.shadowRoot.querySelectorAll(
+      `#${listEl.id} power-bookmark-row`);
   const firstSecondaryIndex = Array.from(elements).findIndex(
-      el => el.rowHeading === loadTimeData.getString('secondaryFilterHeading'));
+      el => (el as PowerBookmarkRowElement).rowHeading ===
+          loadTimeData.getString('secondaryFilterHeading'));
   if (listIndex === 0) {
     return firstSecondaryIndex > -1 ? items.slice(0, firstSecondaryIndex) :
                                       items;
@@ -115,8 +129,9 @@ export function getBookmarkWithId(
 export function getPowerBookmarksRowElement(
     element: PowerBookmarksAppElement, id: string): PowerBookmarkRowElement|
     null {
+  const listEl = getActiveList(element.$.bookmarksList);
   return element.$.bookmarksList.shadowRoot
-      .querySelector<PowerBookmarkRowElement>(`#bookmark-${id}`);
+      .querySelector<PowerBookmarkRowElement>(`#${listEl.id} #bookmark-${id}`);
 }
 
 export function getPowerBookmarksRowItemElement(

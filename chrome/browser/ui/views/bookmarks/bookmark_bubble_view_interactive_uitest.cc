@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
+
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/commerce/shopping_collection_iph_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -152,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkBubbleViewIPHInteractiveTest,
   const bookmarks::BookmarkNode* node = model->AddURL(
       commerce::GetShoppingCollectionBookmarkFolder(model, true), 0,
       u"bookmark",
-      browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetURL());
 
   commerce::AddProductInfoToExistingBookmark(model, node, u"Product", 12345L);
 
@@ -182,7 +184,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkBubbleViewIPHInteractiveTest,
   const bookmarks::BookmarkNode* node = model->AddURL(
       commerce::GetShoppingCollectionBookmarkFolder(model, true), 0,
       u"bookmark",
-      browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetURL());
 
   commerce::AddProductInfoToExistingBookmark(model, node, u"Product", 12345L);
 

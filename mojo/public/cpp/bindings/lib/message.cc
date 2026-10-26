@@ -7,18 +7,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
+#include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/stack_allocated.h"
+#include "base/no_destructor.h"
 #include "base/numerics/safe_math.h"
 #include "base/rand_util.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
@@ -64,6 +73,46 @@ internal::MessageDispatchContext* GetMessageDispatchContext() {
     return GetSLSMessageDispatchContext().GetOrCreateValue();
   }
 }
+
+base::Lock& GetBadMessageCrashKeyLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
+
+class BadMessageCrashKeyScope {
+  STACK_ALLOCATED();
+
+ public:
+  explicit BadMessageCrashKeyScope(const Message* message) {
+    auto* context = internal::MessageDispatchContext::current();
+    if (!context || context->message() != message) {
+      return;
+    }
+    lock_.emplace(GetBadMessageCrashKeyLock());
+    static const auto keys = std::to_array({
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-1",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-2",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-3",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-4",
+                                            base::debug::CrashKeySize::Size256),
+    });
+    base::span<const DeserializationError> error_trace = context->error_trace();
+    const size_t num_keys = std::min(error_trace.size(), scoped_keys_.size());
+    for (size_t i = 0; i < num_keys; ++i) {
+      scoped_keys_[i].emplace(keys[i], error_trace[i].ToString());
+    }
+  }
+
+ private:
+  std::optional<base::AutoLock> lock_;
+  // Crash keys are globals, but deserialization happens on the receiving
+  // sequence.
+  std::array<std::optional<base::debug::ScopedCrashKeyString>, 4> scoped_keys_
+      GUARDED_BY(lock_);
+};
 
 void DoNotifyBadMessage(Message message, std::string_view error) {
   message.NotifyBadMessage(error);
@@ -365,6 +414,35 @@ Message::Message(base::span<const uint8_t> payload,
   serialized_ = true;
 }
 
+Message::Message(ScopedMessageHandle message_handle,
+                 std::vector<ScopedHandle> handles)
+    : handle_(std::move(message_handle)),
+      handles_(std::move(handles)),
+      transferable_(false),
+      serialized_(true) {
+  DCHECK(handle_.is_valid());
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("mojom"),
+              "mojo::Message::Message_FromExtractedHandle", "this", this);
+
+  void* buffer = nullptr;
+  uint32_t num_bytes = 0;
+  MojoGetMessageDataOptions options;
+  options.struct_size = sizeof(options);
+  options.flags = MOJO_GET_MESSAGE_DATA_FLAG_IGNORE_HANDLES;
+  MojoResult rv = MojoGetMessageData(handle_->value(), &options, &buffer,
+                                     &num_bytes, nullptr, nullptr);
+  CHECK_EQ(MOJO_RESULT_OK, rv);
+  // Verify that `handle_` has no remaining unextracted handles
+  // We should get OK if there were never any handles, and
+  // NOT_FOUND if there were handles that got extracted previously.
+  DCHECK_EQ(handles_.empty() ? MOJO_RESULT_OK : MOJO_RESULT_NOT_FOUND,
+            MojoGetMessageData(handle_->value(), nullptr, nullptr, nullptr,
+                               nullptr, nullptr));
+  CHECK(buffer);
+  CHECK_GE(num_bytes, sizeof(internal::MessageHeader));
+  payload_buffer_ = internal::Buffer(buffer, num_bytes, num_bytes);
+}
+
 // static
 Message Message::CreateFromMessageHandle(ScopedMessageHandle* message_handle) {
   DCHECK(message_handle);
@@ -498,8 +576,19 @@ ScopedMessageHandle Message::TakeMojoMessage() {
   return handle;
 }
 
+ScopedMessageHandle Message::TakeMessageHandleForRust() {
+  DCHECK(serialized_);
+  DCHECK(handles()->empty());
+  DCHECK(associated_endpoint_handles()->empty());
+  payload_buffer_.Seal();
+  auto handle = std::move(handle_);
+  Reset();
+  return handle;
+}
+
 void Message::NotifyBadMessage(std::string_view error) {
   DCHECK(handle_.is_valid());
+  BadMessageCrashKeyScope scope(this);
   mojo::NotifyBadMessage(handle_.get(), error);
 }
 
@@ -676,10 +765,6 @@ int64_t Message::creation_timeticks_us() const {
   return header_v3()->creation_timeticks_us;
 }
 
-bool MessageReceiver::PrefersSerializedMessages() {
-  return false;
-}
-
 PassThroughFilter::PassThroughFilter() {}
 
 PassThroughFilter::~PassThroughFilter() {}
@@ -729,6 +814,17 @@ MessageDispatchContext* MessageDispatchContext::current() {
 ReportBadMessageCallback MessageDispatchContext::GetBadMessageCallback() {
   DCHECK(!message_->IsNull());
   return base::BindOnce(&DoNotifyBadMessage, std::move(*message_));
+}
+
+base::span<const DeserializationError> MessageDispatchContext::error_trace()
+    const {
+  return base::span(error_trace_).first(error_trace_count_);
+}
+
+void AddDeserializationError(const DeserializationError& error) {
+  if (auto* context = MessageDispatchContext::current()) {
+    context->AddError(error);
+  }
 }
 
 }  // namespace internal

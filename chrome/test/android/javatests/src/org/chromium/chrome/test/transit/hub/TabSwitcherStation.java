@@ -34,10 +34,14 @@ import org.chromium.base.test.util.ViewActionOnDescendant;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.hub.HubUtils;
 import org.chromium.chrome.browser.hub.PaneId;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridView;
+import org.chromium.chrome.test.transit.ChromeTriggers;
 import org.chromium.chrome.test.transit.SoftKeyboardFacility;
+import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
+import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
 import org.chromium.chrome.test.transit.page.BasePageStation;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.chrome.test.transit.tabmodel.TabCountChangedCondition;
@@ -77,7 +81,11 @@ public abstract class TabSwitcherStation extends HubBaseStation {
         declareElementFactory(
                 mActivityElement,
                 delayedElements -> {
-                    Matcher<View> searchBox = withId(R.id.search_box);
+                    // Scope to the Hub toolbar: the NTP's fakebox uses the same R.id.search_box,
+                    // so an unscoped matcher also matches the page behind the Hub. That makes the
+                    // declareNoView() exit condition below impossible to fulfill when leaving the
+                    // Hub back to an NTP.
+                    ViewSpec<View> searchBox = toolbarElement.descendant(withId(R.id.search_box));
                     ViewSpec<View> searchLoupe =
                             toolbarElement.descendant(withId(R.id.search_loupe));
                     if (shouldHubSearchBoxBeVisible()) {
@@ -101,6 +109,70 @@ public abstract class TabSwitcherStation extends HubBaseStation {
         return menuButtonElement
                 .clickTo()
                 .enterFacility(new TabSwitcherAppMenuFacility<>(mIsIncognito));
+    }
+
+    /** Shortcut to open a new tab programmatically as if selecting "New Tab" from the app menu. */
+    public RegularNewTabPageStation openNewTabFast() {
+        assert !mIsIncognito || !IncognitoUtils.shouldOpenIncognitoAsWindow()
+                : "Regular tabs can only be opened in regular (non-incognito) windows.";
+        return ChromeTriggers.invokeCustomMenuActionTo(R.id.new_tab_menu_id, this)
+                .arriveAt(RegularNewTabPageStation.newBuilder().initOpeningNewTab().build());
+    }
+
+    /**
+     * Shortcut to open a new incognito tab programmatically as if selecting "New Incognito Tab"
+     * from the app menu.
+     */
+    public IncognitoNewTabPageStation openNewIncognitoTabFast() {
+        assert mIsIncognito || !IncognitoUtils.shouldOpenIncognitoAsWindow()
+                : "Incognito tabs can only be opened in incognito windows.";
+        return ChromeTriggers.invokeCustomMenuActionTo(R.id.new_incognito_tab_menu_id, this)
+                .arriveAt(IncognitoNewTabPageStation.newBuilder().initOpeningNewTab().build());
+    }
+
+    /**
+     * Shortcut to open a new window programmatically as if selecting "New Window" from the app
+     * menu.
+     */
+    public RegularNewTabPageStation openNewWindowFast() {
+        return ChromeTriggers.invokeCustomMenuActionTo(R.id.new_window_menu_id, this)
+                .inNewTask()
+                .arriveAt(RegularNewTabPageStation.newBuilder().withEntryPoint().build());
+    }
+
+    /**
+     * Shortcut to open a new incognito window programmatically as if selecting "New Incognito
+     * Window" from the app menu.
+     */
+    public IncognitoNewTabPageStation openNewIncognitoWindowFast() {
+        return ChromeTriggers.invokeCustomMenuActionTo(R.id.new_incognito_window_menu_id, this)
+                .inNewTask()
+                .arriveAt(IncognitoNewTabPageStation.newBuilder().withEntryPoint().build());
+    }
+
+    /**
+     * Opens a new tab programmatically as if selecting "New Tab" from the app menu, or opens a new
+     * window if we are currently in an incognito window that cannot open regular tabs.
+     */
+    public RegularNewTabPageStation openNewTabOrWindowFast() {
+        if (IncognitoUtils.shouldOpenIncognitoAsWindow() && mIsIncognito) {
+            return openNewWindowFast();
+        } else {
+            return openNewTabFast();
+        }
+    }
+
+    /**
+     * Opens a new incognito tab programmatically as if selecting "New Incognito Tab" from the app
+     * menu, or opens a new incognito window if we are currently in a regular window that cannot
+     * open incognito tabs.
+     */
+    public IncognitoNewTabPageStation openNewIncognitoTabOrWindowFast() {
+        if (IncognitoUtils.shouldOpenIncognitoAsWindow() && !mIsIncognito) {
+            return openNewIncognitoWindowFast();
+        } else {
+            return openNewIncognitoTabFast();
+        }
     }
 
     /**
@@ -194,7 +266,7 @@ public abstract class TabSwitcherStation extends HubBaseStation {
             BasePageStation.Builder<T> destinationBuilder) {
         T destination =
                 destinationBuilder.initSelectingExistingTab().withIncognito(mIsIncognito).build();
-        return pressBackTo().withRetry().arriveAt(destination);
+        return pressBackTo().arriveAt(destination);
     }
 
     /** Expect a tab group card to exist. */

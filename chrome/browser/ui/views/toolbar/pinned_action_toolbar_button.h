@@ -20,7 +20,7 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/label_button.h"
 
-class Browser;
+class BrowserWindowInterface;
 class PinnedToolbarActionsContainer;
 
 class PinnedActionToolbarButton : public ToolbarButton {
@@ -28,18 +28,19 @@ class PinnedActionToolbarButton : public ToolbarButton {
 
  public:
   PinnedActionToolbarButton(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       actions::ActionId action_id,
       base::WeakPtr<PinnedToolbarActionsContainer> container);
   ~PinnedActionToolbarButton() override;
 
   actions::ActionId GetActionId() { return action_id_; }
-  Browser* browser() { return browser_; }
+  BrowserWindowInterface* browser() { return browser_; }
 
   void AddHighlight();
   void ResetHighlight();
+  bool IsHighlighted() const;
   void SetPinned(bool pinned);
-  bool IsActive();
+  bool IsActive() const;
   base::AutoReset<bool> SetNeedsDelayedDestruction(
       bool needs_delayed_destruction);
   void SetIconVisibility(bool is_visible);
@@ -83,7 +84,7 @@ class PinnedActionToolbarButton : public ToolbarButton {
   void OnAnchorCountChanged(size_t anchor_count);
   void UpdateFlexPriority();
 
-  raw_ptr<Browser> browser_;
+  raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<PinnedToolbarButtonStatusIndicator> status_indicator_;
 
   actions::ActionId action_id_;
@@ -137,7 +138,7 @@ extern const ui::ClassProperty<
 
 using CreateCustomPinnedActionToolbarButtonCallback =
     base::RepeatingCallback<std::unique_ptr<PinnedActionToolbarButton>(
-        Browser* browser,
+        BrowserWindowInterface* browser,
         actions::ActionId action_id,
         base::WeakPtr<PinnedToolbarActionsContainer> container)>;
 

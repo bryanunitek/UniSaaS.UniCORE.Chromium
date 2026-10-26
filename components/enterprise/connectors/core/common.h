@@ -5,21 +5,22 @@
 #ifndef COMPONENTS_ENTERPRISE_CONNECTORS_CORE_COMMON_H_
 #define COMPONENTS_ENTERPRISE_CONNECTORS_CORE_COMMON_H_
 
-#include <map>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/supports_user_data.h"
 #include "build/blink_buildflags.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/common/proto/synced/browser_events.pb.h"
 #include "components/enterprise/common/proto/synced_from_google3/chrome_reporting_entity.pb.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "url/gurl.h"
@@ -46,6 +47,10 @@ using SourceDestinationStringPair = std::pair<std::string, std::string>;
 
 // Alias to reduce verbosity when using Event::EventCase.
 using EventCase = ::chrome::cros::reporting::proto::Event::EventCase;
+
+// Alias to reduce verbosity when using the data transfer event trigger enum.
+using DataTransferEventTrigger =
+    ::chrome::cros::reporting::proto::DataTransferEventTrigger;
 
 // Callback which accepts a hash for use in scan upload or reporting.
 using OnGotHashCallback = base::OnceCallback<void(std::string)>;
@@ -90,7 +95,6 @@ inline constexpr char kMalwareTag[] = "malware";
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. Keep this enum in sync with
 // EnterpriseReportingEventType in enums.xml.
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.enterprise.connectors
 enum class EnterpriseReportingEventType {
   kUnknownEvent = 0,
   kPasswordReuseEvent = 1,
@@ -161,8 +165,8 @@ struct ReportingSettings {
   ReportingSettings& operator=(ReportingSettings&&);
   ~ReportingSettings();
 
-  std::set<std::string> enabled_event_names;
-  std::map<std::string, std::vector<std::string>> enabled_opt_in_events;
+  base::flat_set<std::string> enabled_event_names;
+  base::flat_map<std::string, std::vector<std::string>> enabled_opt_in_events;
   std::string dm_token;
 
   // Indicates if the report should be made for the profile, or the browser if
@@ -238,18 +242,18 @@ enum class FinalContentAnalysisResult {
   // Show that DLP checks failed, but that the user can proceed if they want.
   WARNING = 4,
 
-  // Show that no issue was found and that the user may proceed.
-  SUCCESS = 5,
-
   // Show that the download is blocked and may proceed to cloud storage.
-  FORCE_SAVE_TO_CLOUD = 6,
+  FORCE_SAVE_TO_CLOUD = 5,
 
   // Show that the user cancelled the scan.
-  CANCELLED = 7,
+  CANCELLED = 6,
 
   // Show that the copy operation is allowed within managed Chrome, but
   // blocked from the OS clipboard.
-  KEPT_IN_MANAGED_CHROME = 8,
+  KEPT_IN_MANAGED_CHROME = 7,
+
+  // Show that no issue was found and that the user may proceed.
+  SUCCESS = 8,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/enterprise/histograms.xml)
 
@@ -350,9 +354,12 @@ enum class EventResult {
 // string returned is processed by the sever.
 std::string EventResultToString(EventResult result);
 
+// DEPRECATED. Prefer GetProfileEmail(Profile* profile) instead.
 // Returns the email address of the unconsented account signed in to the profile
 // or an empty string if no account is signed in.  If `identity_manager` is null
 // then the empty string is returned.
+// TODO(crbug.com/571187038): Remove this function once all callers are migrated
+// to GetProfileEmail(Profile* profile).
 std::string GetProfileEmail(signin::IdentityManager* identity_manager);
 
 // Returns the UMA metrics for tracking the successful uploaded event duration.

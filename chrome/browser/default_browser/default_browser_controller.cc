@@ -7,11 +7,13 @@
 #include <string>
 #include <utility>
 
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/default_browser/default_browser_features.h"
 #include "chrome/browser/default_browser/default_browser_manager.h"
 #include "chrome/browser/default_browser/default_browser_setter.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -23,7 +25,6 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
-#include "default_browser_setter.h"
 
 namespace default_browser {
 
@@ -53,9 +54,8 @@ std::string SetterTypeToString(DefaultBrowserSetterType setter_type) {
       return "ShellIntegration";
     case DefaultBrowserSetterType::kVisualGuide:
       return "VisualGuide";
-    default:
-      NOTREACHED();
   }
+  NOTREACHED();
 }
 
 std::string UiEntrypointTypeToString(
@@ -73,9 +73,14 @@ std::string UiEntrypointTypeToString(
       return "ModalDialogWithSettingsIllustration";
     case DefaultBrowserEntrypointType::kModalDialogWithoutSettingsIllustration:
       return "ModalDialogWithoutSettingsIllustration";
-    default:
-      NOTREACHED();
+    case DefaultBrowserEntrypointType::
+        kStickyModalDialogWithSettingsIllustration:
+      return "StickyModalDialogWithSettingsIllustration";
+    case DefaultBrowserEntrypointType::
+        kStickyModalDialogWithoutSettingsIllustration:
+      return "StickyModalDialogWithoutSettingsIllustration";
   }
+  NOTREACHED();
 }
 
 DefaultBrowserController::DefaultBrowserController(
@@ -98,12 +103,10 @@ void DefaultBrowserController::OnAccepted(
     const DefaultBrowserSetter::ExecuteParams& params) {
   RecordInteractionMetric(DefaultBrowserInteractionType::kAccepted);
 
-  setter_execution_start_time_ = base::TimeTicks::Now();
-
-  completion_callback_ = std::move(completion_callback);
   setter_->Execute(
       base::BindOnce(&DefaultBrowserController::OnSetterExecutionComplete,
-                     weak_ptr_factory_.GetWeakPtr()),
+                     weak_ptr_factory_.GetWeakPtr(),
+                     std::move(completion_callback), base::TimeTicks::Now()),
       std::move(params));
 }
 
@@ -115,7 +118,21 @@ void DefaultBrowserController::OnDismissed() {
   RecordInteractionMetric(DefaultBrowserInteractionType::kDismissed);
 }
 
+// static
+void DefaultBrowserController::RecordRetryCount(
+    DefaultBrowserEntrypointType ui_entrypoint,
+    int retry_count) {
+  CHECK_GE(retry_count, 0);
+  CHECK_LE(retry_count, kMaxRecordedRetryCount);
+  base::UmaHistogramExactLinear(
+      GetEntrypointHistogramName(ui_entrypoint, GetDefaultBrowserSetterType(),
+                                 "RetryCount"),
+      retry_count, /*exclusive_max=*/kMaxRecordedRetryCount + 1);
+}
+
 void DefaultBrowserController::OnSetterExecutionComplete(
+    DefaultBrowserControllerCompletionCallback completion_callback,
+    base::TimeTicks setter_execution_start_time,
     DefaultBrowserState default_browser_state) {
   bool success = default_browser_state == DefaultBrowserState::IS_DEFAULT;
   RecordResultMetric(success);
@@ -125,31 +142,15 @@ void DefaultBrowserController::OnSetterExecutionComplete(
         GetSetterHistogramName(GetSetterType(), "SuccessDuration");
     base::UmaHistogramLongTimes(
         duration_histogram_name,
-        base::TimeTicks::Now() - setter_execution_start_time_);
+        base::TimeTicks::Now() - setter_execution_start_time);
 
     BrowserWindowInterface* browser =
         GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
     if (browser) {
-      ToastController* toast_controller =
-          browser->GetFeatures().toast_controller();
+      ToastController* toast_controller = ToastController::From(browser);
       if (toast_controller) {
         toast_controller->MaybeShowToast(
             ToastParams(ToastId::kDefaultBrowserUpdateSuccess));
-      }
-
-      tabs::TabInterface* active_tab = browser->GetActiveTabInterface();
-      if (active_tab && active_tab->GetContents()) {
-        bool is_default_browser_page = false;
-#if BUILDFLAG(IS_WIN)
-        const GURL& url = active_tab->GetContents()->GetVisibleURL();
-        is_default_browser_page =
-            url.SchemeIs(content::kChromeUIScheme) &&
-            url.host() == chrome::kChromeUIDefaultBrowserVisualGuidedSetterHost;
-#endif
-        if (is_default_browser_page) {
-          CHECK(GetSetterType() == DefaultBrowserSetterType::kVisualGuide);
-          active_tab->Close();
-        }
       }
     }
 
@@ -157,7 +158,7 @@ void DefaultBrowserController::OnSetterExecutionComplete(
     manager->TrackTimeAfterSetterFailure(ui_entrypoint_, GetSetterType());
   }
 
-  std::move(completion_callback_).Run(default_browser_state);
+  std::move(completion_callback).Run(default_browser_state);
 }
 
 void DefaultBrowserController::IncrementShownMetric() {
@@ -176,6 +177,9 @@ void DefaultBrowserController::RecordInteractionMetric(
 void DefaultBrowserController::RecordResultMetric(bool success) {
   base::UmaHistogramBoolean(GetSetterHistogramName(GetSetterType(), "Result"),
                             success);
+  base::UmaHistogramBoolean(
+      GetEntrypointHistogramName(ui_entrypoint_, GetSetterType(), "OutcomeV2"),
+      success);
 }
 
 }  // namespace default_browser

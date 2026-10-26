@@ -317,6 +317,12 @@ void FlingController::GenerateAndSendGestureScrollEvents(
   if (type == WebInputEvent::Type::kGestureScrollUpdate) {
     synthetic_gesture.event.data.scroll_update.delta_x = delta.x();
     synthetic_gesture.event.data.scroll_update.delta_y = delta.y();
+    synthetic_gesture.event.data.scroll_update.delta_x_unconstrained =
+        delta.x();
+    synthetic_gesture.event.data.scroll_update.delta_y_unconstrained =
+        delta.y();
+    synthetic_gesture.event.data.scroll_update.rails_mode =
+        current_fling_parameters_.rails_mode;
     synthetic_gesture.event.data.scroll_update.inertial_phase =
         WebGestureEvent::InertialPhaseState::kMomentum;
   } else {
@@ -404,6 +410,8 @@ bool FlingController::UpdateCurrentFlingState(
   current_fling_parameters_.global_point = fling_start_event.PositionInScreen();
   current_fling_parameters_.modifiers = fling_start_event.GetModifiers();
   current_fling_parameters_.source_device = fling_start_event.SourceDevice();
+  current_fling_parameters_.rails_mode =
+      fling_start_event.data.fling_start.rails_mode;
 
   if (fling_start_event.SourceDevice() ==
           blink::WebGestureDevice::kSyntheticAutoscroll ||

@@ -7,14 +7,17 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_logging_settings.h"
+#include "base/test/test_file_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "content/browser/file_system_access/file_system_access_manager_impl.h"
@@ -47,6 +50,15 @@
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include "base/files/scoped_file.h"
+#include "base/posix/eintr_wrapper.h"
+#endif
+
 namespace content {
 
 using base::test::RunOnceCallback;
@@ -55,6 +67,24 @@ using SensitiveEntryResult =
     FileSystemAccessPermissionContext::SensitiveEntryResult;
 
 static constexpr char kTestMountPoint[] = "testfs";
+
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+namespace {
+
+class ScopedUmaskSetter {
+ public:
+  explicit ScopedUmaskSetter(mode_t target_mask)
+      : old_umask_(umask(target_mask)) {}
+  ScopedUmaskSetter(const ScopedUmaskSetter&) = delete;
+  ScopedUmaskSetter& operator=(const ScopedUmaskSetter&) = delete;
+  ~ScopedUmaskSetter() { umask(old_umask_); }
+
+ private:
+  const mode_t old_umask_;
+};
+
+}  // namespace
+#endif
 
 // This browser test implements end-to-end tests for the file picker
 // APIs.
@@ -84,6 +114,7 @@ class FileSystemChooserBrowserTest : public ContentBrowserTest {
 
     ASSERT_TRUE(embedded_test_server()->Start());
 
+    RenderWidgetHostImpl::DisableResizeAckCheckForTesting();
     ContentBrowserTest::SetUp();
   }
 
@@ -313,12 +344,25 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, SaveFile_NonExistingFile) {
           std::vector<base::FilePath>{test_file}, &dialog_params_));
   ASSERT_TRUE(
       NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
-  EXPECT_EQ(test_file.BaseName().AsUTF8Unsafe(),
-            EvalJs(shell(),
-                   "(async () => {"
-                   "  let e = await self.showSaveFilePicker();"
-                   "  self.entry = e;"
-                   "  return e.name; })()"));
+  {
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+    ScopedUmaskSetter scoped_umask(0002);
+#endif
+    EXPECT_EQ(test_file.BaseName().AsUTF8Unsafe(),
+              EvalJs(shell(),
+                     "(async () => {"
+                     "  let e = await self.showSaveFilePicker();"
+                     "  self.entry = e;"
+                     "  return e.name; })()"));
+  }
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    int mode;
+    ASSERT_TRUE(base::GetPosixFilePermissions(test_file, &mode));
+    EXPECT_EQ(0664, mode & base::FILE_PERMISSION_MASK);
+  }
+#endif
   EXPECT_EQ(ui::SelectFileDialog::SELECT_SAVEAS_FILE, dialog_params_.type);
   EXPECT_EQ(static_cast<int>(file_contents.size()),
             EvalJs(shell(),
@@ -339,6 +383,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, SaveFile_NonExistingFile) {
 IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
                        SaveFile_TruncatesExistingFile) {
   const base::FilePath test_file = CreateTestFile("Hello World");
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+  constexpr int kInitialMode = 0620;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::SetPosixFilePermissions(test_file, kInitialMode));
+  }
+#endif
 
   ui::SelectFileDialog::SetFactory(
       std::make_unique<FakeSelectFileDialogFactory>(
@@ -356,7 +407,191 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
             EvalJs(shell(),
                    "(async () => { const file = await self.entry.getFile(); "
                    "return await file.text(); })()"));
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  int mode;
+  ASSERT_TRUE(base::GetPosixFilePermissions(test_file, &mode));
+  EXPECT_EQ(kInitialMode, mode & base::FILE_PERMISSION_MASK);
+#endif
 }
+
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, SaveFile_CancelDialog) {
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<CancellingSelectFileDialogFactory>());
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  EXPECT_EQ("AbortError", EvalJs(shell(),
+                                 "self.showSaveFilePicker().then("
+                                 "() => 'unexpected success', e => e.name)"));
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, SaveFile_ReadOnlyFile) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  const std::string file_contents = "existing contents";
+  const base::FilePath test_file = CreateTestFile(file_contents);
+
+  // On Windows, MakeFileUnwritable() also prevents reading, so restore the
+  // permissions before checking the file's contents.
+  {
+    base::FilePermissionRestorer permission_restorer(test_file);
+    ASSERT_TRUE(base::MakeFileUnwritable(test_file));
+    base::File file(test_file, base::File::FLAG_OPEN | base::File::FLAG_WRITE);
+    if (file.IsValid()) {
+      GTEST_SKIP() << "File permissions do not prevent writing.";
+    }
+    ASSERT_EQ(base::File::FILE_ERROR_ACCESS_DENIED, file.error_details());
+
+    ui::SelectFileDialog::SetFactory(
+        std::make_unique<FakeSelectFileDialogFactory>(
+            std::vector<base::FilePath>{test_file}, &dialog_params_));
+    ASSERT_TRUE(
+        NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+    EXPECT_EQ("NoModificationAllowedError",
+              EvalJs(shell(),
+                     "self.showSaveFilePicker().then("
+                     "() => 'unexpected success', e => e.name)"));
+  }
+
+  std::string actual_contents;
+  ASSERT_TRUE(base::ReadFileToString(test_file, &actual_contents));
+  EXPECT_EQ(file_contents, actual_contents);
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
+                       SaveFile_MissingParentDirectory) {
+  const base::FilePath test_file =
+      temp_dir_.GetPath().AppendASCII("missing").AppendASCII("file");
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{test_file}, &dialog_params_));
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  EXPECT_EQ("NotFoundError",
+            EvalJs(shell(),
+                   "self.showSaveFilePicker().then("
+                   "() => 'unexpected success', e => e.name)"));
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  EXPECT_FALSE(base::PathExists(test_file));
+}
+
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
+                       SaveFile_RejectsSymbolicLink) {
+  const std::string target_contents = "target contents";
+  const base::FilePath target_file = CreateTestFile(target_contents);
+  const base::FilePath symbolic_link =
+      target_file.DirName().AppendASCII("symbolic-link");
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateSymbolicLink(target_file, symbolic_link));
+  }
+
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{symbolic_link}, &dialog_params_));
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  EXPECT_EQ(true, EvalJs(shell(),
+                         "(async () => {"
+                         "  try {"
+                         "    await self.showSaveFilePicker();"
+                         "    return false;"
+                         "  } catch (e) {"
+                         "    return true;"
+                         "  }"
+                         "})()"));
+
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    std::string actual_contents;
+    ASSERT_TRUE(base::ReadFileToString(target_file, &actual_contents));
+    EXPECT_EQ(target_contents, actual_contents);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, SaveFile_RejectsFifo) {
+  const base::FilePath fifo_path = temp_dir_.GetPath().AppendASCII("fifo");
+  base::ScopedFD fifo_reader;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_EQ(0, mkfifo(fifo_path.value().c_str(), 0600));
+    // Keep a reader open so the write-only open succeeds and exercises the
+    // regular-file check.
+    fifo_reader.reset(HANDLE_EINTR(
+        open(fifo_path.value().c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC)));
+  }
+  ASSERT_TRUE(fifo_reader.is_valid());
+
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{fifo_path}, &dialog_params_));
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  EXPECT_EQ(true, EvalJs(shell(),
+                         "(async () => {"
+                         "  try {"
+                         "    await self.showSaveFilePicker();"
+                         "    return false;"
+                         "  } catch (e) {"
+                         "    return true;"
+                         "  }"
+                         "})()"));
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
+                       SaveFile_RejectsFifoWithoutReader) {
+  const base::FilePath fifo_path =
+      temp_dir_.GetPath().AppendASCII("fifo-without-reader");
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_EQ(0, mkfifo(fifo_path.value().c_str(), 0600));
+  }
+
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{fifo_path}, &dialog_params_));
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  EXPECT_EQ(true, EvalJs(shell(),
+                         "(async () => {"
+                         "  try {"
+                         "    await self.showSaveFilePicker();"
+                         "    return false;"
+                         "  } catch (e) {"
+                         "    return true;"
+                         "  }"
+                         "})()"));
+}
+#endif
+
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
+                       SaveFile_ExternalPathUsesStorageBackend) {
+  const base::FilePath test_file =
+      temp_dir_.GetPath().AppendASCII("external-save");
+  const base::FilePath virtual_path =
+      base::FilePath::FromASCII(kTestMountPoint).Append(test_file.BaseName());
+  ui::SelectedFileInfo selected_file = {base::FilePath(), base::FilePath()};
+  selected_file.virtual_path = virtual_path;
+
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<FakeSelectFileDialogFactory>(
+          std::vector<ui::SelectedFileInfo>{selected_file}, &dialog_params_));
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  {
+    ScopedUmaskSetter scoped_umask(0022);
+    EXPECT_EQ(virtual_path.BaseName().AsUTF8Unsafe(),
+              EvalJs(shell(), "self.showSaveFilePicker().then(e => e.name)"));
+  }
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  int mode;
+  ASSERT_TRUE(base::GetPosixFilePermissions(test_file, &mode));
+  EXPECT_EQ(0600, mode & base::FILE_PERMISSION_MASK);
+}
+#endif
 
 IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
                        SaveFile_NoEnterpriseChecks) {
@@ -416,7 +651,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_file_info,
                   FileSystemAccessPermissionContext::HandleType::kFile,
-                  FileSystemAccessPermissionContext::UserAction::kSave,
+                  FileSystemAccessPermissionContext::AccessTrigger::kSave,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -424,13 +659,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_file_info,
                   FileSystemAccessPermissionContext::HandleType::kFile,
-                  FileSystemAccessPermissionContext::UserAction::kSave))
+                  FileSystemAccessPermissionContext::AccessTrigger::kSave))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_file_info,
                   FileSystemAccessPermissionContext::HandleType::kFile,
-                  FileSystemAccessPermissionContext::UserAction::kSave))
+                  FileSystemAccessPermissionContext::AccessTrigger::kSave))
       .WillOnce(testing::Return(write_grant));
 
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
@@ -658,7 +893,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, OpenDirectory_DenyAccess) {
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -666,13 +901,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, OpenDirectory_DenyAccess) {
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -754,7 +989,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -762,13 +997,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -857,7 +1092,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -865,13 +1100,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -966,7 +1201,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, PathInfo(test_file),
                   FileSystemAccessPermissionContext::HandleType::kFile,
-                  FileSystemAccessPermissionContext::UserAction::kSave,
+                  FileSystemAccessPermissionContext::AccessTrigger::kSave,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAbort));
 
@@ -1040,7 +1275,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, PathInfo(test_file),
                   FileSystemAccessPermissionContext::HandleType::kFile,
-                  FileSystemAccessPermissionContext::UserAction::kSave,
+                  FileSystemAccessPermissionContext::AccessTrigger::kSave,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAbort));
 
@@ -1162,7 +1397,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -1170,13 +1405,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -1271,7 +1506,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -1279,13 +1514,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -1374,7 +1609,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -1382,13 +1617,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -1486,7 +1721,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -1494,13 +1729,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -1591,7 +1826,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               ConfirmSensitiveEntryAccess_(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen,
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen,
                   frame_id, testing::_))
       .WillOnce(RunOnceCallback<5>(SensitiveEntryResult::kAllowed));
 
@@ -1603,13 +1838,13 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
               GetReadPermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(read_grant));
   EXPECT_CALL(permission_context,
               GetWritePermissionGrant(
                   origin, test_dir_info,
                   FileSystemAccessPermissionContext::HandleType::kDirectory,
-                  FileSystemAccessPermissionContext::UserAction::kOpen))
+                  FileSystemAccessPermissionContext::AccessTrigger::kOpen))
       .WillOnce(testing::Return(write_grant));
   EXPECT_CALL(permission_context, CheckPathsAgainstEnterprisePolicy(
                                       testing::_, testing::_, testing::_))
@@ -2249,6 +2484,8 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, MAYBE_ShowThenHide) {
       std::make_unique<ObservableSelectFileDialogFactory>(
           recorder.GetWeakPtr()));
 
+  base::HistogramTester histograms;
+
   // Open the dialog and wait until it's created.
   ASSERT_EQ(
       42,
@@ -2267,6 +2504,131 @@ IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest, MAYBE_ShowThenHide) {
 
   // JS should see the dialog as aborted.
   EXPECT_EQ("AbortError", content::EvalJs(wc, "p"));
+  histograms.ExpectUniqueSample("Content.FileChooser.CancelledByWindowResize",
+                                false, 1);
+}
+
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_DontShowInSmallWindow DISABLED_DontShowInSmallWindow
+#define MAYBE_ShowThenResizeSmall DISABLED_ShowThenResizeSmall
+#else
+#define MAYBE_DontShowInSmallWindow DontShowInSmallWindow
+#define MAYBE_ShowThenResizeSmall ShowThenResizeSmall
+#endif
+
+class WindowBoundsWebContentsDelegate : public content::WebContentsDelegate {
+ public:
+  WindowBoundsWebContentsDelegate(WebContents* web_contents,
+                                  const gfx::Rect& bounds)
+      : web_contents_(web_contents),
+        previous_delegate_(web_contents->GetDelegate()),
+        bounds_(bounds) {
+    web_contents_->SetDelegate(this);
+  }
+
+  ~WindowBoundsWebContentsDelegate() override {
+    web_contents_->SetDelegate(previous_delegate_);
+  }
+
+  void set_bounds(const gfx::Rect& bounds) { bounds_ = bounds; }
+
+  std::optional<gfx::Rect> GetWindowBoundsInScreen() override {
+    return bounds_;
+  }
+
+ private:
+  raw_ptr<WebContents> web_contents_;
+  raw_ptr<WebContentsDelegate> previous_delegate_;
+  gfx::Rect bounds_;
+};
+
+// Ensure dialog is not shown if window size is smaller than the minimum
+// dimensions.
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
+                       MAYBE_DontShowInSmallWindow) {
+  FakeFileSystemAccessPermissionContext permission_context;
+  static_cast<FileSystemAccessManagerImpl*>(
+      shell()
+          ->web_contents()
+          ->GetBrowserContext()
+          ->GetStoragePartition(shell()->web_contents()->GetSiteInstance())
+          ->GetFileSystemAccessEntryFactory())
+      ->SetPermissionContextForTesting(&permission_context);
+
+  GURL url = embedded_test_server()->GetURL("/title1.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  // Record the state of the dialog.
+  SelectFileDialogRecorder recorder;
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<ObservableSelectFileDialogFactory>(
+          recorder.GetWeakPtr()));
+
+  // Resize the window and WebContents to a small dimension.
+  WebContents* wc = shell()->web_contents();
+  WindowBoundsWebContentsDelegate delegate(wc, gfx::Rect(100, 100));
+  shell()->ResizeWebContentForTests(gfx::Size(100, 100));
+
+  base::HistogramTester histograms;
+
+  // JS should see the dialog as aborted.
+  EXPECT_EQ(
+      "AbortError",
+      content::EvalJs(wc, "window.showOpenFilePicker().catch(e => e.name)"));
+  // The dialog should not have been created.
+  EXPECT_EQ(recorder.state, SelectFileDialogRecorder::kNotCreated);
+  histograms.ExpectUniqueSample("Content.FileChooser.SuppressedByWindowSize",
+                                true, 1);
+  histograms.ExpectTotalCount("Content.FileChooser.CancelledByWindowResize", 0);
+  histograms.ExpectTotalCount("Content.FileChooser.SuppressedWindowWidth", 1);
+  histograms.ExpectTotalCount("Content.FileChooser.SuppressedWindowHeight", 1);
+}
+
+// Show the dialog then resize the window below minimum dimensions and ensure
+// the dialog is dismissed.
+IN_PROC_BROWSER_TEST_F(FileSystemChooserBrowserTest,
+                       MAYBE_ShowThenResizeSmall) {
+  GURL url = embedded_test_server()->GetURL("/title1.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  WebContents* wc = shell()->web_contents();
+  WindowBoundsWebContentsDelegate delegate(wc, gfx::Rect(800, 600));
+
+  // Record the state of the dialog.
+  SelectFileDialogRecorder recorder;
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<ObservableSelectFileDialogFactory>(
+          recorder.GetWeakPtr()));
+
+  base::HistogramTester histograms;
+
+  // Open the dialog and wait until it's created.
+  EXPECT_EQ(
+      42,
+      content::EvalJs(
+          wc, "window.p = self.showOpenFilePicker().catch(e => e.name); 42"));
+  EXPECT_TRUE(base::test::RunUntil([&recorder]() {
+    return recorder.state != SelectFileDialogRecorder::kNotCreated;
+  }));
+  histograms.ExpectUniqueSample("Content.FileChooser.SuppressedByWindowSize",
+                                false, 1);
+  histograms.ExpectTotalCount("Content.FileChooser.CancelledByWindowResize", 0);
+
+  // Resize the window below minimum dimensions.
+  delegate.set_bounds(gfx::Rect(100, 100));
+  shell()->ResizeWebContentForTests(gfx::Size(100, 100));
+  EXPECT_TRUE(base::test::RunUntil([&recorder]() {
+    return recorder.state == SelectFileDialogRecorder::kDestroyed;
+  }));
+
+  // JS should see the dialog as aborted.
+  EXPECT_EQ("AbortError", content::EvalJs(wc, "p"));
+  histograms.ExpectUniqueSample("Content.FileChooser.SuppressedByWindowSize",
+                                false, 1);
+  histograms.ExpectUniqueSample("Content.FileChooser.CancelledByWindowResize",
+                                true, 1);
+  histograms.ExpectTotalCount("Content.FileChooser.SuppressedWindowWidth", 1);
+  histograms.ExpectTotalCount("Content.FileChooser.SuppressedWindowHeight", 1);
 }
 
 // Ensure that the dialog is not dismissed on irrelevant navigations.

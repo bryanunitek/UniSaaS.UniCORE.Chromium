@@ -14,7 +14,6 @@ option optimize_for = LITE_RUNTIME;
 
 package sync_pb;
 
-// LINT.IfChange(AutofillValuableSpecifics)
 // This is a copy of google.protobuf.Any.
 message Any {
   // A URL/resource name that uniquely identifies the type of the serialized
@@ -34,6 +33,7 @@ message NaiveDate {
 }
 
 // Represents a loyalty card from Google Wallet.
+// LINT.IfChange(LoyaltyCard)
 message LoyaltyCard {
   // The merchant name e.g. "Deutsche Bahn".
   optional string merchant_name = 1;
@@ -50,8 +50,10 @@ message LoyaltyCard {
   // Merchant domains associated to the loyalty card.
   repeated string merchant_domains = 5;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimLoyaltyCard)
 
 // Represents a vehicle registration from Google Wallet.
+// LINT.IfChange(VehicleRegistration)
 message VehicleRegistration {
   // The vehicle make e.g. "Ford".
   optional string vehicle_make = 1;
@@ -99,8 +101,10 @@ message VehicleRegistration {
   // Note that this field is currently used on Android, not in Chrome.
   optional string owner_address = 13;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimVehicleRegistration)
 
 // Represents a flight reservation from Google Wallet.
+// LINT.IfChange(FlightReservation)
 message FlightReservation {
   // The flight number.
   optional string flight_number = 1;
@@ -148,8 +152,10 @@ message FlightReservation {
   // Note that this field is currently used on Android, not in Chrome.
   repeated string issuer_domains = 14;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimFlightReservation)
 
 // Represents a passport information from Google Wallet.
+// LINT.IfChange(Passport)
 message Passport {
   // The masked passport number (typically only the last 4 digits are provided).
   optional string masked_number = 1;
@@ -171,8 +177,10 @@ message Passport {
   // The expiration date of the passport.
   optional NaiveDate expiration_date = 7;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimPassport)
 
 // Represents a driver's license from Google Wallet.
+// LINT.IfChange(DriverLicense)
 message DriverLicense {
   // The masked driver's license number (typically only the last 4 digits are
   // provided).
@@ -199,8 +207,10 @@ message DriverLicense {
   // The expiration date of the driver's license.
   optional NaiveDate expiration_date = 8;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimDriverLicense)
 
 // Represents a national ID card from Google Wallet.
+// LINT.IfChange(NationalIdCard)
 message NationalIdCard {
   // The masked national ID card number (typically only the last 4 digits are
   // provided).
@@ -224,8 +234,10 @@ message NationalIdCard {
   // The expiration date of the national ID card.
   optional NaiveDate expiration_date = 7;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimNationalIdCard)
 
 // Represents a redress number from Google Wallet.
+// LINT.IfChange(RedressNumber)
 message RedressNumber {
   // The masked redress number (typically only the last 4 digits are provided).
   optional string masked_number = 1;
@@ -233,8 +245,10 @@ message RedressNumber {
   // The owner of the redress number.
   optional string owner_name = 2;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimRedressNumber)
 
 // Represents a known traveler number from Google Wallet.
+// LINT.IfChange(KnownTravelerNumber)
 message KnownTravelerNumber {
   // The masked known traveler number (typically only the last 4 digits are
   // provided).
@@ -249,6 +263,7 @@ message KnownTravelerNumber {
   // The expiration date of the known traveler number.
   optional NaiveDate expiration_date = 4;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimKnownTravelerNumber)
 
 // Represents an event ticket from Google Wallet. Note that this proto is
 // currently used by Android but not used in Chrome.
@@ -304,8 +319,10 @@ message TransitPass {
   repeated string agency_domains = 5;
 }
 
-// Represents an offer from Google Wallet. Note that this proto is
-// currently used by Android but not used in Chrome.
+// Represents an offer from Google Wallet. This proto is currently used for
+// Wallet Direct Offers in Chrome. Note that this is separately used by Android
+// for a different promo offer type that does not sync to Chrome.
+// LINT.IfChange(Offer)
 message Offer {
   // Localized displayable issuer name, like "Safeway".
   optional string issuer_name = 1;
@@ -327,9 +344,62 @@ message Offer {
 
   // Domains associated with the offer issuer.
   repeated string issuer_domains = 7;
+
+  // The description of the offer, like "50% off your next purchase".
+  optional string description = 8;
+
+  // The time at which the offer was issued, in unix epoch microseconds.
+  optional int64 issue_time_unix_epoch_micros = 9;
 }
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimOffer)
+
+// Represents an Order from Google Wallet.
+// LINT.IfChange(Order)
+message Order {
+  // The alphanumeric ID generated by the retail merchant to identify the order.
+  optional string id = 1;
+  // The account that the order was made with. Typically an email address.
+  optional string account = 2;
+  // The date on which the order was placed.
+  optional NaiveDate order_date = 3;
+  // The name of the merchant (e.g. "Amazon").
+  optional string merchant_name = 4;
+  // The eTLD+1 of the merchant's domain (e.g. "amazon.co.uk").
+  optional string merchant_domain = 5;
+  // The names of all the products ordered.
+  repeated string product_names = 6;
+}
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimOrder)
+
+// Represents a Shipment from Google Wallet.
+// Since multiple orders may be shipped together, this is a separate entity
+// rather than a child of Order.
+// LINT.IfChange(Shipment)
+message Shipment {
+  // The alphanumeric ID assigned by the courier, primarily used to monitor the
+  // shipment's delivery status.
+  optional string tracking_number = 1;
+  // The zip code to which the shipment will be delivered.
+  optional string delivery_zip_code = 2;
+  // The date on which the shipment was dispatched.
+  optional NaiveDate shipping_date = 3;
+  // The name of the courier delivering the shipment (e.g. "FedEx").
+  optional string carrier_name = 4;
+  // The eTLD+1 of the courier's domain (e.g. "fedex.com").
+  optional string carrier_domain = 5;
+  // Attributes corresponding to the Order(s) associated with the Shipment.
+  // They are duplicated from the Order fields of the same name and flattened
+  // into Shipment. This avoids having to deal with cross-entity relations.
+  optional string merchant_name = 7;
+  repeated string product_names = 8;
+
+  reserved 6;
+  reserved "associated_order_ids";
+}
+// LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimShipment)
 
 // Valuables coming from Google Wallet.
+// LINT.IfChange(AutofillValuableSpecifics)
 message AutofillValuableSpecifics {
   // The valuable id.
   optional string id = 1;
@@ -350,13 +420,28 @@ message AutofillValuableSpecifics {
     EventTicket event_ticket = 12;
     // Note that TransitPass is used by Android but not by Chrome.
     TransitPass transit_pass = 13;
-    // Note that Offer is used by Android but not by Chrome.
+    // Note that while Offer is used for Wallet Direct Offers in Chrome, this
+    // proto is also separately used for promo offers in Android.
     Offer offer = 14;
+    Order order = 15;
+    Shipment shipment = 16;
     // add other valuable types here.
   }
 
   // Contains information that is used by Chrome and needs to be persisted
   // across clients.
   optional Any serialized_chrome_valuables_metadata = 4;
+
+  optional string context_token = 17 [deprecated = true];
+
+  // The URL to view the pass in the wallet apps.
+  optional string pass_view_url = 18;
+
+  // Opaque legal message token issued by Google Wallet. This token certifies
+  // that the user was shown the necessary notices and disclosures prior to
+  // upserting the pass into Wallet. It is transient and only set during upsert
+  // operations, never persisted. It will only exist for public non-readonly
+  // passes.
+  optional bytes legal_message_token = 19;
 }
 // LINT.ThenChange(//components/autofill/core/browser/webdata/valuables/valuables_sync_util.cc:TrimAutofillValuableSpecificsDataForCaching)

@@ -31,6 +31,8 @@
 
 #include "third_party/blink/renderer/core/html/forms/text_field_input_type.h"
 
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/accessibility/scoped_blink_ax_event_intent.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
@@ -85,6 +87,10 @@ class DataListIndicatorElement final : public HTMLDivElement {
   bool WillRespondToMouseClickEvents() override {
     return HostInput() && !HostInput()->IsDisabledOrReadOnly() &&
            GetDocument().IsActive();
+  }
+
+  FocusableState SupportsFocus(UpdateBehavior) const override {
+    return FocusableState::kNotFocusable;
   }
 
  public:
@@ -252,7 +258,11 @@ void TextFieldInputType::HandleKeydownEvent(KeyboardEvent& event) {
     return;
   }
   if (ChromeClient* chrome_client = GetChromeClient()) {
-    chrome_client->HandleKeyboardEventOnTextField(GetElement(), event);
+    if (chrome_client->HandleKeyboardEventOnEditableElement(GetElement(),
+                                                            event)) {
+      event.SetDefaultHandled();
+      return;
+    }
   }
 }
 
@@ -422,10 +432,6 @@ void TextFieldInputType::HandleBlurEvent() {
             /*exception_state=*/nullptr);
       }
     }
-  }
-
-  if (HTMLSelectElement* select = input.FilterTarget()) {
-    select->StopFiltering();
   }
 }
 
@@ -641,6 +647,11 @@ String TextFieldInputType::SanitizeValue(const String& proposed_value) const {
 
 void TextFieldInputType::HandleBeforeTextInsertedEvent(
     BeforeTextInsertedEvent& event) {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
+  event.SetText(FilterBeforeTextInserted(event.GetText()));
+}
+
+String TextFieldInputType::FilterBeforeTextInserted(const String& text) {
   // Make sure that the text to be inserted will not violate the maxLength.
 
   // We use HTMLInputElement::innerEditorValue() instead of
@@ -677,32 +688,36 @@ void TextFieldInputType::HandleBeforeTextInsertedEvent(
   // Selected characters will be removed by the next text event.
   unsigned base_length = old_length - selection_length;
   unsigned max_length;
-  if (MaxLength() < 0)
+  if (MaxLength() < 0) {
     max_length = std::numeric_limits<int>::max();
-  else
+  } else {
     max_length = static_cast<unsigned>(MaxLength());
+  }
   unsigned appendable_length =
       max_length > base_length ? max_length - base_length : 0;
 
   // Truncate the inserted text to avoid violating the maxLength and other
   // constraints.
-  String event_text = event.GetText();
-  unsigned text_length = event_text.length();
-  while (text_length > 0 && IsASCIILineBreak(event_text[text_length - 1]))
+  String result_text = text;
+  unsigned text_length = result_text.length();
+  while (text_length > 0 && IsASCIILineBreak(result_text[text_length - 1])) {
     text_length--;
-  event_text = event_text.substr(0, text_length);
-  event_text.Replace("\r\n", " ");
-  event_text.Replace('\r', ' ');
-  event_text.Replace('\n', ' ');
+  }
+  result_text = result_text.substr(0, text_length);
+  result_text.Replace("\r\n", " ");
+  result_text.Replace('\r', ' ');
+  result_text.Replace('\n', ' ');
 
-  event.SetText(LimitLength(event_text, appendable_length));
+  String limited_text = LimitLength(result_text, appendable_length);
 
   if (ChromeClient* chrome_client = GetChromeClient()) {
     if (selection_length == old_length && selection_length != 0 &&
-        !event_text.empty()) {
+        !result_text.empty()) {
       chrome_client->DidClearValueInTextField(GetElement());
     }
   }
+
+  return limited_text;
 }
 
 bool TextFieldInputType::ShouldRespectListAttribute() {
@@ -759,13 +774,11 @@ String TextFieldInputType::ConvertFromVisibleValue(
 }
 
 void TextFieldInputType::SubtreeHasChanged() {
+  // SetValueFromRenderer() invalidates the validity pseudo-classes through
+  // SetNeedsValidityCheck(). It does not invalidate the range ones.
   GetElement().SetValueFromRenderer(SanitizeUserInputValue(
       ConvertFromVisibleValue(GetElement().InnerEditorValue())));
   GetElement().UpdatePlaceholderVisibility();
-  GetElement().PseudoStateChanged(CSSSelector::kPseudoValid);
-  GetElement().PseudoStateChanged(CSSSelector::kPseudoInvalid);
-  GetElement().PseudoStateChanged(CSSSelector::kPseudoUserValid);
-  GetElement().PseudoStateChanged(CSSSelector::kPseudoUserInvalid);
   GetElement().PseudoStateChanged(CSSSelector::kPseudoInRange);
   GetElement().PseudoStateChanged(CSSSelector::kPseudoOutOfRange);
 
@@ -862,12 +875,6 @@ void TextFieldInputType::HandleFocusInEvent(
     if (auto* datalist = input.DataList()) {
       datalist->ShowPopoverInternal(&input, /*exception_state=*/nullptr);
     }
-  } else if (HTMLSelectElement* select = input.FilterTarget()) {
-    select->StartFiltering();
-
-    // TODO(crbug.com/453705243): Track the target select element like we are
-    // already doing for the list attribute in order to remove the
-    // :active-option pseudo.
   }
   UpdateWheelEventRegistration(/*is_detaching=*/false);
 }

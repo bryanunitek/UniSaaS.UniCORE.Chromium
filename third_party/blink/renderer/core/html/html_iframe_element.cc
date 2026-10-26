@@ -26,6 +26,8 @@
 
 #include "base/metrics/histogram_macros.h"
 #include "components/viz/common/surfaces/tracked_element_rects.h"
+#include "services/network/public/cpp/connection_allowlist.h"
+#include "services/network/public/cpp/connection_allowlist_parser.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
@@ -61,6 +63,7 @@
 #include "third_party/blink/renderer/platform/json/json_parser.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_parsers.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
@@ -77,6 +80,39 @@ String ConvertToReportValue(const AtomicString& value) {
   }
   static constexpr size_t kMaxLengthToReport = 1024;
   return value.GetString().substr(0, kMaxLengthToReport);
+}
+
+// Parses the `connectionallowlist` attribute value (already validated in
+// ParseAttribute) into a ConnectionAllowlist for Connection-Allowlist embedded
+// enforcement. Like the `csp` attribute, the framed document's response origin
+// isn't known in the renderer, so `response-origin` resolution is deferred to
+// the browser via ConnectionAllowlist::match_response_origin. Returns nullopt
+// (no requirement) for a null, over-long, or malformed value.
+std::optional<network::ConnectionAllowlist> ParseConnectionAllowlistAttribute(
+    const AtomicString& value) {
+  if (value.IsNull()) {
+    return std::nullopt;
+  }
+  // Sanity length cap, mirroring the `csp` attribute's kMaxLengthCSPAttribute.
+  static constexpr unsigned kMaxLengthConnectionAllowlistAttribute = 4096;
+  if (value.length() > kMaxLengthConnectionAllowlistAttribute) {
+    return std::nullopt;
+  }
+  std::string serialized = value.GetString().Utf8();
+  std::optional<network::ConnectionAllowlist> allowlist =
+      network::ParseConnectionAllowlist(serialized, std::nullopt);
+  // ParseAttribute rejects malformed values, but guard defensively: a value
+  // that fails the structured-field grammar (e.g. one containing CR/LF) parses
+  // to an allowlist carrying issues. Drop it rather than emit an unparseable
+  // value in the `Sec-Required-Connection-Allowlist` request header.
+  if (!allowlist || !allowlist->issues.empty()) {
+    return std::nullopt;
+  }
+  // Retain the original attribute string so the browser can re-emit it in the
+  // `Sec-Required-Connection-Allowlist` request header that advertises the
+  // requirement to the framed document (mirrors CSP embedded enforcement).
+  allowlist->serialized_value = std::move(serialized);
+  return allowlist;
 }
 
 }  // namespace
@@ -275,31 +311,56 @@ void HTMLIFrameElement::ParseAttribute(
       // invalid 'csp' attribute.
       required_csp_ = g_null_atom;
       GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
-          mojom::blink::ConsoleMessageSource::kOther,
-          mojom::blink::ConsoleMessageLevel::kError,
-          String::Format("'csp' attribute too long. The max length for the "
-                         "'csp' attribute is %zu bytes.",
-                         kMaxLengthCSPAttribute)));
+          ConsoleMessage::Source::kOther, ConsoleMessage::Level::kError,
+          Format("'csp' attribute too long. The max length for the 'csp' "
+                 "attribute is {} bytes.",
+                 kMaxLengthCSPAttribute)));
     } else if (required_csp_ != value) {
       required_csp_ = value;
       should_call_did_change_attributes = true;
       UseCounter::Count(GetDocument(), WebFeature::kIFrameCSPAttribute);
     }
-  } else if (name == html_names::kBrowsingtopicsAttr) {
+  } else if (name == html_names::kConnectionallowlistAttr) {
+    // The `connectionallowlist` attribute lets an embedder require a
+    // Connection-Allowlist of the document it frames (Connection-Allowlist
+    // embedded enforcement). Gate on the runtime feature, validate the value by
+    // parsing it, and store the raw value for delivery to the browser. The
+    // value is parsed again into a ConnectionAllowlist when collected into
+    // IframeAttributes, where a length cap is also applied (see
+    // ParseConnectionAllowlistAttribute). See
+    // https://github.com/WICG/connection-allowlists/issues/1.
+    //
+    // `ConnectionAllowlistEmbeddedEnforcement` depends_on `ConnectionAllowlist`
+    // (see runtime_enabled_features.json5), so this accessor already returns
+    // false unless the `ConnectionAllowlist` origin trial is also enabled.
     if (GetExecutionContext() &&
-        RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
-        GetExecutionContext()->IsSecureContext()) {
-      bool old_browsing_topics = !params.old_value.IsNull();
-      bool new_browsing_topics = !params.new_value.IsNull();
-
-      if (new_browsing_topics) {
-        UseCounter::Count(GetDocument(),
-                          WebFeature::kIframeBrowsingTopicsAttribute);
-        Deprecation::CountDeprecation(GetExecutionContext(),
-                                      WebFeature::kTopicsAPIAll);
+        RuntimeEnabledFeatures::ConnectionAllowlistEmbeddedEnforcementEnabled(
+            GetExecutionContext())) {
+      // Validate by parsing: the structured-field grammar rejects values
+      // containing header-injecting control characters (e.g. CR/LF) as well as
+      // otherwise malformed input. An invalid value clears the requirement,
+      // mirroring the `csp` attribute. This prevents injection into the
+      // `Sec-Required-Connection-Allowlist` request header the browser emits
+      // from this value.
+      std::optional<network::ConnectionAllowlist> parsed;
+      if (value) {
+        parsed = network::ParseConnectionAllowlist(value.GetString().Utf8(),
+                                                   std::nullopt);
       }
-
-      if (new_browsing_topics != old_browsing_topics) {
+      if (value && (!parsed || !parsed->issues.empty())) {
+        // Fail closed: clear the requirement locally and report an error, but
+        // deliberately do NOT set `should_call_did_change_attributes` (unlike
+        // the valid branch below). Propagating the clear would let a malformed
+        // value drop the browser's enforcement; instead the last valid,
+        // stricter requirement stays in effect. This mirrors the `csp`
+        // attribute above.
+        required_connection_allowlist_ = g_null_atom;
+        GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+            mojom::blink::ConsoleMessageSource::kOther,
+            mojom::blink::ConsoleMessageLevel::kError,
+            StrCat({"'connectionallowlist' attribute is invalid: ", value})));
+      } else if (required_connection_allowlist_ != value) {
+        required_connection_allowlist_ = value;
         should_call_did_change_attributes = true;
       }
     }
@@ -317,29 +378,7 @@ void HTMLIFrameElement::ParseAttribute(
       }
       if (!params.new_value.IsNull()) {
         UseCounter::Count(GetDocument(),
-                          WebFeature::kSharedStorageAPI_Iframe_Attribute);
-      }
-    }
-  } else if (name == html_names::kSharedstoragewritableAttr &&
-             GetExecutionContext() &&
-             RuntimeEnabledFeatures::SharedStorageAPIEnabled(
-                 GetExecutionContext())) {
-    if (!GetExecutionContext()->IsSecureContext()) {
-      GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
-          mojom::blink::ConsoleMessageSource::kOther,
-          mojom::blink::ConsoleMessageLevel::kError,
-          String("sharedStorageWritable: sharedStorage operations "
-                 "are only available in secure contexts.")));
-    } else {
-      if (params.new_value.IsNull() != params.old_value.IsNull()) {
-        should_call_did_change_attributes = true;
-      }
-      if (!params.new_value.IsNull()) {
-        UseCounter::Count(GetDocument(),
-                          WebFeature::kSharedStorageAPI_Iframe_Attribute);
-        Deprecation::CountDeprecation(
-            GetExecutionContext(),
-            mojom::blink::WebFeature::kSharedStorageAPIAll);
+                          WebFeature::kIframeAdAuctionHeadersAttribute);
       }
     }
   } else if (name == html_names::kCredentiallessAttr &&
@@ -576,10 +615,9 @@ HTMLIFrameElement::ConstructTrustTokenParams() const {
     GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kOther,
         mojom::blink::ConsoleMessageLevel::kError,
-        StrCat({"iframe trusttoken attribute was invalid JSON: ",
-                parse_error.message, " (line ",
-                String::Number(parse_error.line), ", col ",
-                String::Number(parse_error.column), ")"})));
+        Format("iframe trusttoken attribute was invalid JSON: {} (line {}, col "
+               "{})",
+               parse_error.message, parse_error.line, parse_error.column)));
     return nullptr;
   }
 
@@ -625,7 +663,7 @@ void HTMLIFrameElement::DidChangeAttributes() {
   // the subframe hasn't been created yet; or if we are in the middle of
   // swapping one frame for another, in which case the final state
   // will be propagated at the end of the swapping operation.
-  if (is_swapping_frames() || !ContentFrame()) {
+  if (IsSwappingFrames() || !ContentFrame()) {
     return;
   }
 
@@ -644,24 +682,13 @@ void HTMLIFrameElement::DidChangeAttributes() {
 
   auto attributes = mojom::blink::IframeAttributes::New();
   attributes->parsed_csp_attribute = csp.empty() ? nullptr : std::move(csp[0]);
+  // The `connectionallowlist` attribute (validated in ParseAttribute) is parsed
+  // into a ConnectionAllowlist here and enforced by the browser. A null value
+  // maps to an absent optional.
+  attributes->required_connection_allowlist =
+      ParseConnectionAllowlistAttribute(required_connection_allowlist_);
   attributes->credentialless = credentialless_;
 
-  if (RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
-      GetExecutionContext()->IsSecureContext()) {
-    attributes->browsing_topics =
-        FastHasAttribute(html_names::kBrowsingtopicsAttr);
-  }
-
-  if (GetExecutionContext()->IsSecureContext()) {
-    attributes->ad_auction_headers =
-        FastHasAttribute(html_names::kAdauctionheadersAttr);
-  }
-
-  if (RuntimeEnabledFeatures::SharedStorageAPIEnabled(GetExecutionContext()) &&
-      GetExecutionContext()->IsSecureContext()) {
-    attributes->shared_storage_writable_opted_in =
-        FastHasAttribute(html_names::kSharedstoragewritableAttr);
-  }
 
   attributes->id = ConvertToReportValue(id_);
   attributes->name = ConvertToReportValue(name_);

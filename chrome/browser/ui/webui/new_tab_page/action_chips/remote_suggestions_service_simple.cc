@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/i18n/char_iterator.h"
 #include "base/memory/raw_ptr.h"
@@ -23,9 +24,11 @@
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 #include "components/omnibox/browser/remote_suggestions_service.h"
 #include "components/omnibox/browser/search_suggestion_parser.h"
+#include "components/search/ntp_features.h"
 #include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "net/base/net_errors.h"
+#include "third_party/omnibox_proto/input_type.pb.h"
 #include "third_party/omnibox_proto/page_vertical.pb.h"
 #include "third_party/omnibox_proto/tool_mode.pb.h"
 #include "url/origin.h"
@@ -34,7 +37,16 @@
 namespace action_chips {
 
 namespace {
-constexpr base::TimeDelta kRemoteCallTimeout = base::Milliseconds(1200);
+constexpr base::TimeDelta kDefaultRemoteCallTimeout = base::Milliseconds(1200);
+
+base::TimeDelta GetSuggestTimeout() {
+  if (base::FeatureList::IsEnabled(
+          ntp_features::kNtpActionChipsSuggestTimeout)) {
+    return ntp_features::kNtpActionChipsSuggestTimeoutParam.Get();
+  }
+  return kDefaultRemoteCallTimeout;
+}
+
 std::u16string TruncateUTF16(const std::u16string_view input,
                              size_t max_length) {
   if (input.empty()) {
@@ -72,7 +84,7 @@ base::expected<std::optional<std::string>,
 HandleRawRemoteResponse(const network::SimpleURLLoader* source,
                         const int response_code,
                         std::optional<std::string> response_body) {
-  DCHECK(source);
+  CHECK(source, base::NotFatalUntil::M162);
   if (source->NetError() != net::OK || response_code != 200) {
     return base::unexpected(RemoteSuggestionsServiceSimple::NetworkError{
         .net_error = source->NetError(), .http_response_code = response_code});
@@ -87,7 +99,7 @@ ParseZeroSuggestionsResponse(AutocompleteProviderClient* client,
                              const bool allow_empty_suggestion,
                              std::optional<std::string> response) {
   using enum ::action_chips::RemoteSuggestionsServiceSimple::ParseFailureReason;
-  DCHECK(response);
+  CHECK(response, base::NotFatalUntil::M162);
 
   if (!response || response->empty()) {
     return base::unexpected(RemoteSuggestionsServiceSimple::ParseError{
@@ -122,6 +134,7 @@ ParseZeroSuggestionsResponse(AutocompleteProviderClient* client,
 std::string CreateAdditionalQueryParams(
     base::optional_ref<const std::u16string> title,
     base::span<const omnibox::ToolMode> allowed_tools,
+    base::span<const omnibox::InputType> allowed_inputs,
     base::optional_ref<const omnibox::PageVertical> page_vertical) {
   std::vector<std::string> params;
 
@@ -133,6 +146,16 @@ std::string CreateAdditionalQueryParams(
     }
     params.push_back(
         base::StrCat({"ats=", base::JoinString(allowed_tools_strings, ",")}));
+  }
+
+  if (!allowed_inputs.empty()) {
+    std::vector<std::string> allowed_inputs_strings;
+    allowed_inputs_strings.reserve(allowed_inputs.size());
+    for (const auto& input : allowed_inputs) {
+      allowed_inputs_strings.push_back(base::NumberToString(input));
+    }
+    params.push_back(
+        base::StrCat({"aits=", base::JoinString(allowed_inputs_strings, ",")}));
   }
 
   if (title.has_value()) {
@@ -173,6 +196,7 @@ RemoteSuggestionsServiceSimpleImpl::GetDeepdiveChipSuggestionsForTab(
   const TemplateURLService* template_url_service =
       client_->GetTemplateURLService();
 
+  const base::TimeDelta timeout = GetSuggestTimeout();
   return client_->GetRemoteSuggestionsService(/*create_if_necessary=*/true)
       ->StartZeroPrefixSuggestionsRequest(
           RemoteRequestType::kZeroSuggestPrefetch, client_->IsOffTheRecord(),
@@ -181,8 +205,9 @@ RemoteSuggestionsServiceSimpleImpl::GetDeepdiveChipSuggestionsForTab(
           base::BindOnce(&RemoteSuggestionsServiceSimpleImpl::
                              HandleActionChipSuggestionsResponse,
                          this->weak_ptr_factory_.GetWeakPtr(),
-                         std::move(callback), /*allow_empty_suggestion=*/false),
-          kRemoteCallTimeout);
+                         std::move(callback),
+                         /*allow_empty_suggestion=*/false),
+          /*timeout=*/timeout);
 }
 
 void RemoteSuggestionsServiceSimpleImpl::HandleActionChipSuggestionsResponse(
@@ -207,6 +232,7 @@ RemoteSuggestionsServiceSimpleImpl::GetActionChipSuggestions(
     base::optional_ref<const std::u16string> title,
     base::optional_ref<const GURL> url,
     base::span<const omnibox::ToolMode> allowed_tools,
+    base::span<const omnibox::InputType> allowed_inputs,
     base::optional_ref<const omnibox::PageVertical> page_vertical,
     base::OnceCallback<
         void(RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&)>
@@ -215,16 +241,17 @@ RemoteSuggestionsServiceSimpleImpl::GetActionChipSuggestions(
   if (url.has_value()) {
     search_terms_args.current_page_url = url->spec();
   }
-  search_terms_args.additional_query_params =
-      CreateAdditionalQueryParams(title, allowed_tools, page_vertical);
+  search_terms_args.additional_query_params = CreateAdditionalQueryParams(
+      title, allowed_tools, allowed_inputs, page_vertical);
   search_terms_args.page_classification =
-      metrics::OmniboxEventProto::NTP_ZPS_PREFETCH;
+      metrics::OmniboxEventProto::NTP_ACTION_CHIPS;
   search_terms_args.request_source =
       SearchTermsData::RequestSource::NTP_ACTION_CHIPS;
 
   const TemplateURLService* template_url_service =
       client_->GetTemplateURLService();
 
+  const base::TimeDelta timeout = GetSuggestTimeout();
   return client_->GetRemoteSuggestionsService(/*create_if_necessary=*/true)
       ->StartZeroPrefixSuggestionsRequest(
           RemoteRequestType::kZeroSuggestPrefetch, client_->IsOffTheRecord(),
@@ -234,7 +261,7 @@ RemoteSuggestionsServiceSimpleImpl::GetActionChipSuggestions(
                              HandleActionChipSuggestionsResponse,
                          this->weak_ptr_factory_.GetWeakPtr(),
                          std::move(callback), /*allow_empty_suggestion=*/true),
-          kRemoteCallTimeout);
+          /*timeout=*/timeout);
 }
 
 }  // namespace action_chips

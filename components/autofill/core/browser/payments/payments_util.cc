@@ -7,13 +7,20 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/common/credit_card_number_validation.h"
 
@@ -45,7 +52,8 @@ bool HasGooglePaymentsAccount(
 bool IsCreditCardNumberSupported(
     const std::u16string& card_number,
     const std::vector<std::pair<int, int>>& supported_card_bin_ranges) {
-  std::u16string stripped_number = StripCardNumberSeparators(card_number);
+  std::u16string stripped_number =
+      StripSeparatorsAndNormalizeDigits(card_number);
   return std::ranges::any_of(supported_card_bin_ranges, [&](const auto& p) {
     auto& [bin_low, bin_high] = p;
     unsigned long range_num_of_digits = base::NumberToString(bin_low).size();
@@ -59,6 +67,40 @@ bool IsCreditCardNumberSupported(
                       &first_digits_end);
     return first_digits_start >= bin_low && first_digits_end <= bin_high;
   });
+}
+
+void FillOrPreviewCard(mojom::ActionPersistence action_persistence,
+                       SuggestionType suggestion_type,
+                       const Suggestion::Payload& payload,
+                       BrowserAutofillManager& manager,
+                       const FormGlobalId& form_id,
+                       const FieldGlobalId& field_id,
+                       AutofillTriggerSource trigger_source,
+                       bool require_user_confirmation) {
+  CHECK(std::holds_alternative<Suggestion::Guid>(payload));
+  CHECK(action_persistence == mojom::ActionPersistence::kFill ||
+        action_persistence == mojom::ActionPersistence::kPreview);
+
+  const CreditCard* credit_card =
+      manager.client()
+          .GetPersonalDataManager()
+          .payments_data_manager()
+          .GetCreditCardByGUID(std::get<Suggestion::Guid>(payload).value());
+  if (!credit_card) {
+    return;
+  }
+
+  const CreditCard* card_to_fill = credit_card;
+  std::optional<CreditCard> virtual_card;
+  if (action_persistence == mojom::ActionPersistence::kFill &&
+      suggestion_type == SuggestionType::kVirtualCreditCardEntry) {
+    virtual_card = CreditCard::CreateVirtualCard(*credit_card);
+    card_to_fill = &*virtual_card;
+  }
+
+  manager.FillOrPreviewForm(action_persistence, form_id, field_id, card_to_fill,
+                            trigger_source, require_user_confirmation,
+                            /*blocked_fields=*/{});
 }
 
 }  // namespace autofill::payments

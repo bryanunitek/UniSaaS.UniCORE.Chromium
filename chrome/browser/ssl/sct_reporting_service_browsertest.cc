@@ -19,6 +19,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -27,7 +28,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/cert_verifier_browser_test.h"
 #include "chrome/browser/ssl/sct_reporting_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -249,16 +251,16 @@ class SCTReportingServiceBrowserTest : public CertVerifierBrowserTest {
 
  protected:
   void SetEnhancedProtectionEnabled(bool enabled) {
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnhanced,
-                                                 enabled);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kSafeBrowsingEnhanced, enabled);
   }
   void SetExtendedReportingEnabled(bool enabled) {
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         prefs::kSafeBrowsingScoutReportingEnabled, enabled);
   }
   void SetSafeBrowsingEnabled(bool enabled) {
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 enabled);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    enabled);
   }
   // |suffix_list| must be sorted lexicographically.
   void SetHashdanceSuffixList(std::vector<std::string> suffix_list) {
@@ -569,7 +571,7 @@ IN_PROC_BROWSER_TEST_F(SCTReportingServiceBrowserTest,
   SimulateNetworkServiceCrash();
   // Flush the network interface to make sure it notices the crash.
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetDefaultStoragePartition()
       ->FlushNetworkInterfaceForTesting();
   g_browser_process->system_network_context_manager()
@@ -1136,7 +1138,7 @@ IN_PROC_BROWSER_TEST_F(SCTReportingServiceBrowserTest,
   // The empty/cleared persistence file will be 2 bytes (the empty JSON list).
   constexpr int64_t kEmptyPersistenceFileSize = 2;
 
-  base::FilePath persistence_path1 = browser()->profile()->GetPath();
+  base::FilePath persistence_path1 = browser()->GetProfile()->GetPath();
   // If the network service sandbox is enabled, then the network service data
   // dir path has an additional "Network" subdirectory in it. This means that
   // different platforms will have different persistence paths depending on the
@@ -1172,7 +1174,7 @@ IN_PROC_BROWSER_TEST_F(SCTReportingServiceBrowserTest,
   }
 
   // Trigger removal and wait for completion.
-  auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
   content::BrowsingDataRemover* remover =
       contents->GetBrowserContext()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver completion_observer(remover);

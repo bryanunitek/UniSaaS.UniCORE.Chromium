@@ -117,9 +117,8 @@ public class DuplicateDownloadDialog {
                         && dismissalCause != DialogDismissalCause.NEGATIVE_BUTTON_CLICKED) {
                     callback.onResult(false);
                 }
-                if (context instanceof AsyncInitializationActivity) {
-                    NewDownloadTab.closeExistingNewDownloadTab(
-                            ((AsyncInitializationActivity) context).getWindowAndroid());
+                if (context instanceof AsyncInitializationActivity asyncActivity) {
+                    NewDownloadTab.closeExistingNewDownloadTab(asyncActivity.getWindowAndroid());
                 }
             }
         };
@@ -155,12 +154,12 @@ public class DuplicateDownloadDialog {
             DuplicateDownloadClickableSpan span =
                     new DuplicateDownloadClickableSpan(
                             filePath,
-                            () -> this.closeDialog(),
+                            this::closeDialog,
                             otrProfileId,
                             DownloadOpenSource.DUPLICATE_DOWNLOAD_DIALOG);
             String template = context.getString(R.string.duplicate_download_dialog_text);
             return DownloadUtils.getDownloadMessageText(
-                    context, template, filePath, true, totalBytes, (ClickableSpan) span);
+                    context, template, filePath, true, totalBytes, span);
         }
         return DownloadUtils.getOfflinePageMessageText(
                 context,

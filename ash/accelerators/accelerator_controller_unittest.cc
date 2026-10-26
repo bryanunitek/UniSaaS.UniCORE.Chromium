@@ -1617,7 +1617,7 @@ TEST_F(AcceleratorControllerTest, GlobalAcceleratorsToggleQuickSettings) {
 
 TEST_F(AcceleratorControllerTest, ToggleMultitaskMenu) {
   // Simulate fake user login to ensure pref registration is done correctly.
-  SimulateUserLogin({"fakeuser"});
+  SimulateUserLogin(AccountId::FromUserEmail("fakeuser"));
   // Enabling `kShortcutCustomization` will start letting
   // `AcceleratorControllerImpl` to observe changes to the accelerator list.
   // This includes accelerators added by enabling flags.
@@ -1981,10 +1981,6 @@ INSTANTIATE_TEST_SUITE_P(
                                              kVolumeButtonSideBottom)}));
 
 TEST_F(AcceleratorControllerTest, PressAndReleasePowerButtonWithFunctionKey) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {features::kModifierSplit, features::kPeripheralCustomization}, {});
-
   const int kKeyboardDeviceIdWithFunction = 123;
   const int kKeyboardDeviceId = 456;
   const ui::KeyboardDevice keyboard_with_function(
@@ -2048,10 +2044,6 @@ TEST_F(AcceleratorControllerTest, PressAndReleasePowerButtonWithFunctionKey) {
 }
 
 TEST_F(AcceleratorControllerTest, ToggleCapsLockAcceleratorsWithFunctionKey) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {features::kModifierSplit, features::kPeripheralCustomization}, {});
-
   AnchoredNudgeManagerImpl* nudge_manager =
       Shell::Get()->anchored_nudge_manager();
   ASSERT_TRUE(nudge_manager);
@@ -2096,7 +2088,6 @@ TEST_F(AcceleratorControllerTest, ToggleCapsLockAcceleratorsWithFunctionKey) {
   // Notification showing caps lock blocked by function key should show up.
   EXPECT_TRUE(nudge_manager->GetNudgeIfShown(kCapsLockNoMatchNudgeId));
   nudge_manager->Cancel(kCapsLockNoMatchNudgeId);
-  feature_list.Reset();
 }
 
 // Tests the AcceleratorAction::kToggleCapsLock accelerator.
@@ -2617,11 +2608,10 @@ class SystemShortcutBehaviorTest : public AcceleratorControllerTest {
   void SetUp() override {
     AcceleratorControllerTest::SetUp();
 
-    auto user_prefs = std::make_unique<TestingPrefServiceSimple>();
-    user_prefs_ = user_prefs.get();
-    RegisterUserProfilePrefs(user_prefs->registry(), /*country=*/"",
-                             /*for_test=*/true);
-    SimulateUserLogin({kUserEmail}, std::nullopt, std::move(user_prefs));
+    AccountId account_id =
+        SimulateUserLogin({.account_id = AccountId::FromUserEmail(kUserEmail)});
+    user_prefs_ = static_cast<TestingPrefServiceSimple*>(
+        GetSessionControllerClient()->GetUserPrefService(account_id));
   }
 
   void TearDown() override {
@@ -3117,7 +3107,7 @@ class MagnifiersAcceleratorsTester : public AcceleratorControllerTest {
   void SetUp() override {
     AcceleratorControllerTest::SetUp();
     // Create user session and simulate its login.
-    SimulateUserLogin({kUserEmail});
+    SimulateUserLogin(AccountId::FromUserEmail(kUserEmail));
   }
 };
 

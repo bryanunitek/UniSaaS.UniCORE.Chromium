@@ -88,7 +88,7 @@ SVGTransformChange LayoutSVGViewportContainer::UpdateLocalTransform(
 
 gfx::RectF LayoutSVGViewportContainer::ViewBoxRect() const {
   return To<SVGViewportContainerElement>(*GetElement())
-      .CurrentViewBoxRect(NoZoomWillBeSvgObjectZoom(StyleRef()));
+      .CurrentViewBoxRect(NoZoomWillBeSvgObjectZoom(Style()));
 }
 
 bool LayoutSVGViewportContainer::NodeAtPoint(
@@ -124,19 +124,20 @@ AffineTransform LayoutSVGViewportContainer::ComputeViewboxTransform() const {
 
   return AffineTransform::Translation(viewport_.x(), viewport_.y()) *
          svg->ViewBoxToViewTransform(viewport_.size(),
-                                     NoZoomWillBeSvgObjectZoom(StyleRef()));
+                                     NoZoomWillBeSvgObjectZoom(Style()));
 }
 
 void LayoutSVGViewportContainer::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGTransformableContainer::StyleDidChange(diff, old_style,
+  LayoutSVGTransformableContainer::StyleDidChange(diff, old_style, new_style,
                                                   style_change_context);
 
   if (old_style && (SVGLayoutSupport::IsOverflowHidden(*old_style) !=
-                    SVGLayoutSupport::IsOverflowHidden(StyleRef()))) {
+                    SVGLayoutSupport::IsOverflowHidden(new_style))) {
     // See NeedsOverflowClip() in PaintPropertyTreeBuilder for the reason.
     SetNeedsPaintPropertyUpdate();
   }

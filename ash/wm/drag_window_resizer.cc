@@ -19,7 +19,7 @@
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -45,11 +45,11 @@ DragWindowResizer::~DragWindowResizer() {
 }
 
 void DragWindowResizer::Drag(const gfx::PointF& location, int event_flags) {
-  base::WeakPtr<DragWindowResizer> resizer(weak_ptr_factory_.GetWeakPtr());
+  WindowResizer::ScopedDeleteBlocker blocker(this);
   next_window_resizer_->Drag(location, event_flags);
-
-  if (!resizer)
+  if (IsDragCompleted()) {
     return;
+  }
 
   last_mouse_location_ = location;
   // Show a phantom window for dragging in another root window.
@@ -77,6 +77,11 @@ void DragWindowResizer::FlingOrSwipe(ui::GestureEvent* event) {
 
 void DragWindowResizer::Pinch(const gfx::PointF& location, float scale) {
   next_window_resizer_->Pinch(location, scale);
+}
+
+void DragWindowResizer::OnDragCompleted() {
+  WindowResizer::OnDragCompleted();
+  next_window_resizer_->OnDragCompleted();
 }
 
 DragWindowResizer::DragWindowResizer(

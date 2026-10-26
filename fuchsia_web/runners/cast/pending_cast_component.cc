@@ -87,22 +87,12 @@ void PendingCastComponent::OnApplicationConfigReceived(
   // Request UrlRequestRewriteRulesProvider from the Agent.
   params_.startup_context->svc()->Connect(
       params_.url_rewrite_rules_provider.NewRequest());
-  params_.url_rewrite_rules_provider.set_error_handler([this](
-                                                           zx_status_t status) {
-    if (status != ZX_ERR_PEER_CLOSED) {
-      ZX_LOG(ERROR, status) << "UrlRequestRewriteRulesProvider disconnected.";
-      CancelComponent();
-      return;
-    }
-
-    TRACE_DURATION("cast_runner", "GetUrlRequestRewriteRules error");
-    TRACE_FLOW_STEP("cast_runner", "CastComponent", params_.trace_flow_id);
-
-    ZX_DLOG(WARNING, status) << "UrlRequestRewriteRulesProvider unsupported.";
-    params_.initial_url_rewrite_rules =
-        std::vector<fuchsia::web::UrlRequestRewriteRule>();
-    MaybeLaunchComponent();
-  });
+  params_.url_rewrite_rules_provider.set_error_handler(
+      [this](zx_status_t status) {
+        ZX_LOG_IF(ERROR, status != ZX_OK, status)
+            << "UrlRequestRewriteRulesProvider disconnected.";
+        CancelComponent();
+      });
   params_.url_rewrite_rules_provider->GetUrlRequestRewriteRules(
       [this](std::vector<fuchsia::web::UrlRequestRewriteRule> rewrite_rules) {
         {
@@ -131,8 +121,9 @@ void PendingCastComponent::OnApplicationConfigReceived(
   if (params_.application_config.has_audio_renderer_usage()) {
     DCHECK(!params_.media_settings);
     params_.media_settings = fuchsia::web::FrameMediaSettings{};
-    params_.media_settings->set_renderer_usage(
-        params_.application_config.audio_renderer_usage());
+    params_.media_settings->set_renderer_usage2(
+        fuchsia::media::AudioRenderUsage2(static_cast<uint32_t>(
+            params_.application_config.audio_renderer_usage())));
   } else {
     // If `audio_renderer_usage` is not specified then `AudioConsumer` is used
     // for that app. We need to fetch `session_id` in that case.
@@ -198,7 +189,8 @@ void PendingCastComponent::MaybeLaunchComponent() {
 
 void PendingCastComponent::OnApplicationContextFidlError(
     fidl::UnbindInfo error) {
-  ZX_LOG(ERROR, error.status()) << "ApplicationContext disconnected.";
+  ZX_LOG_IF(ERROR, error.status() != ZX_OK, error.status())
+      << "ApplicationContext disconnected.";
   CancelComponent();
 }
 

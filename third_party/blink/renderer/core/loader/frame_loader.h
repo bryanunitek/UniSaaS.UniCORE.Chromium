@@ -86,6 +86,7 @@ class CORE_EXPORT FrameLoader final {
   ~FrameLoader();
 
   void Init(const DocumentToken& document_token,
+            const InitiatorStateToken& initiator_state_token,
             std::unique_ptr<PolicyContainer> policy_container,
             const StorageKey& storage_key,
             ukm::SourceId document_ukm_source_id,
@@ -356,6 +357,8 @@ class CORE_EXPORT FrameLoader final {
   // True if we skipped processing a fragment and may need to do it again when
   // asked.
   bool has_pending_cross_document_fragment_ = false;
+
+  WeakMember<DocumentLoader> previous_document_loader_for_xslt_;
 };
 
 }  // namespace blink

@@ -6,11 +6,11 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 #include <vector>
 
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/ash_element_identifiers.h"
-#include "ash/constants/ash_features.h"
 #include "ash/constants/tray_background_view_catalog.h"
 #include "ash/public/cpp/holding_space/holding_space_client.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
@@ -36,7 +36,6 @@
 #include "ash/system/tray/tray_container.h"
 #include "ash/user_education/user_education_class_properties.h"
 #include "base/check.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/sequenced_task_runner.h"
@@ -188,6 +187,7 @@ std::unique_ptr<views::View> CreateDropTargetOverlay() {
   drop_target_overlay->SetID(kHoldingSpaceTrayDropTargetOverlayId);
   drop_target_overlay->SetLayoutManager(std::make_unique<views::FillLayout>());
   drop_target_overlay->SetPaintToLayer();
+  drop_target_overlay->layer()->SetName("HoldingSpaceTray:DropTargetOverlay");
   drop_target_overlay->layer()->SetFillsBoundsOpaquely(false);
   return drop_target_overlay;
 }
@@ -222,11 +222,9 @@ HoldingSpaceTray::HoldingSpaceTray(Shelf* shelf)
   session_observer_.Observe(Shell::Get()->session_controller());
   SetVisible(false);
 
-  if (features::IsUserEducationEnabled()) {
-    // NOTE: Set `kHelpBubbleContextKey` before `views::kElementIdentifierKey`
-    // in case registration causes a help bubble to be created synchronously.
-    SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
-  }
+  // NOTE: Set `kHelpBubbleContextKey` before `views::kElementIdentifierKey`
+  // in case registration causes a help bubble to be created synchronously.
+  SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
   SetProperty(views::kElementIdentifierKey, kHoldingSpaceTrayElementId);
 
   SetTooltipText(l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_TITLE));
@@ -772,7 +770,7 @@ void HoldingSpaceTray::UpdatePreviewsIcon() {
   std::vector<const HoldingSpaceItem*> items_with_previews;
   std::set<base::FilePath> paths_with_previews;
   for (const auto& item :
-       base::Reversed(HoldingSpaceController::Get()->model()->items())) {
+       std::views::reverse(HoldingSpaceController::Get()->model()->items())) {
     if (!IsPreviewable(item)) {
       continue;
     }

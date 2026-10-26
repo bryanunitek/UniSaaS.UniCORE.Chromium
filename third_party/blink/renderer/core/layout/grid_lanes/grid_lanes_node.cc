@@ -20,6 +20,22 @@ void AdjustGridItemSpan(GridItemData& grid_lanes_item,
   GridSpan item_span = line_resolver.ResolveGridPositionsFromStyle(
       grid_lanes_item.node.Style(), grid_axis_direction);
 
+  const wtf_size_t subgrid_span_size =
+      line_resolver.SubgridSpanSize(grid_axis_direction);
+  // Clamp child spans to the inherited tracks, since subgrids cannot create
+  // implicit tracks in this axis.
+  if (subgrid_span_size != kNotFound) {
+    if (item_span.IsIndefinite()) {
+      item_span = GridSpan::IndefiniteGridSpan(
+          std::min(item_span.IndefiniteSpanSize(), subgrid_span_size));
+    } else {
+      item_span = GridSpan::TranslatedDefiniteGridSpan(
+          ClampTo<int>(item_span.UntranslatedStartLine(), 0,
+                       subgrid_span_size - 1),
+          ClampTo<int>(item_span.UntranslatedEndLine(), 1, subgrid_span_size));
+    }
+  }
+
   if (item_span.IsIndefinite()) {
     grid_lanes_item.is_auto_placed = true;
   }
@@ -121,11 +137,40 @@ GridLanesItemGroups GridLanesNode::CollectItemGroups(
   return item_groups;
 }
 
-// TODO(almaher): Similar to grid, we should eventually create an overloaded
-// method that takes `must_consider_for_columns` and `must_consider_for_rows`
-// so that we can pass that in for grid lanes subgrids.
 GridItems* GridLanesNode::ConstructGridItems(
     const GridLineResolver& line_resolver,
+    bool* must_invalidate_placement_cache,
+    bool parent_is_auto_placed,
+    HeapVector<Member<LayoutBox>>* opt_oof_children,
+    bool* opt_has_nested_subgrid) const {
+  const ComputedStyle& style = Style();
+  const GridTrackSizingDirection grid_axis_direction =
+      style.GridLanesTrackSizingDirection();
+  GridItems* grid_items = ConstructGridItems(
+      line_resolver, /*root_grid_style=*/style, /*parent_grid_style=*/style,
+      /*must_consider_for_columns=*/grid_axis_direction == kForColumns,
+      must_invalidate_placement_cache, parent_is_auto_placed, opt_oof_children,
+      opt_has_nested_subgrid);
+
+  // A grid-lanes subgrid skips `BuildSizingCollection`, so cache its resolver
+  // here for recursive sizing and final item reconstruction.
+  if (!line_resolver.HasStandaloneAxis(grid_axis_direction)) {
+    auto* layout_grid_lanes = To<LayoutGridLanes>(box_.Get());
+    if (!layout_grid_lanes->HasCachedPlacementData() ||
+        &line_resolver !=
+            &layout_grid_lanes->CachedPlacementData().line_resolver) {
+      layout_grid_lanes->SetCachedPlacementData(
+          GridPlacementData(line_resolver));
+    }
+  }
+  return grid_items;
+}
+
+GridItems* GridLanesNode::ConstructGridItems(
+    const GridLineResolver& line_resolver,
+    const ComputedStyle& root_grid_style,
+    const ComputedStyle& parent_grid_style,
+    bool must_consider_for_columns,
     bool* must_invalidate_placement_cache,
     bool parent_is_auto_placed,
     HeapVector<Member<LayoutBox>>* opt_oof_children,
@@ -141,12 +186,8 @@ GridItems* GridLanesNode::ConstructGridItems(
   // this container's placement-affecting style changed, that subgrid cache
   // would otherwise go stale. Propagate the invalidation down the subtree.
   CHECK(must_invalidate_placement_cache);
-  *must_invalidate_placement_cache =
+  *must_invalidate_placement_cache |=
       To<LayoutGridLanes>(box_.Get())->IsGridPlacementDirty();
-
-  // For grid-lanes, we only consider subgridding in the grid axis.
-  const bool must_consider_for_columns = (grid_axis_direction == kForColumns);
-  const bool must_consider_for_rows = (grid_axis_direction == kForRows);
 
   if (opt_has_nested_subgrid) {
     *opt_has_nested_subgrid = false;
@@ -163,8 +204,8 @@ GridItems* GridLanesNode::ConstructGridItems(
   const bool is_for_columns = (grid_axis_direction == kForColumns);
   const auto& container_alignment =
       is_for_columns ? style.AlignItems() : style.JustifyItems();
-  if (container_alignment.GetPosition() != ItemPosition::kNormal &&
-      container_alignment.GetPosition() != ItemPosition::kLegacy) {
+  if (container_alignment.GetComputedPosition() != ItemPosition::kNormal &&
+      container_alignment.GetComputedPosition() != ItemPosition::kLegacy) {
     grid_lanes_items->SetHasStackingAxisAlignment();
   }
 
@@ -182,9 +223,9 @@ GridItems* GridLanesNode::ConstructGridItems(
       }
 
       GridItemData* grid_lanes_item = MakeGarbageCollected<GridItemData>(
-          To<BlockNode>(child), /*parent_grid_style=*/style,
-          /*root_grid_style=*/style, must_consider_for_columns,
-          must_consider_for_rows);
+          To<BlockNode>(child), parent_grid_style, root_grid_style,
+          must_consider_for_columns,
+          /*must_consider_for_rows=*/!must_consider_for_columns);
 
       // We'll need to sort when we encounter a non-initial order property.
       should_sort_grid_lanes_items_by_order_property |=
@@ -202,8 +243,8 @@ GridItems* GridLanesNode::ConstructGridItems(
         const auto& self_alignment = is_for_columns
                                          ? child.Style().AlignSelf()
                                          : child.Style().JustifySelf();
-        if (self_alignment.GetPosition() != ItemPosition::kAuto &&
-            self_alignment.GetPosition() != ItemPosition::kNormal) {
+        if (self_alignment.GetComputedPosition() != ItemPosition::kAuto &&
+            self_alignment.GetComputedPosition() != ItemPosition::kNormal) {
           grid_lanes_items->SetHasStackingAxisAlignment();
         }
       }
@@ -273,10 +314,9 @@ void GridLanesNode::ComputeSetIndicesForSubgrid(
     GridLayoutData& layout_data) const {
   // In grid lanes, placement happens after sizing, so the placement of subgrid
   // items may not be known at this point. Translate definite spans using the
-  // `start_offset` cached by BuildSizingCollection. For items without a known
-  // position, assume they start at the beginning of the explicit grid. This
-  // will be updated to the correct position later before the subgrid itself is
-  // laid out.
+  // cached `start_offset`. For items without a known position, assume they
+  // start at the beginning of the explicit grid. This will be updated to the
+  // correct position later before the subgrid itself is laid out.
   const auto grid_axis = Style().GridLanesTrackSizingDirection();
   const wtf_size_t start_offset = CachedPlacementData().StartOffset(grid_axis);
 

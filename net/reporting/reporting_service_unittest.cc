@@ -77,7 +77,7 @@ class ReportingServiceTest : public ::testing::TestWithParam<bool>,
                             SiteForCookies::FromOrigin(kOrigin_));
 
   ReportingServiceTest() {
-    feature_list_.InitAndEnableFeature(
+    AddScopedFeatureList().InitAndEnableFeature(
         features::kPartitionConnectionsByNetworkIsolationKey);
     Init();
   }
@@ -116,8 +116,6 @@ class ReportingServiceTest : public ::testing::TestWithParam<bool>,
   ReportingService* service() { return service_.get(); }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
-
   base::SimpleTestClock clock_;
   base::SimpleTestTickClock tick_clock_;
 
@@ -192,8 +190,7 @@ TEST_P(ReportingServiceTest, DontQueueReportInvalidUrl) {
 }
 
 TEST_P(ReportingServiceTest, QueueReportNetworkIsolationKeyDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
+  AddScopedFeatureList().InitAndDisableFeature(
       features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Re-create the store, so it reads the new feature value.
@@ -257,8 +254,7 @@ TEST_P(ReportingServiceTest, ProcessReportingEndpointsHeader) {
 
 TEST_P(ReportingServiceTest,
        ProcessReportingEndpointsHeaderNetworkIsolationKeyDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
+  AddScopedFeatureList().InitAndDisableFeature(
       features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Re-create the store, so it reads the new feature value.
@@ -313,6 +309,120 @@ TEST_P(ReportingServiceTest, SendReportsAndRemoveSource) {
                     ReportingReport::Status::PENDING));
   // Source should be marked as expired.
   ASSERT_TRUE(
+      context()->cache()->GetExpiredSources().contains(*kReportingSource_));
+}
+
+TEST_P(ReportingServiceTest, SendReportsForSource) {
+  auto parsed_header =
+      ParseReportingEndpoints(kGroup_ + "=\"" + kEndpoint_.spec() + "\", " +
+                              kGroup2_ + "=\"" + kEndpoint2_.spec() + "\"");
+  ASSERT_TRUE(parsed_header.has_value());
+  service()->SetDocumentReportingEndpoints(*kReportingSource_, kOrigin_,
+                                           kIsolationInfo_, *parsed_header);
+
+  // 1st report: sent immediately and starts the delivery agent timer.
+  service()->QueueReport(kUrl_, kReportingSource_, kNak_, kUserAgent_, kGroup_,
+                         kType_, base::DictValue(), 0,
+                         ReportingTargetType::kDeveloper);
+  FinishLoading(true /* load_success */);
+
+  std::vector<raw_ptr<const ReportingReport, VectorExperimental>> reports;
+  context()->cache()->GetReports(&reports);
+  ASSERT_EQ(1u, reports.size());
+  EXPECT_EQ(0u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(1u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
+
+  // 2nd report for group2: remains queued because delivery timer is already
+  // running.
+  service()->QueueReport(kUrl_, kReportingSource_, kNak_, kUserAgent_, kGroup2_,
+                         kType_, base::DictValue(), 0,
+                         ReportingTargetType::kDeveloper);
+  EXPECT_EQ(1u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(1u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
+
+  // Simulate flushing reports for the source without destroying it (e.g.
+  // entering BFCache).
+  service()->SendReportsForSource(*kReportingSource_);
+
+  // The 2nd report should now also be pending (total 2 pending, 0 queued).
+  EXPECT_EQ(0u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(2u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
+  // Source should NOT be marked as expired.
+  EXPECT_FALSE(
+      context()->cache()->GetExpiredSources().contains(*kReportingSource_));
+
+  // 3rd report for group: can still be queued and processed for the
+  // non-expired source.
+  service()->QueueReport(kUrl_, kReportingSource_, kNak_, kUserAgent_, kGroup_,
+                         kType_, base::DictValue(), 0,
+                         ReportingTargetType::kDeveloper);
+  EXPECT_EQ(1u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(2u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
+  context()->cache()->GetReports(&reports);
+  EXPECT_EQ(3u, reports.size());
+
+  // Flushing `kReportingSource_` while the 1st report for `kGroup_` is still
+  // uploading defers the 3rd report until the 1st upload finishes, then
+  // immediately starts uploading the 3rd report without waiting for the timer.
+  service()->SendReportsForSource(*kReportingSource_);
+  EXPECT_EQ(1u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(2u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
+
+  context()->test_uploader()->pending_uploads()[0]->Complete(
+      ReportingUploader::Outcome::SUCCESS);
+  EXPECT_EQ(0u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(2u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
+}
+
+TEST_P(ReportingServiceTest,
+       ProcessReportsBeforeSendReportsForSourceWhenUninitialized) {
+  // Test only relevant when using a persistent store. The store requires async
+  // loading, creating the opportunity for backlog tasks to accumulate before
+  // initialization completes.
+  if (!store()) {
+    GTEST_SKIP();
+  }
+  auto parsed_header =
+      ParseReportingEndpoints(kGroup_ + "=\"" + kEndpoint_.spec() + "\"");
+  ASSERT_TRUE(parsed_header.has_value());
+  service()->SetDocumentReportingEndpoints(*kReportingSource_, kOrigin_,
+                                           kIsolationInfo_, *parsed_header);
+  // Add a "create report" task to the backlog (service not initialized yet).
+  service()->QueueReport(kUrl_, kReportingSource_, kNak_, kUserAgent_, kGroup_,
+                         kType_, base::DictValue(), 0,
+                         ReportingTargetType::kDeveloper);
+
+  // Now trigger SendReportsForSource, adding a "send reports for source" task
+  // to the backlog.
+  service()->SendReportsForSource(*kReportingSource_);
+
+  // Verify neither operation has been processed yet.
+  std::vector<raw_ptr<const ReportingReport, VectorExperimental>> reports;
+  context()->cache()->GetReports(&reports);
+  EXPECT_EQ(0u, reports.size());
+  EXPECT_FALSE(
+      context()->cache()->GetExpiredSources().contains(*kReportingSource_));
+
+  // Now finish loading, which should process the backlog.
+  FinishLoading(true /* load_success */);
+
+  // First the "create report" task was processed, then SendReportsForSource
+  // made the report pending without expiring the source.
+  context()->cache()->GetReports(&reports);
+  EXPECT_EQ(1u, reports.size());
+  EXPECT_FALSE(
       context()->cache()->GetExpiredSources().contains(*kReportingSource_));
 }
 
@@ -407,6 +517,16 @@ TEST_P(ReportingServiceTest,
                     ReportingReport::Status::PENDING));
   ASSERT_TRUE(
       context()->cache()->GetExpiredSources().contains(kReportingSource_));
+
+  // Once the first upload completes, the deferred source flush must immediately
+  // transition the second report to pending without waiting for the delivery
+  // timer.
+  context()->test_uploader()->pending_uploads()[0]->Complete(
+      ReportingUploader::Outcome::SUCCESS);
+  EXPECT_EQ(0u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::QUEUED));
+  EXPECT_EQ(1u, context()->cache()->GetReportCountWithStatusForTesting(
+                    ReportingReport::Status::PENDING));
 }
 
 TEST_P(ReportingServiceTest, ProcessReportingEndpointsHeaderPathAbsolute) {
@@ -472,8 +592,7 @@ TEST_P(ReportingServiceTest, ProcessReportToHeader_TooDeep) {
 }
 
 TEST_P(ReportingServiceTest, ProcessReportToHeaderNetworkIsolationKeyDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
+  AddScopedFeatureList().InitAndDisableFeature(
       features::kPartitionConnectionsByNetworkIsolationKey);
 
   // Re-create the store, so it reads the new feature value.

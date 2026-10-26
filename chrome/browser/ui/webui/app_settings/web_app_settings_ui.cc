@@ -5,10 +5,9 @@
 #include "chrome/browser/ui/webui/app_settings/web_app_settings_ui.h"
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
@@ -18,10 +17,12 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "ui/base/base_window.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/webui/webui_util.h"
 
@@ -141,6 +142,7 @@ WebAppSettingsUI::WebAppSettingsUI(content::WebUI* web_ui)
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
           profile, chrome::kChromeUIWebAppSettingsHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   AddAppManagementStrings(html_source);
 

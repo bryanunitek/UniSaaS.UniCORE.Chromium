@@ -4,6 +4,9 @@
 
 #include "partition_alloc/scheduler_loop_quarantine.h"
 
+#include <thread>
+
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/extended_api.h"
 #include "partition_alloc/internal/partition_root_internal.h"
 #include "partition_alloc/partition_alloc_base/check.h"
@@ -11,6 +14,7 @@
 #include "partition_alloc/partition_page.h"
 #include "partition_alloc/partition_stats.h"
 #include "partition_alloc/scheduler_loop_quarantine_support.h"
+#include "partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
 #include "partition_alloc/slot_start.h"
 #include "partition_alloc/thread_cache.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,7 +26,9 @@ namespace partition_alloc {
 namespace {
 
 template <bool thread_bound>
-internal::SchedulerLoopQuarantineBranch<thread_bound>*
+internal::SchedulerLoopQuarantineBranch<
+    thread_bound,
+    internal::QuarantineTarget::kMiracleObjects>*
 GetBranchFromAllocatorRoot(PartitionRoot* root);
 
 template <>
@@ -83,7 +89,7 @@ class SchedulerLoopQuarantineTest : public testing::Test {
   QuarantineBranch* GetQuarantineBranch() { return branch_; }
 
   void Quarantine(void* object) {
-    internal::SlotStart slot_start = internal::SlotStart::Unchecked(object);
+    SlotStart slot_start = SlotStart::Unchecked(object);
     auto* slot_span = internal::SlotSpanMetadata::FromSlotStart(
         slot_start.Untag(), GetPartitionRoot());
     auto size_details =
@@ -92,13 +98,20 @@ class SchedulerLoopQuarantineTest : public testing::Test {
   }
 
   size_t GetObjectSize(void* object) {
-    internal::SlotStart slot_start = internal::SlotStart::Unchecked(object);
+    SlotStart slot_start = SlotStart::Unchecked(object);
     auto* entry_slot_span = internal::SlotSpanMetadata::FromSlotStart(
         slot_start.Untag(), GetPartitionRoot());
     return entry_slot_span->bucket->slot_size;
   }
 
-  SchedulerLoopQuarantineStats GetStats() const {
+  // Returns up-to-date stats.
+  SchedulerLoopQuarantineStats GetStats() {
+    branch_->PublishStatsForTesting();
+    return GetPublishedStats();
+  }
+
+  // Returns the stats as currently published by the branch.
+  SchedulerLoopQuarantineStats GetPublishedStats() const {
     SchedulerLoopQuarantineStats stats{};
     root_->AccumulateStats(stats);
     return stats;
@@ -190,6 +203,76 @@ TYPED_TEST(SchedulerLoopQuarantineTest, Basic) {
   }
 }
 
+TYPED_TEST(SchedulerLoopQuarantineTest, PurgeHeadroom) {
+  constexpr size_t kHeadroomPercent = 40;
+  QuarantineConfig config = this->GetConfig();
+  config.purge_headroom_percent = kHeadroomPercent;
+  this->GetQuarantineBranch()->Configure(*this->GetQuarantineRoot(), config);
+
+  const size_t capacity_in_bytes =
+      this->GetQuarantineBranch()->GetCapacityInBytes();
+  const size_t headroom_in_bytes = capacity_in_bytes / 100 * kHeadroomPercent;
+
+  void* object = this->GetPartitionRoot()->Alloc(1);
+  const size_t size = this->GetObjectSize(object);
+  ASSERT_GT(headroom_in_bytes, 2 * size);
+
+  // Fill the branch, without purging.
+  const size_t max_count = capacity_in_bytes / size;
+  for (size_t i = 0; i < max_count; i++) {
+    this->Quarantine(object);
+    object = this->GetPartitionRoot()->Alloc(1);
+  }
+  EXPECT_EQ(max_count, this->GetStats().count);
+
+  // The branch is full: quarantining another entry dequarantines enough
+  // entries to make room for `headroom_in_bytes` more bytes.
+  this->Quarantine(object);
+  auto stats = this->GetStats();
+  EXPECT_LE(stats.size_in_bytes, capacity_in_bytes - headroom_in_bytes);
+  EXPECT_GT(stats.size_in_bytes, capacity_in_bytes - headroom_in_bytes - size);
+
+  // Subsequent entries fit without dequarantining anything.
+  const size_t count_after_purge = stats.count;
+  const size_t room_count = (capacity_in_bytes - stats.size_in_bytes) / size;
+  for (size_t i = 1; i <= room_count; i++) {
+    this->Quarantine(this->GetPartitionRoot()->Alloc(1));
+    EXPECT_EQ(count_after_purge + i, this->GetStats().count);
+  }
+}
+
+TYPED_TEST(SchedulerLoopQuarantineTest, StatsArePublishedOnPurge) {
+  constexpr size_t kCount = 10;
+  size_t total_size = 0;
+  for (size_t i = 0; i < kCount; i++) {
+    void* object = this->GetPartitionRoot()->Alloc(1);
+    total_size += this->GetObjectSize(object);
+    this->Quarantine(object);
+  }
+
+  this->GetQuarantineBranch()->Purge();
+
+  auto stats = this->GetPublishedStats();
+  EXPECT_EQ(0u, stats.size_in_bytes);
+  EXPECT_EQ(0u, stats.count);
+  EXPECT_EQ(total_size, stats.cumulative_size_in_bytes);
+  EXPECT_EQ(kCount, stats.cumulative_count);
+}
+
+TYPED_TEST(SchedulerLoopQuarantineTest, StatsArePublishedPeriodically) {
+  constexpr size_t kCount = 1000;
+  for (size_t i = 0; i < kCount; i++) {
+    this->Quarantine(this->GetPartitionRoot()->Alloc(1));
+  }
+
+  // Without a purge, the published stats lag behind by a bounded number of
+  // entries.
+  constexpr size_t kMaxLag = 64;
+  auto stats = this->GetPublishedStats();
+  EXPECT_LE(stats.cumulative_count, kCount);
+  EXPECT_GE(stats.cumulative_count, kCount - kMaxLag);
+}
+
 TYPED_TEST(SchedulerLoopQuarantineTest, TooLargeAllocation) {
   const size_t kThreshold =
       std::min(this->GetConfig().max_quarantine_size,
@@ -238,6 +321,51 @@ TYPED_TEST(SchedulerLoopQuarantineTest, ScopedOptOut) {
 
   this->Quarantine(object2);
   ASSERT_TRUE(this->GetQuarantineBranch()->IsQuarantinedForTesting(object2));
+}
+
+// Test if partition 0 is Invalid that the exclusion still works
+// on the other partitions.
+TEST(SchedulerLoopQuarantineTest, ExclusionWithInvalidFirstPartition) {
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM) && PA_BUILDFLAG(ENABLE_AUTO_PARTITIONING)
+  static_assert(kNumPartitions >= 2);
+  auto* root1 = allocator_shim::internal::PartitionAllocMalloc::Allocator(1);
+  if (!root1) {
+    GTEST_SKIP() << "Partition 1 is not initialized";
+  }
+
+  // Spawn a fresh thread where index 0 has never allocated (is invalid).
+  std::thread worker([root1] {
+    // Verify index 0 is invalid while index 1 is initialized/valid.
+    ASSERT_FALSE(internal::ThreadCache::IsValid(internal::ThreadCache::Get(0)));
+
+    void* ptr = root1->Alloc(16);
+    auto* tcache1 = internal::ThreadCache::Get(1);
+    ASSERT_TRUE(internal::ThreadCache::IsValid(tcache1));
+
+    auto& branch = tcache1->GetSchedulerLoopQuarantineBranch();
+    internal::SchedulerLoopQuarantineRoot qroot(*root1);
+    branch.Configure(
+        qroot, {.branch_capacity_in_bytes = 1024, .enable_quarantine = true});
+
+    SlotStart slot_start = SlotStart::Unchecked(ptr);
+    auto* slot_span =
+        internal::SlotSpanMetadata::FromSlotStart(slot_start.Untag(), root1);
+    auto size_details = root1->SlotSpanToBucketSizeDetails(slot_span);
+
+    {
+      // Index 0 being invalid caused this to return early, skipping index 1's
+      // opt-out. Now index 1 is correctly opted out.
+      ScopedSchedulerLoopQuarantineExclusion opt_out;
+      branch.Quarantine(slot_start, slot_span, size_details);
+      EXPECT_FALSE(branch.IsQuarantinedForTesting(ptr));
+    }
+  });
+  worker.join();
+#else
+  GTEST_SKIP()
+      << "Test requires USE_ALLOCATOR_SHIM and ENABLE_AUTO_PARTITIONING";
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM) &&
+        // PA_BUILDFLAG(ENABLE_AUTO_PARTITIONING)
 }
 
 TYPED_TEST(ThreadBoundSchedulerLoopQuarantineTest,

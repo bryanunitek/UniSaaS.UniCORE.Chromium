@@ -132,7 +132,6 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
   bool AsyncAttributeValue() const override;
   bool DeferAttributeValue() const override;
   bool HasSourceAttribute() const override;
-  bool HasAttributionsrcAttribute() const override;
   bool IsConnected() const override;
   bool HasChildren() const override;
   const AtomicString& GetNonceForElement() const override;
@@ -140,7 +139,7 @@ class CORE_EXPORT HTMLScriptElement final : public HTMLElement,
     return HasDuplicateAttribute();
   }
   bool AllowInlineScriptForCSP(const AtomicString& nonce,
-                               const OrdinalNumber&,
+                               const TextPosition& context_position,
                                const String& script_content) override;
   void DispatchLoadEvent() override;
   void DispatchErrorEvent() override;

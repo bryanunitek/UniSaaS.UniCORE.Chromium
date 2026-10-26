@@ -44,7 +44,7 @@ public abstract class ActionModeCallbackHelper {
     }
 
     /** Empty {@link ActionMode.Callback} that does nothing. Used for {@link #EMPTY_CALLBACK}. */
-    private static class EmptyActionCallback extends ActionModeCallback {
+    public static class EmptyActionCallback extends ActionModeCallback {
         @Override
         public boolean onCreateActionMode(ActionMode mode, Menu menu) {
             return false;
@@ -71,7 +71,6 @@ public abstract class ActionModeCallbackHelper {
             return false;
         }
     }
-    ;
 
     /**
      * @return {@code true} if selection action mode is started and in proper working state. if

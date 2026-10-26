@@ -8,7 +8,7 @@ import 'chrome://resources/cr_elements/cr_toolbar/cr_toolbar_search_field.js';
 import type {CrToolbarSearchFieldElement} from 'chrome://resources/cr_elements/cr_toolbar/cr_toolbar_search_field.js';
 import {pressAndReleaseKeyOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
 import {assertDeepEquals, assertEquals, assertNotEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {eventToPromise} from 'chrome://webui-test/test_util.js';
+import {eventToPromise, hasStyle} from 'chrome://webui-test/test_util.js';
 // clang-format on
 
 /** @fileoverview Suite of tests for cr-toolbar-search-field. */
@@ -20,6 +20,15 @@ suite('cr-toolbar-search-field', function() {
     field.$.searchInput.value = term;
     field.onSearchTermInput();
     field.onSearchTermSearch();
+  }
+
+  async function addSlottedChild() {
+    const child = document.createElement('div');
+    child.slot = 'suffixElement';
+    child.textContent = 'Ctrl+Shift+A';
+    field.appendChild(child);
+    await field.updateComplete;
+    return child;
   }
 
   setup(function() {
@@ -273,5 +282,40 @@ suite('cr-toolbar-search-field', function() {
     field.$.searchInput.dispatchEvent(beforeInputEvent);
     const searchTermBeforeInputEvent = await searchTermBeforeInputEventPromise;
     assertEquals(beforeInputEvent, searchTermBeforeInputEvent.detail.e);
+  });
+
+  test('renders slotted content', async () => {
+    const child = await addSlottedChild();
+
+    const slot = field.shadowRoot.querySelector<HTMLSlotElement>(
+        'slot[name=suffixElement]');
+    assertTrue(!!slot);
+    const assignedNodes = slot.assignedNodes();
+    assertEquals(1, assignedNodes.length);
+    assertEquals(child, assignedNodes[0]);
+  });
+
+  test('hides slotted content when searching for text', async () => {
+    await addSlottedChild();
+
+    // Slot is present when there is no search text.
+    assertTrue(!!field.shadowRoot.querySelector('slot[name=suffixElement]'));
+
+    // Searching for text removes slot and shows clear search button.
+    simulateSearch('query');
+    await field.updateComplete;
+    assertFalse(!!field.shadowRoot.querySelector('slot[name=suffixElement]'));
+    assertTrue(!!field.shadowRoot.querySelector('#clearSearch'));
+
+    // Clearing search text restores slot.
+    field.setValue('');
+    await field.updateComplete;
+    assertTrue(!!field.shadowRoot.querySelector('slot[name=suffixElement]'));
+    assertFalse(!!field.shadowRoot.querySelector('#clearSearch'));
+  });
+
+  test('elides prompt label and allows search term to shrink', () => {
+    assertTrue(hasStyle(field.$.prompt, 'text-overflow', 'ellipsis'));
+    assertTrue(hasStyle(field.$.searchTerm, 'min-width', '0px'));
   });
 });

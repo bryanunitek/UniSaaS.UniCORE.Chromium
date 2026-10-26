@@ -10,7 +10,9 @@
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/banner_promo_view.h"
 #import "ios/chrome/browser/toolbar/ui/toolbar_mutator.h"
 
+class FullscreenBrowserAgent;
 @class BrowserActionFactory;
+@class BrowserLayoutState;
 @class DefaultBrowserBannerPromoAppAgent;
 @protocol FullscreenCommands;
 class FullscreenController;
@@ -19,6 +21,17 @@ class FullscreenController;
 @class UIViewController;
 @protocol ToolbarConsumer;
 @protocol ToolbarHeightDelegate;
+@class ToolbarMediator;
+
+/// Delegate for events in `ToolbarMediator`.
+@protocol ToolbarMediatorDelegate <NSObject>
+
+/// Notifies the delegate that the assistant button was tapped in Incognito
+/// mode.
+- (void)toolbarMediatorDidTapAssistantInIncognito:(ToolbarMediator*)mediator;
+
+@end
+
 class PrefService;
 class WebNavigationBrowserAgent;
 namespace web {
@@ -31,12 +44,19 @@ class AuthenticationService;
 class GeminiBrowserAgent;
 @protocol GeminiCommands;
 class GeminiService;
+class ProfileIOS;
 
 // Mediator for the toolbar.
 @interface ToolbarMediator : NSObject <BannerPromoViewDelegate, ToolbarMutator>
 
+// Browser layout state.
+@property(nonatomic, weak) BrowserLayoutState* browserLayoutState;
+
 // The consumer for this mediator.
 @property(nonatomic, weak) id<ToolbarConsumer> consumer;
+
+// Delegate for events in `ToolbarMediator`.
+@property(nonatomic, weak) id<ToolbarMediatorDelegate> delegate;
 
 // Helper for web navigation.
 @property(nonatomic, assign) WebNavigationBrowserAgent* navigationBrowserAgent;
@@ -66,8 +86,11 @@ class GeminiService;
 - (instancetype)initWithIncognito:(BOOL)incognito
                      webStateList:(WebStateList*)webStateList
                     actionFactory:(BrowserActionFactory*)actionFactory
+                          profile:(ProfileIOS*)profile
                       prefService:(PrefService*)prefService
              fullscreenController:(FullscreenController*)fullscreenController
+           fullscreenBrowserAgent:
+               (FullscreenBrowserAgent*)fullscreenBrowserAgent
                       topPosition:(BOOL)topPosition
      defaultBrowserBannerAppAgent:
          (DefaultBrowserBannerPromoAppAgent*)defaultBrowserBannerAppAgent

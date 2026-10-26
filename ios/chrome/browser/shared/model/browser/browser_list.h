@@ -7,6 +7,7 @@
 
 #include <set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "ios/chrome/browser/shared/model/browser/browser_list_observer.h"
@@ -78,10 +79,15 @@ class BrowserList final : public KeyedService, public BrowserObserver {
 
  private:
   // The list of observers.
-  base::ObserverList<BrowserListObserver, true> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      BrowserListObserver,
+      true,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   // The set of registered Browsers.
-  std::set<Browser*> browsers_;
+  std::set<raw_ptr<Browser>> browsers_;
 };
 
 #endif  // IOS_CHROME_BROWSER_SHARED_MODEL_BROWSER_BROWSER_LIST_H_

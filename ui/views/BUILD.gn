@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//build/buildflag_header.gni")
+import("//build/config/features.gni")
 import("//build/config/ozone.gni")
 import("//build/config/ui.gni")
 import("//build/nocompile.gni")
@@ -259,6 +260,7 @@ component("views") {
     "controls/views_text_services_context_menu.h",
     "controls/views_text_services_context_menu_base.h",
     "debug_utils.h",
+    "deprecated_layout_immediately_pass_key.h",
     "dialog_model_context_menu_controller.h",
     "drag_controller.h",
     "drag_utils.h",
@@ -270,10 +272,14 @@ component("views") {
     "focus/focus_search.h",
     "focus/native_view_focus_manager.h",
     "input_event_activation_protector.h",
-    "input_protection/default_input_protector_delegate.h",
-    "input_protection/input_protector_delegate.h",
+    "input_protection/default_input_protection_policy.h",
+    "input_protection/input_protection_event_handler.h",
+    "input_protection/input_protection_policy.h",
+    "input_protection/input_protection_specification.h",
     "input_protection/occluded_widget_input_protector.h",
-    "input_protection/occlusion_aware_input_protection_delegate.h",
+    "input_protection/view_bounds_and_visibility_input_protection_policy.h",
+    "input_protection/widget_stationarity_monitor.h",
+    "input_protection/window_activation_input_protection_policy.h",
     "interaction/element_highlighter_views.h",
     "interaction/element_tracker_views.h",
     "interaction/element_tracker_widget_state.h",
@@ -320,10 +326,11 @@ component("views") {
     "view.h",
     "view_class_properties.h",
     "view_constants.h",
+    "view_decoration.h",
+    "view_hierarchy_changed_details.h",
     "view_model.h",
     "view_model_utils.h",
     "view_observer.h",
-    "view_shadow.h",
     "view_targeter.h",
     "view_targeter_delegate.h",
     "view_tracker.h",
@@ -368,7 +375,6 @@ component("views") {
     "window/window_button_order_provider.h",
     "window/window_resources.h",
     "window/window_shape.h",
-    "windows_stationarity_monitor.h",
     "word_lookup_client.h",
   ]
 
@@ -517,9 +523,13 @@ component("views") {
     "focus/focus_search.cc",
     "focus/native_view_focus_manager.cc",
     "input_event_activation_protector.cc",
-    "input_protection/default_input_protector_delegate.cc",
+    "input_protection/default_input_protection_policy.cc",
+    "input_protection/input_protection_event_handler.cc",
+    "input_protection/input_protection_specification.cc",
     "input_protection/occluded_widget_input_protector.cc",
-    "input_protection/occlusion_aware_input_protection_delegate.cc",
+    "input_protection/view_bounds_and_visibility_input_protection_policy.cc",
+    "input_protection/widget_stationarity_monitor.cc",
+    "input_protection/window_activation_input_protection_policy.cc",
     "interaction/element_highlighter_views.cc",
     "interaction/element_tracker_views.cc",
     "interaction/element_tracker_widget_state.cc",
@@ -557,9 +567,9 @@ component("views") {
     "style/typography_provider.cc",
     "view.cc",
     "view_class_properties.cc",
+    "view_decoration.cc",
     "view_model.cc",
     "view_model_utils.cc",
-    "view_shadow.cc",
     "view_targeter.cc",
     "view_targeter_delegate.cc",
     "view_tracker.cc",
@@ -595,7 +605,6 @@ component("views") {
     "window/non_client_view.cc",
     "window/window_button_order_provider.cc",
     "window/window_shape.cc",
-    "windows_stationarity_monitor.cc",
   ]
 
   # Other targets in this file (e.g. tests) get access to the internal headers.
@@ -635,7 +644,7 @@ component("views") {
     "//ui/base/interaction",
     "//ui/color",
     "//ui/color:mixers",
-    "//ui/compositor_extra",
+    "//ui/decoration",
     "//ui/display",
     "//ui/gfx:native_ui_types",
     "//ui/latency",
@@ -735,7 +744,6 @@ component("views") {
       "widget/native_widget_mac.h",
       "widget/widget_utils_mac.h",
       "window/native_frame_view_mac.h",
-      "windows_stationarity_monitor_mac.h",
     ]
     sources += [
       "accessibility/ax_virtual_view_mac.mm",
@@ -769,7 +777,6 @@ component("views") {
       "widget/native_widget_mac.mm",
       "widget/widget_utils_mac.mm",
       "window/native_frame_view_mac.mm",
-      "windows_stationarity_monitor_mac.mm",
     ]
     public_deps += [ "//components/remote_cocoa/common:mojo" ]
     deps += [
@@ -861,11 +868,11 @@ component("views") {
       "touchui/touch_selection_controller_impl.h",
       "view_constants_aura.h",
       "widget/focus_manager_event_handler.h",
+      "widget/legacy_window_reorderer.h",
       "widget/native_widget_aura.h",
       "widget/tooltip_manager_aura.h",
       "widget/widget_aura_utils.h",
       "widget/window_reorderer.h",
-      "windows_stationarity_monitor_aura.h",
     ]
 
     sources += [
@@ -893,10 +900,10 @@ component("views") {
       "touchui/touch_selection_controller_impl.cc",
       "view_constants_aura.cc",
       "widget/focus_manager_event_handler.cc",
+      "widget/legacy_window_reorderer.cc",
       "widget/native_widget_aura.cc",
       "widget/tooltip_manager_aura.cc",
       "widget/window_reorderer.cc",
-      "windows_stationarity_monitor_aura.cc",
     ]
     deps += [
       "//components/crash/core/common:crash_key",
@@ -940,10 +947,12 @@ component("views") {
         "widget/desktop_aura/desktop_window_tree_host.cc",
       ]
       if (is_win) {
-        public += [ "widget/desktop_aura/desktop_window_tree_host_win.h" ]
+        public += [
+          "widget/desktop_aura/desktop_drag_drop_client_win.h",
+          "widget/desktop_aura/desktop_window_tree_host_win.h",
+        ]
         sources += [
           "widget/desktop_aura/desktop_drag_drop_client_win.cc",
-          "widget/desktop_aura/desktop_drag_drop_client_win.h",
           "widget/desktop_aura/desktop_drop_target_win.cc",
           "widget/desktop_aura/desktop_native_cursor_manager_win.cc",
           "widget/desktop_aura/desktop_native_cursor_manager_win.h",
@@ -977,12 +986,12 @@ component("views") {
       }
       if (is_linux || is_fuchsia) {
         public += [
+          "widget/desktop_aura/desktop_drag_drop_client_ozone.h",
           "widget/desktop_aura/desktop_window_tree_host_platform.h",
           "widget/desktop_aura/window_move_client_platform.h",
         ]
         sources += [
           "widget/desktop_aura/desktop_drag_drop_client_ozone.cc",
-          "widget/desktop_aura/desktop_drag_drop_client_ozone.h",
           "widget/desktop_aura/desktop_window_tree_host_platform.cc",
           "widget/desktop_aura/window_move_client_platform.cc",
         ]
@@ -1039,6 +1048,7 @@ component("views") {
   if (use_ozone) {
     deps += [ "//ui/ozone" ]
   }
+  check_includes_strict = CHECK_INCLUDES_STRICT_PUBLIC_INCLUDES_PRIVATE
 }
 
 if (is_win || is_mac || is_linux || is_chromeos) {
@@ -1270,10 +1280,6 @@ source_set("test_support") {
     ]
     deps += [ "//ui/ozone:ui_test_support" ]
   }
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 test("views_unittests") {
@@ -1362,8 +1368,12 @@ test("views_unittests") {
     "focus/focus_manager_unittest.cc",
     "focus/focus_traversal_unittest.cc",
     "input_event_activation_protector_unittest.cc",
+    "input_protection/default_input_protection_policy_unittest.cc",
+    "input_protection/input_protection_event_handler_unittest.cc",
     "input_protection/occluded_widget_input_protector_unittest.cc",
-    "input_protection/occlusion_aware_input_protection_delegate_unittest.cc",
+    "input_protection/view_bounds_and_visibility_input_protection_policy_unittest.cc",
+    "input_protection/widget_stationarity_monitor_unittest.cc",
+    "input_protection/window_activation_input_protection_policy_unittest.cc",
     "layout/animating_layout_manager_unittest.cc",
     "layout/box_layout_unittest.cc",
     "layout/box_layout_view_unittest.cc",
@@ -1372,6 +1382,7 @@ test("views_unittests") {
     "layout/flex_layout_unittest.cc",
     "layout/flex_layout_view_unittest.cc",
     "layout/layout_manager_base_unittest.cc",
+    "layout/layout_manager_unittest.cc",
     "layout/normalized_geometry_unittest.cc",
     "layout/proposed_layout_unittest.cc",
     "layout/table_layout_unittest.cc",
@@ -1384,9 +1395,9 @@ test("views_unittests") {
     "scoped_paint_lock_unittest.cc",
     "selection_controller_unittest.cc",
     "test/widget_test_unittest.cc",
+    "view_decoration_unittest.cc",
     "view_model_unittest.cc",
     "view_model_utils_unittest.cc",
-    "view_shadow_unittest.cc",
     "view_targeter_unittest.cc",
     "view_tracker_unittest.cc",
     "view_unittest.cc",
@@ -1398,6 +1409,7 @@ test("views_unittests") {
     "widget/unique_widget_ptr_unittest.cc",
     "widget/widget_delegate_unittest.cc",
     "widget/widget_unittest.cc",
+    "widget/widget_utils_unittest.cc",
     "window/default_frame_view_unittest.cc",
     "window/dialog_client_view_unittest.cc",
     "window/dialog_delegate_unittest.cc",
@@ -1412,6 +1424,7 @@ test("views_unittests") {
     ":views",
     "//base",
     "//base:i18n",
+    "//base/i18n:test_support",
     "//base/test:test_support",
     "//cc:test_support",
     "//cc/paint",
@@ -1439,7 +1452,7 @@ test("views_unittests") {
     "//ui/color",
     "//ui/color:mixers",
     "//ui/compositor:test_support",
-    "//ui/compositor_extra",
+    "//ui/decoration",
     "//ui/display:test_support",
     "//ui/events:dom_keycode_converter",
     "//ui/events:events_base",
@@ -1501,8 +1514,12 @@ test("views_unittests") {
     ]
     deps += [
       "//ui/base/ime/linux",
+      "//ui/linux:display_server_utils_unittests",
       "//ui/linux:test_support",
     ]
+    if (use_dbus) {
+      deps += [ "//ui/linux:portal_settings_unittests" ]
+    }
   }
 
   if (has_native_accessibility) {
@@ -1575,6 +1592,7 @@ test("views_unittests") {
       "corewm/tooltip_controller_unittest.cc",
       "touchui/touch_selection_controller_impl_unittest.cc",
       "view_unittest_aura.cc",
+      "widget/legacy_window_reorderer_unittest.cc",
       "widget/native_widget_aura_unittest.cc",
       "widget/window_reorderer_unittest.cc",
     ]
@@ -1582,13 +1600,17 @@ test("views_unittests") {
       "//ui/aura",
       "//ui/aura:test_support",
       "//ui/base/cursor/mojom:cursor_type",
+      "//ui/platform_window",
       "//ui/wm",
       "//ui/wm/public",
     ]
 
     if (is_mac) {
       # views_unittests not yet compiling on Mac. http://crbug.com/378134
-      sources -= [ "widget/window_reorderer_unittest.cc" ]
+      sources -= [
+        "widget/legacy_window_reorderer_unittest.cc",
+        "widget/window_reorderer_unittest.cc",
+      ]
     }
 
     if (is_win) {
@@ -1670,6 +1692,9 @@ source_set("views_interactive_ui_tests") {
   testonly = true
 
   sources = [
+    "input_protection/input_protection_interactive_test.cc",
+    "input_protection/input_protection_interactive_test.h",
+    "input_protection/input_protection_interactive_uitest.cc",
     "widget/any_widget_observer_interactive_uitest.cc",
     "widget/widget_interactive_uitest.cc",
   ]
@@ -1682,6 +1707,7 @@ source_set("views_interactive_ui_tests") {
     "//mojo/core/embedder",
     "//skia",
     "//testing/gtest",
+    "//ui/accessibility:test_support",
     "//ui/base:test_support",
     "//ui/base/ime",
     "//ui/compositor",
@@ -1690,6 +1716,7 @@ source_set("views_interactive_ui_tests") {
     "//ui/resources",
     "//ui/resources:ui_test_pak",
     "//ui/strings",
+    "//ui/views/interaction:test_support",
   ]
 
   public_deps = [ "//ui/base/mojom" ]
@@ -1752,7 +1779,13 @@ source_set("views_interactive_ui_tests") {
   }
 }
 
-test("views_perftests") {
+if (is_fuchsia) {
+  views_perftests_target_name = "views_perftests_fuchsia"
+} else {
+  views_perftests_target_name = "views_perftests"
+}
+
+test(views_perftests_target_name) {
   sources = [
     "controls/label_perftest.cc",
     "views_perftests.cc",
@@ -1772,4 +1805,16 @@ test("views_perftests") {
     "//testing:run_perf_test",
     "//ui/resources:ui_test_pak_data",
   ]
+
+  if (is_fuchsia) {
+    # These tests use SwiftShader (crbug.com/1022542), which uses JIT.
+    test_runner_shard = "//build/config/fuchsia/test/elf_test_ambient_exec_runner.shard.test-cml"
+
+    additional_manifest_fragments = [
+      "//build/config/fuchsia/test/fonts.shard.test-cml",
+      "//build/config/fuchsia/test/mark_vmo_executable.shard.test-cml",
+      "//build/config/fuchsia/test/present_view.shard.test-cml",
+      "//third_party/fuchsia-sdk/sdk/pkg/vulkan/client.shard.cml",
+    ]
+  }
 }

@@ -9,6 +9,7 @@
 #include <mfidl.h>
 #include <wrl.h>
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -96,8 +97,10 @@ class MEDIA_EXPORT MediaFoundationStreamWrapper
   void ProcessRequestsIfPossible();
   void OnDemuxerStreamRead(DemuxerStream::Status status,
                            scoped_refptr<DecoderBuffer> buffer);
-  // Receive the data from MojoDemuxerStreamAdapter.
-  void OnDemuxerStreamReadBuffers(DemuxerStream::Status status,
+  // Receive the data from MojoDemuxerStreamAdapter. |flush_generation| is the
+  // value |flush_generation_| had when the read was requested.
+  void OnDemuxerStreamReadBuffers(uint32_t flush_generation,
+                                  DemuxerStream::Status status,
                                   DemuxerStream::DecoderBufferVector buffers);
 
   // IMFMediaStream implementation - it is in general running in MF threadpool
@@ -195,7 +198,16 @@ class MEDIA_EXPORT MediaFoundationStreamWrapper
   // DemuxerStream::Read() API.
   uint32_t batch_read_count_ = 1;
 
-  bool stream_ended_ = false;
+  // Whether kMediaFoundationBatchRead is enabled.
+  bool batch_read_enabled_ = false;
+
+  // Incremented by every Flush(). A read stamped with an older value was
+  // requested before that flush, so its buffers are from the position playback
+  // seeked away from. Only ever compared for equality, which stays correct if
+  // the counter wraps.
+  uint32_t flush_generation_ GUARDED_BY(lock_) = 0;
+
+  std::atomic<bool> stream_ended_{false};
   GUID last_key_id_ = GUID_NULL;
 
   static constexpr MFTIME kInvalidTime = -1;
@@ -212,6 +224,7 @@ class MEDIA_EXPORT MediaFoundationStreamWrapper
   bool encryption_type_reported_ = false;
 
   bool is_encrypted_ = false;
+  bool has_cdm_ GUARDED_BY(lock_) = false;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<MediaFoundationStreamWrapper> weak_factory_{this};

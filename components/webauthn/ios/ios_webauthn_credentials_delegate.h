@@ -51,6 +51,9 @@ class IOSWebAuthnCredentialsDelegate
   // Returns whether the previous authentication can be reused.
   bool CanReusePreviousSigninAuth() const;
 
+  // Returns a weak pointer to this instance.
+  base::WeakPtr<IOSWebAuthnCredentialsDelegate> GetWeakPtr();
+
  private:
   // Notify all clients that waiting for passkeys has ended, either from
   // passkeys having been received or from the request having been cancelled.
@@ -80,6 +83,9 @@ class IOSWebAuthnCredentialsDelegate
   // Unique container of backend_ids that have been marked as user verified.
   // A backend_id is the base64-encoded credential ID.
   base::flat_set<std::string> verified_backend_ids_;
+
+  // Set to true when a passkey has been selected for the current request.
+  bool passkey_selected_ = false;
 
   // The WebState associated with this delegate.
   base::WeakPtr<web::WebState> web_state_;

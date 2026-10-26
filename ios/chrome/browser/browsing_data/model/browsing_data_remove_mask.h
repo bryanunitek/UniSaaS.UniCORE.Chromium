@@ -9,10 +9,12 @@
 
 // Mask used to control which data to remove when clearing browsing
 // data.
+// Data types defined here usually also need to be defined on Desktop/Android.
+// Keep the two in sync.
+// LINT.IfChange(BrowsingDataRemoveMask)
 enum class BrowsingDataRemoveMask {
   REMOVE_NOTHING = 0,
 
-  REMOVE_APPCACHE = 1 << 0,
   REMOVE_CACHE = 1 << 1,
   REMOVE_COOKIES = 1 << 2,
   REMOVE_DOWNLOADS = 1 << 3,
@@ -31,12 +33,12 @@ enum class BrowsingDataRemoveMask {
   REMOVE_ORIGIN_PRIVATE_FILE_SYSTEM = 1 << 17,
   REMOVE_SERVICE_WORKERS = 1 << 18,
 
-  // "Site data" includes cookies, appcache, indexed DBs, local storage, webSQL,
-  // cache storage, and visited links.
-  REMOVE_SITE_DATA = REMOVE_APPCACHE | REMOVE_COOKIES | REMOVE_INDEXEDDB |
-                     REMOVE_LOCAL_STORAGE | REMOVE_CACHE_STORAGE |
-                     REMOVE_WEBSQL | REMOVE_ORIGIN_PRIVATE_FILE_SYSTEM |
-                     REMOVE_VISITED_LINKS | REMOVE_SERVICE_WORKERS,
+  // "Site data" includes cookies, indexed DBs, local storage, webSQL, cache
+  // storage, and visited links.
+  REMOVE_SITE_DATA = REMOVE_COOKIES | REMOVE_INDEXEDDB | REMOVE_LOCAL_STORAGE |
+                     REMOVE_CACHE_STORAGE | REMOVE_WEBSQL |
+                     REMOVE_ORIGIN_PRIVATE_FILE_SYSTEM | REMOVE_VISITED_LINKS |
+                     REMOVE_SERVICE_WORKERS,
 
   // Includes all the available remove options. Meant to be used by clients that
   // wish to wipe as much data as possible from a ProfileIOS, to make it
@@ -54,6 +56,7 @@ enum class BrowsingDataRemoveMask {
                                REMOVE_FORM_DATA | REMOVE_HISTORY |
                                REMOVE_PASSWORDS | REMOVE_LAST_USER_ACCOUNT,
 };
+// LINT.ThenChange(//chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h:DataTypes)
 
 // Implementation of bitwise "or", "and" operators and the corresponding
 // assignment operators too (as those are not automatically defined for

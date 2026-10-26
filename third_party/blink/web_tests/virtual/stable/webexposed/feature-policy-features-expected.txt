@@ -3,7 +3,6 @@ All changes to this list should go through Blink's feature review process: http:
 
 accelerometer
 aria-notify
-attribution-reporting
 autoplay
 browsing-topics
 camera
@@ -38,9 +37,11 @@ compute-pressure
 cross-origin-isolated
 deferred-fetch
 deferred-fetch-minimal
+digital-credentials-create
 digital-credentials-get
 display-capture
 encrypted-media
+focus-without-user-activation
 fullscreen
 gamepad
 geolocation
@@ -49,7 +50,6 @@ hid
 identity-credentials-get
 idle-detection
 interest-cohort
-join-ad-interest-group
 keyboard-map
 language-detector
 language-model
@@ -58,22 +58,20 @@ local-network
 local-network-access
 loopback-network
 magnetometer
+media-playback-while-not-visible
 microphone
 midi
 on-device-speech-recognition
 otp-credentials
 payment
 picture-in-picture
-private-aggregation
 private-state-token-issuance
 private-state-token-redemption
 publickey-credentials-create
 publickey-credentials-get
-run-ad-auction
 screen-wake-lock
 serial
-shared-storage
-shared-storage-select-url
+speaker-selection
 storage-access
 summarizer
 sync-xhr

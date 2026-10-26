@@ -10,6 +10,7 @@ import './managed_user_profile_notice_disclosure.js';
 import './managed_user_profile_notice_value_prop.js';
 import './managed_user_profile_notice_state.js';
 import './managed_user_profile_notice_data_handling.js';
+import './signals_disclaimer.js';
 
 import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
@@ -97,6 +98,7 @@ export class ManagedUserProfileNoticeAppElement extends
       processingSubtitle_: {type: String},
       showUserDataHandling_: {type: Boolean},
       selectedDataHandling_: {type: String},
+      showSignalsDisclaimer_: {type: Boolean},
 
       valuePropTitle_: {type: String},
       valuePropSubtitle_: {type: String},
@@ -107,7 +109,6 @@ export class ManagedUserProfileNoticeAppElement extends
       separateDataChoiceDetails_: {type: String},
       mergeDataChoiceTitle_: {type: String},
       mergeDataChoiceDetails_: {type: String},
-      usePrimaryAndTonalButtons_: {type: Boolean},
       email_: {type: String},
       accountName_: {type: String},
     };
@@ -134,12 +135,11 @@ export class ManagedUserProfileNoticeAppElement extends
   protected accessor showSuccess_: boolean = false;
   protected accessor showTimeout_: boolean = false;
   protected accessor showError_: boolean = false;
+  protected accessor showSignalsDisclaimer_: boolean = false;
   protected accessor processingSubtitle_: string =
       loadTimeData.getString('processingSubtitle');
   protected accessor showUserDataHandling_: boolean = false;
   protected accessor selectedDataHandling_: BrowsingDataHandling|undefined;
-  private accessor usePrimaryAndTonalButtons_: boolean =
-      loadTimeData.getBoolean('usePrimaryAndTonalButtonsForPromos');
 
   protected accessor valuePropTitle_: string = '';
   protected accessor valuePropSubtitle_: string = '';
@@ -257,6 +257,7 @@ export class ManagedUserProfileNoticeAppElement extends
     this.showTimeout_ = state === State.TIMEOUT;
     this.showError_ = state === State.ERROR;
     this.showUserDataHandling_ = state === State.USER_DATA_HANDLING;
+    this.showSignalsDisclaimer_ = state === State.SIGNALS_DISCLAIMER;
     this.disableProceedButton_ = false;
   }
 
@@ -267,10 +268,14 @@ export class ManagedUserProfileNoticeAppElement extends
 
   protected allowCancel_() {
     return this.showDisclosure_ || this.showValueProposition_ ||
-        this.showUserDataHandling_ || this.showTimeout_ || this.showProcessing_;
+        this.showUserDataHandling_ || this.showTimeout_ ||
+        this.showProcessing_ || this.showSignalsDisclaimer_;
   }
 
   private computeCancelLabel_() {
+    if (this.currentState_ === State.SIGNALS_DISCLAIMER) {
+      return this.i18n('signalsDisclaimerCancelLabel');
+    }
     if (this.currentState_ === State.VALUE_PROPOSITION &&
         !loadTimeData.getBoolean('enforcedByPolicy')) {
       return this.i18n('cancelValueProp');
@@ -288,6 +293,8 @@ export class ManagedUserProfileNoticeAppElement extends
 
   private computeProceedLabel_() {
     switch (this.currentState_) {
+      case State.SIGNALS_DISCLAIMER:
+        return this.i18n('signalsDisclaimerContinueLabel');
       case State.VALUE_PROPOSITION:
         return this.continueAs_;
       case State.DISCLOSURE:
@@ -314,8 +321,14 @@ export class ManagedUserProfileNoticeAppElement extends
     this.selectedDataHandling_ = e.detail.value;
   }
 
-  protected getCancelButtonClass_(): string {
-    return this.usePrimaryAndTonalButtons_ ? 'tonal-button' : '';
+  protected getActionContainerId_(): string {
+    if (this.showTimeout_) {
+      return 'timeout-action-container';
+    } else if (this.showSignalsDisclaimer_) {
+      return 'signals-disclaimer-action-container';
+    } else {
+      return '';
+    }
   }
 }
 

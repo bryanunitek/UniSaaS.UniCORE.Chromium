@@ -18,6 +18,7 @@
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/ip_address_space_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
+#include "services/network/public/mojom/source_location.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/security_context/insecure_request_policy.h"
 #include "third_party/blink/public/mojom/loader/mixed_content.mojom.h"
@@ -98,24 +99,47 @@ RenderFrameHostImpl* InWhichFrameIsContentMixedForFetchKeepAlive(
 }
 
 void UpdateRendererOnMixedContentFound(NavigationRequest* navigation_request,
-                                       const GURL& mixed_content_url,
+                                       RenderFrameHostImpl* mixed_content_frame,
                                        bool was_allowed,
                                        bool for_redirect) {
   // TODO(carlosk): the root node should never be considered as being/having
   // mixed content for now. Once/if the browser should also check form submits
   // for mixed content than this will be allowed to happen and this DCHECK
   // should be updated.
-  DCHECK(!navigation_request->IsInOutermostMainFrame());
+  CHECK(!navigation_request->IsInOutermostMainFrame(),
+        base::NotFatalUntil::M158);
 
   RenderFrameHostImpl* rfh =
       navigation_request->frame_tree_node()->current_frame_host();
-  DCHECK(!navigation_request->GetRedirectChain().empty());
+  // Mirrors `blink::MainResourceUrlForFrame()`. When the mixed content frame
+  // is in a different process from the navigating frame, only send its origin
+  // since the renderer should not have access to its full URL.
+  GURL mixed_content_url =
+      mixed_content_frame->GetSiteInstance()->group() ==
+              rfh->GetSiteInstance()->group()
+          ? mixed_content_frame->GetLastCommittedURL()
+          : mixed_content_frame->GetLastCommittedOrigin().GetURL();
+  CHECK(!navigation_request->GetRedirectChain().empty(),
+        base::NotFatalUntil::M158);
   GURL url_before_redirects = navigation_request->GetRedirectChain()[0];
-  rfh->GetAssociatedLocalFrame()->MixedContentFound(
-      mixed_content_url, navigation_request->GetURL(),
-      navigation_request->request_context_type(), was_allowed,
-      url_before_redirects, for_redirect,
-      navigation_request->common_params().source_location.Clone());
+  // The source location identifies the document or script that initiated the
+  // navigation, which can be in a different process from the navigating
+  // frame, so it should not be sent if it's cross-origin with the navigating
+  // frame's document.
+  network::mojom::SourceLocationPtr source_location =
+      navigation_request->common_params().source_location.Clone();
+  if (rfh->GetLastCommittedOrigin().IsSameOriginWith(
+          GURL(source_location->url))) {
+    rfh->GetAssociatedLocalFrame()->MixedContentFound(
+        mixed_content_url, navigation_request->GetURL(),
+        navigation_request->request_context_type(), was_allowed,
+        url_before_redirects, for_redirect, std::move(source_location));
+  } else {
+    rfh->GetAssociatedLocalFrame()->MixedContentFound(
+        mixed_content_url, navigation_request->GetURL(),
+        navigation_request->request_context_type(), was_allowed,
+        url_before_redirects, for_redirect, nullptr);
+  }
 }
 
 // Updates the renderer about any Blink feature usage.
@@ -217,9 +241,9 @@ bool MixedContentChecker::ShouldBlockNavigation(
       &navigation_mixed_content_features_, &should_report_to_renderer);
 
   if (should_report_to_renderer) {
-    UpdateRendererOnMixedContentFound(
-        request, mixed_content_frame->GetLastCommittedURL(),
-        /*was_allowed=*/!should_block, for_redirect);
+    UpdateRendererOnMixedContentFound(request, mixed_content_frame,
+                                      /*was_allowed=*/!should_block,
+                                      for_redirect);
     MaybeSendBlinkFeatureUsageReport(navigation_handle,
                                      navigation_mixed_content_features_);
   }
@@ -436,7 +460,6 @@ bool MixedContentChecker::ShouldBlockFetchKeepAlive(
   // A fetch keepalive request's RequestContextType is one of the following:
   // - RequestContextType::FETCH,
   // - RequestContextType::BEACON,
-  // - RequestContextType::ATTRIBUTION_SRC,
   // which all maps to kBlockable.
   // See also `blink::MixedContent::ContextTypeFromRequestContext()`.
   constexpr auto kMixedContentContextType =

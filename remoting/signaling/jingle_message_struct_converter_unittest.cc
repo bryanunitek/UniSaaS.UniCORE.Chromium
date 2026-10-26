@@ -7,9 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "remoting/signaling/content_description.h"
 #include "remoting/signaling/jingle_data_structures.h"
 #include "remoting/signaling/signaling_address.h"
-#include "remoting/signaling/xmpp_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -85,7 +85,6 @@ TEST(JingleMessageStructConverterTest, JingleMessageConversion) {
   EXPECT_EQ(stanza.id, "test_msg_id");
   EXPECT_EQ(stanza.sender.local_part, "from");
   EXPECT_EQ(stanza.receiver.local_part, "to");
-  EXPECT_THAT(stanza.xml, testing::HasSubstr("sid=\"test_sid\""));
 
   JingleMessage message2;
   std::string error;
@@ -108,7 +107,6 @@ TEST(JingleMessageStructConverterTest, JingleMessageReplyConversion) {
   EXPECT_EQ(stanza.id, "reply_id");
   EXPECT_EQ(stanza.sender.local_part, "from");
   EXPECT_EQ(stanza.receiver.local_part, "to");
-  EXPECT_THAT(stanza.xml, HasSubstr("type=\"result\""));
 
   JingleMessageReply reply2;
   ASSERT_TRUE(JingleMessageReplyFromStruct(stanza, &reply2));
@@ -195,11 +193,56 @@ TEST(JingleMessageStructConverterTest, JingleMessageReplyConversion_Error) {
   EXPECT_EQ(reply2.text, "Bad Request Details");
 }
 
+TEST(JingleMessageStructConverterTest,
+     JingleMessageReplyConversion_UnknownError) {
+  JingleMessageReply reply;
+  reply.from = SignalingAddress(kFromJid);
+  reply.to = SignalingAddress(kToJid);
+  reply.message_id = "reply_id";
+  reply.reply_type = JingleMessageReply::REPLY_ERROR;
+  reply.error_type = static_cast<JingleMessageReply::ErrorType>(999);
+  reply.text = "Unknown Error Details";
+
+  auto stanza = JingleMessageReplyToStruct(reply);
+  const auto* error_struct =
+      std::get_if<internal::ErrorStanzaStruct>(&stanza.payload);
+  ASSERT_TRUE(error_struct);
+  EXPECT_EQ(error_struct->condition,
+            internal::ErrorStanzaStruct::Condition::kUnspecified);
+  EXPECT_EQ(error_struct->text, "Unknown Error Details");
+
+  JingleMessageReply reply2;
+  ASSERT_TRUE(JingleMessageReplyFromStruct(stanza, &reply2));
+  EXPECT_EQ(reply2.reply_type, JingleMessageReply::REPLY_ERROR);
+  EXPECT_EQ(reply2.error_type, JingleMessageReply::UNSPECIFIED);
+  EXPECT_EQ(reply2.text, "Unknown Error Details");
+}
+
+TEST(JingleMessageStructConverterTest,
+     JingleMessageReplyConversion_InvalidErrorConditionStruct) {
+  internal::IqStanzaStruct stanza;
+  stanza.id = "reply_id";
+  stanza.sender.local_part = "from";
+  stanza.receiver.local_part = "to";
+  internal::ErrorStanzaStruct error_struct;
+  error_struct.condition =
+      static_cast<internal::ErrorStanzaStruct::Condition>(999);
+  error_struct.text = "Invalid Error Condition Struct";
+  stanza.payload = error_struct;
+
+  JingleMessageReply reply;
+  ASSERT_TRUE(JingleMessageReplyFromStruct(stanza, &reply));
+  EXPECT_EQ(reply.reply_type, JingleMessageReply::REPLY_ERROR);
+  EXPECT_EQ(reply.error_type, JingleMessageReply::UNSPECIFIED);
+  EXPECT_EQ(reply.text, "Invalid Error Condition Struct");
+}
+
 TEST(JingleMessageStructConverterTest, SessionInitiateConversion) {
   JingleMessage message;
   message.from = SignalingAddress(kFromJid);
   message.to = SignalingAddress(kToJid);
   message.message_id = "init_id";
+  message.sid = "init_sid";
   message.initiator = "initiator@domain.com";
 
   SessionInitiate initiate;
@@ -319,6 +362,7 @@ TEST(JingleMessageStructConverterTest, JingleTransportInfoConversion) {
   const auto* converted_transport =
       std::get_if<JingleTransportInfo>(&converted.payload());
   ASSERT_TRUE(converted_transport);
+
   ASSERT_TRUE(converted_transport->session_description.has_value());
   EXPECT_EQ(converted_transport->session_description->type,
             SessionDescription::Type::kOffer);
@@ -337,6 +381,7 @@ TEST(JingleMessageStructConverterTest, HostAttributesAttachmentConversion) {
   JingleMessage message;
   message.from = SignalingAddress(kFromJid);
   message.to = SignalingAddress(kToJid);
+  message.sid = "sid";
   Attachment attachment;
   HostAttributesAttachment host_attr;
   host_attr.attribute = {"attr1", "attr2"};
@@ -362,55 +407,75 @@ TEST(JingleMessageStructConverterTest, HostAttributesAttachmentConversion) {
               testing::ElementsAre("attr1", "attr2"));
 }
 
-TEST(JingleMessageStructConverterTest, FallbackToXmlParsing) {
+TEST(JingleMessageStructConverterTest, ConvertUnknownTerminateReason) {
   internal::IqStanzaStruct stanza;
-  stanza.id = "xml_id";
-  // Raw XML for a basic SessionInfo message.
-  stanza.xml =
-      "<iq xmlns=\"jabber:client\" id=\"xml_id\" type=\"set\" "
-      "from=\"from@domain.com\" to=\"to@domain.com\">"
-      "<jingle xmlns=\"urn:xmpp:jingle:1\" action=\"session-info\" "
-      "sid=\"xml_sid\"/></iq>";
-  // payload is std::monostate by default.
+  stanza.id = "test_id";
+  stanza.sender.local_part = "from";
+  stanza.receiver.local_part = "to";
+  internal::JingleMessageStruct jingle_struct;
+  jingle_struct.session_id = "test_sid";
+  internal::SessionTerminateStruct terminate_struct;
+  terminate_struct.reason =
+      static_cast<internal::SessionTerminateStruct::Reason>(999);
+  jingle_struct.action = terminate_struct;
+  stanza.payload = jingle_struct;
 
   JingleMessage message;
   std::string error;
-  ASSERT_TRUE(JingleMessageFromStruct(stanza, &message, &error)) << error;
-  EXPECT_EQ(message.message_id, "xml_id");
-  EXPECT_EQ(message.sid, "xml_sid");
-  EXPECT_TRUE(std::holds_alternative<SessionInfo>(message.payload()));
+  ASSERT_TRUE(JingleMessageFromStruct(stanza, &message, &error));
+  ASSERT_TRUE(std::holds_alternative<SessionTerminate>(message.payload()));
+  EXPECT_EQ(std::get<SessionTerminate>(message.payload()).reason,
+            SessionTerminate::Reason::kUnknownReason);
 }
 
-TEST(JingleMessageStructConverterTest, RejectDtdInXmlFallback) {
+TEST(JingleMessageStructConverterTest, ConvertMissingHeaders) {
   internal::IqStanzaStruct stanza;
-  stanza.xml = "<!DOCTYPE iq><iq/>";
+  stanza.id = "test_id";
+  stanza.sender.local_part = "from";
+  stanza.receiver.local_part = "to";
+  internal::JingleMessageStruct jingle_struct;
+  jingle_struct.action = internal::SessionAcceptStruct();
+  stanza.payload = jingle_struct;
+
   JingleMessage message;
   std::string error;
   EXPECT_FALSE(JingleMessageFromStruct(stanza, &message, &error));
-  EXPECT_THAT(error, testing::HasSubstr("Rejecting XML with DTD"));
+  EXPECT_EQ(error, "sid attribute is missing");
+
+  jingle_struct.session_id = "test_sid";
+  stanza.payload = jingle_struct;
+  stanza.sender.local_part.clear();
+  EXPECT_FALSE(JingleMessageFromStruct(stanza, &message, &error));
+  EXPECT_EQ(error, "Missing signaling address");
 }
 
-TEST(JingleMessageStructConverterTest, RejectLargeXmlFallback) {
+TEST(JingleMessageStructConverterTest,
+     InboundContentDescriptionInitialization) {
   internal::IqStanzaStruct stanza;
-  stanza.xml = std::string(kMaxStanzaSize + 1, ' ');
+  stanza.id = "test_id";
+  stanza.sender.local_part = "from";
+  stanza.receiver.local_part = "to";
+
+  internal::JingleMessageStruct jingle_struct;
+  jingle_struct.session_id = "test_sid";
+
+  internal::SessionInitiateStruct initiate_struct;
+  internal::AuthenticationStruct auth_struct;
+  auth_struct.method = AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519;
+  auth_struct.supported_methods.push_back(
+      AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519);
+  auth_struct.spake_message = "test";
+  initiate_struct.authentication = auth_struct;
+  initiate_struct.initiator.local_part = "from";
+  jingle_struct.action = initiate_struct;
+  stanza.payload = jingle_struct;
+
   JingleMessage message;
   std::string error;
-  EXPECT_FALSE(JingleMessageFromStruct(stanza, &message, &error));
-  EXPECT_THAT(error, testing::HasSubstr("length exceeds limit"));
-}
-
-TEST(JingleMessageStructConverterTest, Reply_RejectDtdInXmlFallback) {
-  internal::IqStanzaStruct stanza;
-  stanza.xml = "<!DOCTYPE iq><iq/>";
-  JingleMessageReply reply;
-  EXPECT_FALSE(JingleMessageReplyFromStruct(stanza, &reply));
-}
-
-TEST(JingleMessageStructConverterTest, Reply_RejectLargeXmlFallback) {
-  internal::IqStanzaStruct stanza;
-  stanza.xml = std::string(kMaxStanzaSize + 1, ' ');
-  JingleMessageReply reply;
-  EXPECT_FALSE(JingleMessageReplyFromStruct(stanza, &reply));
+  ASSERT_TRUE(JingleMessageFromStruct(stanza, &message, &error));
+  ASSERT_TRUE(message.description);
+  EXPECT_EQ(message.description->authentication().method,
+            AuthenticationMethod::SHARED_SECRET_SPAKE2_CURVE25519);
 }
 
 }  // namespace

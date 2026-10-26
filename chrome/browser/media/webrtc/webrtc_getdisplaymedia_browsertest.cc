@@ -18,21 +18,24 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tab_sharing/tab_sharing_infobar_delegate.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/infobars/content/content_infobar_manager.h"
+#include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -44,6 +47,8 @@
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/audio_service.h"
 #include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -98,8 +103,7 @@ static const char kMainHtmlTitle[] = "WebRTC Automated Test";
 // The captured tab is identified by its title.
 static const char kCapturedTabTitle[] = "totally-unique-captured-page-title";
 static const char kCapturedPageMain[] = "/webrtc/captured_page_main.html";
-static const std::u16string kShareThisTabInsteadMessage =
-    u"Share this tab instead";
+constexpr char16_t kShareThisTabInsteadMessage[] = u"Share this tab instead";
 
 constexpr TabSharingInfoBarButton kCscIndicator =
     TabSharingInfoBarButton::kCapturedSurfaceControlIndicator;
@@ -243,26 +247,67 @@ infobars::ContentInfoBarManager* GetInfoBarManager(
   return infobars::ContentInfoBarManager::FromWebContents(web_contents);
 }
 
-TabSharingInfoBarDelegate* GetDelegate(content::WebContents* web_contents,
+// The tab sharing infobar is a TabSharingInfoBarDelegate, unless the
+// centralized infobar framework shows it (MigratedTabSharing). Then it is a
+// ConfirmInfoBarDelegate whose cancel button is "Share this tab instead" and
+// whose extra button is the Captured Surface Control indicator.
+infobars::InfoBarDelegate* GetDelegate(content::WebContents* web_contents,
                                        size_t infobar_index = 0) {
-  return static_cast<TabSharingInfoBarDelegate*>(
-      GetInfoBarManager(web_contents)->infobars()[infobar_index]->delegate());
+  return GetInfoBarManager(web_contents)->infobars()[infobar_index]->delegate();
+}
+
+TabSharingInfoBarDelegate* AsTabSharingDelegate(
+    infobars::InfoBarDelegate* delegate) {
+  CHECK_EQ(delegate->GetIdentifier(),
+           infobars::InfoBarDelegate::TAB_SHARING_INFOBAR_DELEGATE);
+  CHECK(!delegate->AsConfirmInfoBarDelegate());
+  return static_cast<TabSharingInfoBarDelegate*>(delegate);
 }
 
 bool HasCscIndicator(content::WebContents* web_contents) {
-  return GetDelegate(web_contents)->GetButtons() & kCscIndicator;
+  infobars::InfoBarDelegate* delegate = GetDelegate(web_contents);
+  if (ConfirmInfoBarDelegate* confirm_delegate =
+          delegate->AsConfirmInfoBarDelegate()) {
+    return confirm_delegate->GetButtons() &
+           ConfirmInfoBarDelegate::BUTTON_EXTRA;
+  }
+  return AsTabSharingDelegate(delegate)->GetButtons() & kCscIndicator;
 }
 
 bool HasShareThisTabInsteadButton(content::WebContents* web_contents) {
-  return GetDelegate(web_contents)->GetButtons() &
+  infobars::InfoBarDelegate* delegate = GetDelegate(web_contents);
+  if (ConfirmInfoBarDelegate* confirm_delegate =
+          delegate->AsConfirmInfoBarDelegate()) {
+    return confirm_delegate->GetButtons() &
+           ConfirmInfoBarDelegate::BUTTON_CANCEL;
+  }
+  return AsTabSharingDelegate(delegate)->GetButtons() &
          TabSharingInfoBarButton::kShareThisTabInstead;
 }
 
 std::u16string GetShareThisTabInsteadButtonLabel(
     content::WebContents* web_contents) {
   DCHECK(HasShareThisTabInsteadButton(web_contents));  // Test error otherwise.
-  return GetDelegate(web_contents)
-      ->GetButtonLabel(TabSharingInfoBarButton::kShareThisTabInstead);
+  infobars::InfoBarDelegate* delegate = GetDelegate(web_contents);
+  if (ConfirmInfoBarDelegate* confirm_delegate =
+          delegate->AsConfirmInfoBarDelegate()) {
+    return confirm_delegate->GetButtonLabel(
+        ConfirmInfoBarDelegate::BUTTON_CANCEL);
+  }
+  return AsTabSharingDelegate(delegate)->GetButtonLabel(
+      TabSharingInfoBarButton::kShareThisTabInstead);
+}
+
+void ClickShareThisTabInsteadButton(content::WebContents* web_contents,
+                                    size_t infobar_index = 0) {
+  infobars::InfoBarDelegate* delegate =
+      GetDelegate(web_contents, infobar_index);
+  if (ConfirmInfoBarDelegate* confirm_delegate =
+          delegate->AsConfirmInfoBarDelegate()) {
+    confirm_delegate->Cancel();
+    return;
+  }
+  AsTabSharingDelegate(delegate)->ShareThisTabInstead();
 }
 
 void AdjustCommandLineForZeroCopyCapture(base::CommandLine* command_line) {
@@ -729,13 +774,13 @@ class WebRtcAppWindowCaptureBrowserTestWithPicker
     // Windows to show up in the tabs list, and thus make it selectable.
     base::ListValue matchlist;
     matchlist.Append("*");
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kTabCaptureAllowedByOrigins, std::move(matchlist));
   }
 
   void TearDownOnMainThread() override {
     extensions::PlatformAppBrowserTest::TearDownOnMainThread();
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kTabCaptureAllowedByOrigins, base::ListValue());
   }
 
@@ -754,7 +799,7 @@ class WebRtcAppWindowCaptureBrowserTestWithPicker
     chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), -1, true);
     GURL url = embedded_test_server()->GetURL(test_url);
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 };
 
@@ -795,13 +840,13 @@ class WebRtcSameOriginPolicyBrowserTest
     // Restrict all origins to SameOrigin tab capture only.
     base::ListValue matchlist;
     matchlist.Append("*");
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kSameOriginTabCaptureAllowedByOrigins, std::move(matchlist));
   }
 
   void TearDownOnMainThread() override {
     WebRtcScreenCaptureBrowserTest::TearDownOnMainThread();
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kSameOriginTabCaptureAllowedByOrigins, base::ListValue());
   }
 };
@@ -829,11 +874,11 @@ IN_PROC_BROWSER_TEST_F(WebRtcSameOriginPolicyBrowserTest,
   // the target tab is focused, so that we can navigate it easily. If it is
   // already focused, this will just no-op.
   int target_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(target_tab);
-  browser()->tab_strip_model()->ActivateTabAt(
+      browser()->GetTabStripModel()->GetIndexOfWebContents(target_tab);
+  browser()->GetTabStripModel()->ActivateTabAt(
       target_index, TabStripUserGestureDetails(
                         TabStripUserGestureDetails::GestureType::kOther));
-  ASSERT_EQ(target_tab, browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_EQ(target_tab, browser()->GetTabStripModel()->GetActiveWebContents());
 
   // We navigate to a FileURL so that the origin will change, which should
   // trigger the capture to end.
@@ -869,11 +914,11 @@ IN_PROC_BROWSER_TEST_F(WebRtcSameOriginPolicyBrowserTest,
   // the target tab is focused, so that we can navigate it easily. If it is
   // already focused, this will just no-op.
   int target_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(target_tab);
-  browser()->tab_strip_model()->ActivateTabAt(
+      browser()->GetTabStripModel()->GetIndexOfWebContents(target_tab);
+  browser()->GetTabStripModel()->ActivateTabAt(
       target_index, TabStripUserGestureDetails(
                         TabStripUserGestureDetails::GestureType::kOther));
-  ASSERT_EQ(target_tab, browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_EQ(target_tab, browser()->GetTabStripModel()->GetActiveWebContents());
 
   // We navigate using the test server so that the origin doesn't change.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -1288,7 +1333,7 @@ IN_PROC_BROWSER_TEST_P(GetDisplayMediaChangeSourceBrowserTest,
             kShareThisTabInsteadMessage);
 
   // Click the share-this-tab-instead secondary button.
-  GetDelegate(other_tab)->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(other_tab);
 
   // Wait until the capture of the other tab has started.
   while (!other_tab->IsBeingCaptured()) {
@@ -1332,7 +1377,7 @@ IN_PROC_BROWSER_TEST_P(GetDisplayMediaChangeSourceBrowserTest,
                      /*is_tab_capture=*/true);
 
   // Click the share-this-tab-instead secondary button.
-  GetDelegate(other_tab)->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(other_tab);
 
   // Wait until the capture of the other tab has started.
   while (!other_tab->IsBeingCaptured()) {
@@ -1382,22 +1427,23 @@ IN_PROC_BROWSER_TEST_P(GetDisplayMediaChangeSourceBrowserTest,
   EXPECT_EQ(GetShareThisTabInsteadButtonLabel(other_tab),
             kShareThisTabInsteadMessage);
 
-  browser()->tab_strip_model()->ActivateTabAt(
-      browser()->tab_strip_model()->GetIndexOfWebContents(other_tab));
-  while (browser()->tab_strip_model()->GetActiveWebContents() != other_tab) {
+  browser()->GetTabStripModel()->ActivateTabAt(
+      browser()->GetTabStripModel()->GetIndexOfWebContents(other_tab));
+  while (browser()->GetTabStripModel()->GetActiveWebContents() != other_tab) {
     base::RunLoop().RunUntilIdle();
   }
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kScreenCaptureAllowed,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kScreenCaptureAllowed,
+                                                  false);
 
   // Click the share-this-tab-instead secondary button. This is rejected since
   // screen capture is not allowed by the above policy.
-  GetDelegate(other_tab)->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(other_tab);
 
   // When "Share this tab instead" fails for other_tab, the focus goes back to
   // the captured tab. Wait until that happens:
-  while (browser()->tab_strip_model()->GetActiveWebContents() != captured_tab) {
+  while (browser()->GetTabStripModel()->GetActiveWebContents() !=
+         captured_tab) {
     base::RunLoop().RunUntilIdle();
   }
 
@@ -2251,7 +2297,7 @@ IN_PROC_BROWSER_TEST_F(CapturedSurfaceControlTest,
   const base::expected<std::vector<int>, std::string> result =
       capture_session.GetSupportedZoomLevels();
   EXPECT_FALSE(result.has_value());
-  EXPECT_NE(result.error().find("InvalidStateError"), std::string::npos);
+  EXPECT_TRUE(result.error().contains("InvalidStateError"));
 }
 
 IN_PROC_BROWSER_TEST_F(CapturedSurfaceControlTest,
@@ -2298,7 +2344,7 @@ IN_PROC_BROWSER_TEST_F(CapturedSurfaceControlTest,
   const base::expected<std::vector<int>, std::string> result =
       capture_session.GetSupportedZoomLevels();
   EXPECT_FALSE(result.has_value());
-  EXPECT_NE(result.error().find("InvalidStateError"), std::string::npos);
+  EXPECT_TRUE(result.error().contains("InvalidStateError"));
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -2508,7 +2554,7 @@ void CapturedSurfaceControlTest::RunChangingCapturedTabZoomChangeEventTest(
             100 * zoom_level_first_tab);
   ASSERT_EQ(capture_session.GetZoomLevelChangeEventsSinceLast(), 0);
 
-  GetDelegate(second_captured_tab)->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(second_captured_tab);
   capture_session.WaitForCaptureOf(CapturedTab::kOtherTab);
   ASSERT_EQ(capture_session.GetCapturedTab(), second_captured_tab);
   ASSERT_EQ(GetZoomLevelPercentage(second_captured_tab),
@@ -2583,7 +2629,7 @@ IN_PROC_BROWSER_TEST_F(CapturedSurfaceControlTest,
   // Expect that clicking "share this tab instead" will pipe a notification of
   // the change to the captured surface controller.
   capture_session.SetExpectUpdateCaptureTarget();
-  GetDelegate(capture_session.other_tab())->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(capture_session.other_tab());
   capture_session.WaitForCaptureOf(CapturedTab::kOtherTab);
 
   capture_session.VerifyAndClearExpectations();
@@ -2614,9 +2660,9 @@ void CapturedSurfaceControlTest::RunChangeSourceWorksOnCorrectCaptureSession(
       (session_experiencing_change == 0) ? capture_session_0
                                          : capture_session_1;
   capture_session_experiencing_change.SetExpectUpdateCaptureTarget();
-  GetDelegate(capture_session_experiencing_change.other_tab(),
-              /*infobar_index=*/session_experiencing_change)
-      ->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(
+      capture_session_experiencing_change.other_tab(),
+      /*infobar_index=*/session_experiencing_change);
   capture_session_experiencing_change.WaitForCaptureOf(CapturedTab::kOtherTab);
 
   capture_session_0.VerifyAndClearExpectations();
@@ -2765,7 +2811,7 @@ IN_PROC_BROWSER_TEST_P(
   capture_session.ExpectCapturedTab(CapturedTab::kInitiallyCapturedTab);
 
   // Note absence of call to MakeValidApiCall() before share-this-tab-instead.
-  GetDelegate(capture_session.other_tab())->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(capture_session.other_tab());
 
   // The capturing tab's infobar does not show the CSC indicator because
   // a write-access CSC action was not invoked.
@@ -2789,7 +2835,7 @@ IN_PROC_BROWSER_TEST_P(
   capture_session.ExpectCapturedTab(CapturedTab::kInitiallyCapturedTab);
 
   MakeValidApiCall(capture_session, action_);
-  GetDelegate(capture_session.other_tab())->ShareThisTabInstead();
+  ClickShareThisTabInsteadButton(capture_session.other_tab());
 
   // The capturing tab's infobar show the CSC indicator if the action
   // was a write-access action.
@@ -2886,7 +2932,6 @@ class GetDisplayMediaRestrictOwnAudioTest
   void SetUpInProcessBrowserTestFixture() override {
 #if BUILDFLAG(IS_MAC)
     feature_list_.InitWithFeatures({media::kMacCatapLoopbackAudioForCast,
-                                    media::kMacCatapLoopbackAudioForScreenShare,
                                     blink::features::kRestrictOwnAudio},
                                    {media::kUseSCContentSharingPicker});
 #elif BUILDFLAG(IS_WIN)

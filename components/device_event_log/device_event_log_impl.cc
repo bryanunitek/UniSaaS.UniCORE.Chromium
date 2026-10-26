@@ -9,10 +9,10 @@
 #include <array>
 #include <cmath>
 #include <list>
+#include <ranges>
 #include <set>
 #include <string_view>
 
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_string_value_serializer.h"
@@ -111,22 +111,33 @@ LogType GetLogTypeFromString(std::string_view desc) {
 }
 
 std::string DateAndTimeWithMicroseconds(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(time,
-                                                "yyyy/MM/dd HH:mm:ss.SSSSSS");
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  int64_t micros = time.ToDeltaSinceWindowsEpoch().InMicroseconds() % 1000000;
+  return base::StringPrintf(
+      "%04d/%02d/%02d %02d:%02d:%02d.%06lld", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second,
+      static_cast<long long>(micros));
 }
 
 std::string TimeWithSeconds(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(time, "HH:mm:ss");
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  return base::StringPrintf("%02d:%02d:%02d", exploded.hour, exploded.minute,
+                            exploded.second);
 }
 
 std::string TimeWithMillieconds(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(time, "HH:mm:ss.SSS");
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  return base::StringPrintf("%02d:%02d:%02d.%03d", exploded.hour,
+                            exploded.minute, exploded.second,
+                            exploded.millisecond);
 }
 
 #if BUILDFLAG(IS_POSIX)
 std::string UnixTime(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(
-      time, "yyyy-MM-dd'T'HH:mm:ss.SSSSSSxxx");
+  return base::TimeFormatUnix(time);
 }
 #endif
 
@@ -402,7 +413,7 @@ std::string DeviceEventLogImpl::GetAsString(StringOrder order,
       // determine the first entry to include.
       size_t shown_events = 0;
       size_t num_entries = 0;
-      for (const LogEntry& entry : base::Reversed(entries_)) {
+      for (const LogEntry& entry : std::views::reverse(entries_)) {
         ++num_entries;
         if (!LogEntryMatchesTypes(entry, include_types, exclude_types))
           continue;
@@ -433,7 +444,7 @@ std::string DeviceEventLogImpl::GetAsString(StringOrder order,
   } else {
     size_t nlines = 0;
     // Iterate backwards through the list to show the most recent entries first.
-    for (const LogEntry& entry : base::Reversed(entries_)) {
+    for (const LogEntry& entry : std::views::reverse(entries_)) {
       if (!LogEntryMatchesTypes(entry, include_types, exclude_types))
         continue;
       if (entry.log_level > max_level)

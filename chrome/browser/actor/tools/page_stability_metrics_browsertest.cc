@@ -18,10 +18,12 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/actor/tools/page_stability_test_util.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/page_stability_metrics_common.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/core/page_stability_metrics_common.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/page_content_annotations/content/mojom/page_stability.mojom.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -118,12 +120,13 @@ class PageStabilityMetricsTestBase : public PageStabilityTest {
 class PageStabilityMetricsTest : public PageStabilityMetricsTestBase {
  public:
   PageStabilityMetricsTest() {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        ::features::kGlicActor,
-        {// Do not use min wait.
-         {::features::kGlicActorPageStabilityMinWait.name, "0ms"},
-         {::features::kActorPaintStabilitySubsequentPaintTimeout.name,
-          "100ms"}});
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{::features::kGlicActor, {}},
+         {kActorPageStability,
+          {// Do not use min wait.
+           {kActorPageStabilityMinWait.name, "0ms"},
+           {kActorPaintStabilitySubsequentPaintTimeout.name, "100ms"}}}},
+        {});
   }
 
   PageStabilityMetricsTest(const PageStabilityMetricsTest&) = delete;
@@ -369,7 +372,8 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, RenderFrameGoingAway) {
   EXPECT_FALSE(result.IsReady());
 
   // Navigate away and finish the navigation.
-  const GURL url = embedded_test_server()->GetURL("/actor/blank.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
   content::TestNavigationManager manager(web_contents(), url);
   ASSERT_TRUE(
       ExecJs(web_contents(), content::JsReplace("window.location = $1", url)));
@@ -502,7 +506,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, MojoDisconnectedAndTimeout) {
       kActorRendererPageStabilityTotalTimeToRenderFrameGoingAwayMetricName, 0);
 
   // Wait until timeout.
-  Sleep(features::kGlicActorPageStabilityTimeout.Get());
+  Sleep(kActorPageStabilityTimeout.Get());
 
   // Verify that paint stability and network/main thread metrics were not
   // recorded after timeout.
@@ -528,9 +532,19 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, MojoDisconnectedAndTimeout) {
 class PageStabilityMetricsMinWaitTest : public PageStabilityMetricsTestBase {
  public:
   PageStabilityMetricsMinWaitTest() {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        ::features::kGlicActor,
-        {{::features::kGlicActorPageStabilityMinWait.name, "3s"}});
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{::features::kGlicActor, {}},
+         {kActorPageStability,
+          {// Effectively disable the timeout to prevent flakes.
+           {kActorPageStabilityTimeout.name, "30s"},
+           // Blink's IdlenessDetector checks network quiet (500ms) using a 2s
+           // watchdog timer when no other tasks run on the renderer main
+           // thread, which can take up to 4s to report idle. Use a 6s min-wait
+           // and a 100ms subsequent paint timeout so the initial stability
+           // signal reliably completes while still waiting for min-wait.
+           {kActorPageStabilityMinWait.name, "6s"},
+           {kActorPaintStabilitySubsequentPaintTimeout.name, "100ms"}}}},
+        {});
   }
 
   PageStabilityMetricsMinWaitTest(const PageStabilityMetricsMinWaitTest&) =
@@ -578,6 +592,9 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsMinWaitTest,
   // Verify that paint stability metric was still recorded when paint stability
   // was reached while waiting for minimum wait.
   ClickAndWaitForFrameReady("btnPaint");
+  ASSERT_TRUE(EnsureHistogramsRecorded(
+      histogram_tester,
+      {kActorRendererPageStabilityTimeFromMonitoringToPaintStabilityMetricName}));
 
   ASSERT_TRUE(result.Wait());
 
@@ -604,6 +621,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsMinWaitTest, PaintDelayed) {
 
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
+  content::SimulateEndOfPaintHoldingOnPrimaryMainFrame(web_contents());
 
   mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
@@ -635,6 +653,9 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsMinWaitTest, PaintDelayed) {
   // Verify that the network/main thread metric was still recorded when the
   // network/main thread became idle while waiting for minimum wait.
   Respond("NETWORK DONE");
+  ASSERT_TRUE(EnsureHistogramsRecorded(
+      histogram_tester,
+      {kActorRendererPageStabilityTimeFromMonitoringToNetworkAndMainThreadIdleMetricName}));
 
   ASSERT_TRUE(result.Wait());
 

@@ -69,6 +69,10 @@ class CONTENT_EXPORT BrowserTaskQueues {
     // network service.
     kNavigationNetworkResponse,
 
+    // For tasks processing primary main frame navigation network request's
+    // response from the network service with the highest priority.
+    kMainFrameNavigationNetworkResponse,
+
     // For tasks processing ServiceWorker's storage control's response. This has
     // the highest priority during startup, and is updated to normal priority
     // after startup.
@@ -176,9 +180,19 @@ class CONTENT_EXPORT BrowserTaskQueues {
 
   void AddTaskObserver(base::TaskObserver* task_observer);
 
+  base::sequence_manager::TaskQueue::QueuePriority GetQueuePriorityForTesting(
+      QueueType type) const;
+
   base::sequence_manager::TaskQueue* GetDefaultTaskQueue() const {
     return GetBrowserTaskQueue(QueueType::kDefault);
   }
+
+  bool IsPrioritizeResizeEnabled() const;
+
+  // Re-evaluates queue prioritization once the global base::FeatureList has
+  // been initialized. This is necessary because BrowserTaskQueues is constructed
+  // before the feature list, meaning field trials (Finch) cannot be queried.
+  void PostFeatureListInit();
 
  private:
   struct QueueData {
@@ -208,6 +222,8 @@ class CONTENT_EXPORT BrowserTaskQueues {
 
   std::array<scoped_refptr<base::SingleThreadTaskRunner>, kNumQueueTypes>
   CreateBrowserTaskRunners() const;
+
+  bool startup_queue_prioritized_ = false;
 
   std::array<QueueData, kNumQueueTypes> queue_data_;
 

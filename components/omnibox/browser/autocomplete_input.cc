@@ -4,6 +4,7 @@
 
 #include "components/omnibox/browser/autocomplete_input.h"
 
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -389,10 +390,12 @@ metrics::OmniboxInputType AutocompleteInput::Parse(
   // Check if the canonicalized host has a known TLD, which we'll want to know
   // below.
   const size_t registry_length =
-      net::registry_controlled_domains::GetCanonicalHostRegistryLength(
+      net::registry_controlled_domains::GetCanonicalHostRegistry(
           canonicalized_url->GetHost(),
           net::registry_controlled_domains::EXCLUDE_UNKNOWN_REGISTRIES,
-          net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
+          net::registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES)
+          .transform(&std::string_view::size)
+          .value_or(std::string_view::npos);
   DCHECK_NE(std::string::npos, registry_length);
   const bool has_known_tld = registry_length != 0;
 
@@ -773,6 +776,9 @@ const TemplateURL* AutocompleteInput::GetSubstitutingTemplateURLForInput(
   const TemplateURL* template_url = model->GetTemplateURLForKeyword(keyword);
   if (template_url &&
       template_url->SupportsReplacement(model->search_terms_data())) {
+    if (!template_url->CanBeUsedForKeywordMatching()) {
+      return nullptr;
+    }
     // Adjust cursor position iff it was set before, otherwise leave it as is.
     size_t cursor_position = std::u16string::npos;
     // The adjustment assumes that the keyword was stripped from the beginning
@@ -969,6 +975,9 @@ void AutocompleteInput::Clear() {
   context_tab_title_.clear();
   context_tab_url_ = GURL();
   previous_query_.clear();
+  input_method_.reset();
+  has_previous_submitted_thread_context_ = false;
+  has_auto_suggested_tab_ = false;
 }
 
 size_t AutocompleteInput::EstimateMemoryUsage() const {

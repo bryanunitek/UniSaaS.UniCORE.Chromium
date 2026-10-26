@@ -5,7 +5,9 @@
 package org.chromium.chrome.browser.ui.bottombar;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -31,7 +33,6 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
@@ -41,10 +42,8 @@ import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.glic.GlicEnablingJni;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
-import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -53,7 +52,6 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link BottomBarPromoDialogCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BottomBarPromoDialogCoordinatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -63,7 +61,6 @@ public class BottomBarPromoDialogCoordinatorUnitTest {
 
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private Profile mProfile;
-    @Mock private TemplateUrlService mTemplateUrlService;
     @Mock private Tracker mTracker;
     @Mock private BottomBarPromoDialogCoordinator.BottomBarPromoDialogListener mListener;
     @Mock private GlicEnabling.Natives mGlicEnablingJniMock;
@@ -84,9 +81,6 @@ public class BottomBarPromoDialogCoordinatorUnitTest {
         TrackerFactory.setTrackerForTests(mTracker);
         GlicEnablingJni.setInstanceForTesting(mGlicEnablingJniMock);
         when(mGlicEnablingJniMock.isEnabledForProfile(any())).thenReturn(true);
-        TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
-        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
-        BottomBarActionEligibility.setCountrySupplier(() -> "us");
 
         mCoordinator = new BottomBarPromoDialogCoordinator(mActivity, mModalDialogManagerSupplier);
         mCoordinator.setListener(mListener);
@@ -95,7 +89,6 @@ public class BottomBarPromoDialogCoordinatorUnitTest {
     @After
     public void tearDown() {
         TrackerFactory.setTrackerForTests(null);
-        BottomBarActionEligibility.setCountrySupplier(null);
     }
 
     @Test
@@ -137,7 +130,7 @@ public class BottomBarPromoDialogCoordinatorUnitTest {
 
     @Test
     public void testMaybeShowPromoDialog_NullProfile() {
-        mCoordinator.maybeShowPromoDialog(null);
+        assertFalse(mCoordinator.maybeShowPromoDialog(null));
 
         verify(mModalDialogManager, never()).showDialog(any(), anyInt(), anyBoolean());
     }
@@ -239,75 +232,23 @@ public class BottomBarPromoDialogCoordinatorUnitTest {
     @Test
     public void testMaybeShowPromoDialog_NoActionEligible() {
         when(mGlicEnablingJniMock.isEnabledForProfile(any())).thenReturn(false);
-        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
         when(mTracker.shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_PROMO_DIALOG))
                 .thenReturn(true);
-        when(mTracker.shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_AIM_PROMO_DIALOG))
-                .thenReturn(true);
 
-        mCoordinator.maybeShowPromoDialog(mProfile);
-
+        assertFalse(mCoordinator.maybeShowPromoDialog(mProfile));
         verify(mModalDialogManager, never()).showDialog(any(), anyInt(), anyBoolean());
     }
 
     @Test
-    public void testMaybeShowPromoDialog_AimSuccessfulShow() {
-        when(mGlicEnablingJniMock.isEnabledForProfile(any())).thenReturn(false);
-        when(mTracker.shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_AIM_PROMO_DIALOG))
+    public void testMaybeShowPromoDialog_IncognitoProfile_UsesOriginalProfile() {
+        Profile incognitoProfile = org.mockito.Mockito.mock(Profile.class);
+        when(incognitoProfile.isOffTheRecord()).thenReturn(true);
+        when(incognitoProfile.getOriginalProfile()).thenReturn(mProfile);
+        when(mGlicEnablingJniMock.isEnabledForProfile(eq(mProfile))).thenReturn(true);
+        when(mTracker.shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_PROMO_DIALOG))
                 .thenReturn(true);
 
-        HistogramWatcher watcher =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                "Android.BottomBar.Promo.Event", BottomBarMetrics.PromoEvent.SHOWN)
-                        .build();
-
-        mCoordinator.maybeShowPromoDialog(mProfile);
-
-        watcher.assertExpected();
-
-        verify(mModalDialogManager)
-                .showDialog(
-                        mModelCaptor.capture(),
-                        eq(ModalDialogManager.ModalDialogType.APP),
-                        eq(true));
-
-        PropertyModel model = mModelCaptor.getValue();
-        assertNotNull(model);
-        assertEquals(mCoordinator, model.get(ModalDialogProperties.CONTROLLER));
-        assertNotNull(model.get(ModalDialogProperties.CUSTOM_VIEW));
-    }
-
-    @Test
-    public void testAimPositiveButtonClickDismissesAndNotifiesAccepted() {
-        when(mGlicEnablingJniMock.isEnabledForProfile(any())).thenReturn(false);
-        when(mTracker.shouldTriggerHelpUi(FeatureConstants.ANDROID_BOTTOM_BAR_AIM_PROMO_DIALOG))
-                .thenReturn(true);
-
-        mCoordinator.maybeShowPromoDialog(mProfile);
+        assertTrue(mCoordinator.maybeShowPromoDialog(incognitoProfile));
         verify(mModalDialogManager).showDialog(mModelCaptor.capture(), anyInt(), anyBoolean());
-        PropertyModel model = mModelCaptor.getValue();
-
-        // Perform click
-        mCoordinator.onClick(model, ModalDialogProperties.ButtonType.POSITIVE);
-        verify(mModalDialogManager)
-                .dismissDialog(model, DialogDismissalCause.POSITIVE_BUTTON_CLICKED);
-
-        HistogramWatcher watcher =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                "Android.BottomBar.Promo.Event",
-                                BottomBarMetrics.PromoEvent.ACCEPTED)
-                        .build();
-
-        // Perform dismiss
-        mCoordinator.onDismiss(model, DialogDismissalCause.POSITIVE_BUTTON_CLICKED);
-
-        watcher.assertExpected();
-
-        verify(mTracker).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_AIM_PROMO_DIALOG);
-
-        // Check listener callback is invoked synchronously
-        verify(mListener).onPromoDialogAccepted();
     }
 }

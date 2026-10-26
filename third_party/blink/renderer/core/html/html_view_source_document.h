@@ -27,6 +27,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -61,6 +62,9 @@ class CORE_EXPORT HTMLViewSourceDocument final : public HTMLDocument {
   void ProcessProcessingInstructionToken(const String& source, HTMLToken&);
 
   struct Link {
+    STACK_ALLOCATED();
+
+   public:
     bool is_anchor;
     const AtomicString& url;
   };
@@ -72,11 +76,11 @@ class CORE_EXPORT HTMLViewSourceDocument final : public HTMLDocument {
   void AddText(const StringView& text,
                const AtomicString& class_name,
                const Link* link = nullptr);
-  string_size_t AddRange(const String& source,
-                         string_size_t start,
-                         string_size_t end,
-                         const AtomicString& class_name,
-                         const Link* link = nullptr);
+  wtf_size_t AddRange(const String& source,
+                      wtf_size_t start,
+                      wtf_size_t end,
+                      const AtomicString& class_name,
+                      const Link* link = nullptr);
   int AddSrcset(const String& source, int start, int end);
 
   Element* AddLink(const Link& link);

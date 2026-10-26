@@ -5,6 +5,8 @@
 #ifndef CHROME_ENTERPRISE_COMPANION_DM_CLIENT_H_
 #define CHROME_ENTERPRISE_COMPANION_DM_CLIENT_H_
 
+#include <stdint.h>
+
 #include <memory>
 
 #include "base/functional/callback_forward.h"
@@ -27,6 +29,15 @@ class CloudPolicyClient;
 }  // namespace policy
 
 namespace enterprise_companion {
+
+// Interface for managing failed enrollment tokens.
+class FailedEnrollmentTokenService {
+ public:
+  virtual ~FailedEnrollmentTokenService() = default;
+  virtual bool StoreFailedEnrollmentToken(const std::string& token) = 0;
+  virtual bool DeleteFailedEnrollmentToken() = 0;
+  virtual std::string GetFailedEnrollmentToken() const = 0;
+};
 
 extern const char kGoogleUpdateMachineLevelAppsPolicyType[];
 
@@ -70,6 +81,9 @@ PolicyFetchResponseValidator GetDefaultPolicyFetchResponseValidator();
 std::unique_ptr<policy::DeviceManagementService::Configuration>
 CreateDeviceManagementServiceConfig();
 
+std::unique_ptr<FailedEnrollmentTokenService>
+GetDefaultFailedEnrollmentTokenService();
+
 // Creates a DMClient. `cloud_policy_client_provider` is used to construct the
 // underlying CloudPolicyClient on a separate sequence.
 std::unique_ptr<DMClient> CreateDMClient(
@@ -82,7 +96,10 @@ std::unique_ptr<DMClient> CreateDMClient(
         CreateDeviceManagementServiceConfig(),
     // A default timeout of 25s is slightly shorter than O4's 30s timeout on
     // RPCs to CECA.
-    base::TimeDelta task_timeout = base::Seconds(25));
+    base::TimeDelta task_timeout = base::Seconds(25),
+    std::unique_ptr<FailedEnrollmentTokenService>
+        failed_enrollment_token_service =
+            GetDefaultFailedEnrollmentTokenService());
 
 }  // namespace enterprise_companion
 

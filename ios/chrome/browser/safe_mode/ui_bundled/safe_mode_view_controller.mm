@@ -20,7 +20,6 @@
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ui/base/device_form_factor.h"
-#import "ui/gfx/ios/NSString+CrStringDrawing.h"
 
 namespace {
 const CGFloat kButtonCornerRadius = 15;
@@ -97,9 +96,19 @@ constexpr std::string_view kThirdPartyModsDirectory =
           "23a5260u",  // iOS 26 beta1 (rerelease)
           "23a5276f",  // iOS 26 beta2
           "23a5287g",  // iOS 26 beta3
+          "23A5297i",  // iOS 26 beta4
+          "23A5297m",  // iOS 26 beta4 (rerelease)
+          "23A5297n",  // iOS 26 beta4 (iPhone 11 only)
+          "24a5355q",  // iOS 27 beta1
+          "24a5370h",  // iOS 27 beta2
+          "24a5380h",  // iOS 27 beta3
+          "24a5380l",  // iOS 27 beta3 (iPad)
+          "24a5390f",  // iOS 27 beta4
+          "24a5408d",  // iOS 27 beta5
       });
 
-  std::string build = base::ToLowerASCII(base::SysInfo::GetIOSBuildNumber());
+  std::string build =
+      base::ToLowerASCII(base::SysInfo::OperatingSystemBuildVersion());
   return kBadOSVersions.contains(std::string_view(build));
 }
 
@@ -227,16 +236,13 @@ constexpr std::string_view kThirdPartyModsDirectory =
   [description setTextAlignment:NSTextAlignmentCenter];
   [description setNumberOfLines:0];
   [description setLineBreakMode:NSLineBreakByWordWrapping];
-  CGRect frame = [description frame];
-  frame.size.width =
+  const CGFloat width =
       (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET)
           ? kIPadWidth
           : kIPhoneWidth;
-  CGSize maxSize = CGSizeMake(frame.size.width, 999999.0f);
-  frame.size.height =
-      [[description text] cr_boundingSizeWithSize:maxSize
-                                             font:[description font]]
-          .height;
+  const CGSize size = [description sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
+  CGRect frame = [description frame];
+  frame.size = size;
   [description setFrame:frame];
   [self centerView:description afterView:awSnap];
   [_innerView addSubview:description];

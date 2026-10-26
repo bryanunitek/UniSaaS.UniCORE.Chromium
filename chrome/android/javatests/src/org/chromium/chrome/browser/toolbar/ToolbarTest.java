@@ -39,7 +39,6 @@ import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.hamcrest.Matchers;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -53,13 +52,13 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.ImportantFormFactors;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.ui.KeyboardUtils;
 import org.chromium.chrome.R;
@@ -88,7 +87,6 @@ import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
 import org.chromium.chrome.browser.toolbar.top.ToolbarPhone;
 import org.chromium.chrome.browser.toolbar.top.tab_strip.TabStripTransitionCoordinator;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
@@ -106,8 +104,10 @@ import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.UiAndroidFeatures;
+import org.chromium.ui.test.util.DeviceRestriction;
 
 /** Tests for toolbar manager behavior. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -189,10 +189,7 @@ public class ToolbarTest {
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
     public void testControlContainerTopMarginOnTablet() {
         // Enable the bookmark bar setting for the test.
-        BookmarkBarUtils.setDevicePrefShowBookmarksBar(
-                mActivity.getProfileProviderSupplier().get().getOriginalProfile(),
-                true,
-                /* fromKeyboardShortcut= */ false);
+        BookmarkBarUtils.setDevicePrefShowBookmarksBar(true, /* fromKeyboardShortcut= */ false);
         testControlContainerTopMargin(/* expectBookmarkBar= */ true);
     }
 
@@ -231,6 +228,7 @@ public class ToolbarTest {
         ScrimManager scrimManager = mActivity.getRootUiCoordinatorForTesting().getScrimManager();
         scrimManager.disableAnimationForTesting(true);
         OmniboxCapabilities.setHasDesktopExperienceForTesting(false);
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(false);
 
         assertNull("The scrim should be null.", scrimManager.getViewForTesting());
         assertFalse(
@@ -271,7 +269,7 @@ public class ToolbarTest {
 
         // Load new tab page.
         mActivityTestRule.loadUrl(getOriginalNativeNtpUrl());
-        Assert.assertEquals(getOriginalNativeNtpUrl(), ChromeTabUtils.getUrlStringOnUiThread(tab));
+        assertEquals(getOriginalNativeNtpUrl(), ChromeTabUtils.getUrlStringOnUiThread(tab));
         assertFalse(isErrorPage(tab));
 
         // Stop the server and also disconnect the network.
@@ -280,7 +278,7 @@ public class ToolbarTest {
                 () -> NetworkChangeNotifier.forceConnectivityState(false));
 
         mActivityTestRule.loadUrl(testUrl);
-        Assert.assertEquals(testUrl, ChromeTabUtils.getUrlStringOnUiThread(tab));
+        assertEquals(testUrl, ChromeTabUtils.getUrlStringOnUiThread(tab));
         assertTrue(isErrorPage(tab));
     }
 
@@ -289,10 +287,12 @@ public class ToolbarTest {
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
     @Feature({"Omnibox"})
     public void testFindInPageDismissedOnOmniboxFocus() {
-        findInPageFromMenu();
         OmniboxTestUtils omnibox = new OmniboxTestUtils(mActivity);
+        omnibox.clearFocus();
+        findInPageFromMenu();
         omnibox.requestFocus();
         waitForFindInPageVisibility(false);
+        omnibox.clearFocus();
     }
 
     @Test
@@ -385,7 +385,7 @@ public class ToolbarTest {
         checkTabStripHeightOnUiThread(tabStripHeightResource);
         ComponentCallbacks tabStripCallback =
                 mActivity.getToolbarManager().getTabStripTransitionCoordinator();
-        Assert.assertNotNull("Tab strip transition callback is null.", tabStripCallback);
+        assertNotNull("Tab strip transition callback is null.", tabStripCallback);
 
         // Set the screen width bucket and trigger an configuration change to force toggle tab strip
         // visibility. This is an test only strategy, as we don't want to actually change the
@@ -735,7 +735,10 @@ public class ToolbarTest {
     @Test
     @MediumTest
     @EnableFeatures({UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION})
-    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    // Predictive back gesture navigation requires Android U+ and is not used on desktop or
+    // automotive devices.
+    @MinAndroidSdkLevel(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    @Restriction({DeviceFormFactor.PHONE_OR_TABLET, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
     public void testBackPressCancelledOnTabNull() throws Exception {
         EmbeddedTestServer testServer =
                 EmbeddedTestServer.createAndStartServer(
@@ -744,7 +747,7 @@ public class ToolbarTest {
         mPage = mPage.loadWebPageProgrammatically(testUrl);
 
         ToolbarManager toolbarManager = mActivity.getToolbarManager();
-        Assert.assertNotNull(toolbarManager);
+        assertNotNull(toolbarManager);
 
         // Start a gesture
         ThreadUtils.runOnUiThreadBlocking(
@@ -774,7 +777,7 @@ public class ToolbarTest {
 
     private void setAccessibilityEnabled(boolean enabled) {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(enabled));
+                () -> AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(enabled));
     }
 
     private void setControlsPosition(@ControlsPosition int position) {

@@ -20,16 +20,15 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 
 /** Tests logic in the ShadowAppCompatResources class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowAppCompatResources.class})
+@Config(shadows = {ShadowAppCompatResources.class})
 public class ShadowAppCompatResourcesTest {
     private static final int DRAWABLE_RES_ID = 34567;
 
     @Test
     public void testShadowAppCompatResources() {
         Drawable drawable =
-                AppCompatResources.getDrawable(RuntimeEnvironment.application, DRAWABLE_RES_ID);
+                AppCompatResources.getDrawable(
+                        RuntimeEnvironment.getApplication(), DRAWABLE_RES_ID);
         assertEquals(DRAWABLE_RES_ID, shadowOf(drawable).getCreatedFromResId());
     }
 }

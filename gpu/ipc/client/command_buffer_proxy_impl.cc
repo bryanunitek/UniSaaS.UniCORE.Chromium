@@ -73,7 +73,6 @@ class CommandBufferClientMessageFilter
 
   // mojom::CommandBufferClient:
   void OnConsoleMessage(const std::string& message) override;
-  void OnGpuSwitched() override;
   void OnDestroyed(gpu::error::ContextLostReason reason,
                    gpu::error::Error error) override;
   void OnReturnData(const std::vector<uint8_t>& data) override;
@@ -140,13 +139,6 @@ void CommandBufferClientMessageFilter::OnConsoleMessage(
   base::AutoLock auto_lock(proxy_lock_);
   if (proxy_) {
     proxy_->OnConsoleMessage(message);
-  }
-}
-
-void CommandBufferClientMessageFilter::OnGpuSwitched() {
-  base::AutoLock auto_lock(proxy_lock_);
-  if (proxy_) {
-    proxy_->OnGpuSwitched();
   }
 }
 
@@ -331,12 +323,6 @@ void CommandBufferProxyImpl::OnConsoleMessage(const std::string& message) {
   base::AutoLock shared_state_lock(shared_state_lock_);
   if (gpu_control_client_)
     gpu_control_client_->OnGpuControlErrorMessage(message.c_str(), /*id=*/0);
-}
-
-void CommandBufferProxyImpl::OnGpuSwitched() {
-  base::AutoLock shared_state_lock(shared_state_lock_);
-  if (gpu_control_client_)
-    gpu_control_client_->OnGpuSwitched();
 }
 
 void CommandBufferProxyImpl::AddDeletionObserver(DeletionObserver* observer) {
@@ -713,6 +699,9 @@ void CommandBufferProxyImpl::CreateGpuFence(uint32_t gpu_fence_id,
   }
 
   gfx::GpuFence* gpu_fence = gfx::GpuFence::FromClientGpuFence(source);
+  if (!gpu_fence) {
+    return;
+  }
   command_buffer_->CreateGpuFenceFromHandle(
       gpu_fence_id, gpu_fence->GetGpuFenceHandle().Clone());
 }
@@ -811,8 +800,7 @@ void CommandBufferProxyImpl::TryUpdateStateDontReportError() {
 
 const gpu::CommandBufferSharedState* CommandBufferProxyImpl::shared_state()
     const {
-  return reinterpret_cast<const gpu::CommandBufferSharedState*>(
-      shared_state_mapping_.memory());
+  return shared_state_mapping_.GetMemoryAs<gpu::CommandBufferSharedState>();
 }
 
 base::HistogramBase*
@@ -944,7 +932,10 @@ void CommandBufferProxyImpl::DisconnectChannel() {
   if (!channel_ || disconnected_)
     return;
   disconnected_ = true;
-  channel_->VerifyFlush(UINT32_MAX);
+  // This used to be a call to VerifyFlush which is a synchronous call.
+  // We changed it to EnsureFlush because DestroyCommandBuffer below is
+  // synchronous and so EnsureFlush is enough.
+  channel_->EnsureFlush(UINT32_MAX);
 
   mojo::SyncCallRestrictions::ScopedAllowSyncCall allow_sync;
   channel_->GetGpuChannel().DestroyCommandBuffer(route_id_);

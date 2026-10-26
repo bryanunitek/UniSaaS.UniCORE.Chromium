@@ -58,10 +58,6 @@ class CONTENT_EXPORT ChildProcessHostImpl : public ChildProcessHost,
   static uint64_t ChildProcessIdToTracingProcessId(
       ChildProcessId child_process_id);
 
-  // TODO(crbug.com/379869738): Deprecated, please use
-  // ChildProcessIdToTracingProcessId above.
-  static uint64_t ChildProcessUniqueIdToTracingProcessId(int child_process_id);
-
   // ChildProcessHost implementation
   void ForceShutdown() override;
   std::optional<mojo::OutgoingInvitation>& GetMojoInvitation() override;
@@ -92,7 +88,6 @@ class CONTENT_EXPORT ChildProcessHostImpl : public ChildProcessHost,
   // IPC::Listener methods:
   void OnChannelConnected(int32_t peer_pid) override;
   void OnChannelError() override;
-  void OnBadMessageReceived() override;
 
   // Initializes the IPC channel and returns true on success. |channel_| must be
   // non-null.

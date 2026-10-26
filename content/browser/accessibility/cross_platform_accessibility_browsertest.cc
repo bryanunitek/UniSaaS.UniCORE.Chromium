@@ -12,8 +12,10 @@
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/escape.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -24,14 +26,19 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/accessibility_notification_waiter.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "content/shell/browser/shell.h"
+#include "content/test/content_browser_test_utils_internal.h"
+#include "net/dns/mock_host_resolver.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/common/features.h"
@@ -46,9 +53,7 @@
 #include "ui/base/buildflags.h"
 
 #if BUILDFLAG(IS_WIN)
-#include "base/win/atl.h"
 #include "base/win/scoped_com_initializer.h"
-#include "ui/base/win/atl_module.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -57,6 +62,10 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/accessibility/browser_accessibility_android.h"
+#endif
+
+#if BUILDFLAG(USE_ATK) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#include "content/browser/accessibility/accessibility_content_browsertest.h"
 #endif
 
 using ::testing::ElementsAre;
@@ -71,6 +80,58 @@ constexpr int kDelayForDeferredUpdatesAfterPageLoad = 150;
 #endif
 
 namespace content {
+
+#if BUILDFLAG(USE_ATK) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+class AccessibilityBackForwardCacheBrowserTest
+    : public AccessibilityContentBrowserTest {
+ public:
+  AccessibilityBackForwardCacheBrowserTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        GetDefaultEnabledBackForwardCacheFeaturesForTesting(),
+        GetDefaultDisabledBackForwardCacheFeaturesForTesting());
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(AccessibilityBackForwardCacheBrowserTest,
+                       CachedDocumentNativeParent) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  WebContents* web_contents = GetWebContentsAndAssertNonNull();
+
+  // 1. Open the first page and check its document's native parent.
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
+  WaitForAccessibilityTreeToContainNodeWithName(web_contents,
+                                                "This page has no title.");
+  RenderFrameHostImplWrapper first_frame(web_contents->GetPrimaryMainFrame());
+  auto* first_document = GetRootAndAssertNonNull();
+  EXPECT_TRUE(first_document->GetParent());
+
+  // 2. Navigate away. The cached document must have no native parent.
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title2.html")));
+  WaitForAccessibilityTreeToContainNodeWithName(web_contents,
+                                                "Title Of Awesomeness");
+  ASSERT_TRUE(first_frame);
+  ASSERT_TRUE(first_frame->IsInBackForwardCache());
+  ASSERT_TRUE(first_frame->browser_accessibility_manager());
+  ASSERT_EQ(first_document, first_frame->browser_accessibility_manager()
+                                ->GetBrowserAccessibilityRoot());
+  EXPECT_FALSE(first_document->GetParent());
+
+  // 3. Go back. The same document must regain its native parent.
+  ASSERT_TRUE(HistoryGoBack(web_contents));
+  WaitForAccessibilityTreeToContainNodeWithName(web_contents,
+                                                "This page has no title.");
+  ASSERT_TRUE(first_frame);
+  ASSERT_EQ(first_frame.get(), web_contents->GetPrimaryMainFrame());
+  ASSERT_TRUE(first_frame->IsActive());
+  ASSERT_EQ(first_document, GetRootAndAssertNonNull());
+  EXPECT_TRUE(first_document->GetParent());
+}
+#endif
 
 class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
  public:
@@ -156,12 +217,24 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
         *GetManager()->GetBrowserAccessibilityRoot(), role_value);
   }
 
-  void PressTabAndWaitForFocusChange() {
+  // Repeatedly presses Tab until `target_name` is focused, waiting for the
+  // accessibility focus node to change and settle on a named element after
+  // each keypress.
+  void PressTabUntilFocused(std::string_view target_name) {
     AccessibilityNotificationWaiter waiter(
         shell()->web_contents(), ui::AXEventGenerator::Event::FOCUS_CHANGED);
-    SimulateKeyPress(shell()->web_contents(), ui::DomKey::TAB, ui::DomCode::TAB,
-                     ui::VKEY_TAB, false, false, false, false);
-    ASSERT_TRUE(waiter.WaitForNotification());
+    while (GetNameOfFocusedNode() != target_name) {
+      std::string previous_focus = GetNameOfFocusedNode();
+      SimulateKeyPress(shell()->web_contents(), ui::DomKey::TAB,
+                       ui::DomCode::TAB, ui::VKEY_TAB, false, false, false,
+                       false);
+      // Wait for focus to change away from `previous_focus` and settle past
+      // transient iframe document root focus events, which have empty names.
+      while (GetNameOfFocusedNode() == previous_focus ||
+             GetNameOfFocusedNode().empty()) {
+        ASSERT_TRUE(waiter.WaitForNotification());
+      }
+    }
   }
 
   std::string GetNameOfFocusedNode() {
@@ -258,8 +331,9 @@ void CrossPlatformAccessibilityBrowserTest::ChooseFeatures(
 void CrossPlatformAccessibilityBrowserTest::SetUpOnMainThread() {
 #if BUILDFLAG(IS_WIN)
   com_initializer_ = std::make_unique<base::win::ScopedCOMInitializer>();
-  ui::win::CreateATLModuleIfNeeded();
 #endif
+  // For OOPIF tests.
+  host_resolver()->AddRule("*", "127.0.0.1");
   accessibility_mode_.emplace(ui::kAXModeComplete);
 }
 
@@ -291,12 +365,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        DownloadImageFromAxNode) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/single_face.jpg"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* image =
       FindFirstNodeWithRole(ax::mojom::Role::kImage);
@@ -310,12 +382,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        DownloadImageFromAxNode_NodeNotFound) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/page_with_lazy_image.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* paragraph =
       FindFirstNodeWithRole(ax::mojom::Role::kParagraph);
@@ -329,12 +399,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        DownloadImageFromAxNode_LazyLoaded) {
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(embedded_test_server()->GetURL("/page_with_lazy_image.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* image =
       FindFirstNodeWithRole(ax::mojom::Role::kImage);
@@ -349,12 +417,10 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url(
       embedded_test_server()->GetURL("/page_with_custom_lazy_image.html"));
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ASSERT_TRUE(web_contents);
-  WaitForAccessibilityTreeToChange(web_contents);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+  ASSERT_TRUE(waiter.WaitForNotification());
 
   ui::BrowserAccessibility* image =
       FindFirstNodeWithRole(ax::mojom::Role::kImage);
@@ -1297,6 +1363,157 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                second_list_item_bounds.y()),
       2);
 }
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       GetBoundsRectOOPIFAndIframe) {
+  // Dynamically serve HTML strings for specified URLs
+  embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
+      [](const net::test_server::HttpRequest& request)
+          -> std::unique_ptr<net::test_server::HttpResponse> {
+        auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+        response->set_content_type("text/html");
+        if (request.relative_url == "/main.html") {
+          GURL::Replacements replace_host;
+          replace_host.SetHostStr("b.com");
+          GURL subframe_url = request.base_url.Resolve("/subframe.html")
+                                  .ReplaceComponents(replace_host);
+          constexpr const char* kSubframeHTML = R"HTML(
+            <!DOCTYPE html>
+            <br>
+            <select name="opts" id="opts">
+              <option value="one">one</option>
+              <option value="two">two</option>
+            </select>
+            <iframe style="border-width: 80px; padding: 20px;" id="iframeRes"
+                    src="%s">
+            </iframe>
+          )HTML";
+          response->set_content(
+              base::StringPrintf(kSubframeHTML, subframe_url.spec().c_str()));
+          return response;
+        }
+        if (request.relative_url == "/subframe.html") {
+          response->set_content(R"HTML(
+            <!DOCTYPE html>
+            <iframe style="border-width: 80px; padding: 20px;"
+                    srcdoc="<!DOCTYPE html>
+                      <select aria-label='Select'>
+                        <option value='three'>three</option>
+                        <option value='four'>four</option>
+                      </select>">
+            </iframe>
+          )HTML");
+          return response;
+        }
+        return nullptr;
+      }));
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  GURL main_url = embedded_test_server()->GetURL("a.com", "/main.html");
+  ASSERT_TRUE(NavigateToURL(shell(), main_url));
+
+  content::RenderFrameHost* main_frame =
+      shell()->web_contents()->GetPrimaryMainFrame();
+  content::RenderFrameHost* child_frame = content::ChildFrameAt(main_frame, 0);
+  ASSERT_TRUE(child_frame);
+  ASSERT_TRUE(child_frame->IsCrossProcessSubframe());
+
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Select");
+
+  // 4. Perform your AX bounds checks...
+  ui::AXNode* root = GetManager()->GetRoot();
+  ASSERT_NE(nullptr, root);
+
+  ui::AXNode* iframe_node = root->children()[0]->children()[0]->children()[2];
+  ASSERT_NE(nullptr, iframe_node);
+  ASSERT_EQ(iframe_node->GetRole(), ax::mojom::Role::kIframe);
+
+  ui::AXTreeID iframe_tree_id =
+      ui::AXTreeID::FromString(iframe_node->GetStringAttribute(
+          ax::mojom::StringAttribute::kChildTreeId));
+  ui::BrowserAccessibilityManager* first_iframe_manager =
+      ui::BrowserAccessibilityManager::FromID(iframe_tree_id);
+  ASSERT_NE(nullptr, first_iframe_manager);
+
+  ui::AXNode* first_iframe_root = first_iframe_manager->GetRoot();
+  ASSERT_NE(nullptr, first_iframe_root);
+
+  ui::AXNode* second_iframe_node =
+      first_iframe_root->children()[0]->children()[0]->children()[0];
+  ASSERT_NE(nullptr, second_iframe_node);
+  ASSERT_EQ(second_iframe_node->GetRole(), ax::mojom::Role::kIframe);
+
+  iframe_tree_id =
+      ui::AXTreeID::FromString(second_iframe_node->GetStringAttribute(
+          ax::mojom::StringAttribute::kChildTreeId));
+  ui::BrowserAccessibilityManager* second_iframe_manager =
+      ui::BrowserAccessibilityManager::FromID(iframe_tree_id);
+  ASSERT_NE(nullptr, second_iframe_manager);
+
+  ui::AXNode* select_node = second_iframe_manager->GetRoot()
+                                ->children()[0]
+                                ->children()[0]
+                                ->children()[0];
+  ASSERT_NE(nullptr, select_node);
+  ASSERT_EQ(select_node->GetRole(), ax::mojom::Role::kComboBoxSelect);
+  ui::BrowserAccessibility* select =
+      second_iframe_manager->GetFromAXNode(select_node);
+
+  ui::AXNode* first_list_item_node = select_node->children()[0]->children()[0];
+  ASSERT_EQ(first_list_item_node->GetRole(), ax::mojom::Role::kMenuListOption);
+  ui::AXNode* second_list_item_node = select_node->children()[0]->children()[1];
+  ASSERT_EQ(second_list_item_node->GetRole(), ax::mojom::Role::kMenuListOption);
+  ui::BrowserAccessibility* first_list_item =
+      second_iframe_manager->GetFromAXNode(first_list_item_node);
+  ui::BrowserAccessibility* second_list_item =
+      second_iframe_manager->GetFromAXNode(second_list_item_node);
+
+  gfx::Rect select_bounds =
+      select->GetBoundsRect(ui::AXCoordinateSystem::kScreenPhysicalPixels,
+                            ui::AXClippingBehavior::kUnclipped);
+
+  {
+    AccessibilityNotificationWaiter waiter(
+
+        shell()->web_contents(), ui::AXEventGenerator::Event::EXPANDED);
+    ui::AXActionData action_data;
+    action_data.action = ax::mojom::Action::kDoDefault;
+    select->AccessibilityPerformAction(action_data);
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  gfx::Rect first_list_item_bounds = first_list_item->GetBoundsRect(
+      ui::AXCoordinateSystem::kScreenPhysicalPixels,
+      ui::AXClippingBehavior::kUnclipped);
+  gfx::Rect second_list_item_bounds = second_list_item->GetBoundsRect(
+      ui::AXCoordinateSystem::kScreenPhysicalPixels,
+      ui::AXClippingBehavior::kUnclipped);
+
+  // Both options have the same height, width and left edge.
+  EXPECT_EQ(first_list_item_bounds.height(), second_list_item_bounds.height());
+  EXPECT_EQ(first_list_item_bounds.width(), second_list_item_bounds.width());
+  EXPECT_EQ(first_list_item_bounds.x(), second_list_item_bounds.x());
+
+  // We are making sure that the difference between the select element and the
+  // pop up menu options are (an arbitrary) amount of px away. This is
+  // to account for differences between platforms. Because for the test the
+  // border widths for both of the iframes are set to 80px, if this behavior
+  // were to regress to what it was before this fix, the test would fail even
+  // with the arbitrary buffers.
+  EXPECT_LT(first_list_item_bounds.x() - select_bounds.x(), 20);
+  EXPECT_LT(second_list_item_bounds.x() - select_bounds.x(), 20);
+
+  EXPECT_LT(first_list_item_bounds.y() - select_bounds.y(), 70);
+  EXPECT_LT(second_list_item_bounds.y() - select_bounds.y(), 70);
+
+  // The top of option #2 is option #1's top + the height, within 2 pixels.
+  EXPECT_LT(
+      std::abs(first_list_item_bounds.y() + first_list_item_bounds.height() -
+               second_list_item_bounds.y()),
+      2);
+}
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC) && !(BUILDFLAG(IS_IOS)
         // && BUILDFLAG(USE_BLINK))
 
@@ -1695,6 +1912,70 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
     EXPECT_GT(popup_bounds.y(), 100);
   }
 }
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       GetBoundsRectIframesForDateTimePicker) {
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <iframe style='border-width: 80px; padding: 20px;'
+            srcdoc="
+              <input type='datetime-local' aria-label='Input' />
+            ">
+          </iframe>
+        </body>
+      </html>)HTML"));
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Input");
+
+  ui::AXNode* root = GetManager()->GetRoot();
+  ASSERT_NE(nullptr, root);
+
+  const ui::AXNode* iframe = root->children()[0]->children()[0]->children()[0];
+  ASSERT_NE(nullptr, iframe);
+  ASSERT_EQ(iframe->GetRole(), ax::mojom::Role::kIframe);
+
+  const ui::AXTreeID iframe_tree_id = ui::AXTreeID::FromString(
+      iframe->GetStringAttribute(ax::mojom::StringAttribute::kChildTreeId));
+  ui::BrowserAccessibilityManager* iframe_manager =
+      ui::BrowserAccessibilityManager::FromID(iframe_tree_id);
+  ASSERT_NE(nullptr, iframe_manager);
+
+  ui::BrowserAccessibility* input =
+      FindNodeByRole(iframe_manager->GetBrowserAccessibilityRoot(),
+                     ax::mojom::Role::kDateTime);
+  ASSERT_NE(nullptr, input);
+  ui::BrowserAccessibility* popup_button =
+      FindNodeByRole(input, ax::mojom::Role::kPopUpButton);
+  ASSERT_NE(nullptr, popup_button);
+
+  {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                           ax::mojom::Event::kClicked);
+
+    ui::AXActionData action_data;
+    action_data.action = ax::mojom::Action::kDoDefault;
+    popup_button->AccessibilityPerformAction(action_data);
+
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  const auto& controls_ids =
+      input->GetIntListAttribute(ax::mojom::IntListAttribute::kControlsIds);
+  ASSERT_EQ(1u, controls_ids.size());
+  ui::BrowserAccessibility* popup_area =
+      iframe_manager->GetFromID(controls_ids[0]);
+  ASSERT_NE(nullptr, popup_area);
+  const ui::BrowserAccessibility* previous_month_button =
+      FindFirstAccessibilityNodeWithNameOrValue(*popup_area,
+                                                "Show previous month");
+  ASSERT_NE(nullptr, previous_month_button);
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !popup_area->GetLocation().IsEmpty(); }));
+  EXPECT_EQ(gfx::SizeF(28, 24), previous_month_button->GetLocation().size());
+}
 #endif  // !BUILDFLAG(IS_ANDROID) && !(BUILDFLAG(IS_IOS) &&
         // BUILDFLAG(USE_BLINK))
 
@@ -1835,8 +2116,8 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   EXPECT_EQ(static_cast<int>(ax::mojom::SortDirection::kOther),
             header3->GetIntAttribute(ax::mojom::IntAttribute::kSortDirection));
 
-  ASSERT_FALSE(
-      header4->HasIntAttribute(ax::mojom::IntAttribute::kSortDirection));
+  EXPECT_EQ(static_cast<int>(ax::mojom::SortDirection::kUnsorted),
+            header4->GetIntAttribute(ax::mojom::IntAttribute::kSortDirection));
   ASSERT_FALSE(
       header5->HasIntAttribute(ax::mojom::IntAttribute::kSortDirection));
 }
@@ -2790,9 +3071,9 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
-                       AccessibilityEventsImmediateRefresh) {
+                       AccessibilityEventsConstantRefresh) {
   LoadInitialAccessibilityTreeFromHtmlFilePath(
-      "/accessibility/event/immediate-refresh.html");
+      "/accessibility/event/constant-refresh.html");
   AccessibilityNotificationWaiter waiter(shell()->web_contents(),
                                          ax::mojom::Event::kLoadComplete);
   ASSERT_TRUE(waiter.WaitForNotification());
@@ -2800,12 +3081,6 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        NavigateInIframe) {
-#if BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/511198770): Re-enable once test deflaked on MacOS 26+
-  if (base::mac::MacOSMajorVersion() == 26) {
-    GTEST_SKIP() << "Disabled on macOS Tahoe.";
-  }
-#endif
   LoadInitialAccessibilityTreeFromHtmlFilePath(
       "/accessibility/regression/iframe-navigation.html");
   WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
@@ -2821,9 +3096,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 
   // Keep pressing Tab until we get to the "Go to Inner 2" link in the
   // inner iframe.
-  while (GetNameOfFocusedNode() != "Go to Inner 2") {
-    PressTabAndWaitForFocusChange();
-  }
+  PressTabUntilFocused("Go to Inner 2");
 
   // Press enter to activate the link, wait for the second iframe to load.
   {
@@ -2837,9 +3110,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
 
   // Press Tab, we should eventually land on the last button within the
   // second iframe.
-  while (GetNameOfFocusedNode() != "Bottom of Inner 2") {
-    PressTabAndWaitForFocusChange();
-  }
+  PressTabUntilFocused("Bottom of Inner 2");
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -3228,7 +3499,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   ASSERT_NE(button_node, nullptr);
 
   ui::BrowserAccessibilityManager* manager = button_node->manager();
-  manager->ScrollToMakeVisible(*button_node, gfx::Rect());
+  manager->ScrollToMakeVisible(*button_node);
 
   EXPECT_EQ(manager->GetAccessibilityFocus(), button_node);
 }
@@ -3258,7 +3529,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   ASSERT_NE(button_node, nullptr);
 
   ui::BrowserAccessibilityManager* manager = button_node->manager();
-  manager->ScrollToMakeVisible(*button_node, gfx::Rect());
+  manager->ScrollToMakeVisible(*button_node);
 
   EXPECT_EQ(GetManager()->GetAccessibilityFocus(), button_node);
 }
@@ -3765,5 +4036,94 @@ IN_PROC_BROWSER_TEST_F(CanvasAccessibilityBrowserTest,
 #endif
 }
 #endif  // BUILDFLAG(HAS_NATIVE_ACCESSIBILITY) || BUILDFLAG(IS_ANDROID)
+
+class MenuElementsAccessibilityBrowserTest
+    : public CrossPlatformAccessibilityBrowserTest {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    CrossPlatformAccessibilityBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
+                                    "MenuElements");
+  }
+
+  // A <menulist> that violates its content model (because of the <button>),
+  // so its <menuitemradio>s are exposed as kRadioButton inside a kList.
+  // The menu's items are Copy, Invalid, Radio A, Radio B, Paste.
+  static constexpr char kViolatedMenuWithRadiosHtml[] = R"HTML(
+      <!DOCTYPE html>
+      <menulist id="menu">
+        <menuitem>Copy</menuitem>
+        <button>Invalid</button>
+        <fieldset>
+          <menuitemradio>Radio A</menuitemradio>
+          <menuitemradio>Radio B</menuitemradio>
+        </fieldset>
+        <menuitem>Paste</menuitem>
+      </menulist>)HTML";
+
+  void LoadAndOpenViolatedMenuWithRadios() {
+    LoadInitialAccessibilityTreeFromHtml(kViolatedMenuWithRadiosHtml);
+    ExecuteScript("document.getElementById('menu').showPopover();");
+    WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                  "Radio B");
+  }
+};
+
+// Query a radio's PosInSet/SetSize before anything else in the menu, the way a
+// screen reader does when focus lands on the radio. The radio must be counted
+// among all of the menu's items, with the same values as in
+// ViolatedMenuListSetSizeQueriedFirst.
+IN_PROC_BROWSER_TEST_F(MenuElementsAccessibilityBrowserTest,
+                       ViolatedMenuRadioPosInSetQueriedFirst) {
+  LoadAndOpenViolatedMenuWithRadios();
+
+  ui::BrowserAccessibility* root = GetManager()->GetBrowserAccessibilityRoot();
+  ui::BrowserAccessibility* radio_a =
+      FindFirstAccessibilityNodeWithRoleAndNameOrValue(
+          *root, ax::mojom::Role::kRadioButton, "Radio A");
+  ASSERT_NE(nullptr, radio_a);
+  ui::BrowserAccessibility* radio_b =
+      FindFirstAccessibilityNodeWithRoleAndNameOrValue(
+          *root, ax::mojom::Role::kRadioButton, "Radio B");
+  ASSERT_NE(nullptr, radio_b);
+  ui::BrowserAccessibility* list =
+      FindFirstNodeWithRole(ax::mojom::Role::kList);
+  ASSERT_NE(nullptr, list);
+
+  EXPECT_EQ(std::optional<int>(3), radio_a->GetPosInSet());
+  EXPECT_EQ(std::optional<int>(5), radio_a->GetSetSize());
+  EXPECT_EQ(std::optional<int>(4), radio_b->GetPosInSet());
+  EXPECT_EQ(std::optional<int>(5), radio_b->GetSetSize());
+  EXPECT_EQ(std::optional<int>(5), list->GetSetSize());
+}
+
+// Same as ViolatedMenuRadioPosInSetQueriedFirst, but query the list before the
+// radios. The radios must get the same values as they do in
+// ViolatedMenuRadioPosInSetQueriedFirst.
+IN_PROC_BROWSER_TEST_F(MenuElementsAccessibilityBrowserTest,
+                       ViolatedMenuListSetSizeQueriedFirst) {
+  LoadAndOpenViolatedMenuWithRadios();
+
+  ui::BrowserAccessibility* list =
+      FindFirstNodeWithRole(ax::mojom::Role::kList);
+  ASSERT_NE(nullptr, list);
+
+  EXPECT_EQ(std::optional<int>(5), list->GetSetSize());
+
+  ui::BrowserAccessibility* root = GetManager()->GetBrowserAccessibilityRoot();
+  ui::BrowserAccessibility* radio_a =
+      FindFirstAccessibilityNodeWithRoleAndNameOrValue(
+          *root, ax::mojom::Role::kRadioButton, "Radio A");
+  ASSERT_NE(nullptr, radio_a);
+  ui::BrowserAccessibility* radio_b =
+      FindFirstAccessibilityNodeWithRoleAndNameOrValue(
+          *root, ax::mojom::Role::kRadioButton, "Radio B");
+  ASSERT_NE(nullptr, radio_b);
+
+  EXPECT_EQ(std::optional<int>(3), radio_a->GetPosInSet());
+  EXPECT_EQ(std::optional<int>(5), radio_a->GetSetSize());
+  EXPECT_EQ(std::optional<int>(4), radio_b->GetPosInSet());
+  EXPECT_EQ(std::optional<int>(5), radio_b->GetSetSize());
+}
 
 }  // namespace content

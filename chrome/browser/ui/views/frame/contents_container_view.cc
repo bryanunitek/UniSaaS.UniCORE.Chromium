@@ -77,16 +77,14 @@ ContentsContainerView::ContentsContainerView(BrowserView* browser_view)
   devtools_web_view_ = AddChildView(std::move(devtools_web_view));
 
   devtools_scrim_view_ = AddChildView(std::make_unique<ScrimView>());
-  devtools_scrim_view_->layer()->SetName("DevtoolsScrimView");
+  devtools_scrim_view_->layer()->SetName(
+      "ContentsContainerView:DevtoolsScrimView");
 
   toast_anchor_view_ = AddChildView(std::make_unique<views::View>());
 
   contents_view_ = AddChildView(
       std::make_unique<ContentsWebView>(browser_view->GetProfile()));
   contents_view_->SetID(VIEW_ID_TAB_CONTAINER);
-  contents_view_->set_use_default_deadline_when_animating_bounds(
-      base::FeatureList::IsEnabled(
-          features::kUseDefaultDeadlineWhenAnimatingBounds));
 
   if (base::FeatureList::IsEnabled(ntp_features::kNtpFooter)) {
     new_tab_footer_view_separator_ =
@@ -121,15 +119,14 @@ ContentsContainerView::ContentsContainerView(BrowserView* browser_view)
     ai_overlay_dialog_view_ = AddChildView(std::move(ai_overlay_dialog_view));
   }
 
-  if (features::IsImmersiveReadAnythingEnabled()) {
-    auto read_anything_immersive_overlay_view =
-        std::make_unique<ReadAnythingImmersiveOverlayView>(contents_view_);
-    read_anything_immersive_overlay_view_ =
-        AddChildView(std::move(read_anything_immersive_overlay_view));
-  }
+  auto read_anything_immersive_overlay_view =
+      std::make_unique<ReadAnythingImmersiveOverlayView>(contents_view_);
+  read_anything_immersive_overlay_view_ =
+      AddChildView(std::move(read_anything_immersive_overlay_view));
 
   contents_scrim_view_ = AddChildView(std::make_unique<ScrimView>());
-  contents_scrim_view_->layer()->SetName("ContentsScrimView");
+  contents_scrim_view_->layer()->SetName(
+      "ContentsContainerView:ContentsScrimView");
 
   if (base::FeatureList::IsEnabled(features::kGlicActorUi) &&
       features::kGlicActorUiOverlay.Get()) {
@@ -242,7 +239,7 @@ void ContentsContainerView::SetBorderRoundedCornersFrom(
     const gfx::RoundedCornersF& corner_radii) {
   // Update devtools rounded corners. Note, devtools exists behind the contents
   // view so all devtools corners are rounded.
-  devtools_web_view_->holder()->SetCornerRadii(corner_radii);
+  devtools_web_view_->holder()->SetNativeViewCornerRadii(corner_radii);
   devtools_scrim_view_->SetRoundedCorners(corner_radii);
 
   const bool devtools_in_upper_left =
@@ -279,24 +276,25 @@ void ContentsContainerView::SetBorderRoundedCornersFrom(
                    : content_rounded_corners;
 
   contents_view_->SetBackgroundRadii(radii);
-  contents_view_->holder()->SetCornerRadii(radii);
+  contents_view_->holder()->SetNativeViewCornerRadii(radii);
   contents_scrim_view_->SetRoundedCorners(corner_radii);
 
   if (new_tab_footer_view_) {
-    new_tab_footer_view_->holder()->SetCornerRadii(
+    new_tab_footer_view_->SetBackgroundRadii(content_lower_rounded_corners);
+    new_tab_footer_view_->holder()->SetNativeViewCornerRadii(
         content_lower_rounded_corners);
   }
 
   if (actor_overlay_web_view_) {
     // ActorOverlayWebView should use the same radii as the contents view since
     // it acts as a full transparent layer directly over the main web content.
-    actor_overlay_web_view_->holder()->SetCornerRadii(radii);
+    actor_overlay_web_view_->holder()->SetNativeViewCornerRadii(radii);
   }
 
   if (ai_overlay_dialog_view_) {
     // ai_overlay_dialog_view_ should use the same radii as the contents view
     // since it acts as a layer directly over the main web content.
-    ai_overlay_dialog_view_->holder()->SetCornerRadii(radii);
+    ai_overlay_dialog_view_->holder()->SetNativeViewCornerRadii(radii);
   }
 
   if (glic_selection_overlay_view_) {
@@ -329,7 +327,8 @@ views::View::Views ContentsContainerView::GetChildrenInZOrder() {
 #if DCHECK_IS_ON()
   auto ordered_children = views::View::GetChildrenInZOrder();
   // |capture_contents_border_view_| should have the highest z-order.
-  DCHECK(ordered_children.back() == capture_contents_border_view_);
+  CHECK(ordered_children.back() == capture_contents_border_view_,
+        base::NotFatalUntil::M162);
   return ordered_children;
 #else
   return views::View::GetChildrenInZOrder();
@@ -589,8 +588,7 @@ views::ProposedLayout ContentsContainerView::CalculateProposedLayout(
   }
 
   // Reading Mode overlay view bounds are the same as the contents view.
-  if (features::IsImmersiveReadAnythingEnabled() &&
-      read_anything_immersive_overlay_view_) {
+  if (read_anything_immersive_overlay_view_) {
     layouts.child_layouts.emplace_back(
         read_anything_immersive_overlay_view_.get(),
         read_anything_immersive_overlay_view_->GetVisible(),

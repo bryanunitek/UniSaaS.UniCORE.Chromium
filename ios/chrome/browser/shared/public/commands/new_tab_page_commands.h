@@ -11,6 +11,8 @@
 
 typedef NS_ENUM(NSInteger, FeedLayoutUpdateType);
 
+@protocol PromosManagerUIHandler;
+
 // Commands related to the new tab page.
 @protocol NewTabPageCommands
 
@@ -22,11 +24,24 @@ typedef NS_ENUM(NSInteger, FeedLayoutUpdateType);
 // Presents an IPH bubble to highlight the Lens icon in the NTP Fakebox.
 - (void)presentLensIconBubble;
 
+// Navigates to the NTP if needed and presents an IPH bubble to highlight the
+// AI Mode button.
+- (void)presentAIModeBubble;
+
 // Presents an IPH bubble to highlight scrolling on the feed.
 - (void)presentFeedSwipeFirstRunBubble;
 
 // Presents the Home Customization menu.
 - (void)customizationMenuWasTapped;
+
+// Controls the visibility of the blue dot on the NTP.
+- (void)setNTPBlueDotVisible:(BOOL)visible;
+
+// Shows the home background customization promo on the NTP.
+- (void)showHomeBackgroundCustomizationPromoWithUIHandler:
+            (id<PromosManagerUIHandler>)UIHandler
+                                shouldAlertFETOfDismissal:
+                                    (BOOL)shouldAlertFETOfDismissal;
 
 @end
 

@@ -4,12 +4,12 @@
 
 #include "components/page_content_annotations/core/page_visibility_model_executor.h"
 
+#include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/expected.h"
 #include "build/build_config.h"
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/tflite_op_resolver.h"
 #include "components/page_content_annotations/core/page_visibility_op_resolver.h"
 #include "third_party/tflite_support/src/tensorflow_lite_support/cc/task/text/nlclassifier/nl_classifier.h"
 #include "third_party/tflite_support/src/tensorflow_lite_support/cc/task/text/proto/nl_classifier_options.pb.h"
@@ -55,9 +55,16 @@ PageVisibilityModelExecutor::Execute(
   return *status_or_result;
 }
 
+PageVisibilityModelExecutor::BuildModelExecutionTaskCallback
+PageVisibilityModelExecutor::GetBuildModelExecutionTaskCallback() {
+  return base::BindRepeating(
+      &PageVisibilityModelExecutor::BuildModelExecutionTask, num_threads_);
+}
+
 base::expected<std::unique_ptr<PageVisibilityModelExecutor::ModelExecutionTask>,
                optimization_guide::ExecutionStatus>
-PageVisibilityModelExecutor::BuildModelExecutionTask(base::File& model_file) {
+PageVisibilityModelExecutor::BuildModelExecutionTask(int num_threads,
+                                                     base::File& model_file) {
   tflite::task::text::NLClassifierOptions options;
   auto* mutable_file_descriptor_meta = options.mutable_base_options()
                                            ->mutable_model_file()
@@ -72,7 +79,7 @@ PageVisibilityModelExecutor::BuildModelExecutionTask(base::File& model_file) {
       ->mutable_compute_settings()
       ->mutable_tflite_settings()
       ->mutable_cpu_settings()
-      ->set_num_threads(num_threads_);
+      ->set_num_threads(num_threads);
   options.set_output_score_tensor_name("batched_predictions");
   options.set_output_label_tensor_name("batched_prediction_labels");
 

@@ -13,13 +13,13 @@
 #include "ash/public/cpp/saved_desk_delegate.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
-#include "ash/public/cpp/style/color_provider.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
+#include "ash/style/style_util.h"
 #include "ash/style/typography.h"
 #include "ash/wm/desks/desk.h"
 #include "ash/wm/desks/desk_action_button.h"
@@ -118,6 +118,7 @@ void MaybeSetupBackgroundView(DeskBarViewBase* bar_view) {
 
   auto* layer = view->layer();
   layer->SetFillsBoundsOpaquely(false);
+  layer->SetName("DeskBarViewBase:Background");
 
   if (!type_is_desk_button) {
     // Forest feature needs a transparent desks bar background. Still needs the
@@ -126,8 +127,8 @@ void MaybeSetupBackgroundView(DeskBarViewBase* bar_view) {
   }
 
   if (chromeos::features::IsSystemBlurEnabled()) {
-    layer->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    layer->SetBackgroundBlur(StyleUtil::kBackgroundBlurSigma);
+    layer->SetBackdropFilterQuality(StyleUtil::kBackgroundBlurQuality);
   }
 
   const int corner_radius = type_is_desk_button
@@ -539,9 +540,10 @@ class DeskBarViewBase::PostLayoutOperation {
 class DeskBarViewBase::AddDeskAnimation
     : public DeskBarViewBase::PostLayoutOperation {
  public:
-  AddDeskAnimation(DeskBarViewBase* bar_view,
-                   const gfx::Rect& old_bar_bounds,
-                   std::vector<DeskMiniView*> new_mini_views)
+  AddDeskAnimation(
+      DeskBarViewBase* bar_view,
+      const gfx::Rect& old_bar_bounds,
+      std::vector<raw_ptr<DeskMiniView, DanglingUntriaged>> new_mini_views)
       : PostLayoutOperation(bar_view),
         old_bar_bounds_(old_bar_bounds),
         new_mini_views_(std::move(new_mini_views)) {}
@@ -574,7 +576,7 @@ class DeskBarViewBase::AddDeskAnimation
 
  private:
   const gfx::Rect old_bar_bounds_;
-  std::vector<DeskMiniView*> new_mini_views_;
+  std::vector<raw_ptr<DeskMiniView, DanglingUntriaged>> new_mini_views_;
   base::flat_map<views::View*, int> views_previous_x_map_;
 };
 
@@ -754,7 +756,7 @@ class DeskBarViewBase::ScrollForActiveMiniView
 DeskBarViewBase::DeskBarViewBase(
     aura::Window* root,
     Type type,
-    base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator)
+    base::WeakPtr<DesksWindowOcclusionCalculator> window_occlusion_calculator)
     : type_(type),
       state_(GetPreferredState(type)),
       root_(root),
@@ -1598,7 +1600,7 @@ void DeskBarViewBase::UpdateNewMiniViews(bool initializing_bar_view,
   // insert new mini views in a position in `mini_views_` that corresponds to
   // their index in the `DeskController`'s list of desks.
   int mini_view_index = 0;
-  std::vector<DeskMiniView*> new_mini_views;
+  std::vector<raw_ptr<DeskMiniView, DanglingUntriaged>> new_mini_views;
   for (const auto& desk : desks) {
     if (!FindMiniViewForDesk(desk.get())) {
       DeskMiniView* mini_view = contents_view_->AddChildViewAt(

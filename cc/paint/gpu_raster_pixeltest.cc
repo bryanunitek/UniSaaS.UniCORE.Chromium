@@ -223,13 +223,13 @@ class GpuRasterPixelTest : public testing::Test,
                                           : gpu::raster::kNoMSAA;
 
     if (options.preclear) {
-      ri->BeginRasterCHROMIUM(
-          options.preclear_color,
-          /*needs_clear=*/options.preclear, options.msaa_sample_count,
-          msaa_mode, options.use_lcd_text,
-          /*visible=*/true, options.target_color_params.color_space,
-          options.target_color_params.GetHdrHeadroom(),
-          client_shared_image->mailbox().name);
+      ri->BeginRasterCHROMIUM(options.preclear_color,
+                              /*needs_clear=*/options.preclear,
+                              options.msaa_sample_count, msaa_mode,
+                              options.use_lcd_text,
+                              options.target_color_params.color_space,
+                              options.target_color_params.GetHdrHeadroom(),
+                              client_shared_image->mailbox().name);
       ri->EndRasterCHROMIUM();
     }
 
@@ -240,8 +240,7 @@ class GpuRasterPixelTest : public testing::Test,
     ri->BeginRasterCHROMIUM(
         options.background_color,
         /*needs_clear=*/!options.preclear, options.msaa_sample_count, msaa_mode,
-        options.use_lcd_text,
-        /*visible=*/true, options.target_color_params.color_space,
+        options.use_lcd_text, options.target_color_params.color_space,
         options.target_color_params.GetHdrHeadroom(),
         client_shared_image->mailbox().name);
     size_t max_op_size_limit =
@@ -283,7 +282,8 @@ class GpuRasterPixelTest : public testing::Test,
         image_size.width(), image_size.height(), color_space);
     SkBitmap result;
     result.allocPixels(image_info);
-    ri->ReadbackImagePixels(mailbox, image_info, image_info.minRowBytes(), 0, 0,
+    ri->ReadbackImagePixels(mailbox, image_size, image_info,
+                            image_info.minRowBytes(), 0, 0,
                             /*plane_index=*/0, result.getPixels());
     return result;
   }
@@ -827,7 +827,7 @@ TEST_F(GpuRasterPixelTest, DrawGainmapImage) {
   {
     RasterOptions options(kSize);
     options.target_color_params.color_space =
-        gfx::ColorSpace(*dest_color_space);
+        gfx::ColorSpace(dest_color_space.get());
     options.target_color_params.hdr_headroom = 0.f;
     auto result = Raster(display_item_list, options);
     auto out_color = result.getColor4f(0, 0);
@@ -841,7 +841,7 @@ TEST_F(GpuRasterPixelTest, DrawGainmapImage) {
   {
     RasterOptions options(kSize);
     options.target_color_params.color_space =
-        gfx::ColorSpace(*dest_color_space);
+        gfx::ColorSpace(dest_color_space.get());
     options.target_color_params.hdr_headroom = std::log2(kDestScale);
     auto result = Raster(display_item_list, options);
     auto out_color = result.getColor4f(0, 0);
@@ -915,7 +915,7 @@ TEST_F(GpuRasterPixelTest, DrawGainmapImageCubic) {
   {
     auto dest_color_space = SkColorSpace::MakeSRGBLinear();
     options.target_color_params.color_space =
-        gfx::ColorSpace(*dest_color_space);
+        gfx::ColorSpace(dest_color_space.get());
     options.target_color_params.hdr_headroom = std::log2(kRatioMax);
   }
   auto result = Raster(display_item_list, options);
@@ -1018,7 +1018,7 @@ TEST_F(GpuRasterPixelTest, DrawGainmapImageFiltering) {
   {
     auto dest_color_space = SkColorSpace::MakeSRGBLinear();
     options.target_color_params.color_space =
-        gfx::ColorSpace(*dest_color_space);
+        gfx::ColorSpace(dest_color_space.get());
     options.target_color_params.hdr_headroom = std::log2(kRatioMax);
   }
   auto result = Raster(display_item_list, options);
@@ -1077,7 +1077,7 @@ TEST_F(GpuRasterPixelTest, DrawHdrImageWithMetadata) {
               peak_luminance.value(), kContentAvgNits});
         }
         if (white_luminance.has_value()) {
-          hdr_metadata.SetNDWL(white_luminance.value());
+          hdr_metadata.SetHdrReferenceWhite(white_luminance.value());
         }
 
         auto image_generator = sk_make_sp<FakePaintImageGenerator>(
@@ -2774,9 +2774,10 @@ TEST_F(GpuRasterPixelTest, CopySharedImage) {
     readback_bitmap.allocPixels(SkImageInfo::MakeN32Premul(
         size.width(), size.height(), dest_color_space.ToSkColorSpace()));
 
-    ri->ReadbackImagePixels(dest_client_si->mailbox(), readback_bitmap.info(),
-                            readback_bitmap.rowBytes(), 0, 0,
-                            /*plane_index=*/0, readback_bitmap.getPixels());
+    ri->ReadbackImagePixels(dest_client_si->mailbox(), size,
+                            readback_bitmap.info(), readback_bitmap.rowBytes(),
+                            0, 0, /*plane_index=*/0,
+                            readback_bitmap.getPixels());
   }
 
   // The pixel value should be unchanged, even though the source and dest are

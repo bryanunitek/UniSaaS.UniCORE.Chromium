@@ -41,6 +41,7 @@ class CSSStyleDeclaration;
 class ExecutionContext;
 class ImmutableCSSPropertyValueSet;
 class MutableCSSPropertyValueSet;
+class ResourceFetcher;
 class StyleSheetContents;
 enum class CSSValueID;
 enum class SecureContextMode;
@@ -186,27 +187,27 @@ class CORE_EXPORT CSSPropertyValueSet
   // been modified after we've stored them into the MPC
   // (MatchedPropertiesCache). If you call GetHash() and then later modify the
   // property set (in any way that would change the hash), all future calls to
-  // GetHash() for this object will return HashTraits<unsigned>::DeletedValue(),
+  // GetHash() for this object will return HashTraits<uint32_t>::DeletedValue(),
   // making them invalid for cache lookup uses. (This status can be reset if you
   // clone the object, such as calling ImmutableCopyIfNeeded().) This protects
   // the MPC from returning false positives when a mutable CSSPropertyValueSet
   // has changed, such as for SVG objects' “direct update” of the presentation
   // attribute style.
   //
-  // Can never return HashTraits<unsigned>::EmptyValue() (it is used
+  // Can never return HashTraits<uint32_t>::EmptyValue() (it is used
   // internally).
-  unsigned GetHash() const {
-    if (hash_ == HashTraits<unsigned>::EmptyValue()) {
+  uint32_t GetHash() const {
+    if (hash_ == HashTraits<uint32_t>::EmptyValue()) {
       hash_ = ComputeHash();
     }
     return hash_;
   }
-  unsigned GetExistingHash() const {
-    DCHECK_NE(hash_, HashTraits<unsigned>::EmptyValue());
+  uint32_t GetExistingHash() const {
+    DCHECK_NE(hash_, HashTraits<uint32_t>::EmptyValue());
     return hash_;
   }
   bool ModifiedSinceHashing() const {
-    return hash_ == HashTraits<unsigned>::DeletedValue();
+    return hash_ == HashTraits<uint32_t>::DeletedValue();
   }
 
   bool Equals(const CSSPropertyValueSet& other) {
@@ -216,7 +217,7 @@ class CORE_EXPORT CSSPropertyValueSet
     return Properties() == other.Properties();
   }
 
-  bool HasFailedOrCanceledSubresources() const;
+  bool HasFailedOrCanceledSubresources(ResourceFetcher*) const;
 
   static unsigned AverageSizeInBytes();
 
@@ -234,6 +235,10 @@ class CORE_EXPORT CSSPropertyValueSet
                                 const CSSPropertyValueSet& style) const;
   bool ShorthandPropertyMatches(CSSPropertyID shorthand_id,
                                 const CSSStyleDeclaration& style) const;
+
+  // Returns true if all property values can be pre-computed hover effects on
+  // the compositor.
+  bool ContainsPrecomputableHoverStyleOnly() const;
 
   void Trace(Visitor*) const;
   void TraceAfterDispatch(blink::Visitor* visitor) const {}
@@ -259,7 +264,7 @@ class CORE_EXPORT CSSPropertyValueSet
               IsMutableField::encode(false) |
               ContainsCursorHandField::encode(contains_cursor_hand)) {}
 
-  unsigned ComputeHash() const;
+  uint32_t ComputeHash() const;
 
   // Trace() branches on is_mutable_,
   // other member functions modify may_have_logical_properties_,
@@ -280,7 +285,7 @@ class CORE_EXPORT CSSPropertyValueSet
 
   // EmptyValue() means “not computed yet”. DeletedValue() means “invalid”
   // (see GetHash()).
-  mutable unsigned hash_ = HashTraits<unsigned>::EmptyValue();
+  mutable uint32_t hash_ = HashTraits<uint32_t>::EmptyValue();
 
   friend class PropertySetCSSStyleDeclaration;
 };
@@ -477,7 +482,6 @@ class CORE_EXPORT MutableCSSPropertyValueSet : public CSSPropertyValueSet {
   bool RemoveShorthandProperty(const AtomicString& custom_property_name) {
     return false;
   }
-  CSSPropertyValue* FindCSSPropertyWithName(const CSSPropertyName&);
 
   void InvalidateHashIfComputed() {
     if (hash_ != HashTraits<unsigned>::EmptyValue()) {

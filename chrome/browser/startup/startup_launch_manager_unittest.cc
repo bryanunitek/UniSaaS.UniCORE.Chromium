@@ -17,12 +17,12 @@
 #include "chrome/installer/util/auto_launch_util.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/prefs/testing_pref_service.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/unowned_user_data/user_data_factory.h"
 
 using auto_launch_util::StartupLaunchMode;
-using base::test::TaskEnvironment;
 
 namespace {
 
@@ -51,36 +51,46 @@ class StartupLaunchManagerTestBase : public testing::Test {
       std::optional<features::LaunchOnStartupDefaultPreference>
           default_preference) {
     if (enable_foreground_launch_feature) {
-      CHECK(default_preference.has_value());
-      std::string trial_group_param_string;
+      std::vector<base::test::FeatureRefAndParams> enabled_features;
+      std::vector<base::test::FeatureRef> disabled_features;
 
-      switch (*default_preference) {
-        case features::LaunchOnStartupDefaultPreference::kDisabled:
-          trial_group_param_string = "disabled";
-          break;
-        case features::LaunchOnStartupDefaultPreference::kEnabled:
-          trial_group_param_string = "enabled";
-          break;
+      // Configure kLaunchOnStartup (overall feature and trial params) and
+      // kLaunchOnStartupInfoBar (infobar prompt feature).
+      base::FieldTrialParams launch_on_startup_params = {
+          {features::kLaunchOnStartupModeParam.name, "foreground"}};
+
+      if (default_preference.has_value()) {
+        std::string trial_group_param_string;
+        switch (*default_preference) {
+          case features::LaunchOnStartupDefaultPreference::kDisabled:
+            trial_group_param_string = "disabled";
+            break;
+          case features::LaunchOnStartupDefaultPreference::kEnabled:
+            trial_group_param_string = "enabled";
+            break;
+        }
+        launch_on_startup_params
+            [features::kLaunchOnStartupDefaultPreferenceParam.name] =
+                trial_group_param_string;
+        enabled_features.push_back({features::kLaunchOnStartupInfoBar, {}});
+      } else {
+        disabled_features.push_back(features::kLaunchOnStartupInfoBar);
       }
 
-      scoped_feature_list_.InitAndEnableFeatureWithParameters(
-          features::kLaunchOnStartup,
-          {
-              {
-                  features::kLaunchOnStartupModeParam.name,
-                  "foreground",
-              },
-              {
-                  features::kLaunchOnStartupDefaultPreferenceParam.name,
-                  trial_group_param_string,
-              },
-          });
+      enabled_features.emplace_back(features::kLaunchOnStartup,
+                                    launch_on_startup_params);
+
+      scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                         disabled_features);
     } else {
-      scoped_feature_list_.InitAndDisableFeature(features::kLaunchOnStartup);
+      scoped_feature_list_.InitWithFeatures(
+          {}, {features::kLaunchOnStartup, features::kLaunchOnStartupInfoBar});
     }
 
     CHECK_EQ(enable_foreground_launch_feature,
              features::IsForegroundLaunchEnabled());
+    CHECK_EQ(enable_foreground_launch_feature && default_preference.has_value(),
+             features::IsForegroundLaunchInfoBarEnabled());
 
     // Override factory for creating StartupLaunchManager to return the mocked
     // manager.
@@ -94,6 +104,11 @@ class StartupLaunchManagerTestBase : public testing::Test {
     // Setup the test with this pref reset to default.
     g_browser_process->local_state()->ClearPref(
         prefs::kForegroundLaunchOnLogin);
+    g_browser_process->local_state()->ClearPref(prefs::kPromotionsEnabled);
+    TestingPrefServiceSimple* testing_local_state =
+        TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+    testing_local_state->RemoveManagedPref(prefs::kForegroundLaunchOnLogin);
+    testing_local_state->RemoveRecommendedPref(prefs::kForegroundLaunchOnLogin);
 
     // Construct StartupLaunchManager with mocked override.
     TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
@@ -113,7 +128,8 @@ class StartupLaunchManagerTestBase : public testing::Test {
   }
 
  protected:
-  TaskEnvironment task_environment_{TaskEnvironment::TimeSource::MOCK_TIME};
+  content::BrowserTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
  private:
   ui::UserDataFactory::ScopedOverride scoped_override_;
@@ -202,6 +218,30 @@ TEST_F(StartupLaunchManagerTest, RegisterMultipleBackgroundLaunchReasons) {
       .Times(testing::Exactly(1));
   glic_startup_launch_client.SetLaunchOnStartup(false);
   testing::Mock::VerifyAndClearExpectations(launch_manager);
+}
+
+TEST_F(StartupLaunchManagerTest, OmniboxEverywhereBackgroundLaunchOnStartup) {
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  StartupLaunchManager::Client omnibox_startup_launch_client =
+      StartupLaunchManager::Client(StartupLaunchReason::kOmniboxEverywhere);
+
+  EXPECT_CALL(*launch_manager,
+              UpdateLaunchOnStartup({StartupLaunchMode::kBackground}))
+      .Times(testing::Exactly(1));
+  omnibox_startup_launch_client.SetLaunchOnStartup(true);
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+
+  EXPECT_CALL(*launch_manager, UpdateLaunchOnStartup({std::nullopt}))
+      .Times(testing::Exactly(1));
+  omnibox_startup_launch_client.SetLaunchOnStartup(false);
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+}
+
+TEST(StartupLaunchManagerClientTest, NullManagerDoesNotCrash) {
+  StartupLaunchManager::Client omnibox_client(
+      StartupLaunchReason::kOmniboxEverywhere);
+  omnibox_client.SetLaunchOnStartup(true);
+  omnibox_client.SetLaunchOnStartup(false);
 }
 
 TEST_F(StartupLaunchManagerTest, WaitForAllClientsToInit) {
@@ -552,6 +592,72 @@ TEST_F(StartupLaunchManagerForegroundLaunchOptInTest,
   testing::Mock::VerifyAndClearExpectations(launch_manager);
 }
 
+TEST_F(StartupLaunchManagerForegroundLaunchOptInTest,
+       DoesNotShowInfoBarWhenPromotionsDisabledAtStartup) {
+  TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
+  g_browser_process->local_state()->SetBoolean(prefs::kPromotionsEnabled,
+                                               false);
+  TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
+      /*profile_manager=*/false);
+
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+}
+
+TEST_F(StartupLaunchManagerForegroundLaunchOptInTest,
+       DoesNotShowInfoBarWhenPromotionsDisabledBeforeShow) {
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+
+  g_browser_process->local_state()->SetBoolean(prefs::kPromotionsEnabled,
+                                               false);
+
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+}
+
+class StartupLaunchManagerForegroundLaunchNoInfoBarTest
+    : public StartupLaunchManagerTestBase {
+ public:
+  StartupLaunchManagerForegroundLaunchNoInfoBarTest()
+      : StartupLaunchManagerTestBase(
+            /*enable_foreground_launch_feature=*/true,
+            /*default_preference=*/std::nullopt) {}
+};
+
+TEST_F(StartupLaunchManagerForegroundLaunchNoInfoBarTest,
+       DoesNotShowInfoBarWhenInfoBarFeatureDisabled) {
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+
+  EXPECT_CALL(*infobar_manager, AddObserver(launch_manager))
+      .Times(testing::Exactly(1));
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+
+  // Infobar should NOT be shown when InfoBar feature is disabled.
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+}
+
 class StartupLaunchManagerForegroundLaunchOptOutTest
     : public StartupLaunchManagerTestBase {
  public:
@@ -635,4 +741,170 @@ TEST_F(StartupLaunchManagerForegroundLaunchOptOutTest,
 
   launch_manager->MaybeShowInfoBars();
   testing::Mock::VerifyAndClearExpectations(launch_manager);
+}
+
+TEST_F(StartupLaunchManagerForegroundLaunchOptOutTest,
+       DoesNotEnableByDefaultWhenPromotionsDisabledAtStartup) {
+  TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
+  PrefService* local_state = g_browser_process->local_state();
+  local_state->SetBoolean(prefs::kPromotionsEnabled, false);
+  // Simulate a fresh process: the fixture's manager already overrode the
+  // in-memory default.
+  local_state->SetDefaultPrefValue(prefs::kForegroundLaunchOnLogin,
+                                   base::Value(false));
+  TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
+      /*profile_manager=*/false);
+
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  EXPECT_CALL(*launch_manager, UpdateLaunchOnStartup({std::nullopt}))
+      .Times(testing::Exactly(1));
+  launch_manager->CommitLaunchOnStartupState();
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+  EXPECT_FALSE(local_state->GetBoolean(prefs::kForegroundLaunchOnLogin));
+
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+}
+
+TEST_F(StartupLaunchManagerForegroundLaunchOptOutTest,
+       PolicyDisabledAtStartup) {
+  TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
+  TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
+      prefs::kForegroundLaunchOnLogin, base::Value(false));
+  TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
+      /*profile_manager=*/false);
+
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  EXPECT_CALL(*launch_manager, UpdateLaunchOnStartup({std::nullopt}))
+      .Times(testing::Exactly(1));
+  launch_manager->CommitLaunchOnStartupState();
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+}
+
+TEST_F(StartupLaunchManagerForegroundLaunchOptInTest, PolicyEnabledAtStartup) {
+  TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
+  TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
+      prefs::kForegroundLaunchOnLogin, base::Value(true));
+  TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
+      /*profile_manager=*/false);
+
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  EXPECT_CALL(*launch_manager,
+              UpdateLaunchOnStartup({StartupLaunchMode::kForeground}))
+      .Times(testing::Exactly(1));
+  launch_manager->CommitLaunchOnStartupState();
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+}
+
+TEST_F(StartupLaunchManagerForegroundLaunchOptOutTest,
+       PolicyAppliedWhileInfoBarShown) {
+  base::HistogramTester histogram_tester;
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(1));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+
+  EXPECT_CALL(*infobar_manager, CloseAllInfoBars()).Times(testing::Exactly(1));
+  EXPECT_CALL(*launch_manager, UpdateLaunchOnStartup({std::nullopt}))
+      .Times(testing::Exactly(1));
+  TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
+      prefs::kForegroundLaunchOnLogin, base::Value(false));
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+  testing::Mock::VerifyAndClearExpectations(launch_manager);
+
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+
+  // Policy changes are not user actions.
+  histogram_tester.ExpectTotalCount(
+      "Startup.Launch.Foreground.PreferenceChanged", 0);
+}
+
+TEST_F(StartupLaunchManagerForegroundLaunchOptInTest,
+       RecommendedPolicySuppressesInfoBar) {
+  TestStartupLaunchManager* const launch_manager = launch_on_startup_manager();
+  TestingBrowserProcess::GetGlobal()
+      ->GetTestingLocalState()
+      ->SetRecommendedPref(prefs::kForegroundLaunchOnLogin, base::Value(true));
+
+  auto infobar_manager_mock =
+      std::make_unique<MockStartupLaunchInfoBarManager>();
+  MockStartupLaunchInfoBarManager* infobar_manager = infobar_manager_mock.get();
+  launch_manager->SetInfoBarManager(std::move(infobar_manager_mock));
+  EXPECT_CALL(*infobar_manager, ShowInfoBars(testing::_))
+      .Times(testing::Exactly(0));
+  launch_manager->MaybeShowInfoBars();
+  testing::Mock::VerifyAndClearExpectations(infobar_manager);
+}
+
+TEST(StartupFeaturesTest, IsForegroundLaunchInfoBarEnabledFallback) {
+  base::test::ScopedFeatureList feature_list;
+
+  // Case 1: Base feature enabled, InfoBar feature NOT overridden -> Fallback
+  // to base feature state (returns true).
+  feature_list.InitAndEnableFeatureWithParameters(
+      features::kLaunchOnStartup,
+      {{features::kLaunchOnStartupModeParam.name, "foreground"}});
+  EXPECT_TRUE(features::IsForegroundLaunchEnabled());
+  EXPECT_TRUE(features::IsForegroundLaunchInfoBarEnabled());
+
+  // Case 2: Base feature enabled, InfoBar feature explicitly disabled ->
+  // Returns false.
+  feature_list.Reset();
+  feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{features::kLaunchOnStartup,
+                             {{features::kLaunchOnStartupModeParam.name,
+                               "foreground"}}}},
+      /*disabled_features=*/{features::kLaunchOnStartupInfoBar});
+  EXPECT_TRUE(features::IsForegroundLaunchEnabled());
+  EXPECT_FALSE(features::IsForegroundLaunchInfoBarEnabled());
+
+  // Case 3: Base feature enabled, InfoBar feature explicitly enabled ->
+  // Returns true.
+  feature_list.Reset();
+  feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{features::kLaunchOnStartup,
+                             {{features::kLaunchOnStartupModeParam.name,
+                               "foreground"}}},
+                            {features::kLaunchOnStartupInfoBar, {}}},
+      /*disabled_features=*/{});
+  EXPECT_TRUE(features::IsForegroundLaunchEnabled());
+  EXPECT_TRUE(features::IsForegroundLaunchInfoBarEnabled());
+
+  // Case 4: Base feature disabled -> Returns false.
+  feature_list.Reset();
+  feature_list.InitAndDisableFeature(features::kLaunchOnStartup);
+  EXPECT_FALSE(features::IsForegroundLaunchEnabled());
+  EXPECT_FALSE(features::IsForegroundLaunchInfoBarEnabled());
 }

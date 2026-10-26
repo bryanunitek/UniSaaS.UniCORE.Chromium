@@ -279,6 +279,14 @@ function addPeerConnectionUpdate(peerConnectionElement, update) {
       value = update.value;
     }
   }
+  if (update.type === 'ontrack') {
+    // The rtcstats format flattens the track event into
+    // [kind, id, label, ...streamIds].
+    value = [value.kind, value.id, value.label, ...value.streams];
+  } else if (update.type === 'addTrack') {
+    // Local tracks have no label, see SerializeTrackEvent().
+    value = [value.kind, value.id, ...value.streams];
+  }
   addRtcStatsEvent(
     update.type,
     peerConnectionElement.id,

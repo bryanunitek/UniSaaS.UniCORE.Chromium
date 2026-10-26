@@ -11,7 +11,6 @@
 <translation id="1253734725326687145">Docelowy element dotykowy został przeniesiony w prawy górny róg. Kliknij tutaj.</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" /> – nie udało się udostępnić</translation>
 <translation id="1269641567813814718">Windows</translation>
-<translation id="1291104554099683393">Spróbuj udostępnić jego mniejsze fragmenty.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Od lewej do prawej</translation>
 <translation id="1383876407941801731">Szukaj</translation>
@@ -38,7 +37,6 @@
 <translation id="1901303067676059328">Zaznacz &amp;wszystko</translation>
 <translation id="19085484004813472">To jest nowa funkcja</translation>
 <translation id="2006524834898217237">Upewnij się, że to urządzenie jest połączone z internetem.</translation>
-<translation id="208586643495776849">Spróbuj ponownie</translation>
 <translation id="2111134541987263231">Włącz opcję <ph name="BEGIN_BOLD" />Zezwalaj w trybie incognito<ph name="END_BOLD" />.</translation>
 <translation id="2141853158323869627">{DAYS,plural, =1{1 dzień}few{# dni}many{# dni}other{# dnia}}</translation>
 <translation id="2148716181193084225">Dzisiaj</translation>
@@ -85,7 +83,6 @@
 <translation id="3306688585798492231">Wyświetlacz wbudowany</translation>
 <translation id="335581015389089642">Mowa</translation>
 <translation id="3372635229069101468">Kliknij <ph name="BEGIN_BOLD" />Szczegóły<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Tekst jest za długi</translation>
 <translation id="3406306243914553062">Treść HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{Pozostał 1 dzień}few{Pozostały # dni}many{Pozostało # dni}other{Pozostało # dnia}}</translation>
 <translation id="3600969208114796418">Plik <ph name="SAVEAS_EXTENSION_TYPE" /></translation>
@@ -128,7 +125,6 @@
 <translation id="5046499563572181734">Kliknij tutaj</translation>
 <translation id="5076340679995252485">&amp;Wklej</translation>
 <translation id="520299402983819650"><ph name="QUANTITY" /> PB</translation>
-<translation id="5278860589123563674">Nie udało się wysłać</translation>
 <translation id="5283101102242354279">Włączanie rozszerzenia w trybie incognito:</translation>
 <translation id="528468243742722775">Zakończ</translation>
 <translation id="5329858601952122676">&amp;Usuń</translation>

@@ -5,9 +5,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/search/ntp_test_utils.h"
-#include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
@@ -16,13 +15,14 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/search/ntp_features.h"
 #include "components/search_engines/template_url_service.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace {
@@ -57,7 +57,7 @@ class NewTabPageNavigationThrottleTest : public InProcessBrowserTest {
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetWebContentsAt(0);
+    return browser()->GetTabStripModel()->GetWebContentsAt(0);
   }
 
   net::EmbeddedTestServer* https_test_server() { return &https_test_server_; }
@@ -218,7 +218,7 @@ IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottleNoBrowserInitiatedLinksTest,
   EXPECT_EQ(ntp_url, NavigateToNewTabPage());
 
   const GURL page_url = https_test_server()->GetURL("/simple.html");
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   OverrideNavigationParamsObserver observer(web_contents);
   EXPECT_TRUE(content::NavigateToURLFromRenderer(web_contents, page_url));
 
@@ -246,7 +246,7 @@ IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottleBrowserInitiatedLinksTest,
   EXPECT_EQ(ntp_url, NavigateToNewTabPage());
 
   const GURL page_url = https_test_server()->GetURL("/simple.html");
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   OverrideNavigationParamsObserver observer(web_contents);
   EXPECT_TRUE(content::NavigateToURLFromRenderer(web_contents, page_url));
 
@@ -270,7 +270,7 @@ IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottleNoBrowserInitiatedLinksTest,
   EXPECT_EQ(chrome::kChromeUINewTabPageThirdPartyURL, NavigateToNewTabPage());
 
   const GURL page_url = https_test_server()->GetURL("/simple.html");
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   OverrideNavigationParamsObserver observer(web_contents);
   EXPECT_TRUE(content::NavigateToURLFromRenderer(web_contents, page_url));
 
@@ -294,7 +294,7 @@ IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottleBrowserInitiatedLinksTest,
   EXPECT_EQ(chrome::kChromeUINewTabPageThirdPartyURL, NavigateToNewTabPage());
 
   const GURL page_url = https_test_server()->GetURL("/simple.html");
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   OverrideNavigationParamsObserver observer(web_contents);
   EXPECT_TRUE(content::NavigateToURLFromRenderer(web_contents, page_url));
 
@@ -361,72 +361,6 @@ IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottlePrerenderTest,
 
   // The title should be changed after navigation.
   EXPECT_NE(u"Title Of Awesomeness", web_contents()->GetTitle());
-}
-
-class NewTabPageNavigationThrottleFencedFrameTest
-    : public NewTabPageNavigationThrottleTest {
- public:
-  NewTabPageNavigationThrottleFencedFrameTest() = default;
-  ~NewTabPageNavigationThrottleFencedFrameTest() override = default;
-  NewTabPageNavigationThrottleFencedFrameTest(
-      const NewTabPageNavigationThrottleFencedFrameTest&) = delete;
-
-  NewTabPageNavigationThrottleFencedFrameTest& operator=(
-      const NewTabPageNavigationThrottleFencedFrameTest&) = delete;
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_helper_;
-  }
-
-  content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
-  }
-
- private:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
-};
-
-IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottleFencedFrameTest,
-                       FencedFrameDoesNotResetNewTabStartTime) {
-  base::HistogramTester histogram_tester;
-
-  ASSERT_TRUE(https_test_server()->Start());
-  GURL ntp_url = https_test_server()->GetURL("/instant_extended.html");
-  SetNewTabPage(ntp_url.spec());
-
-  CoreTabHelper* core_tab_helper =
-      CoreTabHelper::FromWebContents(web_contents());
-  core_tab_helper->set_new_tab_start_time(base::TimeTicks().Now());
-
-  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), ntp_url));
-  EXPECT_TRUE(core_tab_helper->new_tab_start_time().is_null());
-
-  core_tab_helper->set_new_tab_start_time(base::TimeTicks().Now());
-  GURL fenced_frame_url =
-      https_test_server()->GetURL("/fenced_frames/title1.html");
-  content::RenderFrameHost* fenced_frame_host =
-      fenced_frame_test_helper().CreateFencedFrame(
-          web_contents()->GetPrimaryMainFrame(), fenced_frame_url);
-  EXPECT_NE(nullptr, fenced_frame_host);
-  EXPECT_FALSE(core_tab_helper->new_tab_start_time().is_null());
-}
-
-IN_PROC_BROWSER_TEST_F(NewTabPageNavigationThrottleFencedFrameTest,
-                       FencedFrameShouldNotAffectTitle) {
-  ASSERT_TRUE(https_test_server()->Start());
-  GURL ntp_url = https_test_server()->GetURL("/instant_extended.html");
-  SetNewTabPage(ntp_url.spec());
-
-  GURL title_url = https_test_server()->GetURL("/title2.html");
-  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), title_url));
-  EXPECT_EQ(u"Title Of Awesomeness", web_contents()->GetTitle());
-
-  content::RenderFrameHost* fenced_frame_host =
-      fenced_frame_test_helper().CreateFencedFrame(
-          web_contents()->GetPrimaryMainFrame(), ntp_url);
-  EXPECT_NE(nullptr, fenced_frame_host);
-  // Fenced frames should not update the title of the web contents.
-  EXPECT_EQ(u"Title Of Awesomeness", web_contents()->GetTitle());
 }
 
 }  // namespace

@@ -10,6 +10,7 @@ import {TrackedElementManager} from '//resources/js/tracked_element/tracked_elem
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import {MenuSourceType} from '//resources/mojo/ui/base/mojom/menu_source_type.mojom-webui.js';
 import type {IconHandle} from '/shared/icon_handle.mojom-webui.js';
+import {HighlightTracker} from '/shared/toolbar_button.js';
 
 import {getCss} from './extension.css.js';
 import {getHtml} from './extension.html.js';
@@ -40,6 +41,7 @@ export class ExtensionElement extends CrLitElement {
 
   private bar: ExtensionsBarElement;
   private extensionId: string;
+  protected highlightTracker_: HighlightTracker = new HighlightTracker();
 
   constructor(extensionId: string, bar: ExtensionsBarElement) {
     super();
@@ -50,8 +52,10 @@ export class ExtensionElement extends CrLitElement {
   override connectedCallback() {
     super.connectedCallback();
     TrackedElementManager.getInstance().startTracking(
-        this, 'kToolbarActionViewElementId',
-        {secondaryId: 'ext:' + this.extensionId});
+        this, 'kToolbarActionViewElementId', {
+          secondaryId: 'ext:' + this.extensionId,
+          onHighlightChanged: this.highlightTracker_.onHighlightChanged,
+        });
   }
 
   override disconnectedCallback() {
@@ -59,7 +63,10 @@ export class ExtensionElement extends CrLitElement {
     TrackedElementManager.getInstance().stopTracking(this);
   }
 
-  protected onClick() {
+  protected onClick(e: PointerEvent) {
+    if (this.highlightTracker_.shouldSkipClick(e)) {
+      return;
+    }
     this.bar.onClick(this.extensionId);
   }
 

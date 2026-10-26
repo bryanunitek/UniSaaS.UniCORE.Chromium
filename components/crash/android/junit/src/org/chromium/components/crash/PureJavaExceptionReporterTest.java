@@ -4,8 +4,6 @@
 
 package org.chromium.components.crash;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
@@ -13,7 +11,6 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.components.minidump_uploader.CrashTestRule;
 
 import java.io.BufferedReader;
@@ -23,7 +20,6 @@ import java.io.IOException;
 
 /** Unittests for {@link PureJavaExceptionReporter}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 public class PureJavaExceptionReporterTest {
     @Rule public CrashTestRule mTestRule = new CrashTestRule();
 
@@ -111,7 +107,6 @@ public class PureJavaExceptionReporterTest {
     }
 
     @Test
-    @SmallTest
     public void verifyMinidumpContentAndUpload() {
         Throwable exception = new RuntimeException(EXCEPTION_NAME);
         TestPureJavaExceptionReporter reporter = new TestPureJavaExceptionReporter();
@@ -132,7 +127,6 @@ public class PureJavaExceptionReporterTest {
     }
 
     @Test
-    @SmallTest
     public void verifyCrashKeys() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {

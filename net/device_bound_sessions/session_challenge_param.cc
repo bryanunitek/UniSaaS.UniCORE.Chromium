@@ -36,38 +36,33 @@ SessionChallengeParam::SessionChallengeParam(
 // static
 std::optional<SessionChallengeParam> SessionChallengeParam::ParseItem(
     const structured_headers::ParameterizedMember& session_challenge) {
-  if (session_challenge.member_is_inner_list ||
-      session_challenge.member.empty()) {
+  const net::structured_headers::ParameterizedItem* item =
+      session_challenge.GetIfItem();
+  if (!item) {
     return std::nullopt;
   }
 
-  const structured_headers::Item& item = session_challenge.member[0].item;
-  if (!item.is_string()) {
-    return std::nullopt;
-  }
-
-  std::string challenge(item.GetString());
-  if (challenge.empty()) {
+  const std::string* challenge = item->item.GetIfString();
+  if (!challenge || challenge->empty()) {
     return std::nullopt;
   }
 
   std::optional<std::string> session_id;
   if (auto it = std::ranges::find(
-          session_challenge.params, kSessionIdKey,
+          item->params, kSessionIdKey,
           &std::pair<std::string, structured_headers::Item>::first);
-      it != session_challenge.params.end()) {
-    const auto& param = it->second;
-    if (!param.is_string()) {
+      it != item->params.end()) {
+    const std::string* string = it->second.GetIfString();
+    if (!string) {
       return std::nullopt;
     }
 
-    auto id = param.GetString();
-    if (!id.empty()) {
-      session_id = std::move(id);
+    if (!string->empty()) {
+      session_id = *string;
     }
   }
 
-  return SessionChallengeParam(std::move(session_id), std::move(challenge));
+  return SessionChallengeParam(std::move(session_id), *challenge);
 }
 
 // static

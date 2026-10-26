@@ -9,19 +9,12 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/download/download_ui_model.h"
 #include "chrome/browser/ui/download/download_bubble_contents_view_info.h"
+#include "chrome/browser/ui/views/download/bubble/download_bubble_mode.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_security_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
-// Type of downloads to show in the download bubble primary view.
-enum class DownloadBubbleMode {
-  // Shows all recent downloads finished within the last 24 hours.
-  kComplete,
-  // Shows only in-progress and uninteracted downloads.
-  kPartial,
-};
-
-class Browser;
+class BrowserWindowInterface;
 class DownloadBubbleNavigationHandler;
 class DownloadBubblePrimaryView;
 class DownloadBubbleRowView;
@@ -53,7 +46,7 @@ class DownloadBubbleContentsView : public views::View,
   };
 
   DownloadBubbleContentsView(
-      base::WeakPtr<Browser> browser,
+      BrowserWindowInterface* browser,
       base::WeakPtr<DownloadBubbleUIController> bubble_controller,
       base::WeakPtr<DownloadBubbleNavigationHandler> navigation_handler,
       // Whether the primary view is the partial view.

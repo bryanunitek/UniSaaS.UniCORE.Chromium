@@ -10,7 +10,6 @@
 #import "ios/chrome/browser/authentication/ui_bundled/views/identity_button_control.h"
 #import "ios/chrome/browser/first_run/public/first_run_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/elements/enterprise_info_popover_view_controller.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/elements/activity_overlay_view.h"
 #import "ios/chrome/browser/shared/ui/image/image_names.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -98,7 +97,7 @@ NSString* const kCollaborationSigninHeaderBackground =
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   self.bannerName = kChromeSigninBannerImage;
   self.headerImage = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kHeaderImageSize));
+      SymbolWithPointSize(SymbolMulticolorChromeball, kHeaderImageSize));
 #else
   self.bannerName = kChromiumSigninBannerImage;
 #endif
@@ -171,7 +170,7 @@ NSString* const kCollaborationSigninHeaderBackground =
             ? self.specificContentView.topAnchor
             : self.identityControl.bottomAnchor;
     UIImage* image = SymbolWithPalette(
-        CustomSymbolWithPointSize(kEnterpriseSymbol, kEnterpriseIconPointSize),
+        SymbolWithPointSize(SymbolEnterprise, kEnterpriseIconPointSize),
         @[ [UIColor colorNamed:kStaticGrey600Color] ]);
     UIImageView* enterpriseImageView =
         [[UIImageView alloc] initWithImage:image];
@@ -271,36 +270,12 @@ NSString* const kCollaborationSigninHeaderBackground =
 
 // Generates the promo sign-in header string.
 - (NSString*)promoSignInHeaderText {
-  if (!FRESignInHeaderTextUpdate()) {
-    return l10n_util::GetNSString(IDS_IOS_UNO_UPGRADE_PROMO_SIGNIN_TITLE);
-  }
-
-  std::string armValue = kFRESignInHeaderTextUpdateParam.Get();
-
-  if (armValue == kFRESignInHeaderTextUpdateParamArm0) {
-    return l10n_util::GetNSString(IDS_IOS_UNO_UPGRADE_PROMO_SIGNIN_TITLE_0);
-  } else if (armValue == kFRESignInHeaderTextUpdateParamArm1) {
-    return l10n_util::GetNSString(IDS_IOS_UNO_UPGRADE_PROMO_SIGNIN_TITLE_1);
-  }
-
-  return l10n_util::GetNSString(IDS_IOS_UNO_UPGRADE_PROMO_SIGNIN_TITLE);
+  return l10n_util::GetNSString(IDS_IOS_UNO_UPGRADE_PROMO_SIGNIN_TITLE_1);
 }
 
 // Generates the FRE sign-in header string.
 - (NSString*)FRESignInHeaderText {
-  if (!FRESignInHeaderTextUpdate()) {
-    return l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE);
-  }
-
-  std::string armValue = kFRESignInHeaderTextUpdateParam.Get();
-
-  if (armValue == kFRESignInHeaderTextUpdateParamArm0) {
-    return l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_0);
-  } else if (armValue == kFRESignInHeaderTextUpdateParamArm1) {
-    return l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1);
-  }
-
-  return l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE);
+  return l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_TITLE_1);
 }
 
 // Generates the footer string.
@@ -426,25 +401,10 @@ NSString* const kCollaborationSigninHeaderBackground =
             l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT);
       }
       break;
-    case SigninContextStyle::kDefault: {
-      if (FRESignInSecondaryActionLabelUpdate()) {
-        std::string signinValue =
-            kFRESignInSecondaryActionLabelUpdateParam.Get();
-        if (signinValue ==
-            kFRESignInSecondaryActionLabelUpdateParamStaySignedOut) {
-          self.configuration.secondaryActionString =
-              l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT);
-        } else {
-          // Fallback action when no valid value is provided.
-          self.configuration.secondaryActionString =
-              l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_DONT_SIGN_IN);
-        }
-      } else {
-        // When the feature flag is disabled, default to the original string
-        self.configuration.secondaryActionString =
-            l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_DONT_SIGN_IN);
-      }
-    } break;
+    case SigninContextStyle::kDefault:
+      self.configuration.secondaryActionString =
+          l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT);
+      break;
   }
 }
 

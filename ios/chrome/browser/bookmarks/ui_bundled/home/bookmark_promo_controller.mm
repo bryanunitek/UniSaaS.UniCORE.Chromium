@@ -23,6 +23,7 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/account_preview_data_service_factory.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
@@ -30,7 +31,7 @@
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 
 @interface BookmarkPromoController () <AuthenticationServiceObserving,
-                                       IdentityManagerObserverBridgeDelegate,
+                                       IdentityManagerObserving,
                                        SigninPromoViewConsumer>
 
 @end
@@ -46,6 +47,7 @@
   // Observer for auth service status changes.
   std::unique_ptr<AuthenticationServiceObserverBridge>
       _authServiceObserverBridge;
+  BOOL _isShutdown;
 }
 
 - (instancetype)initWithBrowser:(Browser*)browser
@@ -56,8 +58,8 @@
         (id<SigninPromoViewMediatorDelegate>)signinPromoViewMediatorDelegate
            accountSettingsPresenter:
                (id<AccountSettingsPresenter>)accountSettingsPresenter {
-  CHECK(browser, base::NotFatalUntil::M145);
-  CHECK(syncService, base::NotFatalUntil::M145);
+  CHECK(browser);
+  CHECK(syncService);
   self = [super init];
   if (self) {
     _delegate = delegate;
@@ -75,6 +77,8 @@
                               authService:AuthenticationServiceFactory::
                                               GetForProfile(profile)
                               prefService:profile->GetPrefs()
+                accountPreviewDataService:AccountPreviewDataServiceFactory::
+                                              GetForProfile(profile)
                               syncService:syncService
                               accessPoint:signin_metrics::AccessPoint::
                                               kBookmarkManager
@@ -96,10 +100,14 @@
 }
 
 - (void)dealloc {
-  CHECK(!_authServiceObserverBridge, base::NotFatalUntil::M152);
+  [self shutdown];
 }
 
 - (void)shutdown {
+  if (_isShutdown) {
+    return;
+  }
+  _isShutdown = YES;
   [_signinPromoViewMediator disconnect];
   _signinPromoViewMediator = nil;
   _browser = nullptr;
@@ -138,7 +146,7 @@
     // The user signed in, but not opted into account bookmarks storage - show
     // review account settings promo.
     signinPromoAction = SigninPromoAction::kReviewAccountSettings;
-  } else if (self.signinPromoViewMediator.showSpinner) {
+  } else if (self.signinPromoViewMediator.spinnerVisible) {
     // The user is opted into syncing bookmarks, but the first sync is not
     // finished yet - keep the promo visible with the same action to show the
     // spinner.
@@ -177,10 +185,10 @@
   [self updateShouldShowSigninPromo];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when a user changes the syncing state.
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   // The account storage promo is not shown if the user is signed-in, so sign-in
   // events should be captured and handled.
@@ -190,10 +198,8 @@
 #pragma mark - SigninPromoViewConsumer
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)configurator
-                             identityChanged:(BOOL)identityChanged {
-  [self.delegate configureSigninPromoWithConfigurator:configurator
-                                      identityChanged:identityChanged];
+    (SigninPromoViewConfigurator*)configurator {
+  [self.delegate configureSigninPromoWithConfigurator:configurator];
 }
 
 - (void)promoProgressStateDidChange {
@@ -212,7 +218,7 @@
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
-      if (!self.signinPromoViewMediator.showSpinner) {
+      if (!self.signinPromoViewMediator.spinnerVisible) {
         self.shouldShowSigninPromo = NO;
       }
       break;

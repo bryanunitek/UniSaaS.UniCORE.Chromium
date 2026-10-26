@@ -28,34 +28,41 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "sandbox/mac/sandbox_serializer.h"
+#include "sandbox/policy/features.h"
 #include "sandbox/policy/mac/params.h"
 #include "sandbox/policy/mac/sandbox_mac.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/switches.h"
+#include "services/webnn/public/mojom/features.mojom-features.h"
 
 namespace content {
 
+// If enabled, restricts the GPU process's access to the Darwin user cache
+// directory (/var/folders/.../C/) to a set of known file names used by Metal
+// ([functions|libraries].[data|list]) as well as providing limited permissions
+// to the Darwin user temp directory (/var/.../T/) to support WebNN's use of
+// CoreML.
+//
+// A sample Metal cache directory tree:
+//   /var/folders/.../C/[bundle_id|helper_bundle_id]
+//   ├── com.apple.metal
+//   │   ├── 16777235_355 (matches regex \d+_\d+)
+//   │   │   ├── functions.data
+//   │   │   └── functions.list
+//   │   └── 32024 (matches regex \d+)
+//   │       ├── libraries.data
+//   │       └── libraries.list
+//   └── com.apple.metalfe
+//       └── modules.timestamp
+BASE_FEATURE(kMacSandboxRestrictGpuDarwinUserDirs,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// If enabled, allows the renderer process to query `process-info-pidinfo` for
+// any process rather than only itself.
+BASE_FEATURE(kMacSandboxAllowRendererPidinfo,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 namespace {
-
-// If disabled, the macOS sandbox for child processes will deny access to
-// distributed notifications (https://crbug.com/513454805).
-BASE_FEATURE(kMacSandboxDistributedNotifications,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// If enabled, the macOS sandbox for the Network process will allow read and
-// write file access to the user's cache and temp directory
-// (https://crbug.com/527885521).
-// TODO(bryanoltman): remove this feature once we have determined the scope of
-// access needed by the Network process, if any.
-BASE_FEATURE(kMacSandboxNetworkUserDirAccess,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// If enabled, the macOS sandbox for the On-Device Model Execution (ODME)
-// process will allow read and write file access to the user directory, as well
-// as the user's cache and temp directories (https://crbug.com/527915149).
-// TODO(bryanoltman): remove this feature once we have determined the scope of
-// access needed by the ODME process, if any.
-BASE_FEATURE(kMacSandboxOdmeUserDirAccess, base::FEATURE_DISABLED_BY_DEFAULT);
 
 std::optional<base::FilePath>& GetNetworkTestCertsDirectory() {
   // Set by SetNetworkTestCertsDirectoryForTesting().
@@ -81,25 +88,21 @@ std::string GetOSVersion() {
 
 // Retrieves the users shared darwin dirs and adds it to the profile.
 void AddDarwinDirs(sandbox::SandboxSerializer* serializer) {
-  char dir_path[PATH_MAX + 1];
-
-  size_t rv = confstr(_CS_DARWIN_USER_CACHE_DIR, dir_path, sizeof(dir_path));
-  PCHECK(rv != 0);
-  CHECK(serializer->SetParameter(
-      sandbox::policy::kParamDarwinUserCacheDir,
-      sandbox::policy::GetCanonicalPath(base::FilePath(dir_path)).value()));
-
-  rv = confstr(_CS_DARWIN_USER_DIR, dir_path, sizeof(dir_path));
-  PCHECK(rv != 0);
-  CHECK(serializer->SetParameter(
-      sandbox::policy::kParamDarwinUserDir,
-      sandbox::policy::GetCanonicalPath(base::FilePath(dir_path)).value()));
-
-  rv = confstr(_CS_DARWIN_USER_TEMP_DIR, dir_path, sizeof(dir_path));
-  PCHECK(rv != 0);
-  CHECK(serializer->SetParameter(
-      sandbox::policy::kParamDarwinUserTempDir,
-      sandbox::policy::GetCanonicalPath(base::FilePath(dir_path)).value()));
+  base::FilePath user_dir =
+      base::GetDarwinUserDirectory(base::DarwinUserDirectory::kUser);
+  CHECK(!user_dir.empty());
+  CHECK(serializer->SetParameter(sandbox::policy::kParamDarwinUserDir,
+                                 user_dir.value()));
+  base::FilePath user_cache_dir =
+      base::GetDarwinUserDirectory(base::DarwinUserDirectory::kUserCache);
+  CHECK(!user_cache_dir.empty());
+  CHECK(serializer->SetParameter(sandbox::policy::kParamDarwinUserCacheDir,
+                                 user_cache_dir.value()));
+  base::FilePath user_temp_dir =
+      base::GetDarwinUserDirectory(base::DarwinUserDirectory::kUserTemp);
+  CHECK(!user_temp_dir.empty());
+  CHECK(serializer->SetParameter(sandbox::policy::kParamDarwinUserTempDir,
+                                 user_temp_dir.value()));
 }
 
 // All of the below functions populate the `serializer` with the parameters that
@@ -111,7 +114,9 @@ void SetupCommonSandboxParameters(
   const base::CommandLine* browser_command_line =
       base::CommandLine::ForCurrentProcess();
   bool enable_logging = browser_command_line->HasSwitch(
-      sandbox::policy::switches::kEnableSandboxLogging);
+                            sandbox::policy::switches::kEnableSandboxLogging) ||
+                        base::FeatureList::IsEnabled(
+                            sandbox::policy::features::kEnableSandboxLogging);
 
   CHECK(serializer->SetParameter(
       sandbox::policy::kParamExecutablePath,
@@ -122,10 +127,6 @@ void SetupCommonSandboxParameters(
                                         enable_logging));
   CHECK(serializer->SetBooleanParameter(
       sandbox::policy::kParamDisableSandboxDenialLogging, !enable_logging));
-
-  CHECK(serializer->SetBooleanParameter(
-      sandbox::policy::kParamEnableDistributedNotifications,
-      base::FeatureList::IsEnabled(kMacSandboxDistributedNotifications)));
 
   std::string bundle_path =
       sandbox::policy::GetCanonicalPath(base::apple::MainBundlePath()).value();
@@ -167,8 +168,6 @@ void SetupCommonSandboxParameters(
 
 void SetupNetworkSandboxParameters(sandbox::SandboxSerializer* serializer,
                                    const base::CommandLine& command_line) {
-  SetupCommonSandboxParameters(serializer, command_line);
-
   std::vector<base::FilePath> storage_paths =
       GetContentClient()->browser()->GetNetworkContextsParentDirectory();
 
@@ -190,27 +189,27 @@ void SetupNetworkSandboxParameters(sandbox::SandboxSerializer* serializer,
         sandbox::policy::GetCanonicalPath(*GetNetworkTestCertsDirectory())
             .value()));
   }
-
-  CHECK(serializer->SetBooleanParameter(
-      sandbox::policy::kParamNetworkUserDirAccess,
-      base::FeatureList::IsEnabled(kMacSandboxNetworkUserDirAccess)));
 }
 
 bool SetupGpuSandboxParameters(sandbox::SandboxSerializer* serializer,
                                const base::CommandLine& command_line) {
-  SetupCommonSandboxParameters(serializer, command_line);
   AddDarwinDirs(serializer);
   CHECK(serializer->SetBooleanParameter(
       sandbox::policy::kParamDisableMetalShaderCache,
       command_line.HasSwitch(
           sandbox::policy::switches::kDisableMetalShaderCache)));
 
-  CHECK(serializer->SetBooleanParameter(
-      sandbox::policy::kParamOdmeUserDirAccess,
-      base::FeatureList::IsEnabled(kMacSandboxOdmeUserDirAccess)));
-
   base::FilePath helper_bundle_path =
       base::apple::GetInnermostAppBundlePath(command_line.GetProgram());
+
+  CHECK(serializer->SetBooleanParameter(
+      sandbox::policy::kParamRestrictGpuDarwinUserDirs,
+      base::FeatureList::IsEnabled(kMacSandboxRestrictGpuDarwinUserDirs)));
+
+  CHECK(serializer->SetBooleanParameter(
+      sandbox::policy::kParamWebnnCompilerProcess,
+      base::FeatureList::IsEnabled(
+          webnn::mojom::features::kWebNNCompilerProcess)));
 
   // The helper may not be contained in an app bundle for unit tests.
   // In that case `kParamHelperBundleId` will remain unset.
@@ -234,8 +233,6 @@ bool SetupGpuSandboxParameters(sandbox::SandboxSerializer* serializer,
 void SetupProxyResolverSandboxParameters(
     sandbox::SandboxSerializer* serializer,
     const base::CommandLine& command_line) {
-  SetupCommonSandboxParameters(serializer, command_line);
-
   // Controls whether the sandbox allows the network access needed to fetch and
   // execute PAC/WPAD scripts.
   // TODO(crbug.com/442313607): Set this to true when PAC/WPAD is implemented.
@@ -243,25 +240,45 @@ void SetupProxyResolverSandboxParameters(
       sandbox::policy::kParamSystemProxyNetworkAccess, /*value=*/false));
 }
 
+void SetupRendererSandboxParameters(sandbox::SandboxSerializer* serializer) {
+  CHECK(serializer->SetBooleanParameter(
+      sandbox::policy::kParamAllowRendererPidinfo,
+      base::FeatureList::IsEnabled(kMacSandboxAllowRendererPidinfo)));
+}
+
+void SetupWebNNModelCompilationSandboxParameters(
+    sandbox::SandboxSerializer* serializer) {
+  // CoreML requires access to user temporary directories to write intermediate
+  // artifacts and compiled models (.mlmodelc bundles).
+  AddDarwinDirs(serializer);
+}
+
 }  // namespace
 
 bool SetupSandboxParameters(sandbox::mojom::Sandbox sandbox_type,
                             const base::CommandLine& command_line,
                             sandbox::SandboxSerializer* serializer) {
+  SetupCommonSandboxParameters(serializer, command_line);
   switch (sandbox_type) {
     case sandbox::mojom::Sandbox::kAudio:
     case sandbox::mojom::Sandbox::kCdm:
     case sandbox::mojom::Sandbox::kMirroring:
     case sandbox::mojom::Sandbox::kPrintBackend:
     case sandbox::mojom::Sandbox::kPrintCompositor:
-    case sandbox::mojom::Sandbox::kRenderer:
     case sandbox::mojom::Sandbox::kService:
     case sandbox::mojom::Sandbox::kServiceWithJit:
+    case sandbox::mojom::Sandbox::kPlatformRuntime:
     case sandbox::mojom::Sandbox::kUtility:
-      SetupCommonSandboxParameters(serializer, command_line);
+      // No specialized setup required.
+      break;
+    case sandbox::mojom::Sandbox::kRenderer:
+      SetupRendererSandboxParameters(serializer);
       break;
     case sandbox::mojom::Sandbox::kProxyResolver:
       SetupProxyResolverSandboxParameters(serializer, command_line);
+      break;
+    case sandbox::mojom::Sandbox::kWebNNModelCompilation:
+      SetupWebNNModelCompilationSandboxParameters(serializer);
       break;
     case sandbox::mojom::Sandbox::kOnDeviceModelExecution:
     case sandbox::mojom::Sandbox::kGpu:
@@ -276,7 +293,6 @@ bool SetupSandboxParameters(sandbox::mojom::Sandbox sandbox_type,
     case sandbox::mojom::Sandbox::kScreenAI:
     case sandbox::mojom::Sandbox::kSpeechRecognition:
     case sandbox::mojom::Sandbox::kOnDeviceTranslation:
-      SetupCommonSandboxParameters(serializer, command_line);
       CHECK(GetContentClient()->browser()->SetupEmbedderSandboxParameters(
           sandbox_type, serializer));
       break;

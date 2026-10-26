@@ -243,15 +243,12 @@ AdjustBackwardPositionToAvoidCrossingEditingBoundariesTemplate(
   // Return first position in the anchor's text node if |pos| is not somewhere
   // inside the editable region containing this position.
   if (highest_root && !highest_root->contains(pos.AnchorNode())) {
-    if (RuntimeEnabledFeatures::
-            ClampWordBoundaryToContentEditableScopeEnabled()) {
-      const Node* first_editable = anchor.ComputeContainerNode();
-      if (first_editable->IsTextNode()) {
-        PositionTemplate<Strategy> first_position =
-            PositionTemplate<Strategy>::FirstPositionInNode(*first_editable);
-        if (anchor != first_position) {
-          return PositionWithAffinityTemplate<Strategy>(first_position);
-        }
+    if (const Node* first_editable = anchor.ComputeContainerNode();
+        first_editable->IsTextNode()) {
+      const PositionTemplate<Strategy> first_position =
+          PositionTemplate<Strategy>::FirstPositionInNode(*first_editable);
+      if (anchor != first_position) {
+        return PositionWithAffinityTemplate<Strategy>(first_position);
       }
     }
     return PositionWithAffinityTemplate<Strategy>();
@@ -509,14 +506,14 @@ PositionWithAffinity PositionForContentsPointRespectingEditingBoundary(
 
 // TODO(yosin): We should use |AssociatedLayoutObjectOf()| in "visible_units.cc"
 // where it takes |LayoutObject| from |Position|.
-int CaretMinOffset(const Node* node) {
+wtf_size_t CaretMinOffset(const Node* node) {
   const LayoutObject* layout_object = AssociatedLayoutObjectOf(*node, 0);
   if (const LayoutText* layout_text = DynamicTo<LayoutText>(layout_object))
     return layout_text->CaretMinOffset();
   return 0;
 }
 
-int CaretMaxOffset(const Node* n) {
+wtf_size_t CaretMaxOffset(const Node* n) {
   return EditingStrategy::CaretMaxOffset(*n);
 }
 
@@ -526,14 +523,14 @@ static bool InRenderedText(const PositionTemplate<Strategy>& position) {
   if (!anchor_node || !anchor_node->IsTextNode())
     return false;
 
-  const int offset_in_node = position.ComputeEditingOffset();
+  const wtf_size_t offset_in_node = position.ComputeEditingOffset();
   const LayoutObject* layout_object =
       AssociatedLayoutObjectOf(*anchor_node, offset_in_node);
   if (!layout_object)
     return false;
 
   const auto* text_layout_object = To<LayoutText>(layout_object);
-  const int text_offset =
+  const wtf_size_t text_offset =
       offset_in_node - text_layout_object->TextStartOffset();
   if (!text_layout_object->ContainsCaretOffset(text_offset))
     return false;
@@ -766,7 +763,7 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
         IsA<Text>(current_node) ? current_pos.OffsetInTextNode() : 0,
         LayoutObjectSide::kFirstLetterIfOnBoundary);
     if (!layout_object ||
-        layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
+        layout_object->Style().Visibility() != EVisibility::kVisible) {
       if (boundary_crossed && rule == kCannotCrossEditingBoundary)
         break;
       continue;
@@ -779,8 +776,8 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
     }
 
     if (!writing_mode.has_value()) {
-      writing_mode.emplace(layout_object->StyleRef().GetWritingMode());
-    } else if (*writing_mode != layout_object->StyleRef().GetWritingMode()) {
+      writing_mode.emplace(layout_object->Style().GetWritingMode());
+    } else if (*writing_mode != layout_object->Style().GetWritingMode()) {
       return last_visible.ComputePosition();
     }
 
@@ -824,7 +821,7 @@ static PositionTemplate<Strategy> MostBackwardCaretPosition(
     const auto* const text_layout_object = To<LayoutText>(layout_object);
     if (!text_layout_object->HasNonCollapsedText())
       continue;
-    const unsigned text_start_offset = text_layout_object->TextStartOffset();
+    const wtf_size_t text_start_offset = text_layout_object->TextStartOffset();
     if (current_node != start_node) {
       // This assertion fires in web tests in the case-transform.html test
       // because of a mix-up between offsets in the text in the DOM tree with
@@ -874,7 +871,7 @@ bool HasInvisibleFirstLetter(const Node* node) {
       DynamicTo<LayoutTextFragment>(AssociatedLayoutObjectOf(*node, 0));
   if (!first_letter || first_letter == remaining_text)
     return false;
-  return first_letter->StyleRef().Visibility() != EVisibility::kVisible ||
+  return first_letter->Style().Visibility() != EVisibility::kVisible ||
          DisplayLockUtilities::LockedAncestorPreventingPaint(*first_letter);
 }
 }  // namespace
@@ -959,7 +956,7 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
         *current_node,
         IsA<Text>(current_node) ? current_pos.OffsetInTextNode() : 0);
     if (!layout_object ||
-        layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
+        layout_object->Style().Visibility() != EVisibility::kVisible) {
       if (boundary_crossed && rule == kCannotCrossEditingBoundary)
         break;
       continue;
@@ -972,8 +969,8 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
     }
 
     if (!writing_mode.has_value()) {
-      writing_mode.emplace(layout_object->StyleRef().GetWritingMode());
-    } else if (*writing_mode != layout_object->StyleRef().GetWritingMode()) {
+      writing_mode.emplace(layout_object->Style().GetWritingMode());
+    } else if (*writing_mode != layout_object->Style().GetWritingMode()) {
       return last_visible.ComputePosition();
     }
 
@@ -1008,7 +1005,7 @@ PositionTemplate<Strategy> MostForwardCaretPosition(
     const auto* const text_layout_object = To<LayoutText>(layout_object);
     if (!text_layout_object->HasNonCollapsedText())
       continue;
-    const unsigned text_start_offset = text_layout_object->TextStartOffset();
+    const wtf_size_t text_start_offset = text_layout_object->TextStartOffset();
     if (current_node != start_node) {
       DCHECK(current_pos.AtStartOfNode() ||
              HasInvisibleFirstLetter(current_node));
@@ -1081,7 +1078,7 @@ static bool IsVisuallyEquivalentCandidateAlgorithm(
   if (!layout_object)
     return false;
 
-  if (layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
+  if (layout_object->Style().Visibility() != EVisibility::kVisible) {
     return false;
   }
 
@@ -1166,8 +1163,8 @@ static UChar32 CharacterAfterAlgorithm(
   auto* text_node = DynamicTo<Text>(pos.ComputeContainerNode());
   if (!text_node)
     return 0;
-  unsigned offset = static_cast<unsigned>(pos.OffsetInContainerNode());
-  unsigned length = text_node->length();
+  wtf_size_t offset = pos.OffsetInContainerNode();
+  wtf_size_t length = text_node->length();
   if (offset >= length)
     return 0;
 
@@ -1354,11 +1351,11 @@ Vector<gfx::QuadF> ComputeTextBounds(
     if (!layout_object || !layout_object->IsText())
       continue;
     const auto* layout_text = To<LayoutText>(layout_object);
-    unsigned start_offset =
+    wtf_size_t start_offset =
         node == start_container ? start_position.OffsetInContainerNode() : 0;
-    unsigned end_offset = node == end_container
-                              ? end_position.OffsetInContainerNode()
-                              : std::numeric_limits<unsigned>::max();
+    wtf_size_t end_offset = node == end_container
+                                ? end_position.OffsetInContainerNode()
+                                : std::numeric_limits<wtf_size_t>::max();
     layout_text->AbsoluteQuadsForRange(result, start_offset, end_offset);
   }
   return result;

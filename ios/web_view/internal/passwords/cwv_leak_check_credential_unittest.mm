@@ -4,6 +4,7 @@
 
 #import "base/strings/utf_string_conversions.h"
 #import "components/password_manager/core/browser/password_form.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "ios/web_view/internal/passwords/cwv_leak_check_credential_internal.h"
 #import "ios/web_view/internal/passwords/cwv_password_internal.h"
 #import "testing/gtest/include/gtest/gtest.h"
@@ -11,6 +12,7 @@
 #import "testing/platform_test.h"
 
 using password_manager::LeakCheckCredential;
+using password_manager::PasswordString;
 
 namespace ios_web_view {
 
@@ -26,7 +28,7 @@ class CWVLeakCheckCredentialTest : public PlatformTest {
     password_form.username_element = u"Email";
     password_form.username_value = username;
     password_form.password_element = u"Passwd";
-    password_form.password_value = password;
+    password_form.password_value = PasswordString(std::u16string(password));
     password_form.submit_element = u"signIn";
     password_form.signon_realm = "http://www.example.com/";
     password_form.scheme = password_manager::PasswordForm::Scheme::kHtml;
@@ -66,11 +68,11 @@ TEST_F(CWVLeakCheckCredentialTest, CWVPasswordInitializationCanonical) {
 // with equivalent credentials.
 TEST_F(CWVLeakCheckCredentialTest, Equals) {
   CWVLeakCheckCredential* credential = [[CWVLeakCheckCredential alloc]
-      initWithCredential:std::make_unique<LeakCheckCredential>(u"username",
-                                                               u"password")];
+      initWithCredential:std::make_unique<LeakCheckCredential>(
+                             u"username", PasswordString(u"password"))];
   CWVLeakCheckCredential* same_credential = [[CWVLeakCheckCredential alloc]
-      initWithCredential:std::make_unique<LeakCheckCredential>(u"username",
-                                                               u"password")];
+      initWithCredential:std::make_unique<LeakCheckCredential>(
+                             u"username", PasswordString(u"password"))];
 
   EXPECT_NSEQ(credential, same_credential);
   EXPECT_EQ(credential.hash, same_credential.hash);
@@ -80,14 +82,14 @@ TEST_F(CWVLeakCheckCredentialTest, Equals) {
 // with different credentials.
 TEST_F(CWVLeakCheckCredentialTest, NotEquals) {
   CWVLeakCheckCredential* credential = [[CWVLeakCheckCredential alloc]
-      initWithCredential:std::make_unique<LeakCheckCredential>(u"username",
-                                                               u"password")];
+      initWithCredential:std::make_unique<LeakCheckCredential>(
+                             u"username", PasswordString(u"password"))];
   CWVLeakCheckCredential* different_password = [[CWVLeakCheckCredential alloc]
-      initWithCredential:std::make_unique<LeakCheckCredential>(u"username",
-                                                               u"secret")];
+      initWithCredential:std::make_unique<LeakCheckCredential>(
+                             u"username", PasswordString(u"secret"))];
   CWVLeakCheckCredential* different_username = [[CWVLeakCheckCredential alloc]
-      initWithCredential:std::make_unique<LeakCheckCredential>(u"bob",
-                                                               u"password")];
+      initWithCredential:std::make_unique<LeakCheckCredential>(
+                             u"bob", PasswordString(u"password"))];
 
   EXPECT_NSNE(credential, different_password);
   EXPECT_NE(credential.hash, different_password.hash);

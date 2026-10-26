@@ -712,10 +712,13 @@ scoped_refptr<VideoFrame> AlignedDataHelper::CreateVideoFrameFromVideoFrameData(
       return nullptr;
     }
 
+    const auto color_space = si_format->is_multi_plane()
+                                 ? gfx::ColorSpace::CreateREC709()
+                                 : gfx::ColorSpace::CreateSRGB();
     const auto si_usage = gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY |
                           gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
     auto shared_image = test_sii_->CreateSharedImage(
-        {*si_format, layout_->coded_size(), gfx::ColorSpace(),
+        {*si_format, layout_->coded_size(), color_space,
          gpu::SharedImageUsageSet(si_usage), "AlignedDataHelper"},
         gpu::kNullSurfaceHandle,
         gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,
@@ -750,6 +753,9 @@ scoped_refptr<VideoFrame> AlignedDataHelper::CreateVideoFrameFromVideoFrameData(
         frame_timestamp);
     DCHECK(frame);
     frame->BackWithOwnedSharedMemory(std::move(dup_region), std::move(mapping));
+    frame->set_color_space(layout_->planes().size() > 1
+                               ? gfx::ColorSpace::CreateREC709()
+                               : gfx::ColorSpace::CreateSRGB());
     return frame;
   }
 }
@@ -834,9 +840,9 @@ scoped_refptr<const VideoFrame> RawDataHelper::GetFrame(size_t index) const {
     // The data is never modified but WrapExternalYuvDataWithLayout() only
     // accepts non-const span.
     // TODO(crbug.com/40285824): spanify this usage.
-    frame_data[i] =
-        UNSAFE_TODO(base::span(const_cast<uint8_t*>(src_frame.plane_addrs[i]),
-                               video_->FrameLayout().planes()[i].size));
+    frame_data[i] = UNSAFE_TODO(
+        base::span(const_cast<uint8_t*>(src_frame.plane_addrs[i].get()),
+                   video_->FrameLayout().planes()[i].size));
   }
 
   scoped_refptr<VideoFrame> video_frame =

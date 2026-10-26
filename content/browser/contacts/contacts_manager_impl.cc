@@ -10,11 +10,14 @@
 
 #include "base/functional/callback.h"
 #include "build/build_config.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/contacts_picker_properties.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+#include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/contacts/contacts_provider_android.h"
@@ -54,11 +57,33 @@ void OnContactsSelected(
 
 }  // namespace
 
+// static
+void ContactsManagerImpl::Create(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::mojom::ContactsManager> receiver) {
+  CHECK(render_frame_host);
+  base::MakeSelfDeleting<ContactsManagerImpl>(
+      *render_frame_host, std::move(receiver),
+      CreateProvider(*render_frame_host));
+}
+
+// static
+ContactsManagerImpl* ContactsManagerImpl::CreateForTesting(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::mojom::ContactsManager> receiver,
+    std::unique_ptr<ContactsProvider> provider) {
+  CHECK(render_frame_host);
+  return base::MakeSelfDeleting<ContactsManagerImpl>(
+      *render_frame_host, std::move(receiver), std::move(provider));
+}
+
 ContactsManagerImpl::ContactsManagerImpl(
     RenderFrameHost& render_frame_host,
-    mojo::PendingReceiver<blink::mojom::ContactsManager> receiver)
-    : DocumentService(render_frame_host, std::move(receiver)),
-      contacts_provider_(CreateProvider(render_frame_host)) {
+    mojo::PendingReceiver<blink::mojom::ContactsManager> receiver,
+    std::unique_ptr<ContactsProvider> provider,
+    base::SelfDeletingPassKey key)
+    : DocumentService(render_frame_host, std::move(receiver), key),
+      contacts_provider_(std::move(provider)) {
   CHECK(!render_frame_host.IsInLifecycleState(
       RenderFrameHost::LifecycleState::kPrerendering));
   source_id_ = render_frame_host.GetPageUkmSourceId();
@@ -73,6 +98,20 @@ void ContactsManagerImpl::Select(bool multiple,
                                  bool include_addresses,
                                  bool include_icons,
                                  SelectCallback mojom_callback) {
+  // Ensure the frame is active and in the primary main frame, and consume
+  // transient user activation to prevent compromised renderers from opening
+  // the contacts picker dialog without user intent.
+  if (!render_frame_host().IsActive() ||
+      !render_frame_host().IsInPrimaryMainFrame() ||
+      !FrameTreeNode::From(&render_frame_host())
+           ->UpdateUserActivationState(
+               blink::mojom::UserActivationUpdateType::
+                   kConsumeTransientActivation,
+               blink::mojom::UserActivationNotificationType::kNone)) {
+    std::move(mojom_callback).Run(std::nullopt);
+    return;
+  }
+
   if (contacts_provider_) {
     contacts_provider_->Select(
         multiple, include_names, include_emails, include_tel, include_addresses,

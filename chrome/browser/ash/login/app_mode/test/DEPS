@@ -1,7 +1,8 @@
 include_rules = [
   "+chrome/browser/extensions/scoped_test_mv2_enabler.h",
   "+chrome/browser/ui/views/frame",
-  "+chrome/browser/ui/browser_window/public",
+  "+chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h",
+  "+chrome/browser/ui/browser_window/public/global_browser_collection.h",
 ]
 
 specific_include_rules = {

@@ -44,8 +44,6 @@ import android.text.style.ClickableSpan;
 import android.view.View;
 import android.view.ViewGroup;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -57,14 +55,13 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillProfileBridge;
 import org.chromium.chrome.browser.autofill.AutofillProfileBridgeJni;
@@ -88,11 +85,14 @@ import org.chromium.components.autofill.autofill_ai.AttributeInstance.DateValue;
 import org.chromium.components.autofill.autofill_ai.AttributeInstance.StringValue;
 import org.chromium.components.autofill.autofill_ai.AttributeType;
 import org.chromium.components.autofill.autofill_ai.AttributeTypeName;
+import org.chromium.components.autofill.autofill_ai.AutofillAiWalletNoticeFunnelEvents;
 import org.chromium.components.autofill.autofill_ai.DataType;
+import org.chromium.components.autofill.autofill_ai.DetailsForUpsertPass;
 import org.chromium.components.autofill.autofill_ai.EntityInstance;
 import org.chromium.components.autofill.autofill_ai.EntityType;
 import org.chromium.components.autofill.autofill_ai.EntityTypeName;
 import org.chromium.components.autofill.autofill_ai.RecordType;
+import org.chromium.components.autofill.payments.LegalMessageLine;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
@@ -107,9 +107,10 @@ import java.util.Collections;
 import java.util.List;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@Batch(Batch.UNIT_TESTS)
-@EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
+@EnableFeatures({
+    ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
+    ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR
+})
 public class EntityEditorModuleTest {
     private static final String USER_EMAIL = "example@gmail.com";
     private static final AttributeType PASSPORT_NAME_ATTRIBUTE_TYPE =
@@ -212,7 +213,7 @@ public class EntityEditorModuleTest {
                     /* isReadOnly= */ false,
                     /* isEnabled= */ true,
                     /* isEligibleForWalletStorage= */ true,
-                    /* isMaskedStorageSupported= */ true,
+                    /* isMaskedStorageSupported= */ false,
                     /* typeNameAsString= */ "Vehicle",
                     /* typeNameAsMetricsString= */ "Vehicle",
                     /* typeNameSectionTitleString= */ "Vehicles",
@@ -255,6 +256,13 @@ public class EntityEditorModuleTest {
             new EntityInstance.Builder(PASSPORT_TYPE)
                     .setGuid("")
                     .setRecordType(RecordType.SERVER_WALLET)
+                    .build();
+
+    private static final EntityInstance NEW_WALLET_VEHICLE =
+            new EntityInstance.Builder(sVehicleType)
+                    .setGuid("")
+                    .setRecordType(RecordType.SERVER_WALLET)
+                    .setIsMaskedServerEntity(false)
                     .build();
 
     private static final EntityInstance WALLET_PASSPORT =
@@ -302,7 +310,7 @@ public class EntityEditorModuleTest {
 
     @Captor private ArgumentCaptor<EntityInstance> mEntityInstanceCaptor;
 
-    private Activity mActivity;
+    private TestActivity mActivity;
     private EntityEditorCoordinator mCoordinator;
     private View mContainerView;
 
@@ -318,7 +326,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testBackgroundColor() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(NEW_LOCAL_PASSPORT);
@@ -333,7 +340,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testBackgroundColorWhenAutofillAiDisabled() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
@@ -349,7 +355,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testOpenHelpAndFeedback() {
         showEditorDialog(LOCAL_PASSPORT);
 
@@ -364,7 +369,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testValidateOnShow() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(NEW_LOCAL_PASSPORT);
@@ -374,7 +378,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testShowEditorDialogForNewEntity() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(NEW_LOCAL_PASSPORT);
@@ -385,7 +388,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testShowEditorDialogForNewWalletEntity() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(NEW_WALLET_PASSPORT);
@@ -399,7 +401,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testShowEditorDialogForExistingEntity() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(LOCAL_PASSPORT);
@@ -410,7 +411,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testClickCancelButton() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(LOCAL_PASSPORT);
@@ -419,7 +419,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testDeleteLocalEntity() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(LOCAL_PASSPORT);
@@ -478,7 +477,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testDeleteWalletEntity() {
         showEditorDialog(WALLET_PASSPORT);
 
@@ -487,7 +485,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testDeleteNewEntity() {
         EntityInstance newPassport =
                 new EntityInstance.Builder(PASSPORT_TYPE)
@@ -501,7 +498,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testEditorFields() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(LOCAL_PASSPORT);
@@ -511,7 +507,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testLocalEntitySourceNotice() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         showEditorDialog(LOCAL_PASSPORT);
@@ -524,7 +519,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testWalletEntitySourceNotice() {
         when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(mAccountInfo);
         showEditorDialog(WALLET_PASSPORT);
@@ -545,7 +539,99 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
+    public void testWalletEntitySourceNotice_WithLegalMessageLines() {
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(mAccountInfo);
+
+        LegalMessageLine legalMessageLine = new LegalMessageLine("Legal disclaimer with link.");
+        legalMessageLine.links.add(
+                new LegalMessageLine.Link(0, 5, "https://policies.google.com/privacy"));
+        DetailsForUpsertPass response =
+                new DetailsForUpsertPass(List.of(legalMessageLine), new byte[] {1, 2, 3});
+
+        HistogramWatcher shownWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        EntityEditorMediator.WALLET_NOTICE_SETTINGS_FUNNEL_HISTOGRAM,
+                        AutofillAiWalletNoticeFunnelEvents.LEGAL_MESSAGE_SHOWN);
+        showEditorDialog(NEW_WALLET_VEHICLE, response);
+        shownWatcher.assertExpected();
+
+        String walletTitle = mActivity.getString(R.string.autofill_google_wallet_title);
+        String expectedSourceNotice =
+                mActivity
+                        .getString(
+                                R.string.autofill_ai_save_or_update_entity_in_wallet_source_notice)
+                        .replace("$1", walletTitle)
+                        .replace("$2", walletTitle)
+                        .replace("$3", USER_EMAIL)
+                        .replace("<link>", "")
+                        .replace("</link>", "");
+
+        String expectedFullText = expectedSourceNotice + "\n\nLegal disclaimer with link.";
+        PropertyModel model = mCoordinator.getEditorModelForTest();
+        verifySourceNotice(model.get(EntityEditorProperties.EDITOR_FIELDS), expectedFullText);
+
+        HistogramWatcher cancelWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        EntityEditorMediator.WALLET_NOTICE_SETTINGS_FUNNEL_HISTOGRAM,
+                        AutofillAiWalletNoticeFunnelEvents.ENTITY_NOT_SAVED);
+        mContainerView.findViewById(R.id.payments_edit_cancel_button).performClick();
+        cancelWatcher.assertExpected();
+    }
+
+    @Test
+    public void testSaveWalletEntity_PassesLegalMessageToken() {
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(mAccountInfo);
+
+        byte[] legalMessageToken = new byte[] {1, 2, 3};
+        DetailsForUpsertPass details =
+                new DetailsForUpsertPass(
+                        List.of(new LegalMessageLine("Legal disclaimer.")), legalMessageToken);
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecords(
+                                EntityEditorMediator.WALLET_NOTICE_SETTINGS_FUNNEL_HISTOGRAM,
+                                AutofillAiWalletNoticeFunnelEvents.LEGAL_MESSAGE_SHOWN,
+                                AutofillAiWalletNoticeFunnelEvents.ENTITY_SAVED)
+                        .build();
+        showEditorDialog(NEW_WALLET_VEHICLE, details);
+
+        PropertyModel model = mCoordinator.getEditorModelForTest();
+        ListModel<EditorItem> editorFields = model.get(EntityEditorProperties.EDITOR_FIELDS);
+        // Set a value for a required field so validation passes.
+        editorFields.get(4).model.set(VALUE, "XYZ123");
+
+        mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
+        verify(mDelegate)
+                .onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), eq(legalMessageToken));
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    public void testSaveWalletEntity_PassesNullLegalMessageTokenWhenLegalMessageEmpty() {
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(mAccountInfo);
+
+        DetailsForUpsertPass details =
+                new DetailsForUpsertPass(Collections.emptyList(), new byte[] {1, 2, 3});
+
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords(
+                                EntityEditorMediator.WALLET_NOTICE_SETTINGS_FUNNEL_HISTOGRAM)
+                        .build();
+        showEditorDialog(NEW_WALLET_VEHICLE, details);
+
+        PropertyModel model = mCoordinator.getEditorModelForTest();
+        ListModel<EditorItem> editorFields = model.get(EntityEditorProperties.EDITOR_FIELDS);
+        // Set a value for a required field so validation passes.
+        editorFields.get(4).model.set(VALUE, "XYZ123");
+
+        mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), eq(null));
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
     public void testWalletEntitySourceNotice_ClickLink() {
         when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(mAccountInfo);
         showEditorDialog(WALLET_PASSPORT);
@@ -558,7 +644,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testPrivateWalletEntitySourceNotice_ClickLink() {
         when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(mAccountInfo);
         showEditorDialog(PRIVATE_WALLET_PASSPORT);
@@ -571,7 +656,7 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR)
     public void testCommitChanges() {
         EntityInstance entity =
                 new EntityInstance.Builder(PASSPORT_TYPE)
@@ -605,7 +690,7 @@ public class EntityEditorModuleTest {
         passportCountryItem.model.set(VALUE, "Germany");
 
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
         EntityInstance updatedEntityInstance = mEntityInstanceCaptor.getValue();
 
         AttributeInstance passportName =
@@ -623,7 +708,7 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR)
     public void testCommitChangesWithInvalidDate() {
         EntityInstance entity =
                 new EntityInstance.Builder(PASSPORT_TYPE)
@@ -650,12 +735,13 @@ public class EntityEditorModuleTest {
         ViewGroup content = mCoordinator.getEntityEditorViewForTest().getContentView();
         DateFieldView issueDate = (DateFieldView) content.getChildAt(3);
 
+        // TODO: crbug.com/487565242 - Refactor the test to use material date picker.
         setDropdownValue(
                 issueDate.getMonthPickerForTest(),
                 DateFieldView.getMonthName(mActivity, /* month= */ 6));
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // Only the month is set, the date is not valid yet.
-        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt());
+        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt(), any());
         assertFalse(TextUtils.isEmpty(issueDateItem.model.get(ERROR_MESSAGE)));
         // The source notice is only show for required fields.
         assertFalse(sourceNoticeItem.model.get(NOTICE_VISIBLE));
@@ -663,7 +749,7 @@ public class EntityEditorModuleTest {
         setDropdownValue(issueDate.getDayPickerForTest(), "20");
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // Only the month and day are set, the date is not valid yet.
-        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt());
+        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt(), any());
         assertFalse(TextUtils.isEmpty(issueDateItem.model.get(ERROR_MESSAGE)));
         // The source notice is only show for required fields.
         assertFalse(sourceNoticeItem.model.get(NOTICE_VISIBLE));
@@ -671,7 +757,7 @@ public class EntityEditorModuleTest {
         setDropdownValue(issueDate.getYearPickerForTest(), "2026");
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // The date is completely valid, the editor should be closed now.
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
 
         EntityInstance updatedEntityInstance = mEntityInstanceCaptor.getValue();
         AttributeInstance passportIssueDate =
@@ -687,7 +773,7 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR)
     public void testCommitChangesWithWhitespaces() {
         EntityInstance entity =
                 new EntityInstance.Builder(PASSPORT_TYPE)
@@ -720,13 +806,14 @@ public class EntityEditorModuleTest {
         // Set partial date to make sure date error message is displayed as well.
         ViewGroup content = mCoordinator.getEntityEditorViewForTest().getContentView();
         DateFieldView issueDate = (DateFieldView) content.getChildAt(3);
+        // TODO: crbug.com/487565242 - Refactor the test to use material date picker.
         setDropdownValue(
                 issueDate.getMonthPickerForTest(),
                 DateFieldView.getMonthName(mActivity, /* month= */ 6));
 
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // The passport number field is required, it's not possible to leave it empty.
-        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt());
+        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt(), any());
         assertFalse(TextUtils.isEmpty(passportNumberItem.model.get(ERROR_MESSAGE)));
         assertFalse(TextUtils.isEmpty(issueDateItem.model.get(ERROR_MESSAGE)));
         assertTrue(sourceNoticeItem.model.get(NOTICE_VISIBLE));
@@ -743,7 +830,7 @@ public class EntityEditorModuleTest {
         setDropdownValue(
                 issueDate.getMonthPickerForTest(), DateFieldView.getMonthDropdownHint(mActivity));
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
 
         EntityInstance updatedEntityInstance = mEntityInstanceCaptor.getValue();
         // The name attribute should not be added to the entity because it wasn't set before.
@@ -760,7 +847,7 @@ public class EntityEditorModuleTest {
 
     /** Test that the entity editor works correctly if the date fields are required. */
     @Test
-    @SmallTest
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR)
     public void testCommitChangesWithDatesRequired() {
         EntityType passportType =
                 new EntityType(
@@ -812,7 +899,7 @@ public class EntityEditorModuleTest {
 
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // The passport number field is required, it's not possible to leave it empty.
-        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt());
+        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt(), any());
         assertFalse(TextUtils.isEmpty(passportIssueDate.model.get(ERROR_MESSAGE)));
         assertFalse(TextUtils.isEmpty(passportExpirationDate.model.get(ERROR_MESSAGE)));
         assertTrue(sourceNotice.model.get(NOTICE_VISIBLE));
@@ -830,7 +917,7 @@ public class EntityEditorModuleTest {
         assertFalse(sourceNotice.model.get(NOTICE_VISIBLE));
 
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
 
         EntityInstance updatedEntityInstance = mEntityInstanceCaptor.getValue();
         // The name attribute should not be added to the entity because it wasn't set before.
@@ -846,7 +933,6 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
     public void testCommitChangesWithTwoRequiredFields() {
         EntityInstance localVehicle =
                 new EntityInstance.Builder(sVehicleType)
@@ -868,7 +954,7 @@ public class EntityEditorModuleTest {
 
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // The entity should not be saved because all required fields are left empty.
-        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt());
+        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt(), any());
         assertFalse(TextUtils.isEmpty(vehicleLicensePlate.model.get(ERROR_MESSAGE)));
         assertFalse(TextUtils.isEmpty(vehicleIdentificationNumber.model.get(ERROR_MESSAGE)));
         assertTrue(sourceNotice.model.get(NOTICE_VISIBLE));
@@ -890,7 +976,7 @@ public class EntityEditorModuleTest {
         // Click the "Done" button and make sure that the editor is closed because only one required
         // attribute is required to save the entity.
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
 
         EntityInstance updatedEntityInstance = mEntityInstanceCaptor.getValue();
         // The name attribute should not be added to the entity because it wasn't set before.
@@ -906,7 +992,7 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR)
     public void testCommitChangesWithThreeRequiredFields() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         EntityType passportTypeWithThreeRequiredFields =
@@ -953,7 +1039,7 @@ public class EntityEditorModuleTest {
 
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
         // The entity should not be saved because all required fields are left empty.
-        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt());
+        verify(mDelegate, times(0)).onDone(any(), anyInt(), anyInt(), any());
         assertFalse(TextUtils.isEmpty(passportNameItem.model.get(ERROR_MESSAGE)));
         assertFalse(TextUtils.isEmpty(passportNumberItem.model.get(ERROR_MESSAGE)));
         assertFalse(TextUtils.isEmpty(passportIssueDateItem.model.get(ERROR_MESSAGE)));
@@ -970,7 +1056,7 @@ public class EntityEditorModuleTest {
 
         passportNumberItem.model.set(VALUE, "AA123456BB");
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
 
         EntityInstance updatedEntityInstance = mEntityInstanceCaptor.getValue();
         assertTrue(updatedEntityInstance.hasAttribute(PASSPORT_NUMBER_ATTRIBUTE_TYPE));
@@ -981,7 +1067,7 @@ public class EntityEditorModuleTest {
     }
 
     @Test
-    @SmallTest
+    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_USE_MATERIAL_DATE_PICKER_IN_ENTITY_EDITOR)
     public void testCommitChangesWithNoRequiredFields() {
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         EntityType passportTypeWithNoRequiredFields =
@@ -1028,11 +1114,18 @@ public class EntityEditorModuleTest {
         // Click the "Done" button and make sure that the editor is closed because there are no
         // required fields in the provided entity.
         mContainerView.findViewById(R.id.editor_dialog_done_button).performClick();
-        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt());
+        verify(mDelegate).onDone(mEntityInstanceCaptor.capture(), anyInt(), anyInt(), any());
     }
 
     private void showEditorDialog(EntityInstance entityInstance) {
-        mCoordinator = new EntityEditorCoordinator(mActivity, mDelegate, mProfile, entityInstance);
+        showEditorDialog(entityInstance, /* detailsForUpsertPass= */ null);
+    }
+
+    private void showEditorDialog(
+            EntityInstance entityInstance, @Nullable DetailsForUpsertPass detailsForUpsertPass) {
+        mCoordinator =
+                new EntityEditorCoordinator(
+                        mActivity, mDelegate, mProfile, entityInstance, detailsForUpsertPass);
         mContainerView = mCoordinator.getEntityEditorViewForTest().getContainerView();
         mCoordinator.showEditorDialog();
     }

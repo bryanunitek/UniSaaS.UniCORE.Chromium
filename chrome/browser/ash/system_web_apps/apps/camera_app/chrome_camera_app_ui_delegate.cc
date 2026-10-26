@@ -29,8 +29,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
-#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/system_web_apps/apps/camera_app/camera_app_survey_handler.h"
@@ -229,7 +227,7 @@ ChromeCameraAppUIDelegate::StorageMonitor::~StorageMonitor() {
 void ChromeCameraAppUIDelegate::StorageMonitor::StartMonitoring(
     base::FilePath monitor_path,
     base::RepeatingCallback<void(StorageMonitorStatus)> callback) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M160);
   // Initialize and set most properties
   monitor_path_ = std::move(monitor_path);
   callback_ = callback;
@@ -245,7 +243,7 @@ void ChromeCameraAppUIDelegate::StorageMonitor::StartMonitoring(
 }
 
 void ChromeCameraAppUIDelegate::StorageMonitor::StopMonitoring() {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M160);
   if (timer_.IsRunning()) {
     timer_.Stop();
   }
@@ -733,7 +731,8 @@ void ChromeCameraAppUIDelegate::MonitorFileDeletionOnFileThread(
     FileMonitor* file_monitor,
     const base::FilePath& file_path,
     base::OnceCallback<void(FileMonitorResult)> callback) {
-  DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(file_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M160);
 
   file_monitor->Monitor(file_path, std::move(callback));
 }

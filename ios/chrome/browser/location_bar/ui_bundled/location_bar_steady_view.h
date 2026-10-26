@@ -11,6 +11,7 @@
 
 @protocol BadgeViewVisibilityDelegate;
 @protocol IncognitoBadgeViewVisibilityDelegate;
+@protocol LocationBarContentSizeDelegate;
 @protocol PageActionMenuCommands;
 @protocol ReaderModeChipVisibilityDelegate;
 @protocol ContextualPanelEntrypointVisibilityDelegate;
@@ -33,7 +34,8 @@
 // A simple view displaying the current URL and security status icon.
 @interface LocationBarSteadyView : UIView
 
-- (instancetype)init NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithTextOnly:(BOOL)textOnly NS_DESIGNATED_INITIALIZER;
+- (instancetype)init;
 - (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
 - (instancetype)initWithCoder:(NSCoder*)aDecoder NS_UNAVAILABLE;
 
@@ -127,6 +129,11 @@
 @property(nonatomic, weak) id<PageActionMenuCommands> pageActionMenuHandler;
 // Whether the browser is in incognito mode.
 @property(nonatomic, assign, getter=isIncognito) BOOL incognito;
+// Delegate notified when the content of this view changed, as this changes the
+// width the location bar needs. This view also re-publishes the changes coming
+// from its badges container.
+@property(nonatomic, weak) id<LocationBarContentSizeDelegate>
+    contentSizeDelegate;
 
 @end
 

@@ -5,23 +5,29 @@
 #include <chromium/cast/cpp/fidl.h>
 #include <fuchsia/camera3/cpp/fidl.h>
 #include <fuchsia/legacymetrics/cpp/fidl.h>
+#include <fuchsia/logger/cpp/fidl.h>
 #include <fuchsia/media/cpp/fidl.h>
 #include <fuchsia/ui/views/cpp/fidl.h>
 #include <fuchsia/web/cpp/fidl.h>
 #include <lib/fdio/directory.h>
 #include <lib/fidl/cpp/binding.h>
 #include <lib/sys/cpp/component_context.h>
+#include <lib/vfs/cpp/service.h>
 #include <lib/zx/eventpair.h>
 
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
+#include "base/check.h"
 #include "base/fuchsia/file_utils.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/mem_buffer_util.h"
+#include "base/fuchsia/process_context.h"
 #include "base/fuchsia/scoped_service_binding.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
@@ -29,12 +35,15 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/test/test_timeouts.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
+#include "chromecast/bindings/bindings_manager_fuchsia.h"
+#include "components/cast/message_port/test_message_port_receiver.h"
 #include "components/fuchsia_component_support/dynamic_component_host.h"
 #include "fuchsia_web/common/string_util.h"
 #include "fuchsia_web/common/test/fit_adapter.h"
@@ -48,10 +57,11 @@
 #include "fuchsia_web/runners/cast/cast_runner_switches.h"
 #include "fuchsia_web/runners/cast/test/cast_runner_features.h"
 #include "fuchsia_web/runners/cast/test/cast_runner_launcher.h"
-#include "fuchsia_web/runners/cast/test/fake_api_bindings.h"
+#include "fuchsia_web/runners/cast/test/scoped_port_handler.h"
 #include "net/test/embedded_test_server/default_handlers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
 
 namespace {
 
@@ -175,6 +185,67 @@ class FakeApplicationContext final : public chromium::cast::ApplicationContext {
   base::OnceClosure on_application_terminated_;
 };
 
+// Injects a JavaScript binding that connects to a test message port
+// ("testport") upon DOMContentLoaded, enabling tests to evaluate arbitrary
+// JavaScript expressions in the context of the Cast web document and receive
+// the serialized string result.
+//
+// If the expression returns a Promise, execution blocks until the Promise
+// resolves and returns the resolved value (or JSON-serialized error).
+class TestQueryApi {
+ public:
+  explicit TestQueryApi(cast_api_bindings::Manager& manager)
+      : port_handler_(manager, "testport") {
+    manager.AddBinding(
+        "test",
+        "function valueOrUndefinedString(value) {"
+        "    return (typeof(value) == 'undefined') ? 'undefined' : value;"
+        "}"
+        "window.addEventListener('DOMContentLoaded', (event) => {"
+        "  var port = cast.__platform__.PortConnector.bind('testport');"
+        "  port.onmessage = (e) => {"
+        "    var result = eval(e.data);"
+        "    if (result && typeof(result.then) == 'function') {"
+        "      result"
+        "        .then(result =>"
+        "                port.postMessage(valueOrUndefinedString(result)))"
+        "        .catch(e => port.postMessage(JSON.stringify(e)));"
+        "    } else {"
+        "      port.postMessage(valueOrUndefinedString(result));"
+        "    }"
+        "  };"
+        "});");
+  }
+
+  ~TestQueryApi() = default;
+
+  TestQueryApi(const TestQueryApi&) = delete;
+  TestQueryApi& operator=(const TestQueryApi&) = delete;
+
+  // Waits until the Cast application connects to "testport".
+  void WaitConnected() {
+    test_port_ = port_handler_.RunUntilPortConnected();
+    CHECK(test_port_);
+    test_port_->SetReceiver(&test_port_receiver_);
+  }
+
+  // Evaluates `code` in the application context and returns the serialized
+  // string result.
+  std::string ExecuteJavaScript(const std::string& code) {
+    CHECK(test_port_);
+    const size_t previous_message_count = test_port_receiver_.buffer().size();
+    test_port_->PostMessage(code);
+    EXPECT_TRUE(test_port_receiver_.RunUntilMessageCountEqual(
+        previous_message_count + 1));
+    return test_port_receiver_.buffer().back().first;
+  }
+
+ private:
+  ScopedPortHandler port_handler_;
+  std::unique_ptr<cast_api_bindings::MessagePort> test_port_;
+  cast_api_bindings::TestMessagePortReceiver test_port_receiver_;
+};
+
 class TestCastComponent {
  public:
   // `test_realm_services` is used to connect to the test `Realm` exposed by
@@ -202,9 +273,9 @@ class TestCastComponent {
   // launched.
   void StartCastComponentWithQueryApi(std::string_view app_id = kTestAppId) {
     auto component_url = base::StrCat({"cast:", app_id});
-    InjectQueryApi();
+    query_api_.emplace(services_->bindings_manager);
     StartCastComponent(component_url);
-    WaitQueryApiConnected();
+    query_api_->WaitConnected();
   }
 
   // Attempts to start the Cast activity identified by `app_id`.
@@ -250,25 +321,8 @@ class TestCastComponent {
   // execution is blocked until the promise is complete and the result of the
   // promise is returned.
   std::string ExecuteJavaScript(const std::string& code) {
-    CHECK(test_port_);
-
-    fuchsia::web::WebMessage message;
-    message.set_data(base::MemBufferFromString(code, "test-msg"));
-    test_port_->PostMessage(
-        std::move(message),
-        [](fuchsia::web::MessagePort_PostMessage_Result result) {
-          EXPECT_TRUE(result.is_response());
-        });
-
-    base::test::TestFuture<fuchsia::web::WebMessage> response;
-    test_port_->ReceiveMessage(CallbackToFitFunction(response.GetCallback()));
-    EXPECT_TRUE(response.Wait());
-
-    std::optional<std::string> response_string =
-        base::StringFromMemBuffer(response.Get().data());
-    EXPECT_TRUE(response_string.has_value());
-
-    return response_string.value_or(std::string());
+    CHECK(query_api_);
+    return query_api_->ExecuteJavaScript(code);
   }
 
   std::string QueryAppUrl() {
@@ -277,7 +331,10 @@ class TestCastComponent {
 
   // Closes active connections to all services offered to the component,
   // to simulate the controlling agent tearing-down unexpectedly.
-  void DisconnectServices() { services_.reset(); }
+  void DisconnectServices() {
+    query_api_.reset();
+    services_.reset();
+  }
 
   // Destroys the component and runs until it is observed to have torn-down.
   void ShutdownComponent() {
@@ -306,7 +363,9 @@ class TestCastComponent {
     on_component_destroyed_ = base::DoNothing();
   }
 
-  FakeApiBindingsImpl& api_bindings() { return services_->api_bindings; }
+  chromecast::bindings::BindingsManagerFuchsia& bindings_manager() {
+    return services_->bindings_manager;
+  }
   FakeApplicationContext& application_context() {
     return services_->application_context;
   }
@@ -322,16 +381,24 @@ class TestCastComponent {
   // directly to Cast activities by their owning agent.
   struct FakeComponentServices {
     FakeComponentServices()
-        : api_bindings_binding(&services, &api_bindings),
+        : api_bindings_binding(&services, &bindings_manager),
           url_request_rewrite_rules_provider_binding(
               &services,
               &url_request_rewrite_rules_provider),
-          context_binding(&services, &application_context) {}
+          context_binding(&services, &application_context) {
+      services.AddEntry(
+          fuchsia::logger::LogSink::Name_,
+          std::make_unique<vfs::Service>(
+              [](zx::channel channel, async_dispatcher_t*) {
+                base::ComponentContextForProcess()->svc()->Connect(
+                    fuchsia::logger::LogSink::Name_, std::move(channel));
+              }));
+    }
 
     // Directory of services to offer to the Cast component.
     vfs::PseudoDir services;
 
-    FakeApiBindingsImpl api_bindings;
+    chromecast::bindings::BindingsManagerFuchsia bindings_manager;
     base::ScopedServiceBinding<chromium::cast::ApiBindings>
         api_bindings_binding;
 
@@ -343,40 +410,6 @@ class TestCastComponent {
     base::ScopedServiceBinding<chromium::cast::ApplicationContext>
         context_binding;
   };
-
-  void InjectQueryApi() {
-    // Inject an API which can be used to evaluate arbitrary Javascript and
-    // return the results over a MessagePort.
-    std::vector<chromium::cast::ApiBinding> binding_list;
-    chromium::cast::ApiBinding eval_js_binding;
-    eval_js_binding.set_before_load_script(base::MemBufferFromString(
-        "function valueOrUndefinedString(value) {"
-        "    return (typeof(value) == 'undefined') ? 'undefined' : value;"
-        "}"
-        "window.addEventListener('DOMContentLoaded', (event) => {"
-        "  var port = cast.__platform__.PortConnector.bind('testport');"
-        "  port.onmessage = (e) => {"
-        "    var result = eval(e.data);"
-        "    if (result && typeof(result.then) == 'function') {"
-        "      result"
-        "        .then(result =>"
-        "                port.postMessage(valueOrUndefinedString(result)))"
-        "        .catch(e => port.postMessage(JSON.stringify(e)));"
-        "    } else {"
-        "      port.postMessage(valueOrUndefinedString(result));"
-        "    }"
-        "  };"
-        "});",
-        "test"));
-    binding_list.emplace_back(std::move(eval_js_binding));
-    services_->api_bindings.set_bindings(std::move(binding_list));
-  }
-
-  void WaitQueryApiConnected() {
-    EXPECT_FALSE(test_port_);
-    test_port_ =
-        services_->api_bindings.RunAndReturnConnectedPort("testport").Bind();
-  }
 
   void OnComponentTeardown() {
     component_.reset();
@@ -401,9 +434,9 @@ class TestCastComponent {
   // Holds the service directory and fake services offered to `component_`.
   std::optional<FakeComponentServices> services_;
 
-  std::optional<fuchsia_component_support::DynamicComponentHost> component_;
+  std::optional<TestQueryApi> query_api_;
 
-  fuchsia::web::MessagePortPtr test_port_;
+  std::optional<fuchsia_component_support::DynamicComponentHost> component_;
 
   base::OnceClosure on_component_destroyed_;
 };
@@ -415,7 +448,7 @@ class CastRunnerIntegrationTest : public testing::Test {
   CastRunnerIntegrationTest()
       : CastRunnerIntegrationTest(test::kCastRunnerFeaturesNone) {}
   explicit CastRunnerIntegrationTest(test::CastRunnerFeatures runner_features)
-      : cast_runner_(runner_features) {}
+      : runner_features_(runner_features) {}
 
   ~CastRunnerIntegrationTest() override = default;
 
@@ -430,22 +463,29 @@ class CastRunnerIntegrationTest : public testing::Test {
     test_server_.ServeFilesFromSourceDirectory(kTestServerRoot);
     net::test_server::RegisterDefaultHandlers(&test_server_);
     ASSERT_TRUE(test_server_.Start());
+    cast_runner_.emplace(runner_features_);
   }
+
+  void TearDown() override { cast_runner_.reset(); }
 
   // Returns the services exposed by the `CastRunnerLauncher` test Realm,
   // including those exposed by the `cast_runner` component under test.
   const sys::ServiceDirectory& test_realm_services() {
-    return cast_runner_.exposed_services();
+    return cast_runner_->exposed_services();
   }
 
-  test::CastRunnerLauncher& cast_runner_launcher() { return cast_runner_; }
+  test::CastRunnerLauncher& cast_runner_launcher() { return *cast_runner_; }
 
   // Returns the HTTP server used to serve fake content for Cast components.
   net::EmbeddedTestServer& test_server() { return test_server_; }
 
   // Convenience accessors for elements managed by the launcher.
   FakeApplicationConfigManager& app_config_manager() {
-    return cast_runner_.fake_cast_agent().app_config_manager();
+    return cast_runner_->fake_cast_agent().app_config_manager();
+  }
+
+  void ExpectAbnormalTermination(std::string_view component_name) {
+    cast_runner_->ExpectAbnormalTermination(component_name);
   }
 
  private:
@@ -458,7 +498,8 @@ class CastRunnerIntegrationTest : public testing::Test {
   const base::test::ScopedRunLoopTimeout scoped_timeout_{
       FROM_HERE, TestTimeouts::action_max_timeout()};
 
-  test::CastRunnerLauncher cast_runner_;
+  const test::CastRunnerFeatures runner_features_;
+  std::optional<test::CastRunnerLauncher> cast_runner_;
   net::EmbeddedTestServer test_server_;
 };
 
@@ -545,6 +586,181 @@ TEST_F(CastRunnerIntegrationTest, ApiBindings) {
   // Verify that we can communicate with the query-API binding added by
   // `StartCastComponentWithQueryApi()`.
   EXPECT_EQ(component.ExecuteJavaScript("1+2+\"\""), "3");
+}
+
+TEST_F(CastRunnerIntegrationTest, BindingsManagerFuchsia_EndToEnd) {
+  TestCastComponent component(test_realm_services());
+
+  ScopedPortHandler connect_handler(component.bindings_manager(), "echo");
+
+  const GURL app_url = test_server().GetURL("/connector.html");
+  app_config_manager().AddApp(kTestAppId, app_url);
+
+  component.StartCastComponent(base::StrCat({"cast:", kTestAppId}));
+
+  std::unique_ptr<cast_api_bindings::MessagePort> message_port =
+      connect_handler.RunUntilPortConnected();
+  ASSERT_TRUE(message_port);
+
+  cast_api_bindings::TestMessagePortReceiver receiver;
+  message_port->SetReceiver(&receiver);
+
+  message_port->PostMessage("ping");
+
+  // Verify that early messages and the echoed response are received in order.
+  receiver.RunUntilMessageCountEqual(3);
+  EXPECT_EQ(receiver.buffer()[0].first, "early 1");
+  EXPECT_EQ(receiver.buffer()[1].first, "early 2");
+  EXPECT_EQ(receiver.buffer()[2].first, "ack ping");
+
+  // Ensure that the MessagePort is disconnected when the component is shut
+  // down.
+  component.ShutdownComponent();
+  receiver.RunUntilDisconnected();
+}
+
+TEST_F(CastRunnerIntegrationTest, BindingsManagerFuchsia_OrderedBindings) {
+  TestCastComponent component(test_realm_services());
+
+  // Add initial binding, another binding, and an overwrite of the first
+  // binding.
+  component.bindings_manager().AddBinding("first",
+                                          "window.firstVar = 'initial';");
+  component.bindings_manager().AddBinding("second",
+                                          "window.secondVar = 'world';");
+  component.bindings_manager().AddBinding("first",
+                                          "window.firstVar = 'hello';");
+
+  // Add a binding that communicates the values over a port.
+  component.bindings_manager().AddBinding(
+      "reporter",
+      "window.addEventListener('DOMContentLoaded', () => {"
+      "  var port = cast.__platform__.PortConnector.bind('result');"
+      "  port.postMessage(window.firstVar + ' ' + window.secondVar);"
+      "});");
+
+  ScopedPortHandler connect_handler(component.bindings_manager(), "result");
+
+  const GURL app_url = test_server().GetURL(kBlankAppUrl);
+  app_config_manager().AddApp(kTestAppId, app_url);
+
+  component.StartCastComponent(base::StrCat({"cast:", kTestAppId}));
+
+  std::unique_ptr<cast_api_bindings::MessagePort> message_port =
+      connect_handler.RunUntilPortConnected();
+  ASSERT_TRUE(message_port);
+
+  cast_api_bindings::TestMessagePortReceiver receiver;
+  message_port->SetReceiver(&receiver);
+
+  receiver.RunUntilMessageCountEqual(1);
+  EXPECT_EQ(receiver.buffer()[0].first, "hello world");
+}
+
+TEST_F(CastRunnerIntegrationTest,
+       BindingsManagerFuchsia_Origin_AvailableOnConnect) {
+  TestCastComponent component(test_realm_services());
+
+  ScopedPortHandler connect_handler(component.bindings_manager(), "echo");
+
+  const GURL app_url = test_server().GetURL("/connector.html");
+  app_config_manager().AddApp(kTestAppId, app_url);
+
+  component.StartCastComponent(base::StrCat({"cast:", kTestAppId}));
+
+  std::unique_ptr<cast_api_bindings::MessagePort> message_port =
+      connect_handler.RunUntilPortConnected();
+  ASSERT_TRUE(message_port);
+
+  // Verify that the caller origin was received and matches the loaded page.
+  EXPECT_EQ(component.bindings_manager().origin(),
+            url::Origin::Create(app_url).Serialize());
+
+  cast_api_bindings::TestMessagePortReceiver receiver;
+  message_port->SetReceiver(&receiver);
+  message_port->PostMessage("ping");
+
+  receiver.RunUntilMessageCountEqual(3);
+  EXPECT_EQ(receiver.buffer()[0].first, "early 1");
+  EXPECT_EQ(receiver.buffer()[1].first, "early 2");
+  EXPECT_EQ(receiver.buffer()[2].first, "ack ping");
+}
+
+TEST_F(CastRunnerIntegrationTest,
+       BindingsManagerFuchsia_Origin_OpaqueOriginEmpty) {
+  TestCastComponent component(test_realm_services());
+  component.bindings_manager().SetOrigin("https://example.com");
+
+  const GURL kOpaqueAppUrl(
+      "data:text/html,<!DOCTYPE html><title>opaque</title>");
+  app_config_manager().AddApp(kTestAppId, kOpaqueAppUrl);
+
+  component.StartCastComponent(base::StrCat({"cast:", kTestAppId}));
+  component.application_context().WaitForSetApplicationController();
+
+  // Verify that the reported origin is cleared for an opaque origin.
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return component.bindings_manager().origin().empty(); }));
+}
+
+TEST_F(CastRunnerIntegrationTest,
+       BindingsManagerFuchsia_Origin_TrackedOnRenavigation) {
+  TestCastComponent component(test_realm_services());
+
+  // Add a binding enabling navigation instructions from native test code.
+  component.bindings_manager().AddBinding(
+      "navigator",
+      "window.addEventListener('DOMContentLoaded', () => {"
+      "  var port = cast.__platform__.PortConnector.bind('nav');"
+      "  port.onmessage = (msg) => {"
+      "    window.location.href = msg.data;"
+      "  };"
+      "});");
+
+  net::EmbeddedTestServer second_test_server;
+  second_test_server.ServeFilesFromSourceDirectory(
+      "fuchsia_web/runners/cast/testdata");
+  ASSERT_TRUE(second_test_server.Start());
+
+  const GURL first_url = test_server().GetURL("/connector.html");
+  const GURL second_url = second_test_server.GetURL("/connector.html");
+
+  app_config_manager().AddApp(kTestAppId, first_url);
+
+  cast_api_bindings::TestMessagePortReceiver nav_receiver;
+  std::unique_ptr<cast_api_bindings::MessagePort> nav_port;
+  {
+    ScopedPortHandler echo_handler(component.bindings_manager(), "echo");
+    ScopedPortHandler nav_handler(component.bindings_manager(), "nav");
+
+    component.StartCastComponent(base::StrCat({"cast:", kTestAppId}));
+
+    std::unique_ptr<cast_api_bindings::MessagePort> echo_port =
+        echo_handler.RunUntilPortConnected();
+    ASSERT_TRUE(echo_port);
+    EXPECT_EQ(component.bindings_manager().origin(),
+              url::Origin::Create(first_url).Serialize());
+
+    nav_port = nav_handler.RunUntilPortConnected();
+    ASSERT_TRUE(nav_port);
+    nav_port->SetReceiver(&nav_receiver);
+  }
+
+  // Register a new handler to receive the "echo" port from the new document.
+  ScopedPortHandler echo_handler2(component.bindings_manager(), "echo");
+
+  // Instruct the first page to navigate to the second origin.
+  nav_port->PostMessage(second_url.spec());
+
+  // Wait for the re-navigated document to connect to "echo".
+  std::unique_ptr<cast_api_bindings::MessagePort> echo_port2 =
+      echo_handler2.RunUntilPortConnected();
+  ASSERT_TRUE(echo_port2);
+
+  // Verify that the origin tracked by BindingsManagerFuchsia was updated to the
+  // second origin.
+  EXPECT_EQ(component.bindings_manager().origin(),
+            url::Origin::Create(second_url).Serialize());
 }
 
 TEST_F(CastRunnerIntegrationTest, UnknownCastAppId_Fails) {
@@ -786,6 +1002,11 @@ TEST_F(HeadlessCastRunnerIntegrationTest, Headless) {
   const GURL animation_url = test_server().GetURL(kAnimationPath);
   app_config_manager().AddApp(kTestAppId, animation_url);
 
+  ScopedPortHandler animation_finished_handler(component.bindings_manager(),
+                                               "animation_finished");
+  ScopedPortHandler view_hidden_handler(component.bindings_manager(),
+                                        "view_hidden");
+
   component.StartCastComponentWithQueryApi();
 
   fuchsia::ui::views::ViewToken view_token;
@@ -811,11 +1032,11 @@ TEST_F(HeadlessCastRunnerIntegrationTest, Headless) {
                                        std::move(view_ref_control),
                                        std::move(view_ref));
 
-  component.api_bindings().RunAndReturnConnectedPort("animation_finished");
+  ASSERT_TRUE(animation_finished_handler.RunUntilPortConnected());
 
   // Verify that dropped "view" EventPair is handled properly.
   view_token.value.reset();
-  component.api_bindings().RunAndReturnConnectedPort("view_hidden");
+  ASSERT_TRUE(view_hidden_handler.RunUntilPortConnected());
 }
 
 // Isolated *and* headless? Doesn't sound like much fun!
@@ -955,6 +1176,9 @@ TEST_F(CastRunnerIntegrationTest,
 // Verifies that starting a component fails if CORS exempt headers cannot be
 // fetched.
 TEST_F(CastRunnerIntegrationTest, MissingCorsExemptHeaderProvider) {
+  // CastRunner is expected to exit when CorsExemptHeaderProvider is missing.
+  ExpectAbnormalTermination("cast_runner");
+
   // Prevent the FakeCastAgent from publishing the
   // chromium.cast.CorsExemptHeaderProvider service.
   cast_runner_launcher().fake_cast_agent().RegisterOnConnectClosure(

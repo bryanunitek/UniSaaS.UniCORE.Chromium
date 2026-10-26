@@ -125,13 +125,14 @@ class WebSocketTransportClientSocketPoolTest
             /*ignore_certificate_errors=*/nullptr,
             /*early_data_enabled=*/nullptr),
         pool_(kMaxSockets,
-              SocketPoolAdditionalCapacity::CreateEmpty(),
               ProxyChain::Direct(),
               &common_connect_job_params_) {
+    pool_.SetAdditionalCapacityForTest(
+        SocketPoolAdditionalCapacity::CreateEmpty());
     if (use_happy_eyeballs_v2()) {
-      scoped_feature_list_.InitAndEnableFeature(features::kHappyEyeballsV2);
+      AddScopedFeatureList().InitAndEnableFeature(features::kHappyEyeballsV2);
     } else {
-      scoped_feature_list_.InitAndDisableFeature(features::kHappyEyeballsV2);
+      AddScopedFeatureList().InitAndDisableFeature(features::kHappyEyeballsV2);
     }
     websocket_endpoint_lock_manager_.SetUnlockDelayForTesting(
         base::TimeDelta());
@@ -180,8 +181,6 @@ class WebSocketTransportClientSocketPoolTest
     return test_base_.requests();
   }
   size_t completion_count() const { return test_base_.completion_count(); }
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   // |group_id_| and |params_| correspond to the same socket parameters.
   const ClientSocketPool::GroupId group_id_;
@@ -1292,8 +1291,7 @@ TEST_P(WebSocketTransportClientSocketPoolTest, NetworkAnonymizationKey) {
   const auto kNetworkAnonymizationKey =
       NetworkAnonymizationKey::CreateSameSite(kSite);
 
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
+  AddScopedFeatureList().InitAndEnableFeature(
       features::kPartitionConnectionsByNetworkIsolationKey);
 
   host_resolver_->set_ondemand_mode(true);
@@ -1443,17 +1441,17 @@ TEST_P(WebSocketTransportClientSocketPoolTest, LoadState) {
 TEST_P(WebSocketTransportClientSocketPoolTest,
        ValidateAdditionalCapacityForWebSocketTransportClientSocketPool) {
   WebSocketTransportClientSocketPool pool(
-      /*socket_soft_cap=*/256, SocketPoolAdditionalCapacity::Create(256),
-      ProxyChain::Direct(), &common_connect_job_params_);
+      /*socket_soft_cap=*/256, ProxyChain::Direct(),
+      &common_connect_job_params_);
   ValidateAdditionalCapacityForSocketPool(
       base::BindLambdaForTesting([&]() {
         StartRequest(kDefaultPriority, &pool);
-        return pool.StateForTest();
+        return pool.ExpandabilityForTest();
       }),
       base::BindLambdaForTesting([&]() { RunUntilIdle(); }),
       base::BindLambdaForTesting([&]() {
         EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::NO_KEEP_ALIVE));
-        return pool.StateForTest();
+        return pool.ExpandabilityForTest();
       }),
       base::BindLambdaForTesting([&]() { return pool.SocketsInUse(); }));
   ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);

@@ -8,7 +8,7 @@
 
 #include "base/environment.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/scoped_environment_variable_override.h"
+#include "base/nix/xdg_util.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
@@ -58,8 +58,8 @@ TEST_F(SetSystemdScopeUnitNameForXdgPortalTest, NotNecessaryInFlatpak) {
   scoped_refptr<dbus::MockBus> bus =
       base::MakeRefCounted<dbus::MockBus>(dbus::Bus::Options());
 
-  base::ScopedEnvironmentVariableOverride env_override("FLATPAK_SANDBOX_DIR",
-                                                       "/");
+  base::nix::ScopedAppSandboxOverrideForTesting sandbox_override(
+      base::nix::AppSandbox::kFlatpak);
 
   std::optional<SystemdUnitStatus> status;
 
@@ -74,7 +74,8 @@ TEST_F(SetSystemdScopeUnitNameForXdgPortalTest, NotNecessaryInSnap) {
   scoped_refptr<dbus::MockBus> bus =
       base::MakeRefCounted<dbus::MockBus>(dbus::Bus::Options());
 
-  base::ScopedEnvironmentVariableOverride env_override("SNAP", "/");
+  base::nix::ScopedAppSandboxOverrideForTesting sandbox_override(
+      base::nix::AppSandbox::kSnap);
 
   std::optional<SystemdUnitStatus> status;
 
@@ -478,6 +479,16 @@ TEST_F(SetSystemdScopeUnitNameForXdgPortalTest, UnitNameConstruction) {
                      [&](SystemdUnitStatus result) { status = result; }));
 
   EXPECT_EQ(status, SystemdUnitStatus::kUnitStarted);
+}
+
+TEST(SystemdEscapeTest, EscapeSystemdUnitName) {
+  EXPECT_EQ(internal::EscapeSystemdUnitName("foo-bar"), "foo\\x2dbar");
+  EXPECT_EQ(internal::EscapeSystemdUnitName("foo/bar"), "foo-bar");
+  EXPECT_EQ(internal::EscapeSystemdUnitName(".foo"), "\\x2efoo");
+  EXPECT_EQ(internal::EscapeSystemdUnitName("1foo"), "1foo");
+  EXPECT_EQ(internal::EscapeSystemdUnitName("foo_bar:baz.qux"),
+            "foo_bar:baz.qux");
+  EXPECT_EQ(internal::EscapeSystemdUnitName(""), "");
 }
 
 }  // namespace

@@ -12,6 +12,52 @@
 
 namespace optimization_guide {
 
+// Different events of the prediction model delivery lifecycle for an
+// OptimizationTarget.
+// Keep in sync with OptimizationGuideModelDeliveryEvent in enums.xml.
+enum class ModelDeliveryEvent {
+  kUnknown = 0,
+
+  // The model was delivered from immediately or after a
+  // successful download.
+  kModelDeliveredAtRegistration = 1,
+  kModelDelivered = 2,
+
+  // GetModelsRequest was sent to the optimization guide server.
+  kGetModelsRequest = 3,
+
+  // Model was requested to be downloaded using download service.
+  kDownloadServiceRequest = 4,
+
+  // Download service started the model download.
+  kModelDownloadStarted = 5,
+
+  // Model got downloaded from the download service.
+  kModelDownloaded = 6,
+
+  // Download service was unavailable.
+  kDownloadServiceUnavailable = 7,
+
+  // GetModelsResponse failed.
+  kGetModelsResponseFailure = 8,
+
+  // Download URL received from model metadata is invalid
+  kDownloadURLInvalid = 9,
+
+  // Model download failed due to download service or verifying the downloaded
+  // model.
+  kModelDownloadFailure = 10,
+
+  // Loading the model from store failed.
+  kModelLoadFailed = 11,
+
+  // Model download was attempted after the model load failed.
+  kModelDownloadDueToModelLoadFailure = 12,
+
+  // Add new values above this line.
+  kMaxValue = kModelDownloadDueToModelLoadFailure,
+};
+
 // Basic implementation of OptimizationGuideModelProvider that tracks
 // observers and current models, and notifies observers on updates.
 // In production, this will be wrapped by PredictionManager to add download
@@ -50,15 +96,14 @@ class ModelProviderRegistry final : public OptimizationGuideModelProvider {
   std::vector<optimization_guide_internals::mojom::DownloadedModelInfoPtr>
   GetDownloadedModelsInfoForWebUI() const;
   // Updates the model for `optimization_target` and notifies observers.
-  // `model_info` must be non-null, use RemoveModel to remove models.
   void UpdateModel(proto::OptimizationTarget optimization_target,
-                   std::unique_ptr<ModelInfo> model_info);
+                   ModelInfo model_info);
   // Removes the model and notifies observers.
   void RemoveModel(proto::OptimizationTarget optimization_target);
   // Like UpdateModel, but NotifyObservers right away instead of via PostTask.
   void UpdateModelImmediatelyForTesting(
       proto::OptimizationTarget optimization_target,
-      std::unique_ptr<ModelInfo> model_info);
+      ModelInfo model_info);
   // Updates the lifecycle histogram for the target.
   static void RecordLifecycleState(
       proto::OptimizationTarget optimization_target,
@@ -87,7 +132,7 @@ class ModelProviderRegistry final : public OptimizationGuideModelProvider {
       proto::OptimizationTarget optimization_target,
       base::optional_ref<const ModelInfo> model_info);
 
-  base::flat_map<proto::OptimizationTarget, std::unique_ptr<ModelInfo>>
+  base::flat_map<proto::OptimizationTarget, ModelInfo>
       optimization_target_model_info_map_;
 
   std::map<proto::OptimizationTarget, ModelRegistrationInfo>

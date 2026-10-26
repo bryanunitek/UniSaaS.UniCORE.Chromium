@@ -15,31 +15,23 @@
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
-#include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/execution_engine.h"
-#include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/history/history_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/action_result.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/url_constants.h"
+#include "chrome/common/webui_url_constants.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/search_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/actor/core/actor_features.h"
-#include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_backend.h"
 #include "components/history/core/browser/history_database.h"
 #include "components/history/core/browser/history_db_task.h"
@@ -50,6 +42,7 @@
 #include "components/history/core/test/history_service_test_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -57,14 +50,20 @@
 #include "content/public/common/referrer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/webui/untrusted_web_ui_browsertest_util.h"
 #include "url/gurl.h"
+#include "url/origin.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/actor/ui/actor_task_unload_handler.h"
+#endif
 
 using content::BrowserThread;
 using ::testing::_;
@@ -214,13 +213,9 @@ class HistoryBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_https_test_server().Start());
   }
 
-  PrefService* GetPrefs() {
-    return GetProfile()->GetPrefs();
-  }
+  PrefService* GetPrefs() { return GetProfile()->GetPrefs(); }
 
-  Profile* GetProfile() {
-    return browser()->profile();
-  }
+  Profile* GetProfile() { return browser()->GetProfile(); }
 
   std::vector<GURL> GetHistoryContents() {
     ui_test_utils::HistoryEnumerator enumerator(GetProfile());
@@ -340,10 +335,12 @@ class HistoryBrowserTest : public InProcessBrowserTest {
                          bool success,
                          const history::URLRow& url_row,
                          const history::VisitVector& visit_vector) {
-    if (success_out)
+    if (success_out) {
       *success_out = success;
-    if (url_row_out)
+    }
+    if (url_row_out) {
       *url_row_out = url_row;
+    }
     std::move(closure).Run();
   }
 };
@@ -503,7 +500,8 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest,
 // sophisticated and multi-part, so we'd need to wait on or ensure a few things
 // are happening before running the test.
 IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, DISABLED_HistorySearchXSS) {
-  GURL url(std::string(chrome::kChromeUIHistoryURL) +
+  GURL url(
+      std::string(chrome::kChromeUIHistoryURL) +
       "#q=%3Cimg%20src%3Dx%3Ax%20onerror%3D%22document.title%3D'XSS'%22%3E");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   // Mainly, this is to ensure we send a synchronous message to the renderer
@@ -593,13 +591,13 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, MultiTabsWindowsHistory) {
       base::FilePath(), base::FilePath(FILE_PATH_LITERAL("simple.html")));
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
-  Browser* browser2 = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* browser2 = CreateBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser2, url2));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser2, url3, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser2, url3, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   ui_test_utils::NavigateToURLWithDisposition(
-      browser2, url4, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser2, url4, WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   std::vector<GURL> urls(GetHistoryContents());
@@ -738,8 +736,8 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, RedirectHistory) {
   GURL landing_url = chrome_test_utils::GetTestUrl(
       base::FilePath().AppendASCII("History"),
       base::FilePath().AppendASCII("landing.html"));
-  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
-      browser(), redirector, 2);
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(),
+                                                            redirector, 2);
   ASSERT_EQ(
       landing_url,
       browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
@@ -790,7 +788,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, ReloadBringPageToTop) {
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), url2, WindowOpenDisposition::NEW_BACKGROUND_TAB,
+      browser(), url2, WindowOpenDisposition::kNewBackgroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   std::vector<GURL> urls(GetHistoryContents());
@@ -820,7 +818,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, BackForwardBringPageToTop) {
 
   content::WebContents* tab =
       browser()->tab_strip_model()->GetActiveWebContents();
-  chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::GoBack(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(tab));
 
   std::vector<GURL> urls(GetHistoryContents());
@@ -828,7 +826,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, BackForwardBringPageToTop) {
   ASSERT_EQ(url1, urls[0]);
   ASSERT_EQ(url2, urls[1]);
 
-  chrome::GoForward(browser(), WindowOpenDisposition::CURRENT_TAB);
+  chrome::GoForward(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(tab));
   urls = GetHistoryContents();
   ASSERT_EQ(2u, urls.size());
@@ -964,7 +962,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, OneHistoryTabPerWindow) {
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(url::kAboutBlankURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   chrome::ExecuteCommand(browser(), IDC_SHOW_HISTORY);
 
@@ -1139,9 +1137,7 @@ IN_PROC_BROWSER_TEST_F(HistoryBrowserTest,
 
 class HistoryTaskTagBrowserTest : public HistoryBrowserTest {
  public:
-  HistoryTaskTagBrowserTest() {
-    scoped_feature_list_.InitAndDisableFeature(actor::kGlicActionAllowlist);
-  }
+  HistoryTaskTagBrowserTest() = default;
 
  protected:
   actor::TaskId LatestTaskIdFromNavigationData(
@@ -1156,7 +1152,7 @@ class HistoryTaskTagBrowserTest : public HistoryBrowserTest {
     return results.begin()->has_actor_source();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   actor::TaskId CreateActingTask(content::WebContents* web_contents) {
     auto* actor_service = actor::ActorKeyedService::Get(profile());
@@ -1175,23 +1171,45 @@ class HistoryTaskTagBrowserTest : public HistoryBrowserTest {
   }
 
   GURL GetActorInitialUrl() {
-    return embedded_https_test_server().GetURL("/empty.html");
+    return embedded_https_test_server().GetURL("example.com", "/empty.html");
   }
 
   GURL GetActorUrl1() {
-    return embedded_https_test_server().GetURL("/title1.html");
+    return embedded_https_test_server().GetURL("example.com", "/title1.html");
   }
 
   GURL GetActorUrl2() {
-    return embedded_https_test_server().GetURL("/title2.html");
+    return embedded_https_test_server().GetURL("example.com", "/title2.html");
   }
 
   actor::ActorKeyedService* actor_service() {
     return actor::ActorKeyedService::Get(profile());
   }
 
+  void SetUpOnMainThread() override {
+    HistoryBrowserTest::SetUpOnMainThread();
+#if !BUILDFLAG(IS_ANDROID)
+    // These tests navigate via browser initiated navigations while an Actor
+    // task is active to verify history tagging. Suppress the leave site dialog
+    // so the test scaffolding is not intercepted, and restore at teardown.
+    previous_suppress_confirm_dialog_ =
+        actor::ActorTaskTabCloseConfirmDialog::ShouldSuppressForTesting();
+    actor::ActorTaskTabCloseConfirmDialog::SetSuppressForTesting(true);
+#endif
+  }
+
+  void TearDownOnMainThread() override {
+#if !BUILDFLAG(IS_ANDROID)
+    actor::ActorTaskTabCloseConfirmDialog::SetSuppressForTesting(
+        previous_suppress_confirm_dialog_);
+#endif
+    HistoryBrowserTest::TearDownOnMainThread();
+  }
+
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+#if !BUILDFLAG(IS_ANDROID)
+  bool previous_suppress_confirm_dialog_ = false;
+#endif
 };
 
 // Test that history entry is correctly tagged when actor is active.
@@ -1283,8 +1301,7 @@ IN_PROC_BROWSER_TEST_F(HistoryTaskTagBrowserTest, TwoTabs) {
 
   // Open a new tab and navigate on it so it becomes active.
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GetActorInitialUrl(),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      browser(), GetActorInitialUrl(), WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 
   // Set up the test observer for this new tab.
@@ -1318,19 +1335,7 @@ IN_PROC_BROWSER_TEST_F(HistoryTaskTagBrowserTest, RendererInitiated) {
   EXPECT_TRUE(IsHistoryEntryTaggedWithActorId());
 }
 
-class History404BrowserTest : public HistoryBrowserTest,
-                              public ::testing::WithParamInterface<bool> {
- public:
-  History404BrowserTest() {
-    scoped_feature_list_.InitWithFeatureState(history::kVisitedLinksOn404,
-                                              GetParam());
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_P(History404BrowserTest, NavigationTo404) {
+IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, NavigationTo404) {
   history::HistoryService* history_service =
       HistoryServiceFactory::GetForProfile(browser()->GetProfile(),
                                            ServiceAccessType::EXPLICIT_ACCESS);
@@ -1351,33 +1356,26 @@ IN_PROC_BROWSER_TEST_P(History404BrowserTest, NavigationTo404) {
   history::BlockUntilHistoryProcessesPendingRequests(history_service);
 
   history::QueryURLAndVisitsResult result = QueryURLAndVisits(url404);
-  if (GetParam()) {
-    // 404 visits should be added to History DB.
-    EXPECT_TRUE(result.success);
-    EXPECT_EQ(1u, result.visits.size());
+  // 404 visits should be added to History DB.
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(1u, result.visits.size());
 
-    // 404 visits should be added to VisitedLink DB.
-    base::CancelableTaskTracker tracker;
-    history::VisitedLinkRow row;
-    history::VisitedLinkID visited_link_id = 0;
-    base::WaitableEvent wait_event(
-        base::WaitableEvent::ResetPolicy::MANUAL,
-        base::WaitableEvent::InitialState::NOT_SIGNALED);
-    auto task = std::make_unique<GetVisitedLinkTask>(
-        result.row.id(), initial_url, initial_url, &visited_link_id,
-        &wait_event);
-    history_service->ScheduleDBTask(FROM_HERE, std::move(task), &tracker);
-    wait_event.Wait();
+  // 404 visits should be added to VisitedLink DB.
+  base::CancelableTaskTracker tracker;
+  history::VisitedLinkRow row;
+  history::VisitedLinkID visited_link_id = 0;
+  base::WaitableEvent wait_event(
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED);
+  auto task = std::make_unique<GetVisitedLinkTask>(
+      result.row.id(), initial_url, initial_url, &visited_link_id, &wait_event);
+  history_service->ScheduleDBTask(FROM_HERE, std::move(task), &tracker);
+  wait_event.Wait();
 
-    EXPECT_NE(history::VisitedLinkID(0), visited_link_id);
-  } else {
-    // 404 visits should not be added to History DB.
-    EXPECT_FALSE(result.success);
-    EXPECT_EQ(0u, result.visits.size());
-  }
+  EXPECT_NE(history::VisitedLinkID(0), visited_link_id);
 }
 
-IN_PROC_BROWSER_TEST_P(History404BrowserTest, HistoryRemovalRemoves404Url) {
+IN_PROC_BROWSER_TEST_F(HistoryBrowserTest, HistoryRemovalRemoves404Url) {
   history::HistoryService* history_service =
       HistoryServiceFactory::GetForProfile(browser()->GetProfile(),
                                            ServiceAccessType::EXPLICIT_ACCESS);
@@ -1388,27 +1386,22 @@ IN_PROC_BROWSER_TEST_P(History404BrowserTest, HistoryRemovalRemoves404Url) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   history::BlockUntilHistoryProcessesPendingRequests(history_service);
 
-  if (GetParam()) {
-    // When feature is enabled, 404 navigations should be in history.
-    EXPECT_TRUE(HistoryContainsURL(url));
+  // 404 navigations should be in history.
+  EXPECT_TRUE(HistoryContainsURL(url));
 
-    // Delete url from history
-    history_service->DeleteURLs({url});
+  // Delete url from history
+  history_service->DeleteURLs({url});
 
-    // Wait for the asynchronous delete to complete
-    base::RunLoop run_loop;
-    history_service->FlushForTest(run_loop.QuitClosure());
-    run_loop.Run();
+  // Wait for the asynchronous delete to complete
+  base::RunLoop run_loop;
+  history_service->FlushForTest(run_loop.QuitClosure());
+  run_loop.Run();
 
-    // Expect url to successfully be deleted from history
-    EXPECT_FALSE(HistoryContainsURL(url));
-  } else {
-    // When feature is disabled, 404 navigations should not be in history.
-    EXPECT_FALSE(HistoryContainsURL(url));
-  }
+  // Expect url to successfully be deleted from history
+  EXPECT_FALSE(HistoryContainsURL(url));
 }
 
-IN_PROC_BROWSER_TEST_P(History404BrowserTest,
+IN_PROC_BROWSER_TEST_F(HistoryBrowserTest,
                        NoOnUpdatedHistoryForNavigationOn404) {
   history::HistoryService* history_service =
       HistoryServiceFactory::GetForProfile(browser()->GetProfile(),
@@ -1438,8 +1431,6 @@ IN_PROC_BROWSER_TEST_P(History404BrowserTest,
       .Times(1);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url_non_404));
 }
-
-INSTANTIATE_TEST_SUITE_P(, History404BrowserTest, ::testing::Bool());
 
 // MPArch means Multiple Page Architecture, each WebContents may have additional
 // FrameTrees which will have their own associated Page.
@@ -1582,61 +1573,6 @@ IN_PROC_BROWSER_TEST_F(HistoryPrerenderBrowserTest,
   // prerendering URL, should be recorded.
   EXPECT_THAT(GetHistoryContents(),
               testing::ElementsAre(kRedirectedUrl, kInitialUrl));
-}
-
-// For tests which use fenced frame.
-class HistoryFencedFrameBrowserTest : public HistoryMPArchBrowserTest {
- public:
-  HistoryFencedFrameBrowserTest() = default;
-  ~HistoryFencedFrameBrowserTest() override = default;
-  HistoryFencedFrameBrowserTest(const HistoryFencedFrameBrowserTest&) = delete;
-
-  HistoryFencedFrameBrowserTest& operator=(
-      const HistoryFencedFrameBrowserTest&) = delete;
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_helper_;
-  }
-
-  content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
-  }
-
- private:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
-};
-
-IN_PROC_BROWSER_TEST_F(HistoryFencedFrameBrowserTest,
-                       FencedFrameDoesNotAffectLoadingState) {
-  HistoryTabHelper* history_tab_helper =
-      HistoryTabHelper::FromWebContents(web_contents());
-  ASSERT_TRUE(history_tab_helper);
-  base::TimeTicks last_load_completion_before_navigation =
-      history_tab_helper->last_load_completion_;
-
-  auto initial_url = embedded_https_test_server().GetURL("/empty.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
-  // |last_load_completion_| should be updated after finishing the normal
-  // navigation.
-  EXPECT_NE(last_load_completion_before_navigation,
-            history_tab_helper->last_load_completion_);
-
-  // Create a fenced frame.
-  GURL fenced_frame_url =
-      embedded_https_test_server().GetURL("/fenced_frames/title1.html");
-  content::RenderFrameHost* fenced_frame_host =
-      fenced_frame_test_helper().CreateFencedFrame(
-          web_contents()->GetPrimaryMainFrame(), fenced_frame_url);
-
-  // Navigate the fenced frame.
-  last_load_completion_before_navigation =
-      history_tab_helper->last_load_completion_;
-  fenced_frame_test_helper().NavigateFrameInFencedFrameTree(fenced_frame_host,
-                                                            fenced_frame_url);
-  // |last_load_completion_| should not be updated after finishing the
-  // navigation of the fenced frame.
-  EXPECT_EQ(last_load_completion_before_navigation,
-            history_tab_helper->last_load_completion_);
 }
 
 // For tests which enable :visited links partitioning.

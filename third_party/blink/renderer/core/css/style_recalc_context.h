@@ -107,19 +107,8 @@ class CORE_EXPORT StyleRecalcContext {
   bool can_use_incremental_style = false;
 
   // True when we're ensuring the style of an element. This can only happen
-  // when regular style can't reach the element (i.e. inside display:none, or
-  // outside the flat tree).
+  // when regular style can't reach the element (i.e. inside display:none).
   bool is_ensuring_style = false;
-
-  // An element can be outside the flat tree if it's a non-slotted
-  // child of a shadow host, or a descendant of such a child.
-  // ComputedStyles produced under these circumstances need to be marked
-  // as such, primarily for the benefit of
-  // Element::MarkNonSlottedHostChildrenForStyleRecalc.
-  //
-  // TODO(crbug.com/831568): Elements outside the flat tree should
-  // not have a style.
-  bool is_outside_flat_tree = false;
 
   // True if the ancestor of this element had a content-visibility: auto
   // style and was locked, meaning that this is a forced update.
@@ -136,8 +125,10 @@ class CORE_EXPORT StyleRecalcContext {
   // True if this element has a container-type:anchored ancestor.
   bool has_anchored_container = false;
 
-  // True if the direct parent of this element is an overscroll container.
-  bool parent_is_overscroll_container = false;
+  // True if the flat tree parent is an overscroll container, or has been one
+  // and may still track overscroll areas. Only such children need
+  // OverscrollAreaTracker::UpdateOverscrollArea().
+  bool is_overscroll_container_child = false;
 };
 
 }  // namespace blink

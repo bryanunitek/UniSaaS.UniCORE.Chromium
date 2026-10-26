@@ -18,6 +18,16 @@ KeyboardEventProcessingResult RenderWidgetHostDelegate::PreHandleKeyboardEvent(
   return KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
+bool RenderWidgetHostDelegate::PreHandleMouseEvent(
+    const blink::WebMouseEvent& event) {
+  return false;
+}
+
+bool RenderWidgetHostDelegate::PreHandleGestureEvent(
+    const blink::WebGestureEvent& event) {
+  return false;
+}
+
 bool RenderWidgetHostDelegate::HandleMouseEvent(
     const blink::WebMouseEvent& event) {
   return false;
@@ -39,11 +49,6 @@ bool RenderWidgetHostDelegate::ShouldIgnoreWebInputEvents(
 }
 
 bool RenderWidgetHostDelegate::ShouldIgnoreInputEvents() {
-  return false;
-}
-
-bool RenderWidgetHostDelegate::PreHandleGestureEvent(
-    const blink::WebGestureEvent& event) {
   return false;
 }
 
@@ -98,6 +103,11 @@ blink::mojom::DisplayMode RenderWidgetHostDelegate::GetDisplayMode() const {
   return blink::mojom::DisplayMode::kBrowser;
 }
 
+blink::mojom::ApplicationContext
+RenderWidgetHostDelegate::GetApplicationContext() const {
+  return blink::mojom::ApplicationContext::kNone;
+}
+
 ui::mojom::WindowShowState RenderWidgetHostDelegate::GetWindowShowState() {
   return ui::mojom::WindowShowState::kDefault;
 }
@@ -113,6 +123,10 @@ bool RenderWidgetHostDelegate::GetResizable() {
 #else
   return true;
 #endif
+}
+
+bool RenderWidgetHostDelegate::GetIsAlwaysOnTopPopup() {
+  return false;
 }
 
 gfx::Rect RenderWidgetHostDelegate::GetWindowsControlsOverlayRect() const {
@@ -177,6 +191,11 @@ ukm::SourceId RenderWidgetHostDelegate::GetCurrentPageUkmSourceId() {
 
 bool RenderWidgetHostDelegate::IsShowingContextMenuOnPage() const {
   return false;
+}
+
+gfx::Rect RenderWidgetHostDelegate::ConstrainPopupBounds(
+    const gfx::Rect& bounds) {
+  return bounds;
 }
 
 int RenderWidgetHostDelegate::GetVirtualKeyboardResizeHeight() {

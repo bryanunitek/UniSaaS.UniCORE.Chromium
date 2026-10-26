@@ -11,12 +11,13 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
+#include "cc/base/math_util.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkPathBuilder.h"
 #include "third_party/skia/include/core/SkPathMeasure.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
@@ -364,7 +365,7 @@ ui::Layer* ProgressIndicator::CreateLayer(ColorResolver color_resolver) {
   CHECK(!layer());
   CHECK(color_resolver);
 
-  auto layer = std::make_unique<ui::Layer>(ui::LAYER_TEXTURED);
+  auto layer = std::make_unique<ui::LayerTextured>();
   layer->set_delegate(this);
   layer->SetFillsBoundsOpaquely(false);
   layer->SetName(kClassName);

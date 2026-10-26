@@ -58,6 +58,7 @@ namespace client_capabilities {
 // //third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc.
 inline constexpr char kConditionalCreate[] = "conditionalCreate";
 inline constexpr char kConditionalGet[] = "conditionalGet";
+inline constexpr char kConditionalPassiveGet[] = "conditionalPassiveGet";
 inline constexpr char kHybridTransport[] = "hybridTransport";
 inline constexpr char kPasskeyPlatformAuthenticator[] =
     "passkeyPlatformAuthenticator";
@@ -65,7 +66,6 @@ inline constexpr char kUserVerifyingPlatformAuthenticator[] =
     "userVerifyingPlatformAuthenticator";
 inline constexpr char kRelatedOrigins[] = "relatedOrigins";
 inline constexpr char kImmediateGet[] = "immediateGet";
-inline constexpr char kAmbientGet[] = "ambientGet";
 inline constexpr char kSignalAllAcceptedCredentials[] =
     "signalAllAcceptedCredentials";
 inline constexpr char kSignalCurrentUserDetails[] = "signalCurrentUserDetails";
@@ -122,6 +122,13 @@ class CONTENT_EXPORT AuthenticatorCommonImpl : public AuthenticatorCommon {
   void DisableTLSCheck() override;
   RenderFrameHost* GetRenderFrameHost() const override;
   void EnableRequestProxyExtensionsAPISupport() override;
+  bool IsGetMatchingCredentialIdsSupported() override;
+  void GetMatchingCredentialIds(
+      std::string_view relying_party_id,
+      base::span<const std::vector<uint8_t>> credential_ids,
+      bool require_third_party_payment_bit,
+      base::OnceCallback<void(std::vector<std::vector<uint8_t>>)> callback)
+      override;
 
   // GetClientCapabilities returns a list WebAuthn capabilities of the browser
   // via the `callback` parameter. Websites can use this information to
@@ -294,7 +301,11 @@ class CONTENT_EXPORT AuthenticatorCommonImpl : public AuthenticatorCommon {
   // Signals to the request delegate that the request has failed for |reason|.
   // The request delegate decides whether to present the user with a visual
   // error before the request is finally resolved with |status|.
+  // `authenticator_type` is the type of the authenticator that produced the
+  // failure, or `std::nullopt` if the failure is not attributable to a specific
+  // authenticator (e.g. a timeout).
   void SignalFailureToRequestDelegate(
+      std::optional<device::AuthenticatorType> authenticator_type,
       AuthenticatorRequestClientDelegate::InterestingFailureReason reason,
       blink::mojom::AuthenticatorStatus status);
 
@@ -332,6 +343,10 @@ class CONTENT_EXPORT AuthenticatorCommonImpl : public AuthenticatorCommon {
   void CompleteReportRequest(blink::mojom::AuthenticatorStatus status,
                              blink::mojom::WebAuthnDOMExceptionDetailsPtr
                                  dom_exception_details = nullptr);
+
+  // Returns true if the TLS state of the current frame is acceptable for
+  // WebAuthn requests from `caller_origin`.
+  bool IsSecurityLevelAcceptable(const url::Origin& caller_origin);
 
   // Returns the FidoDiscoveryFactory for the current request. This may be a
   // real instance, or one injected by the Virtual Authenticator environment, or

@@ -306,12 +306,6 @@ class CORE_EXPORT PaintLayerScrollableArea final
   bool IsScrollCornerVisible() const override;
   gfx::Rect ScrollCornerRect() const override;
   void SetScrollCornerNeedsPaintInvalidation() override;
-  gfx::Rect ConvertFromScrollbarToContainingEmbeddedContentView(
-      const Scrollbar&,
-      const gfx::Rect&) const override;
-  gfx::Point ConvertFromScrollbarToContainingEmbeddedContentView(
-      const Scrollbar&,
-      const gfx::Point&) const override;
   gfx::Point ConvertFromContainingEmbeddedContentViewToScrollbar(
       const Scrollbar&,
       const gfx::Point&) const override;
@@ -327,11 +321,12 @@ class CORE_EXPORT PaintLayerScrollableArea final
       const gfx::PointF& position) const override {
     return ScrollOffset(position - gfx::PointF(ScrollOrigin()));
   }
-  gfx::Vector2d ScrollOffsetInt() const override;
   ScrollOffset GetScrollOffset() const override;
   // Commits a final scroll offset for the frame, if it might have changed.
-  // If it did change, enqueues a scroll event.
-  void EnqueueScrollEventIfNeeded();
+  // If it did change, enqueues a scroll event and returns true; otherwise
+  // returns false.
+  bool EnqueueScrollEventIfNeeded();
+  void ProcessDeferredScrollEvents();
   gfx::Vector2d MinimumScrollOffsetInt() const override;
   gfx::Vector2d MaximumScrollOffsetInt() const override;
   PhysicalRect LayoutContentRect(
@@ -381,7 +376,7 @@ class CORE_EXPORT PaintLayerScrollableArea final
   // to find the appropriate snap position. This ensures consistent behavior
   // across all paging operations (clicking scrollbar track, page down, space
   // bar, ::scroll-button). Returns true if the scroll was performed.
-  bool ScrollByPageWithSnap(ScrollDirectionPhysical direction,
+  bool ScrollByPageWithSnap(mojom::blink::ScrollDirectionPhysical direction,
                             mojom::blink::ScrollBehavior scroll_behavior =
                                 mojom::blink::ScrollBehavior::kAuto);
 
@@ -504,7 +499,7 @@ class CORE_EXPORT PaintLayerScrollableArea final
 
   gfx::QuadF LocalToVisibleContentQuad(const gfx::QuadF&,
                                        const LayoutObject*,
-                                       unsigned = 0) const final;
+                                       MapCoordinatesFlags = {}) const final;
 
   scoped_refptr<base::SingleThreadTaskRunner> GetTimerTaskRunner() const final;
 
@@ -512,29 +507,6 @@ class CORE_EXPORT PaintLayerScrollableArea final
   // DelayableClampScrollOffsetsAfterLayout() in UpdateAfterLayout()?
   bool NeedsScrollOffsetClamp() const { return needs_scroll_offset_clamp_; }
   void SetNeedsScrollOffsetClamp(bool val) { needs_scroll_offset_clamp_ = val; }
-
-  // Did PreventRelayoutScope prevent us from running re-layout due to
-  // adding/subtracting scrollbars in updateAfterLayout()?
-  bool NeedsRelayout() const { return needs_relayout_; }
-  void SetNeedsRelayout(bool val) { needs_relayout_ = val; }
-
-  // Were we laid out with a horizontal scrollbar at the time we were marked as
-  // needing relayout by PreventRelayoutScope?
-  bool HadHorizontalScrollbarBeforeRelayout() const {
-    return had_horizontal_scrollbar_before_relayout_;
-  }
-  void SetHadHorizontalScrollbarBeforeRelayout(bool val) {
-    had_horizontal_scrollbar_before_relayout_ = val;
-  }
-
-  // Were we laid out with a vertical scrollbar at the time we were marked as
-  // needing relayout by PreventRelayoutScope?
-  bool HadVerticalScrollbarBeforeRelayout() const {
-    return had_vertical_scrollbar_before_relayout_;
-  }
-  void SetHadVerticalScrollbarBeforeRelayout(bool val) {
-    had_vertical_scrollbar_before_relayout_ = val;
-  }
 
   void EnqueueForSnapUpdateIfNeeded();
 
@@ -642,7 +614,7 @@ class CORE_EXPORT PaintLayerScrollableArea final
 
   void SetTickmarksOverride(Vector<gfx::Rect> tickmarks);
 
-  bool MayCompositeScrollbar(const Scrollbar&) const;
+  bool MayCompositeScrollbar(const Scrollbar&) const override;
 
   void EstablishScrollbarRoot(bool freeze_horizontal, bool freeze_vertical);
   void ClearScrollbarRoot();
@@ -664,9 +636,8 @@ class CORE_EXPORT PaintLayerScrollableArea final
   // Force scrollbars off for reconstruction.
   void RemoveScrollbarsForReconstruction();
 
-  void DidUpdateCullRect() {
-    last_cull_rect_update_scroll_position_ = ScrollPosition();
-  }
+  void DidUpdateCullRect();
+
   gfx::PointF LastCullRectUpdateScrollPosition() const {
     return last_cull_rect_update_scroll_position_;
   }
@@ -859,9 +830,6 @@ class CORE_EXPORT PaintLayerScrollableArea final
   unsigned scrolls_overflow_ : 1;
 
   unsigned needs_scroll_offset_clamp_ : 1;
-  unsigned needs_relayout_ : 1;
-  unsigned had_horizontal_scrollbar_before_relayout_ : 1;
-  unsigned had_vertical_scrollbar_before_relayout_ : 1;
   unsigned had_resizer_before_relayout_ : 1;
   unsigned scroll_origin_changed_ : 1;
 

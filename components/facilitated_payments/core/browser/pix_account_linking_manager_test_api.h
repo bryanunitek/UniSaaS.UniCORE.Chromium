@@ -28,18 +28,48 @@ class PixAccountLinkingManagerTestApi {
   void DismissPrompt() { manager_->DismissPrompt(); }
   void OnAccepted() { manager_->OnAccepted(); }
   void OnDeclined() { manager_->OnDeclined(); }
+  void OnUserReturnedToChrome() { manager_->OnUserReturnedToChrome(); }
   void OnUiScreenEvent(UiEvent ui_event_type) {
     manager_->OnUiScreenEvent(ui_event_type);
   }
-  void OnGetDetailsForCreatePaymentInstrumentResponseReceived(
-      base::TimeTicks start_time,
-      autofill::payments::PaymentsAutofillClient::PaymentsRpcResult result,
-      bool is_eligible_for_pix_account_linking,
-      const std::vector<uint8_t>& action_token) {
-    manager_->OnGetDetailsForCreatePaymentInstrumentResponseReceived(
-        start_time, result, is_eligible_for_pix_account_linking, action_token);
+
+  // Network and backend response handlers.
+
+  std::optional<AccountLinkingParams> CreateAccountLinkingParams() {
+    return manager_->CreateAccountLinkingParams();
+  }
+
+  void DoOnClientTokenReceived(const std::vector<uint8_t>& client_token) {
+    manager_->DoOnClientTokenReceived(client_token);
+  }
+  void OnAccountLinkingResult(AccountLinkingResult result) {
+    manager_->OnAccountLinkingResult(result);
+  }
+  void DoOnAccountLinkingResult(AccountLinkingResult result) {
+    manager_->DoOnAccountLinkingResult(result);
+  }
+  void DoOnGetDetailsForCreatePaymentInstrumentResponse(bool is_eligible) {
+    manager_->DoOnGetDetailsForCreatePaymentInstrumentResponse(is_eligible);
   }
   void Reset() { manager_->Reset(); }
+
+  // Getters and inspection accessors.
+  std::string_view GetHistogramSuffix() const {
+    return manager_->GetHistogramSuffix();
+  }
+  base::DictValue GetPayloadForGetDetailsForCreatePaymentInstrument() {
+    return manager_->GetPayloadForGetDetailsForCreatePaymentInstrument();
+  }
+  const std::vector<uint8_t>& client_token() const {
+    return manager_->client_token_;
+  }
+  FacilitatedPaymentsApiClient* GetApiClient() {
+    return manager_->GetApiClient();
+  }
+  strike_database::StrikeDatabaseIntegratorBase* GetStrikeDatabase() {
+    return manager_->GetStrikeDatabase();
+  }
+  bool IsUserPrefEnabled() const { return manager_->IsUserPrefEnabled(); }
 
  private:
   const raw_ref<PixAccountLinkingManager> manager_;

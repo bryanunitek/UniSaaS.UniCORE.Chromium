@@ -5,6 +5,9 @@
 package org.chromium.chrome.browser.tabmodel;
 
 import org.chromium.base.Token;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -24,6 +27,8 @@ public class StubTabModel extends EmptyTabModel {
     private final boolean mIsIncognito;
     private final String mMessage;
     private final @Nullable Profile mProfile;
+    private final NonNullObservableSupplier<Integer> mTabCountSupplier =
+            ObservableSuppliers.alwaysZero();
 
     public StubTabModel(boolean isIncognito, @Nullable Profile profile) {
         super();
@@ -59,6 +64,16 @@ public class StubTabModel extends EmptyTabModel {
         return mIsIncognito;
     }
 
+    @Override
+    public NullableObservableSupplier<Tab> getCurrentTabSupplier() {
+        return ObservableSuppliers.alwaysNull();
+    }
+
+    @Override
+    public NonNullObservableSupplier<Integer> getTabCountSupplier() {
+        return mTabCountSupplier;
+    }
+
     // Mutating methods that must throw to enforce isolation
 
     @Override
@@ -72,10 +87,7 @@ public class StubTabModel extends EmptyTabModel {
     }
 
     @Override
-    public void pinTab(
-            int tabId,
-            boolean showUngroupDialog,
-            @Nullable TabModelActionListener tabModelActionListener) {
+    public void pinTab(int tabId, boolean showUngroupDialog) {
         throw error();
     }
 
@@ -106,7 +118,7 @@ public class StubTabModel extends EmptyTabModel {
     }
 
     @Override
-    public void moveRelatedTabs(int id, int newIndex) {
+    public void moveGroupToIndex(Token tabGroupId, int newIndex) {
         throw error();
     }
 
@@ -121,14 +133,22 @@ public class StubTabModel extends EmptyTabModel {
     }
 
     @Override
-    public void mergeTabsToGroup(
-            int sourceTabId, int destinationTabId, boolean skipUpdateTabModel) {
+    public void mergeTabsToGroup(int sourceTabId, int destinationTabId) {
         throw error();
     }
 
     @Override
     public void mergeListOfTabsToGroup(
             List<Tab> tabs, Tab destinationTab, @Nullable Integer indexInGroup, int notify) {
+        throw error();
+    }
+
+    @Override
+    public void mergeListOfTabsToExistingGroup(
+            List<Tab> tabs,
+            Token destinationGroupId,
+            @Nullable Integer indexInGroup,
+            @TabGroupMergeNotificationType int notify) {
         throw error();
     }
 
@@ -162,5 +182,31 @@ public class StubTabModel extends EmptyTabModel {
         if (active) {
             throw error();
         }
+    }
+
+    @Override
+    public void notifyWillActiveStateChange(boolean active) {
+        // The logic here should be consistent with setActive().
+        if (active) {
+            throw error();
+        }
+    }
+
+    @Override
+    public void notifyDidActiveStateChange(boolean active) {
+        // The logic here should be consistent with setActive().
+        if (active) {
+            throw error();
+        }
+    }
+
+    @Override
+    public void notifyWillRemoveTabGroup(Token tabGroupId) {
+        throw error();
+    }
+
+    @Override
+    public @Nullable Tab getHierarchicalNextTab(Tab closingTab, List<Tab> closingTabs) {
+        throw error();
     }
 }

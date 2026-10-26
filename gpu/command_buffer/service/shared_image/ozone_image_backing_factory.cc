@@ -32,7 +32,7 @@
 #include "ui/ozone/public/surface_factory_ozone.h"
 
 #if BUILDFLAG(ENABLE_VULKAN)
-#include "components/viz/common/gpu/vulkan_context_provider.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #endif  // BUILDFLAG(ENABLE_VULKAN)
 
@@ -87,18 +87,21 @@ OzoneImageBackingFactory::~OzoneImageBackingFactory() = default;
 // static
 gfx::GpuMemoryBufferHandle
 OzoneImageBackingFactory::CreateGpuMemoryBufferHandle(
-    viz::VulkanContextProvider* vulkan_context_provider,
+    VulkanContextProvider* vulkan_context_provider,
     const gfx::Size& size,
     viz::SharedImageFormat format,
     gfx::BufferUsage usage) {
+  VulkanDeviceQueue* device_queue = nullptr;
+#if BUILDFLAG(ENABLE_VULKAN)
+  if (vulkan_context_provider) {
+    device_queue = vulkan_context_provider->GetDeviceQueue();
+  }
+#endif  // BUILDFLAG(ENABLE_VULKAN)
   scoped_refptr<gfx::NativePixmap> pixmap =
       ui::OzonePlatform::GetInstance()
           ->GetSurfaceFactoryOzone()
-          ->CreateNativePixmap(gpu::kNullSurfaceHandle,
-                               vulkan_context_provider
-                                   ? vulkan_context_provider->GetDeviceQueue()
-                                   : nullptr,
-                               size, format, usage, size);
+          ->CreateNativePixmap(gpu::kNullSurfaceHandle, device_queue, size,
+                               format, usage, size);
 
   if (!pixmap.get()) {
     DLOG(ERROR) << "Failed to create pixmap " << size.ToString() << ",  "
@@ -385,6 +388,9 @@ bool OzoneImageBackingFactory::CanImportNativePixmapToWebGPU() {
   // This testing in runtime can be done where graphite is enabled by checking
   // against features in the 'dawn_context_provider' in the
   // 'shared_context_state_'.
+  // TODO(crbug.com/413659843: Also ensure WEBGPU_READ usage is passed properly
+  // for WebGPU zero-copy compatibility from the clients (eg.
+  // MappableSharedImageVideoFramePool) for non-ChromeOS Ozone.
   return false;
 #endif
 }

@@ -16,6 +16,7 @@ source_set("prefs") {
     "//base",
     "//chrome/browser:font_pref",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/themes",
     "//chrome/browser/ui/zoom",
     "//components/keyed_service/core",
     "//components/prefs",
@@ -24,15 +25,9 @@ source_set("prefs") {
     "//third_party/blink/public/common",
     "//ui/native_theme",
   ]
-
-  if (!is_android) {
-    public_deps += [ "//chrome/browser/themes" ]
-  }
 }
 
 source_set("impl") {
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   sources = [
     "pref_watcher.cc",
     "prefs_tab_helper.cc",
@@ -40,25 +35,35 @@ source_set("impl") {
 
   deps = [
     ":prefs",
+    "//build:android_buildflags",
     "//chrome/app/resources:platform_locale_settings",
     "//chrome/browser:browser_process",
     "//chrome/browser:font_pref",
     "//chrome/browser:renderer_preferences_util",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/themes",
     "//chrome/browser/ui/zoom",
+    "//chrome/common",
+    "//chrome/common:chrome_features",
+    "//chrome/common:constants",
+    "//components/autofill/core/common",
     "//components/language/core/browser",
     "//components/live_caption:constants",
     "//components/pref_registry",
     "//components/proxy_config",
+    "//components/strings:components_locale_settings",
+    "//components/universal_optout",
   ]
+
+  if (is_chromeos) {
+    deps += [ "//ash/constants" ]
+  }
 
   if (is_android) {
     deps += [
       "//chrome/browser/flags:flags_android",
       "//components/browser_ui/accessibility/android",
     ]
-  } else {
-    deps += [ "//chrome/browser/themes" ]
   }
 
   if (is_linux) {
@@ -75,10 +80,10 @@ if (!is_android || enable_desktop_android_extensions) {
     deps = [
       "//base",
       "//chrome/browser/profiles:profile",
-      "//chrome/browser/ui",
       "//chrome/common:constants",
       "//chrome/common:non_code_constants",
       "//chrome/test:test_support",
+      "//chrome/test/base:chrome_test_utils",
       "//components/prefs",
       "//content/test:test_support",
       "//third_party/blink/public/common:headers",

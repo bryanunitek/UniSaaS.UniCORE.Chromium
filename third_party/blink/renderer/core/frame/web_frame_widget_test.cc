@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -13,10 +14,8 @@
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "cc/base/features.h"
-#include "cc/input/scroll_timing_info.h"
 #include "cc/layers/solid_color_layer.h"
 #include "cc/test/property_tree_test_utils.h"
-#include "cc/trees/compositor_commit_data.h"
 #include "cc/trees/scroll_source_type.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -31,11 +30,14 @@
 #include "third_party/blink/renderer/core/dom/events/add_event_listener_options_resolved.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
+#include "third_party/blink/renderer/core/events/web_input_event_conversion.h"
+#include "third_party/blink/renderer/core/events/wheel_event.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
@@ -44,15 +46,11 @@
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
-#include "third_party/blink/renderer/core/performance_entry_names.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar.h"
 #include "third_party/blink/renderer/core/testing/fake_web_plugin.h"
 #include "third_party/blink/renderer/core/testing/scoped_fake_plugin_registry.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
-#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
-#include "third_party/blink/renderer/core/timing/performance_scroll_timing.h"
-#include "third_party/blink/renderer/core/timing/window_performance.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
@@ -62,7 +60,6 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "ui/base/mojom/window_show_state.mojom-blink.h"
 #include "ui/display/screen_info.h"
-#include "ui/events/types/scroll_input_type.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "components/stylus_handwriting/win/features.h"
@@ -100,7 +97,12 @@ class TouchMoveEventListener final : public NativeEventListener {
 
 }  // namespace
 
-class WebFrameWidgetSimTest : public SimTest {};
+class WebFrameWidgetSimTest : public SimTest {
+ protected:
+  bool IsFullscreenGranted() {
+    return WebView().MainFrameViewWidget()->IsFullscreenGranted();
+  }
+};
 
 // Tests that if a WebView is auto-resized, the associated
 // WebFrameWidgetImpl requests a new viz::LocalSurfaceId to be allocated on the
@@ -190,6 +192,196 @@ TEST_F(WebFrameWidgetSimTest, ColorGamutChangeTriggersMediaQuery) {
   v8::Local<v8::Value> changed = MainFrame().ExecuteScriptAndReturnValue(
       WebScriptSource("window.__changed"));
   EXPECT_TRUE(changed->BooleanValue(Window().GetIsolate()));
+}
+
+TEST_F(WebFrameWidgetSimTest, CoalescedFullscreenEnterAndExitRejectsRequest) {
+  class CountingEventListener final : public NativeEventListener {
+   public:
+    void Invoke(ExecutionContext*, Event*) override { ++count_; }
+    int count() const { return count_; }
+
+   private:
+    int count_ = 0;
+  };
+
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete("<!DOCTYPE html><div id='target'></div>");
+  Compositor().BeginFrame();
+
+  Document& document = GetDocument();
+  Element* target = document.getElementById(AtomicString("target"));
+  ASSERT_TRUE(target);
+
+  auto* fullscreen_change_listener =
+      MakeGarbageCollected<CountingEventListener>();
+  document.addEventListener(event_type_names::kFullscreenchange,
+                            fullscreen_change_listener, false);
+  auto* fullscreen_error_listener =
+      MakeGarbageCollected<CountingEventListener>();
+  document.addEventListener(event_type_names::kFullscreenerror,
+                            fullscreen_error_listener, false);
+
+  LocalFrame::NotifyUserActivation(
+      document.GetFrame(), mojom::blink::UserActivationNotificationType::kTest);
+  Fullscreen::RequestFullscreen(*target);
+  EXPECT_EQ(nullptr, Fullscreen::FullscreenElementFrom(document));
+
+  // Simulate a coalesced false -> true -> false transition arriving in a single
+  // VisualProperties update (`is_fullscreen_granted = false`,
+  // `fullscreen_grant_count` incremented by 1 for the intermediate entry).
+  VisualProperties visual_properties;
+  visual_properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
+  visual_properties.new_size_device_px = gfx::Size(800, 600);
+  visual_properties.visible_viewport_size_device_px = gfx::Size(800, 600);
+  visual_properties.is_fullscreen_granted = false;
+  visual_properties.fullscreen_grant_count = 1;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  Compositor().BeginFrame();
+
+  // The intermediate entry was not granted, so the pending request is rejected:
+  // no `fullscreenchange` events fired, one `fullscreenerror` event fired,
+  // and `FullscreenController` returned to `State::kInitial`.
+  EXPECT_EQ(0, fullscreen_change_listener->count());
+  EXPECT_EQ(1, fullscreen_error_listener->count());
+  EXPECT_EQ(nullptr, Fullscreen::FullscreenElementFrom(document));
+
+  visual_properties.is_fullscreen_granted = true;
+  visual_properties.fullscreen_grant_count = 2;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  EXPECT_EQ(nullptr, Fullscreen::FullscreenElementFrom(document));
+}
+
+TEST_F(WebFrameWidgetSimTest,
+       CoalescedFullscreenExitAndReenterStaysInFullscreen) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete("<!DOCTYPE html><div id='target'></div>");
+  Compositor().BeginFrame();
+
+  Document& document = GetDocument();
+  Element* target = document.getElementById(AtomicString("target"));
+  ASSERT_TRUE(target);
+
+  LocalFrame::NotifyUserActivation(
+      document.GetFrame(), mojom::blink::UserActivationNotificationType::kTest);
+  Fullscreen::RequestFullscreen(*target);
+
+  VisualProperties visual_properties;
+  visual_properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
+  visual_properties.new_size_device_px = gfx::Size(800, 600);
+  visual_properties.visible_viewport_size_device_px = gfx::Size(800, 600);
+  visual_properties.is_fullscreen_granted = true;
+  visual_properties.fullscreen_grant_count = 1;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  ASSERT_EQ(target, Fullscreen::FullscreenElementFrom(document));
+
+  // Simulate a coalesced true -> false -> true transition
+  // (`is_fullscreen_granted = true`, `fullscreen_grant_count` incremented by 1
+  // for the new fullscreen entry). The document must remain in fullscreen
+  // rather than getting exited to State::kInitial.
+  visual_properties.is_fullscreen_granted = true;
+  visual_properties.fullscreen_grant_count = 2;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  EXPECT_EQ(target, Fullscreen::FullscreenElementFrom(document));
+  EXPECT_TRUE(IsFullscreenGranted());
+}
+
+TEST_F(WebFrameWidgetSimTest,
+       PreviousExitUpdateBeforeGrantedReentryCompletesPendingRequest) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete("<!DOCTYPE html><div id='target'></div>");
+  Compositor().BeginFrame();
+
+  Document& document = GetDocument();
+  Element* target = document.getElementById(AtomicString("target"));
+  ASSERT_TRUE(target);
+
+  VisualProperties visual_properties;
+  visual_properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
+  visual_properties.new_size_device_px = gfx::Size(800, 600);
+  visual_properties.visible_viewport_size_device_px = gfx::Size(800, 600);
+
+  // Enter browser-controlled fullscreen without a DOM fullscreen request.
+  visual_properties.is_fullscreen_granted = true;
+  visual_properties.fullscreen_grant_count = 1;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  ASSERT_TRUE(IsFullscreenGranted());
+  ASSERT_EQ(nullptr, Fullscreen::FullscreenElementFrom(document));
+
+  LocalFrame::NotifyUserActivation(
+      document.GetFrame(), mojom::blink::UserActivationNotificationType::kTest);
+  Fullscreen::RequestFullscreen(*target);
+
+  // Deliver the previous fullscreen exit before the browser's grant callback
+  // for the new request.
+  visual_properties.is_fullscreen_granted = false;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  test::RunPendingTasks();
+
+  // The post-ack update reports the granted re-entry through the incremented
+  // count. The pending request should complete even though the delayed exit
+  // reset the controller state before the grant callback arrived.
+  visual_properties.is_fullscreen_granted = true;
+  visual_properties.fullscreen_grant_count = 2;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  EXPECT_EQ(target, Fullscreen::FullscreenElementFrom(document));
+}
+
+TEST_F(WebFrameWidgetSimTest,
+       PreviousExitUpdateBeforeFailedReentryRejectsPendingRequest) {
+  class CountingEventListener final : public NativeEventListener {
+   public:
+    void Invoke(ExecutionContext*, Event*) override { ++count_; }
+    int count() const { return count_; }
+
+   private:
+    int count_ = 0;
+  };
+
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete("<!DOCTYPE html><div id='target'></div>");
+  Compositor().BeginFrame();
+
+  Document& document = GetDocument();
+  Element* target = document.getElementById(AtomicString("target"));
+  ASSERT_TRUE(target);
+  auto* fullscreen_error_listener =
+      MakeGarbageCollected<CountingEventListener>();
+  document.addEventListener(event_type_names::kFullscreenerror,
+                            fullscreen_error_listener, false);
+
+  VisualProperties visual_properties;
+  visual_properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
+  visual_properties.new_size_device_px = gfx::Size(800, 600);
+  visual_properties.visible_viewport_size_device_px = gfx::Size(800, 600);
+
+  // Enter browser-controlled fullscreen without a DOM fullscreen request.
+  visual_properties.is_fullscreen_granted = true;
+  visual_properties.fullscreen_grant_count = 1;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+
+  LocalFrame::NotifyUserActivation(
+      document.GetFrame(), mojom::blink::UserActivationNotificationType::kTest);
+  Fullscreen::RequestFullscreen(*target);
+
+  // Deliver the previous fullscreen exit before the browser's grant callback
+  // for the new request.
+  visual_properties.is_fullscreen_granted = false;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  test::RunPendingTasks();
+
+  // Report that the granted entry was followed by another exit. The pending
+  // request should be rejected even though the delayed exit reset the
+  // controller state before the grant callback arrived.
+  visual_properties.fullscreen_grant_count = 2;
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  Compositor().BeginFrame();
+
+  EXPECT_EQ(1, fullscreen_error_listener->count());
+  EXPECT_EQ(nullptr, Fullscreen::FullscreenElementFrom(document));
 }
 
 TEST_F(WebFrameWidgetSimTest, FrameSinkIdHitTestAPI) {
@@ -368,8 +560,8 @@ class WebFrameWidgetScrollContainerHitTest : public WebFrameWidgetSimTest {
 
   void TestScrollContainerHitTest(gfx::PointF box1_target_offset,
                                   gfx::PointF box2_target_offset) {
-    Element* box1 = GetDocument().getElementById(AtomicString("box1"));
-    Element* box2 = GetDocument().getElementById(AtomicString("box2"));
+    Element* box1 = GetElementById("box1");
+    Element* box2 = GetElementById("box2");
 
     const cc::ElementId box1_dom_node_id =
         box1->GetLayoutBox()->GetScrollableArea()->GetScrollElementId();
@@ -420,104 +612,6 @@ TEST_F(WebFrameWidgetScrollContainerHitTest, PageScaleHalf) {
   TestScrollContainerHitTest(gfx::PointF(50, 50), gfx::PointF(50, 150));
 }
 
-// Exercises WebFrameWidgetImpl::ProcessScrollTimingData, the entry point that
-// converts compositor-thread scroll timing records (delivered on
-// CompositorCommitData) into PerformanceScrollTiming entries on the main
-// thread for the Performance Scroll Timing API.
-class WebFrameWidgetScrollTimingSimTest : public WebFrameWidgetSimTest {
- public:
-  void SetUp() override {
-    WebFrameWidgetSimTest::SetUp();
-    WebView().Resize(gfx::Size(400, 400));
-
-    SimRequest request("https://example.com/test.html", "text/html");
-    LoadURL("https://example.com/test.html");
-    request.Complete(R"HTML(
-      <!DOCTYPE html>
-      <style>
-        #scroller { width: 100px; height: 100px; overflow: scroll; }
-        #space { width: 400px; height: 400px; }
-      </style>
-      <div id='scroller'><div id='space'></div></div>
-    )HTML");
-    WebView().MainFrameViewWidget()->UpdateAllLifecyclePhases(
-        DocumentUpdateReason::kTest);
-  }
-
-  WindowPerformance* GetPerformance() {
-    return DOMWindowPerformance::performance(*GetDocument().domWindow());
-  }
-
-  cc::ElementId ScrollerElementId() {
-    return GetDocument()
-        .getElementById(AtomicString("scroller"))
-        ->GetLayoutBox()
-        ->GetScrollableArea()
-        ->GetScrollElementId();
-  }
-
-  PerformanceEntryVector ScrollEntries() {
-    return GetPerformance()->getBufferedEntriesByType(
-        performance_entry_names::kScroll);
-  }
-
- private:
-  ScopedScrollPerformanceTimingForTest scroll_performance_timing_{true};
-};
-
-TEST_F(WebFrameWidgetScrollTimingSimTest, EmitsEntryForCompositorScroll) {
-  const base::TimeTicks start = base::TimeTicks::Now();
-
-  cc::CompositorCommitData commit_data;
-  cc::ScrollTimingInfo timing;
-  timing.element_id = ScrollerElementId();
-  timing.start_time = start;
-  timing.end_time = start + base::Milliseconds(50);
-  timing.input_type = ui::ScrollInputType::kWheel;
-  commit_data.scroll_timing_infos.push_back(timing);
-
-  WebView().MainFrameViewWidget()->UpdateCompositorScrollState(commit_data);
-
-  const auto entries = ScrollEntries();
-  ASSERT_EQ(1u, entries.size());
-  const auto* entry = static_cast<PerformanceScrollTiming*>(entries[0].Get());
-  EXPECT_EQ(AtomicString("wheel"), entry->scrollSource());
-  // The element id resolves to the scroller node and is exposable, so it is
-  // preserved as the entry's target.
-  EXPECT_EQ(GetDocument().getElementById(AtomicString("scroller")),
-            entry->target());
-}
-
-TEST_F(WebFrameWidgetScrollTimingSimTest,
-       EmitsEntryWithNullTargetForUnknownId) {
-  const base::TimeTicks start = base::TimeTicks::Now();
-
-  cc::CompositorCommitData commit_data;
-  cc::ScrollTimingInfo timing;
-  // An element id that does not correspond to any scrollable container, e.g. a
-  // scroller torn down before the commit reached the main thread.
-  timing.element_id = cc::ElementId(0xDEADBEEF);
-  timing.start_time = start;
-  timing.end_time = start + base::Milliseconds(50);
-  timing.input_type = ui::ScrollInputType::kTouchscreen;
-  commit_data.scroll_timing_infos.push_back(timing);
-
-  WebView().MainFrameViewWidget()->UpdateCompositorScrollState(commit_data);
-
-  const auto entries = ScrollEntries();
-  ASSERT_EQ(1u, entries.size());
-  const auto* entry = static_cast<PerformanceScrollTiming*>(entries[0].Get());
-  EXPECT_EQ(AtomicString("touch"), entry->scrollSource());
-  EXPECT_EQ(nullptr, entry->target());
-}
-
-TEST_F(WebFrameWidgetScrollTimingSimTest, NoEntryWithoutScrollTimingInfos) {
-  cc::CompositorCommitData commit_data;
-  WebView().MainFrameViewWidget()->UpdateCompositorScrollState(commit_data);
-
-  EXPECT_TRUE(ScrollEntries().empty());
-}
-
 class WebFrameWidgetImplRemoteFrameSimTest : public SimTest {
  public:
   void SetUp() override {
@@ -559,20 +653,114 @@ TEST_F(WebFrameWidgetImplRemoteFrameSimTest,
   EXPECT_FALSE(layer_tree_host->is_external_pinch_gesture_active_for_testing());
 }
 
-const char EVENT_LISTENER_RESULT_HISTOGRAM[] = "Event.PassiveListeners";
+class WebFrameWidgetWheelPageScaleTest
+    : public WebFrameWidgetImplRemoteFrameSimTest,
+      public testing::WithParamInterface<bool> {};
 
-// Keep in sync with enum defined in
-// RenderWidgetInputHandler::LogPassiveEventListenersUma.
-enum {
-  PASSIVE_LISTENER_UMA_ENUM_PASSIVE,
-  PASSIVE_LISTENER_UMA_ENUM_UNCANCELABLE,
-  PASSIVE_LISTENER_UMA_ENUM_SUPPRESSED,
-  PASSIVE_LISTENER_UMA_ENUM_CANCELABLE,
-  PASSIVE_LISTENER_UMA_ENUM_CANCELABLE_AND_CANCELED,
-  PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_FLING,
-  PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_MAIN_THREAD_RESPONSIVENESS_DEPRECATED,
-  PASSIVE_LISTENER_UMA_ENUM_COUNT
-};
+TEST_P(WebFrameWidgetWheelPageScaleTest, PixelDeltasWithExternalPageScale) {
+  ScopedWheelEventDeltaExternalPageScaleForTest feature(GetParam());
+  LocalDOMWindow& window = *LocalFrameRoot().GetFrame()->DomWindow();
+  for (float css_zoom : {1.0f, 1.5f}) {
+    for (float page_scale : {1.2f, 2.0f}) {
+      VisualProperties properties;
+      properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
+      properties.css_zoom_factor = css_zoom;
+      properties.page_scale_factor = page_scale;
+      LocalFrameRootWidget()->ApplyVisualProperties(properties);
+      ASSERT_NEAR(css_zoom, window.devicePixelRatio(), 1.0e-6);
+
+      for (int modifiers :
+           {WebInputEvent::kNoModifiers, WebInputEvent::kFromDebugger}) {
+        for (auto units : {ui::ScrollGranularity::kScrollByPixel,
+                           ui::ScrollGranularity::kScrollByPrecisePixel}) {
+          SCOPED_TRACE(testing::Message()
+                       << "css zoom=" << css_zoom << " page scale="
+                       << page_scale << " modifiers=" << modifiers
+                       << " units=" << static_cast<int>(units));
+          WebMouseWheelEvent native_event(
+              WebInputEvent::Type::kMouseWheel, modifiers,
+              WebInputEvent::GetStaticTimeStampForTests());
+          native_event.delta_x = -55 * css_zoom * page_scale;
+          native_event.delta_y = 70 * css_zoom * page_scale;
+          native_event.delta_units = units;
+          native_event.wheel_ticks_x = -1;
+          native_event.wheel_ticks_y = 1;
+          native_event.SetPositionInWidget(27, 33);
+          WheelEvent* event = WheelEvent::Create(native_event, window);
+
+          const float remaining_scale = GetParam() ? 1.0f : page_scale;
+          EXPECT_NEAR(55 * remaining_scale, event->deltaX(), 1.0e-4);
+          EXPECT_NEAR(-70 * remaining_scale, event->deltaY(), 1.0e-4);
+          EXPECT_EQ(WheelEvent::kDomDeltaPixel, event->deltaMode());
+          // DOM normalization must not change the event forwarded to plugins
+          // or the browser-side event that generates gesture scrolling.
+          EXPECT_FLOAT_EQ(native_event.delta_x, event->NativeEvent().delta_x);
+          EXPECT_FLOAT_EQ(native_event.delta_y, event->NativeEvent().delta_y);
+          EXPECT_FLOAT_EQ(native_event.wheel_ticks_x,
+                          event->NativeEvent().wheel_ticks_x);
+          EXPECT_FLOAT_EQ(native_event.wheel_ticks_y,
+                          event->NativeEvent().wheel_ticks_y);
+          EXPECT_EQ(native_event.PositionInWidget(),
+                    event->NativeEvent().PositionInWidget());
+          EXPECT_EQ(modifiers, event->NativeEvent().GetModifiers());
+        }
+      }
+    }
+  }
+}
+
+TEST_P(WebFrameWidgetWheelPageScaleTest, PageDeltasKeepExistingNormalization) {
+  ScopedWheelEventDeltaExternalPageScaleForTest feature(GetParam());
+  VisualProperties properties;
+  properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
+  properties.css_zoom_factor = 1.5f;
+  properties.page_scale_factor = 1.2f;
+  LocalFrameRootWidget()->ApplyVisualProperties(properties);
+  LocalDOMWindow& window = *LocalFrameRoot().GetFrame()->DomWindow();
+
+  for (int modifiers :
+       {WebInputEvent::kNoModifiers, WebInputEvent::kFromDebugger}) {
+    WebMouseWheelEvent native_event(
+        WebInputEvent::Type::kMouseWheel, modifiers,
+        WebInputEvent::GetStaticTimeStampForTests());
+    native_event.delta_x = -1;
+    native_event.delta_y = 1;
+    native_event.delta_units = ui::ScrollGranularity::kScrollByPage;
+    WheelEvent* event = WheelEvent::Create(native_event, window);
+    EXPECT_DOUBLE_EQ(1 / window.devicePixelRatio(), event->deltaX());
+    EXPECT_DOUBLE_EQ(-1 / window.devicePixelRatio(), event->deltaY());
+    EXPECT_EQ(WheelEvent::kDomDeltaPage, event->deltaMode());
+    EXPECT_FLOAT_EQ(-1, event->NativeEvent().delta_x);
+    EXPECT_FLOAT_EQ(1, event->NativeEvent().delta_y);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         WebFrameWidgetWheelPageScaleTest,
+                         testing::Bool());
+
+TEST_F(WebFrameWidgetSimTest, WheelDeltasDoNotApplyTopLevelPageScaleTwice) {
+  ScopedWheelEventDeltaExternalPageScaleForTest feature(true);
+  WebView().SetPageScaleFactor(2.0f);
+  for (int modifiers :
+       {WebInputEvent::kNoModifiers, WebInputEvent::kFromDebugger}) {
+    WebMouseWheelEvent native_event(
+        WebInputEvent::Type::kMouseWheel, modifiers,
+        WebInputEvent::GetStaticTimeStampForTests());
+    native_event.delta_x = -110;
+    native_event.delta_y = 140;
+    native_event.delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
+    WebMouseWheelEvent transformed = TransformWebMouseWheelEvent(
+        MainFrame().GetFrame()->View(), native_event);
+    ASSERT_FLOAT_EQ(2, transformed.FrameScale());
+    WheelEvent* event = WheelEvent::Create(transformed, Window());
+    EXPECT_DOUBLE_EQ(55, event->deltaX());
+    EXPECT_DOUBLE_EQ(-70, event->deltaY());
+    EXPECT_FLOAT_EQ(native_event.delta_x, event->NativeEvent().delta_x);
+    EXPECT_FLOAT_EQ(native_event.delta_y, event->NativeEvent().delta_y);
+    EXPECT_FLOAT_EQ(2, event->NativeEvent().FrameScale());
+  }
+}
 
 // Since std::unique_ptr<InputHandlerProxy::DidOverscrollParams> isn't copyable
 // we can't use the MockCallback template.
@@ -670,13 +858,6 @@ class WebFrameWidgetImplSimTest : public SimTest {
 #endif  // BUILDFLAG(IS_WIN)
         base::DoNothing());
   }
-
-  const base::HistogramTester& histogram_tester() const {
-    return histogram_tester_;
-  }
-
- private:
-  base::HistogramTester histogram_tester_;
 };
 
 TEST_F(WebFrameWidgetImplSimTest, CursorChange) {
@@ -704,69 +885,6 @@ TEST_F(WebFrameWidgetImplSimTest, CursorChange) {
   MockMainFrameWidget()->SetCursor(cursor);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(widget_host.CursorSetCount(), 2u);
-}
-
-TEST_F(WebFrameWidgetImplSimTest, RenderWidgetInputEventUmaMetrics) {
-  SyntheticWebTouchEvent touch;
-  touch.PressPoint(10, 10);
-  touch.touch_start_or_first_touch_move = true;
-
-  EXPECT_CALL(*MockMainFrameWidget(), HandleInputEvent(_))
-      .Times(5)
-      .WillRepeatedly(::testing::Return(WebInputEventResult::kNotHandled));
-  EXPECT_CALL(*MockMainFrameWidget(), DispatchBufferedTouchEvents())
-      .Times(5)
-      .WillRepeatedly(::testing::Return(WebInputEventResult::kNotHandled));
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_CANCELABLE, 1);
-
-  touch.dispatch_type = WebInputEvent::DispatchType::kEventNonBlocking;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_UNCANCELABLE,
-                                       1);
-
-  touch.dispatch_type =
-      WebInputEvent::DispatchType::kListenersNonBlockingPassive;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_PASSIVE, 1);
-
-  touch.dispatch_type =
-      WebInputEvent::DispatchType::kListenersForcedNonBlockingDueToFling;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(
-      EVENT_LISTENER_RESULT_HISTOGRAM,
-      PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_FLING, 1);
-
-  touch.MovePoint(0, 10, 10);
-  touch.touch_start_or_first_touch_move = true;
-  touch.dispatch_type =
-      WebInputEvent::DispatchType::kListenersForcedNonBlockingDueToFling;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(
-      EVENT_LISTENER_RESULT_HISTOGRAM,
-      PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_FLING, 2);
-
-  EXPECT_CALL(*MockMainFrameWidget(), HandleInputEvent(_))
-      .WillOnce(::testing::Return(WebInputEventResult::kNotHandled));
-  EXPECT_CALL(*MockMainFrameWidget(), DispatchBufferedTouchEvents())
-      .WillOnce(::testing::Return(WebInputEventResult::kHandledSuppressed));
-  touch.dispatch_type = WebInputEvent::DispatchType::kBlocking;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_SUPPRESSED, 1);
-
-  EXPECT_CALL(*MockMainFrameWidget(), HandleInputEvent(_))
-      .WillOnce(::testing::Return(WebInputEventResult::kNotHandled));
-  EXPECT_CALL(*MockMainFrameWidget(), DispatchBufferedTouchEvents())
-      .WillOnce(::testing::Return(WebInputEventResult::kHandledApplication));
-  touch.dispatch_type = WebInputEvent::DispatchType::kBlocking;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(
-      EVENT_LISTENER_RESULT_HISTOGRAM,
-      PASSIVE_LISTENER_UMA_ENUM_CANCELABLE_AND_CANCELED, 1);
 }
 
 // Ensures that the compositor thread gets sent the gesture event & overscroll
@@ -822,8 +940,7 @@ TEST_F(WebFrameWidgetImplSimTest, TestStartStylusWritingForInputElement) {
       </body>
       )HTML");
   Compositor().BeginFrame();
-  Element* first =
-      DynamicTo<Element>(GetDocument().getElementById(AtomicString("first")));
+  Element* first = DynamicTo<Element>(GetElementById("first"));
   WebPointerEvent event(
       WebInputEvent::Type::kPointerDown,
       WebPointerProperties(1, WebPointerProperties::PointerType::kPen,
@@ -851,8 +968,7 @@ TEST_F(WebFrameWidgetImplSimTest,
       </body>
       )HTML");
   Compositor().BeginFrame();
-  Element* first =
-      DynamicTo<Element>(GetDocument().getElementById(AtomicString("first")));
+  Element* first = DynamicTo<Element>(GetElementById("first"));
   WebPointerEvent event(
       WebInputEvent::Type::kPointerDown,
       WebPointerProperties(1, WebPointerProperties::PointerType::kPen,
@@ -882,10 +998,8 @@ TEST_F(WebFrameWidgetImplSimTest,
       </body>
       )HTML");
   Compositor().BeginFrame();
-  Element* first =
-      DynamicTo<Element>(GetDocument().getElementById(AtomicString("first")));
-  Element* second =
-      DynamicTo<Element>(GetDocument().getElementById(AtomicString("second")));
+  Element* first = DynamicTo<Element>(GetElementById("first"));
+  Element* second = DynamicTo<Element>(GetElementById("second"));
   WebPointerEvent event(
       WebInputEvent::Type::kPointerDown,
       WebPointerProperties(1, WebPointerProperties::PointerType::kPen,
@@ -1292,10 +1406,6 @@ class WebFrameWidgetProximateBoundsCollectionSimTestBase
         blink::BindOnce(&WebFrameWidgetProximateBoundsCollectionSimTestBase::
                             OnStartStylusWritingComplete,
                         weak_factory_.GetWeakPtr()));
-  }
-
-  Element* GetElementById(const char* id) {
-    return GetDocument().getElementById(AtomicString(id));
   }
 
   const mojom::blink::ProximateCharacterRangeBounds* GetLastProximateBounds()
@@ -1886,9 +1996,8 @@ TEST_P(WebFrameWidgetInputEventsSimTest, DispatchBufferedTouchEvents) {
   auto* widget = WebView().MainFrameViewWidget();
 
   auto* listener = MakeGarbageCollected<TouchMoveEventListener>();
-  Window().addEventListener(
-      event_type_names::kTouchmove, listener,
-      MakeGarbageCollected<AddEventListenerOptionsResolved>());
+  AddEventListenerOptionsResolved options;
+  Window().addEventListener(event_type_names::kTouchmove, listener, options);
   widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
 
   // Send a start.
@@ -2042,10 +2151,10 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterFocusChange) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  HTMLInputElement* first = DynamicTo<HTMLInputElement>(
-      GetDocument().getElementById(AtomicString("first")));
-  HTMLInputElement* second = DynamicTo<HTMLInputElement>(
-      GetDocument().getElementById(AtomicString("second")));
+  HTMLInputElement* first =
+      DynamicTo<HTMLInputElement>(GetElementById("first"));
+  HTMLInputElement* second =
+      DynamicTo<HTMLInputElement>(GetElementById("second"));
   // Focus the first element and check the line bounds.
   first->SetValue("ABCD");
   first->Focus();
@@ -2106,7 +2215,7 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectForContenteditable) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  Element* first = GetDocument().getElementById(AtomicString("first"));
+  Element* first = GetElementById("first");
   first->Focus();
   widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
 
@@ -2266,8 +2375,8 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterLayoutChange) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  HTMLInputElement* first = DynamicTo<HTMLInputElement>(
-      GetDocument().getElementById(AtomicString("first")));
+  HTMLInputElement* first =
+      DynamicTo<HTMLInputElement>(GetElementById("first"));
   // Focus the element and check the line bounds.
   first->Focus();
   first->SetValue("hello world");
@@ -2279,9 +2388,8 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterLayoutChange) {
     i.Offset(0, 200);
   }
 
-  GetDocument()
-      .getElementById(AtomicString("d"))
-      ->setAttribute(html_names::kStyleAttr, AtomicString("height: 200px"));
+  GetElementById("d")->setAttribute(html_names::kStyleAttr,
+                                    AtomicString("height: 200px"));
   widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
   Vector<gfx::Rect> actual =
       widget->GetLastCursorAnchorInfoForTesting()->visible_line_bounds;
@@ -2330,8 +2438,8 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterPageScroll) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  HTMLTextAreaElement* first = DynamicTo<HTMLTextAreaElement>(
-      GetDocument().getElementById(AtomicString("first")));
+  HTMLTextAreaElement* first =
+      DynamicTo<HTMLTextAreaElement>(GetElementById("first"));
   // Focus the element and check the line bounds.
   first->Focus();
   widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
@@ -2402,8 +2510,8 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterElementScroll) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  HTMLTextAreaElement* first = DynamicTo<HTMLTextAreaElement>(
-      GetDocument().getElementById(AtomicString("first")));
+  HTMLTextAreaElement* first =
+      DynamicTo<HTMLTextAreaElement>(GetElementById("first"));
   // Focus the element and check the line bounds.
   first->Focus();
   widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
@@ -2466,8 +2574,8 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterCommit) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  HTMLTextAreaElement* first = DynamicTo<HTMLTextAreaElement>(
-      GetDocument().getElementById(AtomicString("first")));
+  HTMLTextAreaElement* first =
+      DynamicTo<HTMLTextAreaElement>(GetElementById("first"));
   // Focus the element and check the line bounds.
   first->Focus();
   gfx::Point origin =
@@ -2532,8 +2640,8 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreCorrectAfterDelete) {
   font_resource.Complete(
       *test::ReadFromFile(test::CoreTestDataPath("Ahem.woff2")));
   Compositor().BeginFrame();
-  HTMLTextAreaElement* first = DynamicTo<HTMLTextAreaElement>(
-      GetDocument().getElementById(AtomicString("first")));
+  HTMLTextAreaElement* first =
+      DynamicTo<HTMLTextAreaElement>(GetElementById("first"));
 
   first->Focus();
   first->SetValue("hello world\rgoodbye world");
@@ -2793,7 +2901,163 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreClippedInSubframe) {
     EXPECT_EQ(expected.at(i), actual.at(i));
   }
 }
+
+TEST_F(WebFrameWidgetSimTest, TestCursorAnchorInfoWithEditContext) {
+  WebView().ResizeVisualViewport(gfx::Size(1000, 1000));
+  auto* widget = WebView().MainFrameViewWidget();
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(
+      R"HTML(
+      <!doctype html>
+      <div id="target" style='width:200px;height:200px'></div>
+      <script>
+        const editContext = new EditContext();
+        const target = document.getElementById('target');
+        target.editContext = editContext;
+        target.focus();
+        let controlBounds = new DOMRect(10, 20, 100, 50);
+        editContext.updateControlBounds(controlBounds);
+        let selectionBounds = new DOMRect(15, 25, 2, 10);
+        editContext.updateSelectionBounds(selectionBounds);
+      </script>
+      )HTML");
+  Compositor().BeginFrame();
+  widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
+
+  // Directly verify CalculateCursorAnchorInfo using ForTesting helper
+  mojom::blink::InputCursorAnchorInfoPtr info =
+      widget->CalculateCursorAnchorInfoForTesting(/*update_requested=*/true);
+  ASSERT_TRUE(info);
+  EXPECT_EQ(gfx::RectF(10, 20, 100, 50),
+            info->editor_bounds_info->editor_bounds);
+  EXPECT_TRUE(info->insertion_marker.has_value());
+  EXPECT_EQ(gfx::Rect(15, 25, 2, 10), info->insertion_marker.value());
+
+  // Also verify UpdateCursorAnchorInfo properly populates
+  // last_cursor_anchor_info_
+  widget->UpdateCursorAnchorInfo(/*update_requested=*/true);
+  mojom::blink::InputCursorAnchorInfoPtr& actual =
+      widget->GetLastCursorAnchorInfoForTesting();
+  ASSERT_TRUE(actual);
+  EXPECT_EQ(gfx::RectF(10, 20, 100, 50),
+            actual->editor_bounds_info->editor_bounds);
+  EXPECT_TRUE(actual->insertion_marker.has_value());
+  EXPECT_EQ(gfx::Rect(15, 25, 2, 10), actual->insertion_marker.value());
+}
 #endif  // BUILDFLAG(IS_ANDROID)
+
+class WebFrameWidgetEditContextBoundsSimTest : public WebFrameWidgetSimTest {
+ protected:
+  // Loads a page with a focused element whose EditContext is active, and
+  // flushes the initial frame and TextInputStateChanged IPCs.
+  void LoadPageWithActiveEditContext() {
+    SimRequest request("https://example.com/test.html", "text/html");
+    LoadURL("https://example.com/test.html");
+    request.Complete(R"HTML(
+        <!doctype html>
+        <div id="target" style="width:200px;height:200px"></div>
+        <script>
+          target.editContext = new EditContext();
+          target.focus();
+        </script>
+        )HTML");
+    Compositor().BeginFrame();
+    test::RunPendingTasks();
+  }
+
+  // Runs JS outside of any frame, like a setTimeout/debounce callback would.
+  void RunScript(const char* script) {
+    MainFrame().ExecuteScript(WebScriptSource(WebString::FromUtf8(script)));
+  }
+
+  void BeginFrameAndFlushIpcs() {
+    Compositor().BeginFrame();
+    test::RunPendingTasks();
+  }
+
+  frame_test_helpers::TestWebFrameWidgetHost& Host() {
+    return GetWebFrameWidget().WidgetHost();
+  }
+};
+
+// Regression test: EditContext.updateSelectionBounds() and
+// updateControlBounds() called from an async task (which neither mutates the
+// DOM nor dirties layout) must schedule a frame so that the new bounds are sent
+// to the browser via TextInputStateChanged.
+TEST_F(WebFrameWidgetEditContextBoundsSimTest,
+       BoundsUpdateSchedulesFrameAndSendsTextInputState) {
+  LoadPageWithActiveEditContext();
+  ASSERT_FALSE(Compositor().NeedsBeginFrame());
+
+  // Simulate a debounced caret update, as done by e.g. Google Docs.
+  RunScript(
+      "target.editContext.updateSelectionBounds(new DOMRect(15, 25, 2, 10));");
+  ASSERT_TRUE(Compositor().NeedsBeginFrame());
+  BeginFrameAndFlushIpcs();
+  ASSERT_TRUE(Host().LastTextInputState());
+  EXPECT_EQ(gfx::Rect(15, 25, 2, 10),
+            Host().LastTextInputState()->edit_context_selection_bounds);
+
+  // Setting identical bounds is a no-op and should not request a frame.
+  RunScript(
+      "target.editContext.updateSelectionBounds(new DOMRect(15, 25, 2, 10));");
+  EXPECT_FALSE(Compositor().NeedsBeginFrame());
+
+  // Control bounds changes are also propagated.
+  RunScript(
+      "target.editContext.updateControlBounds(new DOMRect(10, 20, 100, 50));");
+  ASSERT_TRUE(Compositor().NeedsBeginFrame());
+  BeginFrameAndFlushIpcs();
+  ASSERT_TRUE(Host().LastTextInputState());
+  EXPECT_EQ(gfx::Rect(10, 20, 100, 50),
+            Host().LastTextInputState()->edit_context_control_bounds);
+  EXPECT_EQ(gfx::Rect(15, 25, 2, 10),
+            Host().LastTextInputState()->edit_context_selection_bounds);
+
+  // Multiple updates before the next frame are coalesced into a single IPC
+  // carrying the latest bounds.
+  const size_t count_before = Host().TextInputStateChangedCount();
+  RunScript(R"JS(
+      target.editContext.updateSelectionBounds(new DOMRect(30, 40, 2, 10));
+      target.editContext.updateSelectionBounds(new DOMRect(50, 60, 2, 10));
+  )JS");
+  ASSERT_TRUE(Compositor().NeedsBeginFrame());
+  BeginFrameAndFlushIpcs();
+  EXPECT_EQ(count_before + 1, Host().TextInputStateChangedCount());
+  EXPECT_EQ(gfx::Rect(50, 60, 2, 10),
+            Host().LastTextInputState()->edit_context_selection_bounds);
+}
+
+// Bounds updates on an EditContext that is not the active one should not
+// request frames.
+TEST_F(WebFrameWidgetEditContextBoundsSimTest,
+       InactiveEditContextDoesNotScheduleFrame) {
+  LoadPageWithActiveEditContext();
+  ASSERT_FALSE(Compositor().NeedsBeginFrame());
+
+  RunScript(R"JS(
+      const inactive = new EditContext();
+      inactive.updateSelectionBounds(new DOMRect(1, 2, 3, 4));
+      inactive.updateControlBounds(new DOMRect(5, 6, 7, 8));
+  )JS");
+  EXPECT_FALSE(Compositor().NeedsBeginFrame());
+}
+
+// With the fix disabled, an async bounds update leaves the browser with stale
+// bounds until some unrelated frame occurs. This documents the original bug.
+TEST_F(WebFrameWidgetEditContextBoundsSimTest, KillSwitchRestoresOldBehavior) {
+  ScopedEditContextBoundsUpdateSchedulesFrameForTest disable_fix(false);
+  LoadPageWithActiveEditContext();
+  ASSERT_FALSE(Compositor().NeedsBeginFrame());
+  const size_t count_before = Host().TextInputStateChangedCount();
+
+  RunScript(
+      "target.editContext.updateSelectionBounds(new DOMRect(15, 25, 2, 10));");
+  EXPECT_FALSE(Compositor().NeedsBeginFrame());
+  test::RunPendingTasks();
+  EXPECT_EQ(count_before, Host().TextInputStateChangedCount());
+}
 
 class EventHandlingWebFrameWidgetSimTest : public SimTest {
  public:
@@ -2865,7 +3129,7 @@ class EventHandlingWebFrameWidgetSimTest : public SimTest {
     int64_t GetTraceId() const override { return 0; }
 
    private:
-    State* const state_;
+    const raw_ptr<State, UnprotectedInRelease | DanglingUntriaged> state_;
   };
 
   // A test `WebFrameWidget` implementation that fakes handling of an event.

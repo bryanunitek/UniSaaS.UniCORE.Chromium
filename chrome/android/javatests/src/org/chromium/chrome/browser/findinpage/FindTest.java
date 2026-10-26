@@ -4,6 +4,10 @@
 
 package org.chromium.chrome.browser.findinpage;
 
+import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.matcher.ViewMatchers.withId;
+
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -17,9 +21,6 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.TextView;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.action.ViewActions.click;
-import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import androidx.test.espresso.Espresso;
 import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
@@ -45,6 +46,7 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.KeyUtils;
+import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
@@ -239,6 +241,7 @@ public class FindTest {
     @Test
     @MediumTest
     @Feature({"FindInPage"})
+    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET)
     public void testFindNext() {
         String query = "pitts";
         loadTestAndVerifyFindInPage(query, "1/7");
@@ -254,6 +257,7 @@ public class FindTest {
     @Test
     @MediumTest
     @Feature({"FindInPage"})
+    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET)
     public void testFindNextPrevious() {
         String query = "pitts";
         loadTestAndVerifyFindInPage(query, "1/7");
@@ -295,6 +299,7 @@ public class FindTest {
     @Test
     @MediumTest
     @Feature({"FindInPage"})
+    @RequiresRestart("crbug.com/539532908")
     public void testResultsBarVisibleAfterTypingText() {
         mActivityTestRule.loadUrl(mActivityTestRule.getTestServer().getURL(FILEPATH));
         findInPageFromMenu();
@@ -446,6 +451,27 @@ public class FindTest {
 
         Assert.assertEquals(View.GONE, findToolbar.getVisibility());
         Assert.assertFalse(findQueryText.hasFocus());
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"FindInPage"})
+    public void testFindQueryRetainsFocusOnEnter() {
+        mActivityTestRule.loadUrl(mActivityTestRule.getTestServer().getURL(FILEPATH));
+        findInPageFromMenu();
+
+        final EditText findQueryText = getFindQueryText();
+        Assert.assertTrue("FindQuery should have focus initially", findQueryText.hasFocus());
+
+        KeyUtils.singleKeyEventView(
+                InstrumentationRegistry.getInstrumentation(), findQueryText, KeyEvent.KEYCODE_T);
+
+        KeyUtils.singleKeyEventView(
+                InstrumentationRegistry.getInstrumentation(),
+                findQueryText,
+                KeyEvent.KEYCODE_ENTER);
+
+        Assert.assertTrue("FindQuery should retain focus after Enter", findQueryText.hasFocus());
     }
 
     /** Verify "Find in page" isn't dismissed when ESCAPE is pressed w/ modifiers. */

@@ -25,40 +25,40 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
 
-#include "third_party/blink/renderer/platform/wtf/text/string_hasher.h"
+#include "third_party/blink/renderer/platform/wtf/hash_functions_memory.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
-unsigned FontSelectionRequest::GetHash() const {
+uint32_t FontSelectionRequest::GetHash() const {
   int16_t val[] = {
       weight.RawValue(),
       width.RawValue(),
       slope.RawValue(),
   };
-  return StringHasher::HashMemory32(base::as_byte_span(val));
+  return HashMemory32(base::as_byte_span(val));
 }
 
-unsigned FontSelectionRequestKeyHashTraits::GetHash(
+uint32_t FontSelectionRequestKeyHashTraits::GetHash(
     const FontSelectionRequestKey& key) {
   uint32_t val[] = {key.request.GetHash(), key.isDeletedValue};
-  return StringHasher::HashMemory32(base::as_byte_span(val));
+  return HashMemory32(base::as_byte_span(val));
 }
 
-unsigned FontSelectionCapabilitiesHashTraits::GetHash(
+uint32_t FontSelectionCapabilitiesHashTraits::GetHash(
     const FontSelectionCapabilities& key) {
   uint32_t val[] = {key.width.UniqueValue(), key.slope.UniqueValue(),
                     key.weight.UniqueValue(), key.IsHashTableDeletedValue()};
-  return StringHasher::HashMemory32(base::as_byte_span(val));
+  return HashMemory32(base::as_byte_span(val));
 }
 
 String FontSelectionValue::ToString() const {
-  return String::Format("%f", (float)*this);
+  return Format("{:f}", static_cast<float>(*this));
 }
 
 String FontSelectionRequest::ToString() const {
-  return String::Format(
-      "weight=%s, width=%s, slope=%s", weight.ToString().Ascii().c_str(),
-      width.ToString().Ascii().c_str(), slope.ToString().Ascii().c_str());
+  return StrCat({"weight=", weight.ToString(), ", width=", width.ToString(),
+                 ", slope=", slope.ToString()});
 }
 
 }  // namespace blink

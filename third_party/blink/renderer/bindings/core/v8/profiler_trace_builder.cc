@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/profiler_trace_builder.h"
 
 #include "base/time/time.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/webdx_feature.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_profiler_frame.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_profiler_marker.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_profiler_sample.h"
@@ -13,6 +14,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/timing/performance.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -23,11 +25,10 @@ namespace blink {
 ProfilerTrace* ProfilerTraceBuilder::FromProfile(
     ScriptState* script_state,
     const v8::CpuProfile* profile,
-    const SecurityOrigin* allowed_origin,
     base::TimeTicks time_origin) {
   TRACE_EVENT0("blink", "ProfilerTraceBuilder::FromProfile");
-  ProfilerTraceBuilder* builder = MakeGarbageCollected<ProfilerTraceBuilder>(
-      script_state, allowed_origin, time_origin);
+  ProfilerTraceBuilder* builder =
+      MakeGarbageCollected<ProfilerTraceBuilder>(script_state, time_origin);
   if (profile) {
     for (int i = 0; i < profile->GetSamplesCount(); i++) {
       const auto* node = profile->GetSample(i);
@@ -42,11 +43,8 @@ ProfilerTrace* ProfilerTraceBuilder::FromProfile(
 }
 
 ProfilerTraceBuilder::ProfilerTraceBuilder(ScriptState* script_state,
-                                           const SecurityOrigin* allowed_origin,
                                            base::TimeTicks time_origin)
-    : script_state_(script_state),
-      allowed_origin_(allowed_origin),
-      time_origin_(time_origin) {
+    : script_state_(script_state), time_origin_(time_origin) {
   ExecutionContext* execution_context = ExecutionContext::From(script_state_);
   if (execution_context) {
     is_cross_origin_isolated_ =
@@ -64,7 +62,9 @@ void ProfilerTraceBuilder::Trace(Visitor* visitor) const {
 std::optional<V8ProfilerMarker> ProfilerTraceBuilder::GetMarker(
     const v8::EmbedderStateTag embedder_state,
     const v8::StateTag fallback_state) {
-  if (!RuntimeEnabledFeatures::ExperimentalJSProfilerMarkersEnabled()) {
+  ExecutionContext* execution_context = ExecutionContext::From(script_state_);
+  if (!RuntimeEnabledFeatures::ExperimentalJSProfilerMarkersEnabled(
+          execution_context)) {
     return std::nullopt;
   }
 
@@ -76,6 +76,10 @@ std::optional<V8ProfilerMarker> ProfilerTraceBuilder::GetMarker(
   if (!is_cross_origin_isolated_) {
     marker = ProfileMarkerToPublicMarker(marker->AsEnum());
   }
+  if (marker && execution_context) {
+    UseCounter::CountWebDXFeature(
+        execution_context, mojom::blink::WebDXFeature::kJSSelfProfilingMarkers);
+  }
   return marker;
 }
 
@@ -85,13 +89,9 @@ void ProfilerTraceBuilder::AddSample(
     const v8::StateTag state,
     const v8::EmbedderStateTag embedder_state) {
   auto* sample = ProfilerSample::Create();
-  // TODO(yoav): This should not use MonotonicTimeToDOMHighResTimeStamp, as
-  // these timestamps are clamped, which makes no sense for traces. Since this
-  // only exposes time to traces, it's fine to define this as statically "cross
-  // origin isolated".
   auto relative_timestamp = Performance::MonotonicTimeToDOMHighResTimeStamp(
       time_origin_, timestamp, /*allow_negative_value=*/true,
-      /*cross_origin_isolated_capability=*/true);
+      /*cross_origin_isolated_capability=*/is_cross_origin_isolated_);
 
   sample->setTimestamp(relative_timestamp);
   if (std::optional<wtf_size_t> stack_id = GetOrInsertStackId(node)) {
@@ -213,23 +213,25 @@ bool ProfilerTraceBuilder::ShouldIncludeStackFrame(
 
   int script_id = resource_node->GetScriptId();
 
-  // If we already tested whether or not this script was cross-origin, return
-  // the cached results.
-  auto it = script_same_origin_cache_.find(script_id);
-  if (it != script_same_origin_cache_.end())
+  // If we already tested whether or not this script's frames may be included,
+  // return the cached result.
+  auto it = script_inclusion_cache_.find(script_id);
+  if (it != script_inclusion_cache_.end()) {
     return it->value;
+  }
 
-  KURL resource_url(resource_node->GetScriptResourceNameStr());
-  if (!resource_url.IsValid())
-    return false;
-
-  auto origin = SecurityOrigin::Create(resource_url);
-  // Omit frames that don't pass a cross-origin check.
+  // Omit frames whose script's response was not CORS-same-origin with the
+  // profiling context. This mirrors the muted-errors check used for
+  // window.onerror, and accounts for redirects in the script's request chain.
+  //
+  // Also omit frames whose script has no parseable resource name, such as
+  // eval() and new Function().
+  //
   // Do this at the stack level (rather than the frame level) to avoid
   // including skeleton frames without data.
-  bool allowed = resource_node->IsScriptSharedCrossOrigin() ||
-                 origin->IsSameOriginWith(allowed_origin_);
-  script_same_origin_cache_.Set(script_id, allowed);
+  bool allowed = resource_node->IsScriptSharedCrossOrigin() &&
+                 KURL(resource_node->GetScriptResourceNameStr()).IsValid();
+  script_inclusion_cache_.Set(script_id, allowed);
   return allowed;
 }
 

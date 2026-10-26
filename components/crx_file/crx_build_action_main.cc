@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <cstdint>
+#include <stddef.h>
+
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -30,7 +32,7 @@ int main(int argc, char** raw_argv) {
     VLOG(0) << "Failed to read key material from " << argv[3];
     return -1;
   }
-  return static_cast<int>(crx_file::Create(
+  return std::to_underlying(crx_file::Create(
       base::FilePath::FromASCII(argv[1]), base::FilePath::FromASCII(argv[2]),
       *crypto::keypair::PrivateKey::FromPrivateKeyInfo(
           base::as_byte_span(key_file))));

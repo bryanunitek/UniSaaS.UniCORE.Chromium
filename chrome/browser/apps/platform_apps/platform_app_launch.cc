@@ -18,14 +18,19 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/extensions/chrome_app_deprecation.h"
 #include "chrome/browser/extensions/extension_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/common/webui_url_constants.h"
+#include "ui/base/base_window.h"
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 namespace apps {
@@ -96,7 +101,7 @@ bool OpenExtensionApplicationWindow(Profile* profile,
   RecordCmdLineAppHistogram(app->GetType());
 
   apps::AppLaunchParams params(app_id, launch_container,
-                               WindowOpenDisposition::NEW_WINDOW,
+                               WindowOpenDisposition::kNewWindow,
                                apps::LaunchSource::kFromCommandLine);
   params.command_line = command_line;
   params.current_directory = current_directory;
@@ -130,7 +135,7 @@ content::WebContents* OpenExtensionApplicationTab(Profile* profile,
   content::WebContents* app_tab = ::OpenApplication(
       profile,
       apps::AppLaunchParams(app_id, apps::LaunchContainer::kLaunchContainerTab,
-                            WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                            WindowOpenDisposition::kNewForegroundTab,
                             apps::LaunchSource::kFromCommandLine));
   return app_tab;
 }
@@ -141,8 +146,9 @@ bool OpenDeprecatedApplicationPrompt(Profile* profile,
   if (!extensions::IsExtensionUnsupportedDeprecatedApp(profile, app_id))
     return false;
 
-  Browser::CreateParams create_params(profile, /*user_gesture=*/false);
-  Browser* browser = Browser::Create(create_params);
+  BrowserWindowCreateParams create_params(profile, /*from_user_gesture=*/false);
+  BrowserWindowInterface* browser =
+      CreateBrowserWindow(std::move(create_params));
 
   GURL url;
   if (extensions::util::IsExtensionForceInstalled(app_id, profile)) {
@@ -153,7 +159,7 @@ bool OpenDeprecatedApplicationPrompt(Profile* profile,
   }
 
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.tabstrip_add_types = AddTabTypes::ADD_ACTIVE;
   Navigate(&params);
 
@@ -180,7 +186,7 @@ bool OpenExtensionApplicationWithReenablePrompt(
   RecordCmdLineAppHistogram(extensions::Manifest::Type::kPlatformApp);
   apps::AppLaunchParams params(
       app_id, apps::LaunchContainer::kLaunchContainerNone,
-      WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromCommandLine);
+      WindowOpenDisposition::kNewWindow, apps::LaunchSource::kFromCommandLine);
   params.command_line = command_line;
   params.current_directory = current_directory;
   ::OpenApplicationWithReenablePrompt(profile, std::move(params));

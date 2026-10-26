@@ -22,7 +22,6 @@
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/location_bar/badge/ui/location_bar_badge_constants.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/ui/constants.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -38,6 +37,7 @@
 #import "ios/components/webui/web_ui_url_constants.h"
 #import "ios/testing/earl_grey/app_launch_manager.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
+#import "ios/testing/test_tag_registry.h"
 #import "net/base/url_util.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
 #import "net/test/embedded_test_server/http_response.h"
@@ -286,7 +286,6 @@ class TestResponseProvider {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
-  config.features_enabled.push_back(kEnableReaderModeTranslationWithInfobar);
   config.additional_args.push_back(std::string("-") +
                                    test_switches::kUseDefaultInfobarDuration);
 
@@ -303,7 +302,6 @@ class TestResponseProvider {
             (testTranslateBadgeWithReaderModeBadgeSupport)] ||
       [self
           isRunningTest:@selector(testTranslateInReaderModeAndNavigatesBack)]) {
-    config.features_enabled.push_back(kEnableReaderModeInUS);
     config.features_enabled.push_back(kProactiveSuggestionsFramework);
     config.features_enabled.push_back(kPageActionMenu);
   }
@@ -595,6 +593,7 @@ class TestResponseProvider {
 
 // Tests that the page can be translated and that translation can be reverted
 // using the banner and modal.
+TAG_SMOKE_TEST(TranslateInfobarTestCase, testInfobarTranslateRevert);
 - (void)testInfobarTranslateRevert {
   // Load a page with French text.
   GURL URL = self.testServer->GetURL(kFrenchPagePath);

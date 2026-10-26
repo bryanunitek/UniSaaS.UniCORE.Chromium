@@ -29,12 +29,23 @@
 - (void)assistantAIMHeaderViewDidRequestLoadedURL:
     (AssistantAIMHeaderView*)headerView;
 
+// Called when the user requests to see the Composebox logs.
+- (void)assistantAIMHeaderViewDidRequestComposeboxLogs:
+    (AssistantAIMHeaderView*)headerView;
+
 // Called when the start new thread button is tapped.
 - (void)assistantAIMHeaderViewDidTapStartNewThread:
     (AssistantAIMHeaderView*)headerView;
 
 // Called when the history button is tapped.
 - (void)assistantAIMHeaderViewDidTapHistory:(AssistantAIMHeaderView*)headerView;
+
+// Called when the my activity button is tapped.
+- (void)assistantAIMHeaderViewDidTapMyActivity:
+    (AssistantAIMHeaderView*)headerView;
+
+// Called when the help button is tapped.
+- (void)assistantAIMHeaderViewDidTapHelp:(AssistantAIMHeaderView*)headerView;
 
 @end
 

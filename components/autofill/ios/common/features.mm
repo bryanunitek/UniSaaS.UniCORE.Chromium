@@ -11,11 +11,6 @@ BASE_FEATURE(kAutofillAllowDefaultPreventedSubmission,
              base::FEATURE_ENABLED_BY_DEFAULT);
 // LINT.ThenChange(/components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_allow_default_prevented_submission)
 
-// LINT.IfChange(autofill_correct_user_edited_bit_in_parsed_field)
-BASE_FEATURE(kAutofillCorrectUserEditedBitInParsedField,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-// LINT.ThenChange(/components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_correct_user_edited_bit_in_parsed_field)
-
 // LINT.IfChange(autofill_count_form_submission_in_renderer)
 BASE_FEATURE(kAutofillCountFormSubmissionInRenderer,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -36,6 +31,11 @@ BASE_FEATURE(kAutofillExtractFullUrlOnIOs, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kAutofillFormSubmissionEventsInCaptureMode,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// LINT.IfChange(autofill_ignore_tab_index_for_focusability_ios)
+BASE_FEATURE(kAutofillIgnoreTabIndexForFocusabilityIos,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+// LINT.ThenChange(//components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_ignore_tab_index_for_focusability_ios)
+
 BASE_FEATURE(kAutofillPaymentsSheetDetachInvalidatedListenersIos,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -45,8 +45,6 @@ BASE_FEATURE(kAutofillPaymentsSheetStateless,
 BASE_FEATURE(kAutofillPaymentsSheetV2Ios, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kAutofillPaymentsSheetV3Ios, base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kAutofillUndoIos, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kAutofillRejectFormSubmissionsWithoutUserGesture,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -58,8 +56,15 @@ BASE_FEATURE(kAutofillReportFormSubmissionErrors,
 
 BASE_FEATURE(kAutofillStickyInfobarIos, base::FEATURE_ENABLED_BY_DEFAULT);
 
+// LINT.IfChange(autofill_support_content_editable_ios)
+BASE_FEATURE(kAutofillSupportContentEditableIos,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+// LINT.ThenChange(//components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_support_content_editable_ios)
+
 // LINT.IfChange(autofill_support_date_input)
-BASE_FEATURE(kAutofillSupportDateInput, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_WITH_COUNTRY_RESTRICTIONS(kAutofillSupportDateInput,
+                                       base::FEATURE_ENABLED_FOR_COUNTRIES,
+                                       "us");
 // LINT.ThenChange(//components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_support_date_input)
 
 BASE_FEATURE(kAutofillThrottleDocumentFormScanIos,
@@ -72,7 +77,9 @@ extern const base::FeatureParam<int> kAutofillDocumentFormScanPeriodMs = {
 BASE_FEATURE(kAutofillThrottleDocumentFormScanForceFirstScanIos,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// LINT.IfChange(autofill_track_password_fields_ios)
 BASE_FEATURE(kAutofillTrackPasswordFieldsIos, base::FEATURE_ENABLED_BY_DEFAULT);
+// LINT.ThenChange(/components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_track_password_fields_ios)
 
 BASE_FEATURE(kAutofillThrottleFilteredDocumentFormScanIos,
              base::FEATURE_DISABLED_BY_DEFAULT);

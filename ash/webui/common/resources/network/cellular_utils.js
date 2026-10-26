@@ -18,6 +18,7 @@ import {OncMojo} from './onc_mojo.js';
 
 /**
  * @enum {string}
+ * @typedef {string} ApnDetailDialogMode
  */
 export const ApnDetailDialogMode = {
   CREATE: 'create',
@@ -27,11 +28,10 @@ export const ApnDetailDialogMode = {
 
 /**
  * @typedef {{
- *   apn: !ApnProperties,
- *   mode: !ApnDetailDialogMode,
- * }}
+ *   apn: ApnProperties,
+ *   mode: ApnDetailDialogMode,
+ * }} ApnEventData
  */
-export let ApnEventData;
 
 /**
  * Checks if the device has a cellular network with connectionState not

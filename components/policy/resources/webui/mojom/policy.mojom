@@ -4,6 +4,8 @@
 
 module policy.mojom;
 
+import "mojo/public/mojom/base/values.mojom";
+
 // The type of the policy log result object. The definition is based on
 // components/policy/core/common/policy_logger.cc Log::GetAsValue().
 struct Log {
@@ -54,10 +56,133 @@ struct Status {
   bool extension_install_error;
 };
 
+// Enforcement level of a policy. Mirrors `policy::PolicyLevel`.
+enum PolicyLevel {
+  kRecommended = 0,
+  kMandatory,
+};
+
+// Scope of a policy. Mirrors `policy::PolicyScope`.
+enum PolicyScope {
+  kUser = 0,
+  kMachine,
+};
+
+// Represents a conflicting policy value.
+struct Conflict {
+  // Enforcement level of the conflicting policy.
+  PolicyLevel level;
+
+  // Scope of the conflicting policy.
+  PolicyScope scope;
+
+  // The name of the policy provider from which the conflicting policy
+  // originated.
+  string source;
+
+  // The actual conflicting policy value.
+  mojo_base.mojom.Value? value;
+};
+
+// Represents an individual policy and its associated metadata.
+struct Policy {
+  // True if the policy was ignored by Chrome.
+  bool ignored;
+
+  // Name of the policy.
+  string name;
+
+  // Enforcement level of this policy.
+  PolicyLevel level;
+
+  // Scope of this policy.
+  PolicyScope scope;
+
+  // The name of the policy provider from which this policy originated.
+  string source;
+
+  // The actual value of this policy.
+  mojo_base.mojom.Value value;
+
+  // True if restart is required to apply this policy.
+  bool restart_required;
+
+  // True if the policy has been deprecated.
+  bool deprecated;
+
+  // True if the policy has not been released yet.
+  bool future;
+
+  // True if all conflicting values have been successfully merged.
+  // Null if no merging was necessary.
+  bool? all_sources_merged;
+
+  // List of lower precedence conflicting values for this policy.
+  array<Conflict> conflicts;
+
+  // List of policies that were superseded by this policy.
+  array<Conflict> superseded;
+
+  // Localized human readable messages.
+  // Do not attempt to parse programmatically.
+  string error;
+  string warning;
+  string info;
+};
+
+// Represents a policy group/namespace with metadata and corresponding policies.
+struct PolicyGroup {
+  // Name of this policy group/namespace.
+  string name;
+
+  // Optional display ID (such as a serialized origin when multiple web apps
+  // share the same origin). Falls back to the map key in `policy_groups`.
+  string? id;
+
+  // Maps policy name to its representation.
+  map<string, Policy> policies;
+
+  // Ordered list of localized strings defining the policy source precedence
+  // order.
+  // This field is only present for the "Policy Precedence" group.
+  array<string>? precedence_order;
+
+  // Indicates whether this policy group belongs to an installed Chrome
+  // Extension.
+  // TODO(crbug.com/40897784): Replace `is_extension` and `is_web_app` with an
+  // enum.
+  bool is_extension;
+
+  // Indicates whether this policy group belongs to a Web App.
+  // TODO(crbug.com/40897784): Replace `is_extension` and `is_web_app` with an
+  // enum.
+  bool is_web_app;
+
+  // Indicates whether these policies apply to the ChromeOS sign-in screen.
+  bool for_signin_screen;
+};
+
+struct PolicyGroupsResponse {
+  // List of policy group ids specifying the presentation order for
+  // `policy_groups`.
+  array<string> policy_ids_presentation_order;
+
+  // Maps policy group id to a given policy group.
+  map<string, PolicyGroup> policy_groups;
+};
+
+struct PolicyGroupNames {
+  // Name of this policy group/namespace.
+  string name;
+
+  // List of policy names belonging to this policy group.
+  array<string> policy_names;
+};
+
 // Messages sent from the renderer WebUI TS to the browser process C++.
 interface PolicyPageHandler {
   // Test function to verify the mojo interface works.
-  // TODO: crbug.com/40897784 - clean this up once the migration is complete.
+  // TODO(crbug.com/40897784): Clean this up once the migration is complete.
   GetDebugString() => (string message);
 
   // Saves the provided `policies` (expected to be a JSON string) to the local
@@ -102,8 +227,9 @@ interface PolicyPageHandler {
   RecordBannerRedirected();
 
   // Retrieves all current policies in raw JSON format. These are then either
-  // copied to uers's clipboard or downloaded. The action is denoted by `reason`
+  // copied to user's clipboard or downloaded. The action is denoted by `reason`
   // for metrics.
+  // TODO(crbug.com/40897784): This should be returning a `Value`.
   GetPoliciesJson(GetPoliciesReason reason) => (string policies_json);
 };
 
@@ -113,6 +239,12 @@ interface PolicyPageClient {
   // name to its metadata.
   // See `policy::PolicyStatusProvider` for more details.
   StatusUpdated(map<string, Status> status);
+
+  // Notifies the UI about policies update. `policy_names` maps string id of the
+  // policy group to a corresponding PolicyGroupNames object.
+  // See `policy::PolicyValueProvider` for more details.
+  PoliciesUpdated(map<string, PolicyGroupNames> policy_names,
+                  PolicyGroupsResponse policy_values);
 };
 
 // The factory interface used to bootstrap the connection between the

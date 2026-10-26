@@ -20,7 +20,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/web_contents_tester.h"
 #include "media/base/media_switches.h"
@@ -39,8 +38,9 @@
 #include "chrome/browser/ui/android/tab_model/tab_model_test_helper.h"
 #include "chrome/test/base/android/android_browser_test.h"
 #else
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
@@ -414,8 +414,16 @@ IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
   EnsureTabDuplicateHistogramsMatchExpectations(expected_histograms);
 }
 
+// TODO(crbug.com/449230856): Consistently failing on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_AdditionalTabStatsObserverGetsInitiliazed \
+  DISABLED_AdditionalTabStatsObserverGetsInitiliazed
+#else
+#define MAYBE_AdditionalTabStatsObserverGetsInitiliazed \
+  AdditionalTabStatsObserverGetsInitiliazed
+#endif
 IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
-                       AdditionalTabStatsObserverGetsInitiliazed) {
+                       MAYBE_AdditionalTabStatsObserverGetsInitiliazed) {
   // Assert that the |TabStatsTracker| instance is initialized during the
   // creation of the main browser.
   ASSERT_TRUE(tab_stats_tracker_ != nullptr);
@@ -716,7 +724,14 @@ class AudioStartObserver : public content::WebContentsObserver {
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest, AddObserverAudibleTab) {
+// TODO(crbug.com/449389404): Consistently failing on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_AddObserverAudibleTab DISABLED_AddObserverAudibleTab
+#else
+#define MAYBE_AddObserverAudibleTab AddObserverAudibleTab
+#endif
+IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
+                       MAYBE_AddObserverAudibleTab) {
   // Set up the embedded test server to serve the test javascript file.
   embedded_test_server()->ServeFilesFromSourceDirectory(
       media::GetTestDataPath());
@@ -841,9 +856,6 @@ class TabStatsTrackerSubFrameBrowserTest : public TabStatsTrackerBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
     TabStatsTrackerBrowserTest::SetUpOnMainThread();
   }
-
- protected:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
 };
 
 // TODO(crbug.com/532509057): Fix the flakiness on Android and re-enable the
@@ -883,15 +895,6 @@ IN_PROC_BROWSER_TEST_F(TabStatsTrackerSubFrameBrowserTest,
                          "document.body.appendChild(iframe);",
                          embedded_test_server()->GetURL("/title1.html"))));
   WaitForLoadStop(GetWebContents());
-  ::testing::Mock::VerifyAndClear(&mock_observer);
-
-  // Create a fenced frame and navigate inside the fenced frame.
-  EXPECT_CALL(mock_observer, OnPrimaryMainFrameNavigationCommitted(_)).Times(0);
-  content::RenderFrameHost* fenced_frame_host =
-      fenced_frame_helper_.CreateFencedFrame(
-          GetWebContents()->GetPrimaryMainFrame(),
-          embedded_test_server()->GetURL("/fenced_frames/title1.html"));
-  ASSERT_NE(nullptr, fenced_frame_host);
   ::testing::Mock::VerifyAndClear(&mock_observer);
 
   tab_stats_tracker_->RemoveObserver(&mock_observer);

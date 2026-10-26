@@ -49,9 +49,12 @@ class HTMLFormElement;
 class KeyboardEvent;
 class PointerEvent;
 class TextControlElement;
+class UIEvent;
 class V8UnionStringLegacyNullToEmptyStringOrTrustedScript;
 class V8UnionBooleanOrTogglePopoverOptions;
 class ShowPopoverOptions;
+class UnboundedEventData;
+enum class PopoverInvokedVia;
 
 enum TranslateAttributeMode {
   kTranslateAttributeYes,
@@ -108,6 +111,12 @@ enum class TopLayerElementType {
 enum class PopoverHideResult {
   kHidden,
   kForcedOpenByInspector,
+};
+
+enum class UnboundedEvents {
+  kFireCancelable,
+  kFireNonCancelable,
+  kSuppress,
 };
 
 class CORE_EXPORT HTMLElement : public Element {
@@ -212,7 +221,11 @@ class CORE_EXPORT HTMLElement : public Element {
   // TODO(crbug.com/443013457): Remove these 2 methods when the
   // permission/usermedia trials are over.
   virtual bool IsHTMLCapabilityElementBase() const { return false; }
+  virtual bool IsHTMLMediaCaptureElementBase() const { return false; }
+  virtual bool IsHTMLMediaTrackElementBase() const { return false; }
   virtual bool IsHTMLUserMediaElement() const { return false; }
+  virtual bool IsHTMLCameraElement() const { return false; }
+  virtual bool IsHTMLMicrophoneElement() const { return false; }
   virtual bool IsHTMLUnknownElement() const { return false; }
   virtual bool IsPluginElement() const { return false; }
 
@@ -222,8 +235,9 @@ class CORE_EXPORT HTMLElement : public Element {
   LabelsNodeList* labels();
   bool HasActiveLabel() const;
 
-  // https://html.spec.whatwg.org/C/#interactive-content
   virtual bool IsInteractiveContent() const;
+  bool HasActivationBehavior() const override;
+  void RunActivationBehavior(Event&, EventDispatchHandlingState*) override;
   void DefaultEventHandler(Event&) override;
 
   // Returns the axes on which this element has native arrow key behavior.
@@ -339,11 +353,9 @@ class CORE_EXPORT HTMLElement : public Element {
   // pointerup events.
   static void HandlePopoverLightDismiss(const PointerEvent& event,
                                         const Node& node);
-  static void HidePopoversForLightDismiss(const HTMLElement* target_popover,
-                                          Document& document);
   static void HandlePopoverLightDismissForClick(const Node& pointer_down_target,
                                                 const Node& pointer_up_target);
-  void InvokePopover(Element& invoker);
+  void InvokePopover(Element& invoker, PopoverInvokedVia invoked_via);
   void SetPopoverFocusOnShow();
   // This hides all visible popovers up to, but not including,
   // |endpoint|. If |endpoint| is nullptr, all popovers are hidden. Hiding
@@ -382,7 +394,8 @@ class CORE_EXPORT HTMLElement : public Element {
                              CommandEventType command) override;
   bool IsValidBuiltinPopoverCommand(CommandEventType command);
   bool HandleCommandInternal(HTMLElement& invoker,
-                             CommandEventType command) override;
+                             CommandEventType command,
+                             UIEvent* activate_event) override;
   // This is true if this element *can* be a command invoker: it is an element
   // type that supports command invokers (e.g. buttons and menuitems), and the
   // element isn't in a state that disqualifies it (e.g. a disabled state). This
@@ -391,7 +404,7 @@ class CORE_EXPORT HTMLElement : public Element {
   virtual bool CanBeCommandInvoker() const;
   static CommandEventType GetCommandEventType(const AtomicString& type,
                                               ExecutionContext*);
-  virtual bool HandleCommandForActivation();
+  virtual bool HandleCommandForActivation(UIEvent* activate_event);
   Element* commandForElement() const;
   AtomicString command() const;
   void setCommand(const AtomicString& type);
@@ -410,7 +423,10 @@ class CORE_EXPORT HTMLElement : public Element {
   ScriptPromise<IDLUndefined> showUnboundedElement(ScriptState*);
   ScriptPromise<IDLUndefined> hideUnboundedElement(ScriptState*);
   bool IsUnboundedElementActive() const;
-  void SetUnboundedElementActive(bool active);
+  // Returns true if the state change proceeded, and false if the beforetoggle
+  // event was canceled by the author.
+  bool SetUnboundedElementActive(bool active, UnboundedEvents fire_events);
+  void AttachLayoutTree(AttachContext& context) override;
   gfx::Rect LastSentUnboundedBounds() const;
   void SetLastSentUnboundedBounds(const gfx::Rect& bounds);
 
@@ -425,6 +441,10 @@ class CORE_EXPORT HTMLElement : public Element {
                             const String& value,
                             AllowPercentage = kAllowPercentageValues,
                             AllowZero = kAllowZeroValues);
+  // https://html.spec.whatwg.org/multipage/rendering.html#maps-to-the-pixel-length-property
+  void AddHTMLPixelLengthToStyle(HeapVector<CSSPropertyValue, 8>&,
+                                 CSSPropertyID,
+                                 const String& value);
   void AddHTMLColorToStyle(HeapVector<CSSPropertyValue, 8>&,
                            CSSPropertyID,
                            const String& color);
@@ -470,6 +490,8 @@ class CORE_EXPORT HTMLElement : public Element {
 
  private:
   bool IsAutocapitalizeOrAutocorrectInheriting() const;
+  UnboundedEventData* GetUnboundedEventData() const;
+  UnboundedEventData& EnsureUnboundedEventData();
 
   String nodeName() const final;
 
@@ -486,9 +508,10 @@ class CORE_EXPORT HTMLElement : public Element {
 
   TranslateAttributeMode GetTranslateAttributeMode() const;
 
+  void HandleKeydownEvent(KeyboardEvent&);
   void HandleKeypressEvent(KeyboardEvent&);
 
-  void SetPopoverInvoker(Element* invoker);
+  void SetPopoverInvoker(Element* invoker, PopoverInvokedVia invoked_via);
 
   // Attempts to hide a popover stack.  Hiding (some) popovers may be prevented
   // by the inspector. In that case, PopoverHideResult::kForceOpenedByInspector

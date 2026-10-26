@@ -4,7 +4,7 @@
 
 #include "components/autofill/core/browser/field_types.h"
 
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -153,6 +153,8 @@ TEST(FieldTypesTest, IsValidFieldType) {
       FLIGHT_RESERVATION_FLIGHT_NUMBER,
       FLIGHT_RESERVATION_CONFIRMATION_CODE,
       FLIGHT_RESERVATION_TICKET_NUMBER,
+      FLIGHT_RESERVATION_DEPARTURE_AIRPORT,
+      FLIGHT_RESERVATION_ARRIVAL_AIRPORT,
       FLIGHT_RESERVATION_DEPARTURE_DATE,
       ADDRESS_HOME_ZIP_AND_CITY,
       ORDER_ID,

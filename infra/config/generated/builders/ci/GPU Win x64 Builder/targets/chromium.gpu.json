@@ -2,6 +2,7 @@
   "Win10 x64 Release (NVIDIA)": {
     "gtest_tests": [
       {
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -12,8 +13,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -31,6 +32,7 @@
           "--use-gl=angle",
           "--use-gpu-in-tests"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -41,8 +43,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -59,6 +61,7 @@
           "--use-gpu-in-tests",
           "--git-revision=${got_revision}"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -74,8 +77,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -90,6 +93,7 @@
         "args": [
           "--ignore-runtime-requirements=*"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
@@ -100,8 +104,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -126,6 +130,7 @@
           "--enforce-browser-version",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -140,8 +145,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -169,6 +174,7 @@
           "${buildername}",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -188,8 +194,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -213,6 +219,7 @@
           "--enforce-browser-version",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -227,8 +234,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -252,6 +259,7 @@
           "--enforce-browser-version",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -266,8 +274,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -295,6 +303,7 @@
           "2184",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -309,8 +318,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -338,6 +347,7 @@
           "${buildername}",
           "--jobs=1"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -357,8 +367,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -383,6 +393,7 @@
           "--dont-restore-color-profile-after-test",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -397,8 +408,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -422,6 +433,7 @@
           "--enforce-browser-version",
           "--jobs=1"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -436,8 +448,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },
@@ -463,6 +475,7 @@
           "--read-abbreviated-json-results-from=../../content/test/data/gpu/webgl1_conformance_win_runtimes.json",
           "--jobs=4"
         ],
+        "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
@@ -477,8 +490,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu",
             "puppet_env": "production"
           },

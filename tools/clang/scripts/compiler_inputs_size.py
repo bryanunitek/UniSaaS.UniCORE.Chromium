@@ -51,7 +51,7 @@ norm_paths = {}  # Memoization cache for norm_path().
 
 
 def norm_path(build_dir, filename):
-  if not filename in norm_paths:
+  if filename not in norm_paths:
     p = pathlib.Path(os.path.join(build_dir, filename)).resolve()
     x = os.path.relpath(p)
     norm_paths[filename] = x
@@ -63,7 +63,7 @@ file_sizes = {}  # Memoization cache for size().
 
 def size(filename):
   """Get the size of a file."""
-  if not filename in file_sizes:
+  if filename not in file_sizes:
     file_sizes[filename] = os.path.getsize(filename)
   return file_sizes[filename]
 
@@ -190,8 +190,12 @@ def parse_deps(build_dir, deps_output):
       if not line.startswith('    '):
         raise Exception("Unexpected deps file line '%s'" % line)
       dep_file = norm_path(build_dir, line[4:].rstrip('\n'))
-      if not dep_file.endswith(".pcm") and not dep_file.endswith(
-          ".modulemap") and not dep_file.endswith(".txt") and main_file is None:
+      if (
+        not dep_file.endswith(".pcm")
+        and not dep_file.endswith(".modulemap")
+        and not dep_file.endswith(".txt")
+        and main_file is None
+      ):
         main_file = dep_file
         continue
       dep.add(dep_file)
@@ -235,15 +239,20 @@ def main():
   if doctest.testmod()[0]:
     return 1
 
-  parser = argparse.ArgumentParser(description='Measure compiler input sizes '
-                                   'for a build target.')
+  parser = argparse.ArgumentParser(
+    description='Measure compiler input sizes for a build target.'
+  )
   parser.add_argument('build_dir', type=str, help='Chromium build dir')
-  parser.add_argument('commands',
-                      type=argparse.FileType('r', errors='ignore'),
-                      help='File with the output of "ninja -t commands"')
-  parser.add_argument('deps',
-                      type=argparse.FileType('r', errors='ignore'),
-                      help='File with the output of "ninja -t deps"')
+  parser.add_argument(
+    'commands',
+    type=argparse.FileType('r', errors='ignore'),
+    help='File with the output of "ninja -t commands"',
+  )
+  parser.add_argument(
+    'deps',
+    type=argparse.FileType('r', errors='ignore'),
+    help='File with the output of "ninja -t deps"',
+  )
   args = parser.parse_args()
 
   if sys.platform == 'win32':

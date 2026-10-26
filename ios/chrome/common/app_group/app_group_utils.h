@@ -22,8 +22,9 @@ void ClearAppGroupSandbox();
 // Returns `default_value` if the string is nil.
 NSString* UserDefaultsStringForKey(NSString* key, NSString* default_value);
 
-// Returns whether the confirmation alerts should be swapped.
-BOOL IsConfirmationButtonSwapOrderEnabled();
+// Validates whether `url` represents a valid Share Extension command URL
+// and matches a pending command in the shared App Group user defaults.
+bool IsShareExtensionCommandURL(NSURL* url);
 
 }  // namespace app_group
 

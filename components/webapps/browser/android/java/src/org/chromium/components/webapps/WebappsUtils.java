@@ -6,10 +6,12 @@ package org.chromium.components.webapps;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
+import android.content.pm.webapp.WebAppManager;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.os.Build;
@@ -18,17 +20,23 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.WorkerThread;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.StrictModeContext;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.webapk.lib.client.WebApkValidator;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.widget.Toast;
+import org.chromium.url.GURL;
 
 import java.util.List;
 
@@ -49,7 +57,7 @@ public class WebappsUtils {
     // sCheckedIfRequestPinShortcutSupported and sIsRequestPinShortcutSupported.
     private static final Object sLock = new Object();
 
-    private static @Nullable Boolean sIsTwaInstallerPackage;
+    private static @TriState int sIsTwaInstallerPackage;
 
     /**
      * Creates an intent that will add a shortcut to the home screen.
@@ -83,15 +91,47 @@ public class WebappsUtils {
             return;
         }
 
-        String defaultLauncher = getDefaultLauncherPackageName();
-        if (defaultLauncher == null) {
-            Log.w(TAG, "ShortcutManager is not supported and no default launcher found to target.");
+        String targetPackage = getShortcutReceiverPackageName();
+        if (targetPackage == null) {
+            Log.w(TAG, "ShortcutManager is not supported and no package found to target.");
             return;
         }
         Intent intent = createAddToHomeIntent(title, icon, shortcutIntent);
-        intent.setPackage(defaultLauncher);
+        intent.setPackage(targetPackage);
         ContextUtils.getApplicationContext().sendBroadcast(intent);
         showAddedToHomescreenToast(title);
+    }
+
+    private static @Nullable String getShortcutReceiverPackageName() {
+        PackageManager pm = ContextUtils.getApplicationContext().getPackageManager();
+        String defaultLauncher = getDefaultLauncherPackageName();
+        if (defaultLauncher != null) {
+            Intent intent = new Intent(INSTALL_SHORTCUT);
+            intent.setPackage(defaultLauncher);
+            List<ResolveInfo> receivers = pm.queryBroadcastReceivers(intent, 0);
+            if (!receivers.isEmpty()) {
+                return defaultLauncher;
+            }
+        }
+
+        // On some devices, the receiver for the INSTALL_SHORTCUT broadcast resides in a system
+        // package that is different from the default launcher package. To support shortcut
+        // installation on these devices while maintaining security, we query all packages for the
+        // receiver and target the first trusted system package.
+        Intent i = new Intent(INSTALL_SHORTCUT);
+        List<ResolveInfo> receivers = pm.queryBroadcastReceivers(i, 0);
+        for (ResolveInfo resolveInfo : receivers) {
+            if (resolveInfo.activityInfo == null
+                    || resolveInfo.activityInfo.applicationInfo == null) {
+                continue;
+            }
+            int flags = resolveInfo.activityInfo.applicationInfo.flags;
+            if ((flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP))
+                    != 0) {
+                return resolveInfo.activityInfo.packageName;
+            }
+        }
+        return null;
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -162,15 +202,7 @@ public class WebappsUtils {
      */
     public static boolean isAddToHomeIntentSupported() {
         if (isRequestPinShortcutSupported()) return true;
-
-        String defaultLauncher = getDefaultLauncherPackageName();
-        if (defaultLauncher == null) return false;
-
-        PackageManager pm = ContextUtils.getApplicationContext().getPackageManager();
-        Intent i = new Intent(INSTALL_SHORTCUT);
-        i.setPackage(defaultLauncher);
-        List<ResolveInfo> receivers = pm.queryBroadcastReceivers(i, 0);
-        return !receivers.isEmpty();
+        return getShortcutReceiverPackageName() != null;
     }
 
     private static @Nullable String getDefaultLauncherPackageName() {
@@ -245,27 +277,20 @@ public class WebappsUtils {
 
     @CalledByNative
     private static boolean isWebAppServiceEnabled() {
-        var aconfigFlaggedApiDelegate = AconfigFlaggedApiDelegate.getInstance();
-        if (aconfigFlaggedApiDelegate == null) {
-            Log.e(TAG, "Failed to get AconfigFlaggedApiDelegate in isWebAppServiceEnabled()");
-            return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+            Context context = ContextUtils.getApplicationContext();
+            WebAppManager webAppManager = context.getSystemService(WebAppManager.class);
+            return webAppManager != null;
         }
-        return aconfigFlaggedApiDelegate.isWebAppServiceEnabled();
+        return false;
     }
 
     public static void isTwaInstallerPackage(String title, Callback<Boolean> callback) {
-        if (sIsTwaInstallerPackage != null) {
-            callback.onResult(sIsTwaInstallerPackage);
+        if (sIsTwaInstallerPackage != TriState.NOT_SET) {
+            callback.onResult(sIsTwaInstallerPackage == TriState.TRUE);
             return;
         }
-        var aconfigFlaggedApiDelegate = AconfigFlaggedApiDelegate.getInstance();
-        if (aconfigFlaggedApiDelegate == null) {
-            Log.e(TAG, "Failed to get AconfigFlaggedApiDelegate in isWebAppServiceEnabled()");
-            callback.onResult(false);
-            return;
-        }
-
-        aconfigFlaggedApiDelegate.isInstalled(title).then(callback);
+        TwaInstaller.isInstalled(title).then(callback);
     }
 
     /**
@@ -273,7 +298,23 @@ public class WebappsUtils {
      *
      * @param installed Whether TwaInstallerPackage is installed.
      */
-    public static void setIsTwaInstallerPackageForTesting(Boolean installed) {
-        sIsTwaInstallerPackage = installed;
+    public static void setIsTwaInstallerPackageForTesting(boolean installed) {
+        sIsTwaInstallerPackage = TriStateUtils.from(installed);
+        ResettersForTesting.register(() -> sIsTwaInstallerPackage = TriState.NOT_SET);
+    }
+
+    /**
+     * Clears navigation history that occurred before the user most recently entered the app's
+     * scope.
+     */
+    public static void prunePreScopeNavigationHistory(WebContents webContents, GURL scope) {
+        WebappsUtilsJni.get().prunePreScopeNavigationHistory(webContents, scope);
+    }
+
+    @NativeMethods
+    public interface Natives {
+        void prunePreScopeNavigationHistory(
+                @JniType("content::WebContents*") WebContents webContents,
+                @JniType("GURL") GURL scope);
     }
 }

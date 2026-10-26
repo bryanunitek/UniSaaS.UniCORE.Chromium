@@ -9,7 +9,6 @@
 
 #include "base/callback_list.h"
 #include "base/component_export.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/proto/on_device_base_model_metadata.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker_debug.mojom-forward.h"
 #include "components/prefs/pref_service.h"
@@ -17,6 +16,40 @@
 #include "services/on_device_model/public/mojom/on_device_model.mojom-shared.h"
 
 namespace optimization_guide {
+
+// Performance class of this device.
+//
+// These values are persisted to logs and prefs. Entries should not be
+// renumbered and numeric values should never be reused.
+enum class OnDeviceModelPerformanceClass : int {
+  kUnknown = 0,
+
+  // See on_device_model::mojom::PerformanceClass for explanation of these.
+  kError = 1,
+  kVeryLow = 2,
+  kLow = 3,
+  kMedium = 4,
+  kHigh = 5,
+  kVeryHigh = 6,
+
+  // WARNING!: If you add a new performance class, please be aware of
+  // `IsPerformanceClassCompatibleWithOnDeviceModel`.
+
+  // The service crashed, so a valid value was not returned.
+  kServiceCrash = 7,
+
+  // GPU was blocklisted.
+  kGpuBlocked = 8,
+
+  // Native library failed to load.
+  kFailedToLoadLibrary = 9,
+
+  // This must be kept in sync with
+  // OnDeviceModelPerformanceClass in optimization/enums.xml.
+
+  // Insert new values before this line.
+  kMaxValue = kFailedToLoadLibrary,
+};
 
 // Convert from mojo enum.
 OnDeviceModelPerformanceClass ConvertToOnDeviceModelPerformanceClass(
@@ -27,15 +60,17 @@ void UpdatePerformanceClassPref(
     PrefService* local_state,
     OnDeviceModelPerformanceClass performance_class);
 
+// Stores the current browser version in the preferences file to record that
+// performance classification has completed for this version.
+void UpdatePerformanceClassVersionPref(PrefService* local_state);
+
 // Stores the device VRAM in the preferences file.
 void UpdateVramPref(PrefService* local_state, uint64_t vram_mb);
 
 // Stores the device info in the preferences file.
-void UpdateDeviceInfoPrefs(PrefService* local_state,
-                           uint32_t vendor_id,
-                           uint32_t device_id,
-                           std::string driver_version,
-                           bool supports_fp16);
+void UpdateDeviceInfoPrefs(
+    PrefService* local_state,
+    const on_device_model::mojom::DeviceInfo& device_info);
 
 // Loads the performance class from the preferences file.
 OnDeviceModelPerformanceClass PerformanceClassFromPref(
@@ -114,12 +149,16 @@ class PerformanceClassifier final {
 
   std::vector<mojom::BrokerPropertyInfoPtr> GetBrokerProperties() const;
 
- private:
+  // Returns the device VRAM in MB saved in local state.
+  uint64_t GetDeviceVramMb() const;
+
   // Called when performance class has finished evaluating.
+  // Public for testing.
   void OnDeviceAndPerformanceInfo(
       on_device_model::mojom::DevicePerformanceInfoPtr perf_info,
       on_device_model::mojom::DeviceInfoPtr device_info);
 
+ private:
   raw_ptr<PrefService> local_state_;
 
   base::SafeRef<on_device_model::ServiceClient> service_client_;

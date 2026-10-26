@@ -36,8 +36,8 @@ export class ToggleRowElement extends WithPersonalizationStore {
     };
   }
 
-  private ambientModeEnabled_: boolean|null;
-  override ariaLabel: string;
+  declare private ambientModeEnabled_: boolean|null;
+  declare ariaLabel: string;
 
   override focus() {
     this.$.toggle.focus();

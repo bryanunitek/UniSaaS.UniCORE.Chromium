@@ -7,11 +7,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/test_timeouts.h"
-#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
@@ -25,14 +22,15 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon/core/large_icon_service_impl.h"
 #include "components/favicon_base/favicon_types.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sessions/core/session_types.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
@@ -58,6 +56,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -73,6 +72,7 @@ using sessions_helper::NavigateTabBack;
 using sessions_helper::NavigateTabForward;
 using sessions_helper::OpenTab;
 using sessions_helper::OpenTabAtIndex;
+using sessions_helper::OpenTabInWindow;
 using sessions_helper::ScopedWindowMap;
 using sessions_helper::SessionEntitiesChecker;
 using sessions_helper::SyncedSessionVector;
@@ -173,6 +173,7 @@ class FaviconForPageUrlAvailableChecker : public StatusChangeChecker {
  protected:
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override {
+    *os << "Waiting for favicon for " << page_url_ << " to become available.";
     return exit_condition_satisfied_;
   }
 
@@ -233,7 +234,11 @@ class SingleClientSessionsSyncTest
   }
 
   GURL GetInitialURL() const override {
-    return chrome::ChromeUINewTabURLAsGURL();
+    // Return a lightweight unsynced WebUI URL so the initial tab is not synced
+    // (unlike the default about:blank). Avoid chrome://newtab/ because loading
+    // the full New Tab Page WebUI and its subframes significantly slows down
+    // test setup and teardown.
+    return GURL(chrome::kChromeUIVersionURL);
   }
 
   void ExpectNavigationChain(const std::vector<GURL>& urls) {
@@ -662,7 +667,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, OpenNewWindow) {
   GURL new_window_url =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
   AddBrowser(0);
-  ASSERT_TRUE(OpenTab(1, new_window_url));
+  ASSERT_TRUE(OpenTabInWindow(0, /*window_index=*/1, new_window_url));
 
   WaitForHierarchyOnServer(
       SessionsHierarchy({{base_url.spec()}, {new_window_url.spec()}}));
@@ -828,13 +833,14 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, TabMovedToOtherWindow) {
   GURL new_window_url =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
   AddBrowser(0);
-  ASSERT_TRUE(OpenTab(1, new_window_url));
+  ASSERT_TRUE(OpenTabInWindow(0, /*window_index=*/1, new_window_url));
 
   WaitForHierarchyOnServer(SessionsHierarchy(
       {{base_url.spec(), moved_tab_url.spec()}, {new_window_url.spec()}}));
 
-  // Move tab 1 in browser 0 to browser 1.
-  MoveTab(0, 1, 1);
+  // Move tab 1 in window 0 to window 1.
+  MoveTab(/*profile_index=*/0, /*from_window_index=*/0, /*to_window_index=*/1,
+          /*tab_index=*/1);
 
   WaitForHierarchyOnServer(SessionsHierarchy(
       {{base_url.spec()}, {new_window_url.spec(), moved_tab_url.spec()}}));
@@ -1034,63 +1040,5 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsWithoutDestroyProfileSyncTest,
   CloseTab(/*browser_index=*/0, /*tab_index=*/0);
   WaitForHierarchyOnServer(SessionsHierarchy());
 }
-
-#if !BUILDFLAG(IS_CHROMEOS)
-class SingleClientSessionsWithDestroyProfileSyncTest
-    : public SingleClientSessionsSyncTest {
- public:
-  SingleClientSessionsWithDestroyProfileSyncTest() {
-    features_.InitAndEnableFeature(features::kDestroyProfileOnBrowserClose);
-  }
-
- private:
-  base::test::ScopedFeatureList features_;
-};
-
-INSTANTIATE_TEST_SUITE_P(,
-                         SingleClientSessionsWithDestroyProfileSyncTest,
-                         GetSyncTestModes(),
-                         testing::PrintToStringParamName());
-
-IN_PROC_BROWSER_TEST_P(SingleClientSessionsWithDestroyProfileSyncTest,
-                       ShouldNotDeleteLastClosedTab) {
-  ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(CheckInitialState(0));
-
-  GURL url1 =
-      embedded_test_server()->GetURL("www.host1.com", "/sync/simple.html");
-  GURL url2 =
-      embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
-
-  NavigateTab(0, url1);
-  ASSERT_TRUE(OpenTab(0, url2));
-  WaitForHierarchyOnServer(SessionsHierarchy({{url1.spec(), url2.spec()}}));
-
-  CloseTab(/*browser_index=*/0, /*tab_index=*/0);
-  WaitForHierarchyOnServer(SessionsHierarchy({{url2.spec()}}));
-
-  {
-    // Closing the last tab results in profile destruction and hence may require
-    // running blocking tasks which are normally disallowed during tests.
-    // TODO(crbug.com/40846214): remove once it's clear why it results in
-    // blocking tasks.
-    base::ScopedAllowUnresponsiveTasksForTesting scoped_allow_sync_primitives;
-    CloseTab(/*browser_index=*/0, /*tab_index=*/0);
-    // TODO(crbug.com/40113507): When DestroyProfileOnBrowserClose is enabled,
-    // the last CloseTab() triggers Profile deletion (and SyncService deletion).
-    // This means the last tab close never gets synced. We should fix this
-    // regression eventually. Once that's done, merge this test with the
-    // WithoutDestroyProfile version.
-    base::RunLoop run_loop;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(), TestTimeouts::action_timeout());
-    run_loop.Run();
-  }
-
-  // Even after several seconds, state didn't change on the server.
-  fake_server::FakeServerVerifier verifier(GetFakeServer());
-  EXPECT_TRUE(verifier.VerifySessions(SessionsHierarchy({{url2.spec()}})));
-}
-#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace

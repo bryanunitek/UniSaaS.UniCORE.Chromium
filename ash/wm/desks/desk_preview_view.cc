@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <functional>
+#include <ranges>
 #include <utility>
 
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -27,7 +29,6 @@
 #include "ash/wm/workspace/backdrop_controller.h"
 #include "ash/wm/workspace/workspace_layout_manager.h"
 #include "ash/wm/workspace_controller.h"
-#include "base/containers/adapters.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
@@ -39,9 +40,9 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/color/color_provider.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/layer_tree_owner.h"
-#include "ui/compositor/layer_type.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
@@ -172,7 +173,23 @@ void MirrorLayerTree(
   if (layer_data.should_skip_layer)
     return;
 
-  auto* mirror = source_layer->Mirror().release();
+  ui::Layer::LayerMirrorSettings mirror_settings;
+  mirror_settings.sync_rounded_corners = false;
+  // Disables rounded corners sync on the mirroring layer. Changes on its source
+  // layer's rounded corners shouldn't affect the rounded corners of the
+  // mirroring layer.
+  // On entering overview, the rounded corners of the windows get updated after
+  // the starting animation completes. These rounded corners are added
+  // specifically for the visuals of the windows inside overview, whereas the
+  // desk previews reflect the windows visuals outside of overview. Hence, these
+  // changes of the rounded corners on the source layers should not show up on
+  // the mirror layers. See http://b/293946863.
+  mirror_settings.sync_bounds = true;
+  if (layer_data.should_force_mirror_visible) {
+    mirror_settings.sync_visibility = false;
+  }
+
+  auto* mirror = source_layer->Mirror(mirror_settings).release();
   parent->Add(mirror);
 
   // Calculate child layers.
@@ -243,7 +260,7 @@ void MirrorLayerTree(
 
     // Step 2: Populate child layers from `source_layer` with their orders.
     size_t order = 0;
-    for (ui::Layer* it : base::Reversed(source_layer->children())) {
+    for (ui::Layer* it : std::views::reverse(source_layer->children())) {
       while (primary_key_taken.contains(order)) {
         order++;
       }
@@ -272,21 +289,9 @@ void MirrorLayerTree(
                     desk_container);
   }
 
-  // Disables rounded corners sync on the mirroring layer. Changes on its source
-  // layer's rounded corners shouldn't affect the rounded corners of the
-  // mirroring layer.
-  // On entering overview, the rounded corners of the windows get updated after
-  // the starting animation completes. These rounded corners are added
-  // specifically for the visuals of the windows inside overview, whereas the
-  // desk previews reflect the windows visuals outside of overview. Hence, these
-  // changes of the rounded corners on the source layers should not show up on
-  // the mirror layers. See http://b/293946863.
-  mirror->set_sync_rounded_corners_with_source(false);
-  mirror->set_sync_bounds_with_source(true);
   if (layer_data.should_force_mirror_visible) {
     mirror->SetVisible(true);
     mirror->SetOpacity(1);
-    mirror->set_sync_visibility_with_source(false);
   }
 
   if (layer_data.should_clear_transform)
@@ -297,9 +302,10 @@ void MirrorLayerTree(
 // of the given |window|, and fills |out_layers_data|. If
 // `window_occlusion_calculator` is null, the window's occlusion state will not
 // be considered when deciding whether the layer should be skipped.
-void GetLayersData(aura::Window* window,
-                   const WindowOcclusionCalculator* window_occlusion_calculator,
-                   base::flat_map<ui::Layer*, LayerData>* out_layers_data) {
+void GetLayersData(
+    aura::Window* window,
+    const DesksWindowOcclusionCalculator* window_occlusion_calculator,
+    base::flat_map<ui::Layer*, LayerData>* out_layers_data) {
   auto& layer_data = (*out_layers_data)[window->layer()];
 
   // Windows may be explicitly set to be skipped in mini_views such as those
@@ -381,7 +387,7 @@ void GetLayersData(aura::Window* window,
 DeskPreviewView::DeskPreviewView(
     PressedCallback callback,
     DeskMiniView* mini_view,
-    base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator)
+    base::WeakPtr<DesksWindowOcclusionCalculator> window_occlusion_calculator)
     : views::Button(std::move(callback)),
       mini_view_(mini_view),
       window_occlusion_calculator_(window_occlusion_calculator),
@@ -406,7 +412,7 @@ DeskPreviewView::DeskPreviewView(
   desk_mirrored_contents_view_->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
   ui::Layer* contents_view_layer = desk_mirrored_contents_view_->layer();
   contents_view_layer->SetMasksToBounds(true);
-  contents_view_layer->SetName("Desk mirrored contents view");
+  contents_view_layer->SetName("DeskPreviewView:DeskMirroredContents");
   contents_view_layer->SetRoundedCornerRadius(kCornerRadius);
   contents_view_layer->SetIsFastRoundedCorner(true);
   AddChildViewRaw(desk_mirrored_contents_view_.get());
@@ -415,7 +421,7 @@ DeskPreviewView::DeskPreviewView(
   highlight_overlay_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
   highlight_overlay_->SetVisible(false);
   ui::Layer* highlight_overlay_layer = highlight_overlay_->layer();
-  highlight_overlay_layer->SetName("DeskPreviewView highlight overlay");
+  highlight_overlay_layer->SetName("DeskPreviewView:HighlightOverlay");
   highlight_overlay_layer->SetRoundedCornerRadius(kCornerRadius);
   highlight_overlay_layer->SetIsFastRoundedCorner(true);
 
@@ -432,11 +438,7 @@ DeskPreviewView::DeskPreviewView(
       ui::Accelerator(ui::VKEY_W, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN));
 }
 
-DeskPreviewView::~DeskPreviewView() {
-  if (window_occlusion_calculator_) {
-    window_occlusion_calculator_->RemoveObserver(this);
-  }
-}
+DeskPreviewView::~DeskPreviewView() = default;
 
 // static
 int DeskPreviewView::GetHeight(aura::Window* root) {
@@ -467,11 +469,7 @@ void DeskPreviewView::RecreateDeskContentsMirrorLayers() {
   DCHECK(desk_container);
   DCHECK(desk_container->layer());
 
-  // For simplicity, clear occlusion observation state and set it up again.
-  if (window_occlusion_calculator_) {
-    window_occlusion_calculator_->RemoveObserver(this);
-  }
-  aura::Window::Windows parent_windows_to_mirror = {desk_container};
+  aura::Window::Windows containers_to_mirror = {desk_container};
   // If there is a floated window that belongs to this desk, since it doesn't
   // belong to `desk_container`, we need to add it separately. Note: this
   // function may be called *while* a floated window is in the process of being
@@ -481,21 +479,21 @@ void DeskPreviewView::RecreateDeskContentsMirrorLayers() {
       Shell::Get()->float_controller()->FindFloatedWindowOfDesk(
           mini_view_->desk());
   if (floated_window && floated_window->parent()) {
-    parent_windows_to_mirror.push_back(floated_window);
+    containers_to_mirror.push_back(floated_window);
     force_float_occlusion_tracker_visible_.emplace(floated_window);
   } else {
     force_float_occlusion_tracker_visible_.reset();
   }
   if (window_occlusion_calculator_) {
-    window_occlusion_calculator_->AddObserver(parent_windows_to_mirror, this);
+    window_occlusion_calculator_->SnapshotOcclusionStateForWindows(
+        containers_to_mirror);
   }
 
   // Mirror the layer tree of the desk container.
-  auto mirrored_content_root_layer =
-      std::make_unique<ui::Layer>(ui::LAYER_NOT_DRAWN);
-  mirrored_content_root_layer->SetName("mirrored contents root layer");
+  auto mirrored_content_root_layer = std::make_unique<ui::LayerNotDrawn>();
+  mirrored_content_root_layer->SetName("DeskPreviewView:MirroredContentsRoot");
   base::flat_map<ui::Layer*, LayerData> layers_data;
-  for (const auto& window : parent_windows_to_mirror) {
+  for (const auto& window : containers_to_mirror) {
     GetLayersData(window.get(), window_occlusion_calculator_.get(),
                   &layers_data);
   }
@@ -671,9 +669,9 @@ void DeskPreviewView::OnGestureEvent(ui::GestureEvent* event) {
 void DeskPreviewView::OnThemeChanged() {
   views::Button::OnThemeChanged();
 
-  highlight_overlay_->layer()->SetColor(SkColorSetA(
-      GetColorProvider()->GetColor(ui::kColorHighlightBorderHighlight1),
-      kHighlightTransparency));
+  highlight_overlay_->layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+      SkColorSetA(GetColorProvider()->GetColor(ui::kColorCrosSystemHighlight),
+                  kHighlightTransparency)));
 }
 
 void DeskPreviewView::OnFocus() {
@@ -714,32 +712,6 @@ bool DeskPreviewView::AcceleratorPressed(const ui::Accelerator& accelerator) {
 
 bool DeskPreviewView::CanHandleAccelerators() const {
   return HasFocus() && views::Button::CanHandleAccelerators();
-}
-
-void DeskPreviewView::OnWindowOcclusionChanged(aura::Window* window) {
-  // If `window_occlusion_calculator_` finds multiple windows with occlusion
-  // changes in one calculation, they can be condensed into one
-  // `RecreateDeskContentsMirrorLayers()` call by canceling any pending task
-  // already scheduled.
-  recreate_mirror_layers_weak_factory_.InvalidateWeakPtrs();
-
-  // `RecreateDeskContentsMirrorLayers()` cannot be called directly. If it is,
-  // it creates an infinite loop`:
-  // * DeskPreviewView::OnWindowOcclusionChanged()
-  //   * DeskPreviewView::RecreateDeskContentsMirrorLayers()
-  //     * WindowOcclusionCalculator::RemoveObserver(this)
-  //     * WindowOcclusionCalculator::AddObserver(..., this)
-  // * Iterate to the next observer in the list (which is `this` again). Go back
-  //   to previous step.
-  //
-  // Posting a task fixes this because it finishes the
-  // `WindowOcclusionCalculator::Observer::OnWindowOcclusionChanged()`
-  // notification loop before `DeskPreviewView` resets its observation state.
-  // It's also just simpler to reason about.
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&DeskPreviewView::RecreateDeskContentsMirrorLayers,
-                     recreate_mirror_layers_weak_factory_.GetWeakPtr()));
 }
 
 BEGIN_METADATA(DeskPreviewView)

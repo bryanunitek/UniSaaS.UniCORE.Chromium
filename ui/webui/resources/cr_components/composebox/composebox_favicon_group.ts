@@ -10,6 +10,8 @@ import type {TabInfo} from '//resources/mojo/components/omnibox/browser/searchbo
 import {getCss} from './composebox_favicon_group.css.js';
 import {getHtml} from './composebox_favicon_group.html.js';
 
+// Keep in sync with the per-coin `--skeleton-stagger-delay` rules in
+// composebox_favicon_group.css.
 const MAX_DISPLAY_COUNT = 3;
 
 export class ComposeboxFaviconGroupElement extends CrLitElement {
@@ -30,10 +32,12 @@ export class ComposeboxFaviconGroupElement extends CrLitElement {
       tabs: {type: Array},
       visibleTabs_: {type: Array},
       remainingCount_: {type: Number},
+      submittedTabIds: {type: Object},
     };
   }
 
   accessor tabs: TabInfo[] = [];
+  accessor submittedTabIds: Set<number> = new Set();
   protected accessor visibleTabs_: TabInfo[] = [];
   protected accessor remainingCount_: number = 0;
   private loadedFavicons_: Map<number, string> = new Map();
@@ -53,7 +57,7 @@ export class ComposeboxFaviconGroupElement extends CrLitElement {
     // 'wait-for-tab-load' prompts the C++ backend to observe the active tab
     // and return the fully loaded favicon URL once ready.
     for (const tab of this.visibleTabs_) {
-      if (tab.tabId) {
+      if (tab.tabId && !this.submittedTabIds.has(tab.tabId)) {
         this.fire('wait-for-tab-load', {
           tabId: tab.tabId,
           onTabLoaded: (faviconDataUrl?: string) => {
@@ -69,13 +73,21 @@ export class ComposeboxFaviconGroupElement extends CrLitElement {
     }
   }
 
+  // Shows a skeleton coin while the tab strip shows the tab as loading.
+  protected isTabLoading_(tab: TabInfo): boolean {
+    return tab.isLoading && !this.submittedTabIds.has(tab.tabId);
+  }
+
   protected getFaviconUrl_(tab: TabInfo|string|{url: string, tabId?: number}):
       string {
     if (typeof tab === 'object' && tab !== null) {
       const tabObj = tab as {url: string | {url: string}, tabId?: number};
       const urlStr =
           typeof tabObj.url === 'string' ? tabObj.url : tabObj.url.url;
-      return (tabObj.tabId && this.loadedFavicons_.get(tabObj.tabId)) ||
+      const isSubmitted =
+          tabObj.tabId && this.submittedTabIds.has(tabObj.tabId);
+      return (tabObj.tabId && !isSubmitted &&
+              this.loadedFavicons_.get(tabObj.tabId)) ||
           getFaviconForPageURL(urlStr, false);
     }
     return getFaviconForPageURL(tab, false);

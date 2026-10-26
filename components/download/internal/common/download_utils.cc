@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/bits.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
 #include "base/i18n/file_util_icu.h"
@@ -41,7 +42,9 @@
 #include "url/url_constants.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/android/android_info.h"
 #include "components/download/internal/common/android/download_collection_bridge.h"
+#include "components/download/internal/common/android/download_document_uri_bridge.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace download {
@@ -67,7 +70,7 @@ const int kDefaultOverwrittenDownloadExpiredTimeInDays = 90;
 const int kDefaultDownloadFileBufferSize = 524288;
 
 // Maximum size of a data URL. URLs larger than this will be truncated.
-const size_t kMaxDataURLSize = 1024u;
+const size_t kMaxDataURLSize = 8192u;
 
 #if BUILDFLAG(IS_ANDROID)
 // Default maximum length of a downloaded file name on Android.
@@ -140,6 +143,25 @@ void AppendRangeHeader(net::HttpRequestHeaders* headers,
 }
 
 #if BUILDFLAG(IS_ANDROID)
+base::FilePath GetDisplayName(const base::FilePath& download_uri) {
+  if (DownloadDocumentUriBridge::IsDocumentUri(download_uri)) {
+    return DownloadDocumentUriBridge::GetDisplayName(download_uri);
+  }
+  return DownloadCollectionBridge::GetDisplayName(download_uri);
+}
+
+DisplayNames GetDisplayNamesOnBackgroundThread(
+    std::vector<base::FilePath> content_uris) {
+  auto result = std::make_unique<std::map<std::string, base::FilePath>>();
+  for (const auto& uri : content_uris) {
+    base::FilePath display_name = GetDisplayName(uri);
+    if (!display_name.empty()) {
+      result->emplace(uri.value(), std::move(display_name));
+    }
+  }
+  return result;
+}
+
 struct CreateIntermediateUriResult {
  public:
   CreateIntermediateUriResult(const base::FilePath& content_uri,
@@ -163,7 +185,7 @@ CreateIntermediateUriResult CreateIntermediateUri(
                 original_url, referrer_url, suggested_name, mime_type);
   base::FilePath file_name;
   if (!content_path.empty()) {
-    file_name = DownloadCollectionBridge::GetDisplayName(content_path);
+    file_name = GetDisplayName(content_path);
   }
   if (file_name.empty())
     file_name = suggested_name;
@@ -180,16 +202,39 @@ void OnInterMediateUriCreated(LocalPathCallback callback,
 
 const uint32_t DownloadItem::kInvalidId = 0;
 
-void TruncateDataUrlAtTheEndIfNeeded(std::vector<GURL>* url_chain) {
-  for (GURL& url : *url_chain) {
-    if (url.SchemeIs(url::kDataScheme)) {
-      const std::string& data_url = url.spec();
-      if (data_url.size() > kMaxDataURLSize) {
-        GURL truncated_url(data_url.substr(0, kMaxDataURLSize));
-        url.Swap(&truncated_url);
-      }
-    }
+bool TruncateDataUrlAtTheEndIfNeeded(GURL& url) {
+  constexpr std::string_view kBase64Substr = "base64,";
+  if (!url.SchemeIs(url::kDataScheme)) {
+    return false;
   }
+  const std::string& data_url = url.spec();
+  if (data_url.size() <= kMaxDataURLSize) {
+    return false;
+  }
+  size_t data_url_end = kMaxDataURLSize;
+  // If there is a base64 substr, trim the following data only if it is within
+  // the max limit.
+  if (size_t pos = data_url.find(kBase64Substr);
+      pos != std::string::npos &&
+      pos + kBase64Substr.size() < kMaxDataURLSize) {
+    size_t max_base64_length = base::bits::AlignDown(
+        kMaxDataURLSize - pos - kBase64Substr.size(), static_cast<size_t>(4));
+    // If the prefix before the base64 data is not divisible by 4, adjust the
+    // truncation end pos so the base64 data can be strictly decoded.
+    data_url_end = pos + kBase64Substr.size() + max_base64_length;
+  }
+
+  GURL truncated_url(data_url.substr(0, data_url_end));
+  url.Swap(&truncated_url);
+  return true;
+}
+
+bool TruncateDataUrlAtTheEndIfNeeded(std::vector<GURL>* url_chain) {
+  bool truncated = false;
+  for (GURL& url : *url_chain) {
+    truncated |= TruncateDataUrlAtTheEndIfNeeded(url);
+  }
+  return truncated;
 }
 
 DownloadInterruptReason HandleRequestCompletionStatus(
@@ -447,7 +492,13 @@ std::unique_ptr<network::ResourceRequest> CreateResourceRequest(
   // See also:
   // - https://crbug.com/952834
   // - https://github.com/whatwg/fetch/issues/896#issuecomment-484423278
-  request->mode = network::mojom::RequestMode::kNavigate;
+  //
+  // Note that while top-level navigations use kNavigate (which bypasses CORS
+  // restrictions in the network service), Background Fetch requests require
+  // strict adoption of the originating fetch request mode (kCors) to prevent
+  // cross-origin information leaks.
+  request->mode = params->fetch_request_mode();
+  request->credentials_mode = params->credentials_mode();
 
   bool has_upload_data = false;
   if (params->post_body()) {
@@ -591,6 +642,7 @@ DownloadDBEntry CreateDownloadDBEntryFromItem(const DownloadItemImpl& item) {
   in_progress_info.bytes_wasted = item.GetBytesWasted();
   in_progress_info.auto_resume_count = item.GetAutoResumeCount();
   in_progress_info.credentials_mode = item.GetCredentialsMode();
+  in_progress_info.fetch_request_mode = item.GetFetchRequestMode();
   auto range_request_offset = item.GetRangeRequestOffset();
   in_progress_info.range_request_from = range_request_offset.first;
   in_progress_info.range_request_to = range_request_offset.second;
@@ -854,6 +906,20 @@ void DetermineSavePackagePath(const GURL& url,
     return;
   }
   std::move(callback).Run(mhtml_path, mhtml_path.BaseName());
+}
+
+void GetDisplayNamesForDownloads(std::vector<base::FilePath> content_uris,
+                                 GetDisplayNamesCallback callback) {
+  if (content_uris.empty() || base::android::android_info::sdk_int() <
+                                  base::android::android_info::SDK_VERSION_Q) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+  GetDownloadTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&GetDisplayNamesOnBackgroundThread,
+                     std::move(content_uris)),
+      std::move(callback));
 }
 #endif
 

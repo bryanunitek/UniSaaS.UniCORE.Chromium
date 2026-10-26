@@ -8,14 +8,12 @@ import {WebUiListenerMixinLit} from '//resources/cr_elements/web_ui_listener_mix
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
 import {ToolbarEvent} from '../content/read_anything_types.js';
-import type {SettingsPrefs, ShowAtConfigPrefs} from '../content/read_anything_types.js';
-import {DEFAULT_SETTINGS} from '../content/read_anything_types.js';
-import {ReadAnythingSettingsChange} from '../shared/metrics_browser_proxy.js';
-import {ReadAnythingLogger} from '../shared/read_anything_logger.js';
+import type {ShowAtConfigPrefs} from '../content/read_anything_types.js';
 
 import {getHtml} from './line_spacing_menu.html.js';
-import {getIndexOfSetting} from './menu_util.js';
 import type {MenuStateItem, ToolbarMenu} from './menu_util.js';
 import type {SimpleActionMenuElement} from './simple_action_menu.js';
 
@@ -40,34 +38,35 @@ export class LineSpacingMenuElement extends LineSpacingMenuElementBase
 
   static override get properties() {
     return {
-      settingsPrefs: {type: Object},
+      lineSpacing: {type: Number},
       nonModal: {type: Boolean},
       options_: {type: Array},
     };
   }
 
-  accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
+  accessor lineSpacing: number = 0;
   accessor nonModal: boolean = false;
+
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
 
   protected accessor options_: Array<MenuStateItem<number>> = [
     {
       title: loadTimeData.getString('lineSpacingStandardTitle'),
-      icon: 'read-anything:line-spacing-standard',
-      data: chrome.readingMode.standardLineSpacing,
+      icon: 'read-anything:line-spacing-standard-custom',
+      data: this.visualBrowserProxy_.getStandardLineSpacing(),
     },
     {
       title: loadTimeData.getString('lineSpacingLooseTitle'),
-      icon: 'read-anything:line-spacing-loose',
-      data: chrome.readingMode.looseLineSpacing,
+      icon: 'read-anything:line-spacing-loose-custom',
+      data: this.visualBrowserProxy_.getLooseLineSpacing(),
     },
     {
       title: loadTimeData.getString('lineSpacingVeryLooseTitle'),
-      icon: 'read-anything:line-spacing-very-loose',
-      data: chrome.readingMode.veryLooseLineSpacing,
+      icon: 'read-anything:line-spacing-very-loose-custom',
+      data: this.visualBrowserProxy_.getVeryLooseLineSpacing(),
     },
   ];
-
-  private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
 
   open(anchor: HTMLElement, showAtConfig?: ShowAtConfigPrefs) {
     this.$.menu.open(anchor, showAtConfig);
@@ -77,14 +76,7 @@ export class LineSpacingMenuElement extends LineSpacingMenuElementBase
     this.$.menu.close();
   }
 
-  protected restoredLineSpacingIndex_(): number {
-    return getIndexOfSetting(this.options_, this.settingsPrefs['lineSpacing']);
-  }
-
-  protected onLineSpacingChange_(event: CustomEvent<{data: number}>) {
-    chrome.readingMode.onLineSpacingChange(event.detail.data);
-    this.logger_.logTextSettingsChange(
-        ReadAnythingSettingsChange.LINE_HEIGHT_CHANGE);
+  protected onLineSpacingChange_() {
     this.fire(ToolbarEvent.CLOSE_ALL_MENUS);
   }
 }

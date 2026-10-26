@@ -12,14 +12,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.customtabs.features.minimizedcustomtab.CustomTabMinimizationManager.KEY_IS_CCT_MINIMIZED;
 import static org.chromium.chrome.browser.tab.TabSelectionType.FROM_USER;
 
-import android.app.PictureInPictureParams;
 import android.os.Build;
 import android.os.Build.VERSION_CODES;
 import android.os.Bundle;
@@ -29,7 +27,7 @@ import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.PictureInPictureModeChangedInfo;
 import androidx.lifecycle.Lifecycle.State;
-import androidx.test.ext.junit.rules.ActivityScenarioRule;
+import androidx.test.core.app.ActivityScenario;
 
 import org.junit.After;
 import org.junit.Before;
@@ -38,11 +36,11 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.BaseSwitches;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -57,6 +55,8 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.InflationObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.toolbar.top.ResourceFactory;
+import org.chromium.chrome.browser.toolbar.top.ResourceFactoryJni;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.content_public.browser.WebContents;
@@ -68,17 +68,12 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link CustomTabMinimizationManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @CommandLineFlags.Add({
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-    ChromeSwitches.DISABLE_NATIVE_INITIALIZATION
+    BaseSwitches.DISABLE_NATIVE_INITIALIZATION
 })
 @EnableFeatures(ChromeFeatureList.CCT_REPORT_PRERENDER_EVENTS)
 public class CustomTabMinimizationManagerUnitTest {
-    @Rule
-    public ActivityScenarioRule<CustomTabActivity> mActivityScenarioRule =
-            new ActivityScenarioRule<>(CustomTabActivity.class);
-
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private static final String TITLE = "Google";
@@ -86,7 +81,8 @@ public class CustomTabMinimizationManagerUnitTest {
             UrlFormatter.formatUrlForDisplayOmitSchemePathAndTrivialSubdomains(
                     JUnitTestGURLs.SEARCH_URL);
 
-    @Spy private AppCompatActivity mActivity;
+    private ActivityScenario<CustomTabActivity> mActivityScenario;
+    private AppCompatActivity mActivity;
     @Mock private Tab mTab;
     @Mock private WebContents mWebContents;
     @Mock private MinimizedCustomTabFeatureEngagementDelegate mFeatureEngagementDelegate;
@@ -94,6 +90,7 @@ public class CustomTabMinimizationManagerUnitTest {
     @Mock private CustomTabsConnection mConnection;
     @Mock private Runnable mCloseTabRunnable;
     @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
+    @Mock private ResourceFactory.Natives mResourceFactoryNatives;
     @Mock private CustomTabMinimizeDelegate.Observer mMinimizationObserver;
     @Mock private CustomTabMinimizeDelegate mOtherMinimizeDelegate;
     @Mock private ActivityLifecycleDispatcher mLifecycleDispatcher;
@@ -104,16 +101,17 @@ public class CustomTabMinimizationManagerUnitTest {
 
     @Before
     public void setUp() {
-        mActivityScenarioRule.getScenario().onActivity(activity -> mActivity = spy(activity));
         DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
+        ResourceFactoryJni.setInstanceForTesting(mResourceFactoryNatives);
+
+        mActivityScenario = ActivityScenario.launch(CustomTabActivity.class);
+        mActivityScenario.onActivity(activity -> mActivity = activity);
 
         CustomTabsConnection.setInstanceForTesting(mConnection);
         mActivityTabProvider.setForTesting(mTab);
         when(mTab.getWebContents()).thenReturn(mWebContents);
         when(mTab.getUrl()).thenReturn(JUnitTestGURLs.SEARCH_URL);
         when(mTab.getTitle()).thenReturn(TITLE);
-        when(mActivity.enterPictureInPictureMode(any(PictureInPictureParams.class)))
-                .thenReturn(true);
         mManager =
                 new CustomTabMinimizationManager(
                         mActivity,
@@ -129,12 +127,16 @@ public class CustomTabMinimizationManagerUnitTest {
     @After
     public void tearDown() {
         CustomTabMinimizationManager.sLastMinimizeDelegate = null;
+        if (mActivityScenario != null) {
+            mActivityScenario.close();
+        }
     }
 
     @Test
     public void testMinimize() {
+        assertFalse(mActivity.isInPictureInPictureMode());
         mManager.minimize();
-        verify(mActivity).enterPictureInPictureMode(any(PictureInPictureParams.class));
+        assertTrue(mActivity.isInPictureInPictureMode());
         verify(mFeatureEngagementDelegate).notifyUserEngaged();
         verify(mMinimizationObserver).onMinimizationChanged(true);
 
@@ -171,7 +173,7 @@ public class CustomTabMinimizationManagerUnitTest {
         // Simulate Activity entering PiP.
         mManager.accept(new PictureInPictureModeChangedInfo(true));
         // Now, simulate PiP being dismissed by the user.
-        mActivityScenarioRule.getScenario().moveToState(State.CREATED);
+        mActivityScenario.moveToState(State.CREATED);
         mManager.accept(new PictureInPictureModeChangedInfo(false));
 
         verify(mTab, never()).show(anyInt());

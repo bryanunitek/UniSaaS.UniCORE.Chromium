@@ -4,32 +4,29 @@
 
 #include "components/private_ai/websocket_client.h"
 
-#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/types/expected.h"
+#include "components/private_ai/attestation/server_verification_key.h"
 #include "components/private_ai/common/private_ai_logger.h"
 #include "components/private_ai/proto_utils/google_rpc_code.h"
-#include "net/http/http_request_headers.h"
-#include "net/storage_access_api/status.h"
+#include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "services/network/public/cpp/constants.h"
-#include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/oak/chromium/proto/session/session.pb.h"
+#include "url/gurl.h"
 
 namespace private_ai {
 namespace {
-
-constexpr size_t kMaxIncomingMessageSize = 1 << 20;
 
 constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("private_ai_client", R"(
@@ -67,13 +64,15 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
 WebSocketClient::WebSocketClient(
     const GURL& service_url,
-    network::mojom::NetworkContext* network_context,
-    PrivateAiLogger* logger)
-    : service_url_(service_url),
-      network_context_(network_context),
-      logger_(logger),
-      readable_watcher_(FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::MANUAL) {
-  CHECK(network_context_);
+    network::NetworkContextGetter network_context_getter,
+    PrivateAiLogger* logger,
+    std::optional<bool> has_chrome_proxy)
+    : logger_(logger),
+      streaming_client_(service_url,
+                        std::move(network_context_getter),
+                        kTrafficAnnotation,
+                        /*delegate=*/this),
+      has_chrome_proxy_(has_chrome_proxy) {
   CHECK(logger_);
 }
 
@@ -102,22 +101,16 @@ void WebSocketClient::Send(const oak::session::v1::SessionRequest& request) {
 void WebSocketClient::Send(Request request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (state_ == State::kDisconnected ||
-      request.size() > std::numeric_limits<uint32_t>::max()) {
+  if (state_ == State::kDisconnected) {
     ClosePipe(TransportError::kError);
     return;
   }
 
   if (state_ == State::kInitialized) {
-    Connect();
+    state_ = State::kActive;
   }
 
-  if (state_ != State::kOpen) {
-    pending_write_data_.push(std::move(request));
-    return;
-  }
-
-  InternalWrite(request);
+  streaming_client_.Send(std::move(request));
 }
 
 void WebSocketClient::OnResponse(
@@ -142,171 +135,65 @@ void WebSocketClient::OnResponse(
   response_callback_.Run(base::ok(std::move(session_response)));
 }
 
-void WebSocketClient::Connect() {
-  // A disconnect handler is used so that the request can be completed in the
-  // event of an unexpected disconnection from the network service.
-  auto handshake_remote = handshake_receiver_.BindNewPipeAndPassRemote();
-  // base::Unretained(this) is safe because client_receiver_ is owned by
-  // |this|.
-  handshake_receiver_.set_disconnect_handler(base::BindOnce(
-      &WebSocketClient::OnMojoPipeDisconnect, base::Unretained(this)));
-
-  state_ = State::kConnecting;
-
-  std::vector<std::string> requested_protocols;
-
-  std::vector<network::mojom::HttpHeaderPtr> additional_headers{};
-  additional_headers.push_back(network::mojom::HttpHeader::New(
-      "X-WebChannel-Content-Type", "application/x-protobuf"));
-
-  network_context_->CreateWebSocket(
-      service_url_, requested_protocols, net::StorageAccessApiStatus::kNone,
-      net::IsolationInfo::CreateForInternalRequest(
-          url::Origin::Create(service_url_)),
-      std::move(additional_headers), network::OriginatingProcessId::browser(),
-      url::Origin::Create(service_url_),
-      network::mojom::ClientSecurityState::New(),
-      network::mojom::kWebSocketOptionBlockAllCookies,
-      net::MutableNetworkTrafficAnnotationTag(kTrafficAnnotation),
-      std::move(handshake_remote),
-      /*url_loader_network_observer=*/mojo::NullRemote(),
-      /*auth_handler=*/mojo::NullRemote(),
-      /*header_client=*/mojo::NullRemote(),
-      /*throttling_profile_id=*/std::nullopt,
-      // PrivateAI WebSocket connections are browser-wide operations not
-      // associated with any page/frame, so no Connection Allowlist restrictions
-      // should apply.
-      network::GetNoOpNetworkRestrictionsId());
-}
-
-void WebSocketClient::InternalWrite(base::span<const uint8_t> data) {
-  CHECK(state_ == State::kOpen);
-
-  // Use the BINARY message type because the message is a binary-encoded
-  // protobuf. The TEXT message type would be used for JSON.
-  websocket_->SendMessage(network::mojom::WebSocketMessageType::BINARY,
-                          data.size());
-  MojoResult result = writable_->WriteAllData(data);
-  if (result != MOJO_RESULT_OK) {
-    logger_->LogError(FROM_HERE, "Failed to write to WebSocket.");
-    ClosePipe(TransportError::kError);
-  }
-}
-
-void WebSocketClient::OnOpeningHandshakeStarted(
-    network::mojom::WebSocketHandshakeRequestPtr request) {
+void WebSocketClient::OnMessage(std::vector<uint8_t> message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Call OnResponse asynchronously since this object may be destroyed during
+  // the callback.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&WebSocketClient::OnResponse,
+                                weak_ptr_factory_.GetWeakPtr(),
+                                base::ok(std::move(message))));
 }
 
-void WebSocketClient::OnFailure(const std::string& message,
-                                int net_error,
-                                int response_code) {
+void WebSocketClient::OnConnected() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RecordConnectionResult(net::OK);
+}
+
+void WebSocketClient::OnConnectionError(const std::string& message,
+                                        int net_error,
+                                        int response_code) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RecordConnectionResult(net_error);
+  // Called when the WebSocket opening handshake fails, i.e. the connection to
+  // the server could not be established. Unrelated to the secure channel
+  // handshake.
   logger_->LogError(
       FROM_HERE, base::StrCat({"PrivateAI service connection failed ", message,
                                " (net error:", base::NumberToString(net_error),
                                ", response code:",
                                base::NumberToString(response_code), ")"}));
 
-  ClosePipe(TransportError::kError);
-}
-
-void WebSocketClient::OnConnectionEstablished(
-    mojo::PendingRemote<network::mojom::WebSocket> socket,
-    mojo::PendingReceiver<network::mojom::WebSocketClient> client_receiver,
-    network::mojom::WebSocketHandshakeResponsePtr response,
-    mojo::ScopedDataPipeConsumerHandle readable,
-    mojo::ScopedDataPipeProducerHandle writable) {
-  CHECK(!websocket_.is_bound());
-  CHECK(state_ == State::kConnecting);
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  websocket_.Bind(std::move(socket));
-  readable_ = std::move(readable);
-  // base::Unretained(this) is safe because readable_watcher_ is owned by
-  // |this|.
-  CHECK_EQ(readable_watcher_.Watch(
-               readable_.get(), MOJO_HANDLE_SIGNAL_READABLE,
-               MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
-               base::BindRepeating(&WebSocketClient::ReadFromDataPipe,
-                                   base::Unretained(this))),
-           MOJO_RESULT_OK);
-  writable_ = std::move(writable);
-  client_receiver_.Bind(std::move(client_receiver));
-
-  // |handshake_receiver_| will disconnect soon. In order to catch network
-  // process crashes, we switch to watching |client_receiver_|.
-  handshake_receiver_.set_disconnect_handler(base::DoNothing());
-  // base::Unretained(this) is safe because client_receiver_ is owned by
-  // |this|.
-  client_receiver_.set_disconnect_handler(base::BindOnce(
-      &WebSocketClient::OnMojoPipeDisconnect, base::Unretained(this)));
-
-  websocket_->StartReceiving();
-
-  state_ = State::kOpen;
-  connection_open_time_ = base::TimeTicks::Now();
-
-  while (!pending_write_data_.empty()) {
-    InternalWrite(pending_write_data_.front());
-    // Writing might fail which will close the socket.
-    if (state_ != State::kOpen) {
-      return;
-    }
-    pending_write_data_.pop();
-  }
-}
-
-void WebSocketClient::OnDataFrame(bool finish,
-                                  network::mojom::WebSocketMessageType type,
-                                  uint64_t data_len) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK_EQ(state_, State::kOpen);
-  CHECK_EQ(pending_read_data_index_, pending_read_data_.size());
-  CHECK(!pending_read_finished_);
-  if (data_len == 0) {
-    if (finish) {
-      ProcessCompletedResponse();
-    }
-    return;
+  // Net error codes are negative, while the NetErrorCodes enum used for the
+  // histogram contains their absolute values.
+  base::UmaHistogramSparse("PrivateAi.Client.WebSocketConnectionError.NetError",
+                           -net_error);
+  // `response_code` is -1 if no HTTP response was received, e.g. because of a
+  // network error.
+  if (response_code > 0) {
+    base::UmaHistogramSparse(
+        "PrivateAi.Client.WebSocketConnectionError.ResponseCode",
+        response_code);
   }
 
-  const size_t old_size = pending_read_data_index_;
-  const size_t new_size = old_size + data_len;
-  if ((type != network::mojom::WebSocketMessageType::BINARY &&
-       type != network::mojom::WebSocketMessageType::CONTINUATION) ||
-      data_len > std::numeric_limits<uint32_t>::max() || new_size < old_size ||
-      new_size > kMaxIncomingMessageSize) {
-    logger_->LogError(
-        FROM_HERE,
-        base::StrCat({"Invalid WebSocket frame (type: ",
-                      base::NumberToString(static_cast<int>(type)),
-                      ", len: ", base::NumberToString(data_len), ")"}));
-    ClosePipe(TransportError::kError);
-    return;
-  }
-
-  pending_read_data_.resize(new_size);
-  pending_read_finished_ = finish;
-  client_receiver_.Pause();
-  ReadFromDataPipe(MOJO_RESULT_OK, mojo::HandleSignalsState());
+  ClosePipe(TransportError::kConnectionFailed);
 }
 
 void WebSocketClient::OnDropChannel(bool was_clean,
                                     uint16_t code,
-                                    const std::string& reason) {
+                                    const std::string& reason,
+                                    std::optional<base::TimeDelta> elapsed) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK(state_ == State::kOpen || state_ == State::kConnecting);
   logger_->LogError(FROM_HERE, base::StrCat({"Websocket Channel dropped (code:",
                                              base::NumberToString(code),
                                              ", reason:", reason, ")"}));
 
   base::UmaHistogramSparse("PrivateAi.Client.WebSocketCloseCode", code);
 
-  if (state_ == State::kOpen) {
+  if (elapsed.has_value()) {
     base::UmaHistogramLongTimes(
-        "PrivateAi.Client.WebSocketSessionDuration.ClosedByServer",
-        base::TimeTicks::Now() - connection_open_time_);
+        "PrivateAi.Client.WebSocketSessionDuration.ClosedByServer", *elapsed);
   }
 
   // If there is a reason, it indicates an error from the server.
@@ -318,52 +205,27 @@ void WebSocketClient::OnDropChannel(bool was_clean,
   ClosePipe(TransportError::kSocketClosed);
 }
 
-void WebSocketClient::OnClosingHandshake() {}
-
-void WebSocketClient::ReadFromDataPipe(MojoResult,
-                                       const mojo::HandleSignalsState&) {
-  CHECK_LT(pending_read_data_index_, pending_read_data_.size());
-
-  size_t actually_read_bytes = 0;
-  const MojoResult result = readable_->ReadData(
-      MOJO_READ_DATA_FLAG_NONE,
-      base::span(pending_read_data_).subspan(pending_read_data_index_),
-      actually_read_bytes);
-  if (result == MOJO_RESULT_OK) {
-    pending_read_data_index_ += actually_read_bytes;
-    DCHECK_LE(pending_read_data_index_, pending_read_data_.size());
-
-    if (pending_read_data_index_ < pending_read_data_.size()) {
-      readable_watcher_.ArmOrNotify();
-    } else {
-      client_receiver_.Resume();
-      if (pending_read_finished_) {
-        ProcessCompletedResponse();
-      }
-    }
-  } else if (result == MOJO_RESULT_SHOULD_WAIT) {
-    readable_watcher_.ArmOrNotify();
-  } else {
-    logger_->LogError(
-        FROM_HERE,
-        base::StrCat({"Reading WebSocket frame failed: ",
-                      base::NumberToString(static_cast<int>(result))}));
-    ClosePipe(TransportError::kError);
+void WebSocketClient::OnError(const std::string& message) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!message.empty()) {
+    logger_->LogError(FROM_HERE, message);
   }
+  ClosePipe(TransportError::kError);
 }
 
-void WebSocketClient::ProcessCompletedResponse() {
-  std::vector<uint8_t> pending_read_data;
-  pending_read_data.swap(pending_read_data_);
-  pending_read_data_index_ = 0;
-  pending_read_finished_ = false;
+void WebSocketClient::OnClose() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ClosePipe(TransportError::kSocketClosed);
+}
 
-  // Call OnResponse asynchronously since this object may be destroyed during
-  // the callback.
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&WebSocketClient::OnResponse,
-                                weak_ptr_factory_.GetWeakPtr(),
-                                base::ok(std::move(pending_read_data))));
+std::vector<network::mojom::HttpHeaderPtr>
+WebSocketClient::GetAdditionalHeaders() {
+  std::vector<network::mojom::HttpHeaderPtr> additional_headers;
+  if (IsNonProdServerVerificationKey(streaming_client_.service_url())) {
+    additional_headers.push_back(network::mojom::HttpHeader::New(
+        "X-Client-Verification-Key-Variant", "nonprod"));
+  }
+  return additional_headers;
 }
 
 void WebSocketClient::ClosePipe(TransportError status) {
@@ -371,11 +233,7 @@ void WebSocketClient::ClosePipe(TransportError status) {
     return;
   }
   state_ = State::kDisconnected;
-  client_receiver_.reset();
-  pending_write_data_ = {};
-  pending_read_data_index_ = 0;
-  pending_read_finished_ = false;
-  pending_read_data_.clear();
+  streaming_client_.Close();
 
   // Call OnResponse asynchronously since this object may be destroyed during
   // the callback.
@@ -385,8 +243,17 @@ void WebSocketClient::ClosePipe(TransportError status) {
                      weak_ptr_factory_.GetWeakPtr(), base::unexpected(status)));
 }
 
-void WebSocketClient::OnMojoPipeDisconnect() {
-  ClosePipe(TransportError::kSocketClosed);
+void WebSocketClient::RecordConnectionResult(int net_error) {
+  if (has_recorded_connection_result_ || !has_chrome_proxy_.has_value()) {
+    return;
+  }
+  has_recorded_connection_result_ = true;
+  const char* variant = *has_chrome_proxy_ ? "WithProxy" : "WithoutProxy";
+  // Net error codes are negative, while the NetErrorCodes enum used for
+  // histogram contains their absolute values. net::OK is 0.
+  base::UmaHistogramSparse(
+      base::StrCat({"PrivateAi.Client.ConnectionResult.", variant}),
+      net_error == net::OK ? net::OK : -net_error);
 }
 
 }  // namespace private_ai

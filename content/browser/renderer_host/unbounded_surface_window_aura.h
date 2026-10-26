@@ -31,25 +31,23 @@ class Layer;
 namespace content {
 
 class RenderWidgetHostViewAura;
+class RenderWidgetHostViewBase;
 
 class UnboundedSurfaceWindowAura : public UnboundedSurfaceWindow,
                                    public aura::WindowDelegate,
                                    public aura::WindowObserver,
-                                   public viz::HostFrameSinkClient,
-                                   public blink::mojom::UnboundedSurfaceHost {
+                                   public viz::HostFrameSinkClient {
  public:
   static std::unique_ptr<UnboundedSurfaceWindowAura> Create(
       RenderWidgetHostViewAura* parent_view,
-      mojo::PendingAssociatedReceiver<blink::mojom::UnboundedSurfaceHost> host,
-      mojo::PendingAssociatedRemote<blink::mojom::UnboundedSurfaceClient>
-          client,
-      const gfx::Rect& bounds_in_dips);
+      const gfx::Rect& bounds_in_screen,
+      base::WeakPtr<RenderWidgetHostViewBase> subframe_view);
 
   ~UnboundedSurfaceWindowAura() override;
 
   // UnboundedSurfaceWindow overrides:
   base::WeakPtr<UnboundedSurfaceWindow> GetWeakPtr() override;
-  bool is_valid() const override;
+  bool IsValid() const override;
   gfx::NativeWindow GetNativeWindow() const override;
   void SetBounds(const gfx::Rect& bounds_in_screen) override;
   viz::FrameSinkId GetFrameSinkId() const override;
@@ -59,7 +57,6 @@ class UnboundedSurfaceWindowAura : public UnboundedSurfaceWindow,
       mojo::PendingRemote<viz::mojom::CompositorFrameSinkClient> client)
       override;
 
-  void RouteMouseEvent(const blink::WebMouseEvent& event) override;
   gfx::Rect GetBounds() const override;
   void CopyFromSurface(
       const gfx::Rect& src_subrect,
@@ -68,9 +65,6 @@ class UnboundedSurfaceWindowAura : public UnboundedSurfaceWindow,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
       override;
   void EnsureSurfaceSynchronizedForWebTest() override;
-
-  // blink::mojom::UnboundedSurfaceHost overrides:
-  void UpdateBounds(const gfx::Rect& bounds) override;
 
   // aura::WindowDelegate overrides:
   gfx::Size GetMinimumSize() const override;
@@ -84,8 +78,6 @@ class UnboundedSurfaceWindowAura : public UnboundedSurfaceWindow,
       const gfx::Point& location) override;
   bool CanFocus() override;
   void OnCaptureLost() override {}
-
-  void Dismiss() override;
   void OnPaint(const ui::PaintContext& context) override {}
   void OnDeviceScaleFactorChanged(float old_device_scale_factor,
                                   float new_device_scale_factor) override {}
@@ -98,8 +90,8 @@ class UnboundedSurfaceWindowAura : public UnboundedSurfaceWindow,
   // ui::EventHandler overrides (from WindowDelegate):
   void OnKeyEvent(ui::KeyEvent* event) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
+  void OnScrollEvent(ui::ScrollEvent* event) override;
   void OnTouchEvent(ui::TouchEvent* event) override;
-
 
   // viz::HostFrameSinkClient overrides:
   void OnFirstSurfaceActivation(const viz::SurfaceInfo& surface_info) override {
@@ -107,24 +99,20 @@ class UnboundedSurfaceWindowAura : public UnboundedSurfaceWindow,
   void OnFrameTokenChanged(uint32_t frame_token,
                            base::TimeTicks activation_time) override {}
 
+ protected:
+  void TeardownAndDestroy() override;
+
  private:
   class DebugBorderDelegate;
 
   UnboundedSurfaceWindowAura(
       RenderWidgetHostViewAura* parent_view,
-      mojo::PendingAssociatedReceiver<blink::mojom::UnboundedSurfaceHost> host,
-      mojo::PendingAssociatedRemote<blink::mojom::UnboundedSurfaceClient>
-          client);
-  bool InitWindow(const gfx::Rect& bounds_in_dips);
-  void OnConnectionError();
-  gfx::Rect ConvertDIPToScreenBounds(const gfx::Rect& bounds_in_dips) const;
+      base::WeakPtr<RenderWidgetHostViewBase> subframe_view);
+  bool InitWindow(const gfx::Rect& bounds_in_screen);
 
-  raw_ptr<RenderWidgetHostViewAura> parent_view_;
   viz::FrameSinkId frame_sink_id_;
   viz::FrameSinkId parent_frame_sink_id_;
   viz::ParentLocalSurfaceIdAllocator local_surface_id_allocator_;
-  mojo::AssociatedReceiver<blink::mojom::UnboundedSurfaceHost> receiver_{this};
-  mojo::AssociatedRemote<blink::mojom::UnboundedSurfaceClient> client_remote_;
   std::unique_ptr<aura::Window> window_;
   raw_ptr<aura::Window> root_window_ = nullptr;
   ui::MotionEventAura pointer_state_;

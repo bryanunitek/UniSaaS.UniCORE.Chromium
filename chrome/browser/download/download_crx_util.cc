@@ -20,6 +20,7 @@
 #include "content/public/browser/download_item_utils.h"
 #include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/install_prompt_data.h"
 #include "extensions/browser/webstore_installer.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
@@ -27,7 +28,8 @@
 #include "extensions/common/user_script.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -74,14 +76,16 @@ std::unique_ptr<ExtensionInstallPrompt> CreateExtensionInstallPrompt(
       // handles having an empty ExtensionInstallPrompt.
       return nullptr;
 #else
-      browser = Browser::Create(
-          Browser::CreateParams(Browser::TYPE_NORMAL, profile, true));
+      browser = CreateBrowserWindow(BrowserWindowCreateParams(
+          BrowserWindowInterface::TYPE_NORMAL, profile, true));
 #endif
     }
     TabListInterface* tab_list = TabListInterface::From(browser);
     web_contents = tab_list->GetActiveTab()->GetContents();
   }
-  return std::make_unique<ExtensionInstallPrompt>(web_contents);
+  return std::make_unique<ExtensionInstallPrompt>(
+      web_contents, std::make_unique<extensions::InstallPromptData>(
+                        extensions::InstallPromptData::UNSET_PROMPT_TYPE));
 }
 }  // namespace
 
@@ -109,6 +113,7 @@ scoped_refptr<extensions::CrxInstaller> CreateCrxInstaller(
   installer->set_error_on_unsupported_requirements(true);
   installer->set_delete_source(true);
   installer->set_was_triggered_by_user_download();
+  installer->set_download_url(download_item.GetURL());
   installer->set_original_mime_type(download_item.GetOriginalMimeType());
   installer->set_apps_require_extension_mime_type(true);
 

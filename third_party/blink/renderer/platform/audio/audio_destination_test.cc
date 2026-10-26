@@ -6,18 +6,21 @@
 
 #include <array>
 #include <memory>
+#include <vector>
 
-#include "base/test/scoped_feature_list.h"
-#include "base/test/test_simple_task_runner.h"
-#include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
+#include "base/run_loop.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
+#include "base/test/test_simple_task_runner.h"
 #include "base/thread_annotations.h"
+#include "base/threading/thread_restrictions.h"
 #include "media/audio/audio_features.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_glitch_info.h"
+#include "media/base/audio_timestamp_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_audio_device.h"
@@ -27,6 +30,7 @@
 #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
 #include "third_party/blink/renderer/platform/audio/audio_io_callback.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+#include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 
 namespace blink {
@@ -53,6 +57,24 @@ class MockWebAudioDevice : public WebAudioDevice {
   explicit MockWebAudioDevice(double sample_rate, int frames_per_buffer)
       : sample_rate_(sample_rate), frames_per_buffer_(frames_per_buffer) {}
 
+  ~MockWebAudioDevice() override {
+    if (expected_destruction_thread_id_.has_value()) {
+      EXPECT_EQ(base::PlatformThread::CurrentId(),
+                expected_destruction_thread_id_.value());
+    }
+    if (quit_closure_) {
+      std::move(quit_closure_).Run();
+    }
+  }
+
+  void ExpectDestructionOnThread(base::PlatformThreadId thread_id) {
+    expected_destruction_thread_id_ = thread_id;
+  }
+
+  void SetQuitClosure(base::OnceClosure quit_closure) {
+    quit_closure_ = std::move(quit_closure);
+  }
+
   MOCK_METHOD(void, Start, (), (override));
   MOCK_METHOD(void, Stop, (), (override));
   MOCK_METHOD(void, Pause, (), (override));
@@ -69,6 +91,8 @@ class MockWebAudioDevice : public WebAudioDevice {
  private:
   double sample_rate_;
   int frames_per_buffer_;
+  std::optional<base::PlatformThreadId> expected_destruction_thread_id_;
+  base::OnceClosure quit_closure_;
 };
 
 class TestPlatform : public TestingPlatformSupport {
@@ -103,7 +127,7 @@ class TestPlatform : public TestingPlatformSupport {
     return kDefaultHardwareOutputChannelNumber;
   }
 
-  const MockWebAudioDevice& web_audio_device() {
+  MockWebAudioDevice& web_audio_device() {
     CHECK(webaudio_device_)
         << "Finish setting up expectations before calling CreateAudioDevice "
            "(via AudioDestination::Create).";
@@ -124,7 +148,7 @@ class AudioCallback : public AudioIOCallback {
               const media::AudioGlitchInfo& glitch_info) override {
     audio_bus->Zero();
     frames_processed_ += frames_to_process;
-    last_latency_ = delay;
+    latencies_.push_back(delay);
     glitch_accumulator_.Add(glitch_info);
     render_call_count_++;
   }
@@ -135,7 +159,8 @@ class AudioCallback : public AudioIOCallback {
   int frames_processed_ = 0;
   int render_call_count_ = 0;
   media::AudioGlitchInfo::Accumulator glitch_accumulator_;
-  base::TimeDelta last_latency_;
+  // Playout delay of each rendered quantum, in render order.
+  std::vector<base::TimeDelta> latencies_;
 };
 
 // A custom TaskRunner that intercepts posted tasks and allows the test to
@@ -304,7 +329,7 @@ TEST_P(AudioDestinationTest, GlitchAndDelay) {
       WebAudioLatencyHint(WebAudioLatencyHint::kCategoryInteractive));
   const int requested_frames = audio_destination->FramesPerBuffer();
 
-  const int kRenderCount = 3;
+  constexpr int kRenderCount = 3;
 
   auto glitches = std::to_array<media::AudioGlitchInfo>({
       {.duration = base::Milliseconds(120), .count = 3},
@@ -328,8 +353,12 @@ TEST_P(AudioDestinationTest, GlitchAndDelay) {
   // delay.
   const int priming_frames = RoundUpToRenderQuantum(requested_frames);
 #endif
-  base::TimeDelta priming_delay = audio_utilities::FramesToTime(
-      priming_frames, Platform::Current()->AudioHardwareSampleRate());
+  const double hardware_sample_rate =
+      Platform::Current()->AudioHardwareSampleRate();
+  const auto priming_delay = media::AudioTimestampHelper::FramesToTime(
+      priming_frames, hardware_sample_rate);
+  const auto buffer_duration = media::AudioTimestampHelper::FramesToTime(
+      requested_frames, hardware_sample_rate);
 
   auto audio_bus = media::AudioBus::Create(kDefaultHardwareOutputChannelNumber,
                                            requested_frames);
@@ -337,19 +366,30 @@ TEST_P(AudioDestinationTest, GlitchAndDelay) {
   audio_destination->Start();
 
   for (int i = 0; i < kRenderCount; ++i) {
+    callback_.latencies_.clear();
     audio_destination->Render(delays[i], base::TimeTicks::Now(), glitches[i],
                               audio_bus.get());
 
     EXPECT_EQ(callback_.glitch_accumulator_.GetAndReset(), glitches[i]);
 
-    if (audio_destination->SampleRate() !=
-        Platform::Current()->AudioHardwareSampleRate()) {
-      // Resampler kernel adds a bit of a delay.
-      EXPECT_GE(callback_.last_latency_, delays[i] + priming_delay);
-      EXPECT_LE(callback_.last_latency_,
-                delays[i] + base::Milliseconds(1) + priming_delay);
+    ASSERT_FALSE(callback_.latencies_.empty());
+    if (audio_destination->SampleRate() != hardware_sample_rate) {
+      // The resampler can pull during any quantum in the callback buffer, and
+      // its kernel adds a bit of delay.
+      for (const auto latency : callback_.latencies_) {
+        EXPECT_GE(latency, delays[i] + priming_delay);
+        EXPECT_LE(latency, delays[i] + priming_delay + buffer_duration +
+                               base::Milliseconds(1));
+      }
     } else {
-      EXPECT_EQ(callback_.last_latency_, delays[i] + priming_delay);
+      ASSERT_EQ(callback_.latencies_.size(),
+                static_cast<size_t>(requested_frames / kWebAudioRenderQuantum));
+      for (size_t q = 0; q < callback_.latencies_.size(); ++q) {
+        const auto quantum_offset = media::AudioTimestampHelper::FramesToTime(
+            q * kWebAudioRenderQuantum, hardware_sample_rate);
+        EXPECT_EQ(callback_.latencies_[q],
+                  delays[i] + priming_delay + quantum_offset);
+      }
     }
   }
 
@@ -678,6 +718,97 @@ TEST_F(AudioDestinationTest,
   // Clean up.
   audio_destination->Stop();
 }
+
+TEST_F(AudioDestinationTest, DestructOnMainThread) {
+  base::test::TaskEnvironment task_environment;
+  ScopedTestingPlatformSupport<TestPlatform> platform;
+  platform->CreateMockWebAudioDevice(kDefaultHardwareSampleRate,
+                                     kDefaultHardwareBufferSize);
+
+  base::RunLoop run_loop;
+
+  // We expect the mock device (and thus AudioDestination) to be destroyed
+  // on the main thread.
+  platform->web_audio_device().ExpectDestructionOnThread(
+      base::PlatformThread::CurrentId());
+  platform->web_audio_device().SetQuitClosure(run_loop.QuitClosure());
+
+  scoped_refptr<AudioDestination> audio_destination = CreateAudioDestination(
+      44100, WebAudioLatencyHint(WebAudioLatencyHint::kCategoryInteractive));
+
+  std::unique_ptr<NonMainThread> background_thread =
+      NonMainThread::CreateThread(
+          ThreadCreationParams(ThreadType::kTestThread));
+
+  base::WaitableEvent release_done;
+
+  // Post a task to background thread to hold a reference.
+  background_thread->GetTaskRunner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](scoped_refptr<AudioDestination> destination,
+             base::WaitableEvent* event) {
+            // Keep the reference until main thread releases its reference.
+            // We use the event to coordinate.
+            event->Wait();
+            // destination goes out of scope here, releasing the last reference
+            // on the background thread.
+          },
+          audio_destination, &release_done));
+
+  // Release the main thread reference.
+  audio_destination = nullptr;
+
+  // Signal the background thread to release its reference.
+  release_done.Signal();
+
+  // Wait for the background thread to finish task execution.
+  // This ensures the release has happened.
+  background_thread.reset();
+
+  // Run the loop. It will be quit when MockWebAudioDevice is destroyed on the
+  // main thread.
+  run_loop.Run();
+}
+
+class AudioDestinationSmallRenderQuantumTest
+    : public ::testing::TestWithParam<unsigned> {};
+
+TEST_P(AudioDestinationSmallRenderQuantumTest, Resampling) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kWebAudioRemoveAudioDestinationResampler);
+  ScopedTestingPlatformSupport<TestPlatform> platform;
+  platform->CreateMockWebAudioDevice(kDefaultHardwareSampleRate,
+                                     kDefaultHardwareBufferSize);
+  EXPECT_CALL(platform->web_audio_device(), Start).Times(1);
+  EXPECT_CALL(platform->web_audio_device(), Stop).Times(1);
+
+  WebAudioSinkDescriptor sink_descriptor(WebString(""), kFrameToken);
+  const int channel_count = Platform::Current()->AudioHardwareOutputChannels();
+
+  AudioCallback callback;
+  const unsigned quantum = GetParam();
+  scoped_refptr<AudioDestination> destination = AudioDestination::Create(
+      callback, sink_descriptor, channel_count,
+      // Pick an unusual context sample rate to force resampling regardless of
+      // platform-default hardware sample rate.
+      WebAudioLatencyHint(WebAudioLatencyHint::kCategoryInteractive), 40000.0f,
+      quantum);
+  ASSERT_NE(destination, nullptr);
+  EXPECT_NE(destination->GetResamplerForTesting(), nullptr);
+
+  destination->Start();
+  auto audio_bus =
+      media::AudioBus::Create(channel_count, destination->FramesPerBuffer());
+  destination->Render(base::TimeDelta::Min(), base::TimeTicks::Now(), {},
+                      audio_bus.get());
+  destination->Stop();
+}
+
+INSTANTIATE_TEST_SUITE_P(AudioDestinationSmallRenderQuantumTest,
+                         AudioDestinationSmallRenderQuantumTest,
+                         ::testing::Values(1u, 16u, 32u, 48u, 64u));
 
 }  // namespace
 

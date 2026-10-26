@@ -12,6 +12,7 @@
 
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,6 +23,7 @@
 #include "components/autofill/core/common/autofill_regex_constants.h"
 #include "components/autofill/core/common/autofill_regexes.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
+#include "components/autofill/core/common/credit_card_number_validation.h"
 
 namespace autofill {
 
@@ -136,8 +138,7 @@ bool IsValidZip(std::u16string_view text,
 }
 
 bool IsSSN(std::u16string_view text) {
-  std::u16string number_string;
-  base::RemoveChars(text, u"- ", &number_string);
+  std::u16string number_string = StripSeparatorsAndNormalizeDigits(text);
 
   // A SSN is of the form AAA-GG-SSSS (A = area number, G = group number, S =
   // serial number). The validation we do here is simply checking if the area,
@@ -207,12 +208,6 @@ bool IsUPIVirtualPaymentAddress(std::u16string_view value) {
   return MatchesRegex<kUPIVirtualPaymentAddressRe>(value);
 }
 
-bool IsInternationalBankAccountNumber(std::u16string_view value) {
-  std::u16string no_spaces;
-  base::RemoveChars(value, u" ", &no_spaces);
-  return MatchesRegex<kInternationalBankAccountNumberValueRe>(no_spaces);
-}
-
 bool IsAchRoutingTransitNumber(std::u16string_view value) {
   // For a 9-digit Routing Transit Number, multiply the first eight digits by
   // [3,7,1,3,7,1,3,7], and total the results. The remaining ninth digit is the
@@ -257,13 +252,8 @@ bool IsPlausible4DigitExpirationYear(std::u16string_view value) {
 }
 
 bool IsValidNameOnCard(std::u16string_view name) {
-  static constexpr size_t kMaxNameOnCardLength = 26;
   static constexpr char16_t kInvalidNameCharacters[] =
       u"[0-9@#$^*()\\[\\]<>{}=?\"“”|•]";
-
-  if (name.length() > kMaxNameOnCardLength) {
-    return false;
-  }
 
   return !MatchesRegex<kInvalidNameCharacters>(name);
 }

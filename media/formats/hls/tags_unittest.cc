@@ -1533,6 +1533,12 @@ TEST(HlsTagsTest, ParseInfTag) {
   ErrorTest<InfTag>("asdf,",
                     ParseStatusCode::kFailedToParseDecimalFloatingPoint);
 
+  result = OkTest<InfTag>("0,");
+  EXPECT_EQ(result.tag.duration, base::Seconds(0));
+
+  result = OkTest<InfTag>("0.0,");
+  EXPECT_EQ(result.tag.duration, base::Seconds(0));
+
   // Test max value
   result = OkTest<InfTag>(base::NumberToString(MaxSeconds()) + ",\t");
   EXPECT_TRUE(RoughlyEqual(result.tag.duration, base::Seconds(MaxSeconds())));

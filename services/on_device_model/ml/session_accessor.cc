@@ -18,6 +18,7 @@
 #include "services/on_device_model/ml/chrome_ml.h"
 #include "services/on_device_model/ml/chrome_ml_types.h"
 #include "services/on_device_model/ml/constraint_factory.h"
+#include "services/on_device_model/public/cpp/features.h"
 
 namespace ml {
 
@@ -66,6 +67,17 @@ std::optional<ml::InputPiece> ConvertMojomInputPieceToMlInputPiece(
       if (!base::JSONWriter::Write(input->input_schema,
                                    &output.input_schema_json)) {
         LOG(WARNING) << "Failed to serialize tool declaration input_schema.";
+        return std::nullopt;
+      }
+      return output;
+    }
+    case odmm::InputPiece::Tag::kToolCall: {
+      auto& input = piece->get_tool_call();
+      ml::ToolCall output;
+      output.call_id = std::move(input->call_id);
+      output.name = std::move(input->name);
+      if (!base::JSONWriter::Write(input->arguments, &output.arguments_json)) {
+        LOG(WARNING) << "Failed to serialize tool call arguments.";
         return std::nullopt;
       }
       return output;
@@ -174,9 +186,11 @@ SessionAccessor::Ptr SessionAccessor::Create(
     ChromeMLModel model,
     on_device_model::mojom::SessionParamsPtr params,
     on_device_model::mojom::LoadAdaptationParamsPtr adaptation_params,
-    std::optional<uint32_t> adaptation_id) {
-  Ptr handle(new SessionAccessor(chrome_ml, task_runner, model),
-             base::OnTaskRunnerDeleter(task_runner));
+    std::optional<uint32_t> adaptation_id,
+    ChromeMLModel postprocessor_model) {
+  Ptr handle(
+      new SessionAccessor(chrome_ml, task_runner, model, postprocessor_model),
+      base::OnTaskRunnerDeleter(task_runner));
   // SessionAccessor is deleted on `task_runner_` so base::Unretained is safe.
   task_runner->PostTask(
       FROM_HERE,
@@ -197,14 +211,17 @@ SessionAccessor::~SessionAccessor() {
 SessionAccessor::SessionAccessor(
     const ChromeML& chrome_ml,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
-    ChromeMLModel model)
+    ChromeMLModel model,
+    ChromeMLModel postprocessor_model)
     : chrome_ml_(chrome_ml),
       task_runner_(std::move(task_runner)),
-      model_(model) {}
+      model_(model),
+      postprocessor_model_(postprocessor_model) {}
 
 SessionAccessor::Ptr SessionAccessor::Clone() {
   TRACE_EVENT("optimization_guide", "SessionAccessor::Clone");
-  Ptr handle(new SessionAccessor(chrome_ml_.get(), task_runner_, model_),
+  Ptr handle(new SessionAccessor(chrome_ml_.get(), task_runner_, model_,
+                                 postprocessor_model_),
              base::OnTaskRunnerDeleter(task_runner_));
   // SessionAccessor is deleted on `task_runner_` so base::Unretained is safe.
   task_runner_->PostTask(
@@ -349,11 +366,15 @@ void SessionAccessor::CreateInternal(
           on_device_model::CapabilityFlags::kImageInput),
       .enable_audio_input = params->capabilities.Has(
           on_device_model::CapabilityFlags::kAudioInput),
+      .allow_speculative_decoding = base::FeatureList::IsEnabled(
+          on_device_model::features::kOnDeviceModelSpeculativeDecoding),
   };
   VLOG(1) << __func__ << " starting session with: "
           << "max_tokens=" << descriptor.max_tokens << ", "
           << "top_k=" << descriptor.top_k << ", "
           << "temperature=" << descriptor.temperature << ", "
+          << "allow_speculative_decoding="
+          << descriptor.allow_speculative_decoding << ", "
           << "enable_image_input=" << descriptor.enable_image_input << ", "
           << "enable_audio_input=" << descriptor.enable_audio_input;
   ChromeMLModelData data;
@@ -448,6 +469,8 @@ void SessionAccessor::GenerateInternal(
       .max_output_tokens = generate_options->max_output_tokens,
       .constraint = constraint,
       .output_fn = &output_fn,
+      .enable_thinking = generate_options->enable_thinking,
+      .thinking_token_budget = generate_options->thinking_token_budget,
   };
   chrome_ml_->SessionGenerate(session_, &options, canceler->get());
 }
@@ -510,7 +533,16 @@ std::optional<odmm::AsrError> SessionAccessor::CreateAsrStreamInternal(
   ChromeMLASRStreamOptions options{
       .sample_rate_hz = asr_options->sample_rate_hz,
       .output_fn = &output_fn,
+      .decoder_prefill_backoff = -1,
+      .language =
+          asr_options->language ? asr_options->language->c_str() : nullptr,
+      .polisher_model = postprocessor_model_,
   };
+  if (base::FeatureList::IsEnabled(
+          on_device_model::features::kOnDeviceModelAsrDecoderPrefill)) {
+    options.decoder_prefill_backoff =
+        on_device_model::features::kOnDeviceModelAsrDecoderPrefillBackoff.Get();
+  }
   asr_stream_ = chrome_ml_->ASRCreateStream(session_, &options);
   if (asr_stream_ == 0) {
     return odmm::AsrError::kInitializationFailed;
@@ -522,7 +554,9 @@ void SessionAccessor::AsrAddAudioChunkInternal(odmm::AudioDataPtr data) {
   TRACE_EVENT("optimization_guide.debug",
               "SessionAccessor::AsrAddAudioChunkInternal");
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  CHECK_NE(asr_stream_, 0u) << "ASR stream must be created first.";
+  if (asr_stream_ == 0) {
+    return;
+  }
   ml::AudioBuffer audio;
   audio.sample_rate_hz = data->sample_rate;
   audio.num_channels = data->channel_count;

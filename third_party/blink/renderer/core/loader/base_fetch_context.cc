@@ -83,19 +83,19 @@ BaseFetchContext::CanRequestBasedOnSubresourceFilterOnly(
   return std::nullopt;
 }
 
-std::optional<AdProvenance> BaseFetchContext::CalculateIfAdSubresource(
+ResourceAnnotations BaseFetchContext::CalculateResourceAnnotations(
     const ResourceRequestHead& request,
     base::optional_ref<const KURL> alias_url,
     ResourceType type,
     const FetchInitiatorInfo& initiator_info,
-    bool scan_stack_for_ads) {
+    bool scan_javascript_stack) {
   // A derived class should override this if they have more signals than just
   // the SubresourceFilter.
 
   // 1. Check if the request is already flagged as an ad.
   if (const std::optional<AdProvenance>& ad_provenance =
           request.GetAdProvenance()) {
-    return ad_provenance;
+    return ResourceAnnotations{ad_provenance};
   }
 
   // 2. Check the SubresourceFilter.
@@ -110,10 +110,10 @@ std::optional<AdProvenance> BaseFetchContext::CalculateIfAdSubresource(
 
   if (filter &&
       filter->IsAdResource(url, request.GetRequestDestination(), out_rule)) {
-    return std::move(rule);
+    return ResourceAnnotations{std::move(rule)};
   }
 
-  return std::nullopt;
+  return {};
 }
 
 void BaseFetchContext::PrintAccessDeniedMessage(const KURL& url) const {
@@ -188,7 +188,7 @@ BaseFetchContext::CheckCSPForRequestInternal(
   }
 
   ContentSecurityPolicy* csp =
-      GetContentSecurityPolicyForWorld(options.world_for_csp.Get());
+      GetContentSecurityPolicyForWorld(options.WorldForCsp());
 
   if (csp &&
       !csp->AllowRequest(request_context, request_destination, request_mode,
@@ -289,8 +289,8 @@ BaseFetchContext::CanRequestInternal(
         resource_request.GetKeepalive() || redirect_info.has_value());
 
   if (!IntegrityPolicy::AllowRequest(
-          GetExecutionContext(), options.world_for_csp.Get(),
-          request_destination, request_mode, options.integrity_metadata, url)) {
+          GetExecutionContext(), options.WorldForCsp(), request_destination,
+          request_mode, options.integrity_metadata, url)) {
     return ResourceRequestBlockedReason::kIntegrity;
   }
 

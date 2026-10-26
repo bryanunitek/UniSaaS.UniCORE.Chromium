@@ -13,6 +13,10 @@
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
+namespace content {
+class BrowserContext;
+}
+
 namespace extensions {
 
 class ChromeComponentExtensionResourceManager
@@ -32,7 +36,8 @@ class ChromeComponentExtensionResourceManager
                                     const base::FilePath& resource_path,
                                     int* resource_id) const override;
   const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
-      const ExtensionId& extension_id) const override;
+      const ExtensionId& extension_id,
+      content::BrowserContext* context) const override;
 
  private:
   class Data;

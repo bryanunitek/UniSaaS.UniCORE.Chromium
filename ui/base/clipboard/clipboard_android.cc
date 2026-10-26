@@ -16,7 +16,6 @@
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/base64.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted_memory.h"
@@ -43,7 +42,6 @@
 #include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/clipboard_jni_headers/Clipboard_jni.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
@@ -425,7 +423,13 @@ void ClipboardMap::CommitToAndroidClipboard(GURL data_source) {
     }
 
     if (!text_data.empty()) {
-      Java_Clipboard_setClipboardText(env, clipboard_manager_, text_data);
+      if (!Java_Clipboard_setClipboardText(env, clipboard_manager_,
+                                           text_data)) {
+        map_.clear();
+        map_state_ = MapState::kOutOfDate;
+        ClearLastModifiedTime();
+        return;
+      }
     } else {
       Java_Clipboard_clear(env, clipboard_manager_);
       NOTIMPLEMENTED();
@@ -602,9 +606,7 @@ void ClipboardAndroid::OnPrimaryClipTimestampInvalidated(
     // sequence number, last modified time and notify the ClipboardMonitor if
     // monitoring external clipboard changes.
     GetClipboardMap().OnPrimaryClipTimestampInvalidated(timestamp);
-    if (base::FeatureList::IsEnabled(features::kPlatformClipboardMonitor)) {
-      ClipboardMonitor::GetInstance()->NotifyClipboardDataChanged();
-    }
+    ClipboardMonitor::GetInstance()->NotifyClipboardDataChanged();
   }
 }
 

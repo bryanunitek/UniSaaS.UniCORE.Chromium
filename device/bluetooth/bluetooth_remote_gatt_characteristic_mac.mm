@@ -4,14 +4,17 @@
 
 #include "device/bluetooth/bluetooth_remote_gatt_characteristic_mac.h"
 
+#include "base/apple/foundation_util.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/notimplemented.h"
+#include "base/strings/strcat.h"
 #include "base/strings/sys_string_conversions.h"
 #import "base/task/single_thread_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/unguessable_token.h"
 #include "device/bluetooth/bluetooth_device_mac.h"
 #include "device/bluetooth/bluetooth_gatt_notify_session.h"
 #include "device/bluetooth/bluetooth_low_energy_adapter_apple.h"
@@ -80,9 +83,8 @@ BluetoothRemoteGattCharacteristicMac::BluetoothRemoteGattCharacteristicMac(
       weak_ptr_factory_(this) {
   uuid_ = BluetoothLowEnergyAdapterApple::BluetoothUUIDWithCBUUID(
       [cb_characteristic_ UUID]);
-  identifier_ = base::SysNSStringToUTF8(
-      [NSString stringWithFormat:@"%s-%p", uuid_.canonical_value().c_str(),
-                                 cb_characteristic_]);
+  identifier_ = base::StrCat({uuid_.canonical_value(), "-",
+                              base::UnguessableToken::Create().ToString()});
 }
 
 BluetoothRemoteGattCharacteristicMac::~BluetoothRemoteGattCharacteristicMac() {
@@ -308,8 +310,8 @@ void BluetoothRemoteGattCharacteristicMac::DidUpdateValue(NSError* error) {
 
 void BluetoothRemoteGattCharacteristicMac::UpdateValue() {
   NSData* nsdata_value = [cb_characteristic_ value];
-  const uint8_t* buffer = static_cast<const uint8_t*>(nsdata_value.bytes);
-  value_.assign(buffer, UNSAFE_TODO(buffer + nsdata_value.length));
+  auto span = base::apple::NSDataToSpan(nsdata_value);
+  value_.assign(span.begin(), span.end());
 }
 
 void BluetoothRemoteGattCharacteristicMac::DidWriteValue(NSError* error) {
@@ -483,9 +485,7 @@ DEVICE_BLUETOOTH_EXPORT std::ostream& operator<<(
       static_cast<const BluetoothRemoteGattServiceMac*>(
           characteristic.GetService());
   return out << "<BluetoothRemoteGattCharacteristicMac "
-             << characteristic.GetUUID().canonical_value() << "/"
-             << &characteristic
-             << ", service: " << service_mac->GetUUID().canonical_value() << "/"
-             << service_mac << ">";
+             << characteristic.GetIdentifier()
+             << ", service: " << service_mac->GetIdentifier() << ">";
 }
 }  // namespace device.

@@ -13,6 +13,7 @@
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/sync/cross_device_theme_tracker_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/trusted_vault/trusted_vault_service_factory.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -28,9 +29,12 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
 #include "components/sync/service/sync_service_impl.h"
+#include "components/themes/cross_device/cross_device_theme_tracker.h"
+#include "components/themes/cross_device/features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/webui/buildflags.h"
 
 #if BUILDFLAG(ENABLE_SPELLCHECK)
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
@@ -136,14 +140,26 @@ class SyncServiceFactoryTest : public testing::Test {
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
+    datatypes.Put(syncer::WEB_APPS);
+#if BUILDFLAG(IS_CHROMEOS)
     datatypes.Put(syncer::APPS);
     datatypes.Put(syncer::APP_SETTINGS);
-    datatypes.Put(syncer::WEB_APPS);
+#else
+    if (!base::FeatureList::IsEnabled(
+            syncer::kSyncDoNotSyncAppsAndAppSettings)) {
+      datatypes.Put(syncer::APPS);
+      datatypes.Put(syncer::APP_SETTINGS);
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(themes::kCrossDeviceThemeTracker)) {
+      datatypes.Put(syncer::THEMES);
+    }
+#else
     datatypes.Put(syncer::THEMES);
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
     if (base::FeatureList::IsEnabled(syncer::kSyncSearchEnginesAndroidLFF)) {
@@ -187,7 +203,6 @@ class SyncServiceFactoryTest : public testing::Test {
     datatypes.Put(syncer::AUTOFILL_WALLET_CREDENTIAL);
     datatypes.Put(syncer::AUTOFILL_WALLET_DATA);
     datatypes.Put(syncer::AUTOFILL_WALLET_METADATA);
-    datatypes.Put(syncer::AUTOFILL_WALLET_OFFER);
     datatypes.Put(syncer::AUTOFILL_WALLET_USAGE);
     datatypes.Put(syncer::BOOKMARKS);
     datatypes.Put(syncer::CONTACT_INFO);
@@ -208,23 +223,11 @@ class SyncServiceFactoryTest : public testing::Test {
             data_sharing::features::kDataSharingFeature)) {
       datatypes.Put(syncer::COLLABORATION_GROUP);
       datatypes.Put(syncer::SHARED_TAB_GROUP_DATA);
-      if (base::FeatureList::IsEnabled(
-              syncer::kSyncSharedTabGroupAccountData)) {
-        datatypes.Put(syncer::SHARED_TAB_GROUP_ACCOUNT_DATA);
-      }
+      datatypes.Put(syncer::SHARED_TAB_GROUP_ACCOUNT_DATA);
       if (base::FeatureList::IsEnabled(syncer::kSyncSharedComment)) {
         datatypes.Put(syncer::SHARED_COMMENT);
       }
     }
-#if BUILDFLAG(IS_ANDROID)
-    if (base::FeatureList::IsEnabled(syncer::kWebApkBackupAndRestoreBackend)) {
-      datatypes.Put(syncer::WEB_APKS);
-    }
-#endif  // BUILDFLAG(IS_ANDROID)
-
-    // syncer::PLUS_ADDRESS and syncer::PLUS_ADDRESS_SETTING are excluded
-    // because GoogleGroupsManagerFactory is null for testing and hence no
-    // controller gets instantiated for the type.
 
     datatypes.Put(syncer::AUTOFILL_VALUABLE);
 
@@ -255,17 +258,36 @@ class SyncServiceFactoryTest : public testing::Test {
     if (base::FeatureList::IsEnabled(
             syncer::kSyncEncryptedTabContextContainer)) {
       datatypes.Put(syncer::ENCRYPTED_TAB_CONTEXT_CONTAINER);
+      datatypes.Put(syncer::ENCRYPTED_TAB_CONTEXT_ITEM);
     }
 
-    if (base::FeatureList::IsEnabled(syncer::kSyncThemesIos)) {
+    if (base::FeatureList::IsEnabled(themes::kCrossDeviceThemeTracker)) {
       datatypes.Put(syncer::THEMES_IOS);
     }
 
-
+#if !BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(themes::kCrossDeviceThemeTracker)) {
+      datatypes.Put(syncer::THEMES_ANDROID);
+    }
+#elif !BUILDFLAG(ENABLE_WEBUI_NTP)
     if (base::FeatureList::IsEnabled(
             syncer::kNewTabPageCustomizationThemeSync)) {
       datatypes.Put(syncer::THEMES_ANDROID);
     }
+#endif
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncNotebook)) {
+      datatypes.Put(syncer::NOTEBOOK);
+    }
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncJourney)) {
+      datatypes.Put(syncer::JOURNEY);
+    }
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncAutofillEntitySuppression)) {
+      datatypes.Put(syncer::AUTOFILL_ENTITY_SUPPRESSION);
+    }
+
     return datatypes;
   }
 
@@ -315,12 +337,97 @@ TEST_F(SyncServiceFactoryTest, CreateSyncServiceImplDefault) {
   }
 }
 
-class SyncServiceFactoryTestWithCrossDeviceThemeFeatures
+class SyncServiceFactoryWithNtpThemeCustomizationSyncTest
     : public SyncServiceFactoryTest {
  public:
-  SyncServiceFactoryTestWithCrossDeviceThemeFeatures() {
+  SyncServiceFactoryWithNtpThemeCustomizationSyncTest() {
     feature_list_.InitWithFeatures(
-        /*enabled_features=*/{syncer::kSyncThemesIos,
+        /*enabled_features=*/{syncer::kNewTabPageCustomizationThemeSync},
+        /*disabled_features=*/{themes::kCrossDeviceThemeTracker});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Verifies that enabling kNewTabPageCustomizationThemeSync alone only activates
+// continuous 2-way sync for Android's own NTP customizations (THEMES_ANDROID on
+// Android via NtpAndroidCustomBackgroundService) and does not activate
+// CrossDeviceThemeTracker controllers.
+TEST_F(SyncServiceFactoryWithNtpThemeCustomizationSyncTest,
+       ContinuousNtpThemeSyncOnly) {
+  syncer::SyncServiceImpl* sync_service =
+      SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(profile());
+  syncer::DataTypeSet types = sync_service->GetRegisteredDataTypesForTest();
+
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, THEMES_ANDROID is registered for continuous NTP sync (except
+  // on Desktop Android where NTP theme sync is temporarily disabled).
+#if !BUILDFLAG(ENABLE_WEBUI_NTP)
+  EXPECT_TRUE(types.Has(syncer::THEMES_ANDROID));
+#else
+  EXPECT_FALSE(types.Has(syncer::THEMES_ANDROID));
+#endif
+  // CrossDeviceThemeTracker controllers are disabled.
+  EXPECT_FALSE(types.Has(syncer::THEMES));
+  EXPECT_FALSE(types.Has(syncer::THEMES_IOS));
+#else
+  // On Desktop, THEMES is registered natively via ThemeService.
+  EXPECT_TRUE(types.Has(syncer::THEMES));
+  // CrossDeviceThemeTracker controllers (THEMES_ANDROID, THEMES_IOS) are
+  // disabled.
+  EXPECT_FALSE(types.Has(syncer::THEMES_ANDROID));
+  EXPECT_FALSE(types.Has(syncer::THEMES_IOS));
+#endif
+
+  EXPECT_EQ(nullptr, CrossDeviceThemeTrackerFactory::GetForProfile(profile()));
+}
+
+class SyncServiceFactoryWithCrossDeviceThemeTrackerFlagTest
+    : public SyncServiceFactoryTest {
+ public:
+  SyncServiceFactoryWithCrossDeviceThemeTrackerFlagTest() {
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/{themes::kCrossDeviceThemeTracker},
+        /*disabled_features=*/{syncer::kNewTabPageCustomizationThemeSync});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Verifies that enabling kCrossDeviceThemeTracker alone activates remote theme
+// controllers across platforms for Synced Set Up without activating continuous
+// 2-way NTP background sync on Android.
+TEST_F(SyncServiceFactoryWithCrossDeviceThemeTrackerFlagTest,
+       RegistersCrossDeviceThemeDataTypes) {
+  syncer::SyncServiceImpl* sync_service =
+      SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(profile());
+  syncer::DataTypeSet types = sync_service->GetRegisteredDataTypesForTest();
+
+  EXPECT_TRUE(types.Has(syncer::THEMES_IOS));
+  EXPECT_TRUE(types.Has(syncer::THEMES));
+
+#if BUILDFLAG(IS_ANDROID)
+  // THEMES_ANDROID is owned by NtpAndroidCustomBackgroundService (guarded by
+  // kNewTabPageCustomizationThemeSync) and remains unregistered.
+  EXPECT_FALSE(types.Has(syncer::THEMES_ANDROID));
+#else
+  // On Desktop, CrossDeviceThemeTracker registers THEMES_ANDROID.
+  EXPECT_TRUE(types.Has(syncer::THEMES_ANDROID));
+#endif
+
+  auto* tracker = CrossDeviceThemeTrackerFactory::GetForProfile(profile());
+  ASSERT_NE(nullptr, tracker);
+  EXPECT_EQ(themes::ServiceStatus::kInitializing, tracker->GetServiceStatus());
+}
+
+class SyncServiceFactoryWithBothThemeFeaturesTest
+    : public SyncServiceFactoryTest {
+ public:
+  SyncServiceFactoryWithBothThemeFeaturesTest() {
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/{themes::kCrossDeviceThemeTracker,
                               syncer::kNewTabPageCustomizationThemeSync},
         /*disabled_features=*/{});
   }
@@ -329,17 +436,50 @@ class SyncServiceFactoryTestWithCrossDeviceThemeFeatures
   base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_F(SyncServiceFactoryTestWithCrossDeviceThemeFeatures,
-       CreateSyncServiceImpl) {
+// Verifies that enabling both flags activates all continuous and cross-device
+// theme controllers.
+TEST_F(SyncServiceFactoryWithBothThemeFeaturesTest,
+       RegistersAllThemeDataTypes) {
   syncer::SyncServiceImpl* sync_service =
       SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(profile());
   syncer::DataTypeSet types = sync_service->GetRegisteredDataTypesForTest();
 
-#if !BUILDFLAG(IS_ANDROID)
   EXPECT_TRUE(types.Has(syncer::THEMES_IOS));
+  EXPECT_TRUE(types.Has(syncer::THEMES));
+#if !BUILDFLAG(IS_ANDROID) || !BUILDFLAG(ENABLE_WEBUI_NTP)
   EXPECT_TRUE(types.Has(syncer::THEMES_ANDROID));
 #else
-  EXPECT_FALSE(types.Has(syncer::THEMES_IOS));
   EXPECT_FALSE(types.Has(syncer::THEMES_ANDROID));
 #endif
+
+  auto* tracker = CrossDeviceThemeTrackerFactory::GetForProfile(profile());
+  ASSERT_NE(nullptr, tracker);
+  EXPECT_EQ(themes::ServiceStatus::kInitializing, tracker->GetServiceStatus());
 }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS) && !BUILDFLAG(IS_CHROMEOS)
+class SyncServiceFactoryTestWithoutAppsAndAppSettings
+    : public SyncServiceFactoryTest {
+ public:
+  SyncServiceFactoryTestWithoutAppsAndAppSettings() {
+    feature_list_.InitAndEnableFeature(
+        syncer::kSyncDoNotSyncAppsAndAppSettings);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(SyncServiceFactoryTestWithoutAppsAndAppSettings,
+       AppsAndAppSettingsNotRegistered) {
+  syncer::SyncServiceImpl* sync_service =
+      SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(profile());
+  syncer::DataTypeSet types = sync_service->GetRegisteredDataTypesForTest();
+
+  EXPECT_FALSE(types.Has(syncer::APPS));
+  EXPECT_FALSE(types.Has(syncer::APP_SETTINGS));
+
+  // WEB_APPS should still be registered.
+  EXPECT_TRUE(types.Has(syncer::WEB_APPS));
+}
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS) && !BUILDFLAG(IS_CHROMEOS)

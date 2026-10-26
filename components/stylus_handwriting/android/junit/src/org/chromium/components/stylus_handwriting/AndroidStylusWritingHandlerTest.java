@@ -24,6 +24,7 @@ import android.os.Build;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.FrameLayout;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -34,7 +35,9 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.components.stylus_handwriting.test_support.ShadowGlobalSettings;
 import org.chromium.components.stylus_handwriting.test_support.ShadowSecureSettings;
@@ -46,7 +49,6 @@ import java.util.List;
 /** Unit tests for {@link AndroidStylusWritingHandler}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
-        manifest = Config.NONE,
         sdk = Build.VERSION_CODES.TIRAMISU,
         shadows = {ShadowGlobalSettings.class, ShadowSecureSettings.class})
 public class AndroidStylusWritingHandlerTest {
@@ -79,6 +81,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsDisabled_withFeatureDisabled() {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(true);
         ShadowGlobalSettings.setHandwritingEnabled(false);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertFalse(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -88,6 +93,9 @@ public class AndroidStylusWritingHandlerTest {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(true);
         ShadowGlobalSettings.setHandwritingEnabled(false);
         ShadowSecureSettings.setHandwritingEnabled(true);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertTrue(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -95,6 +103,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsDisabled_noKeyboard() {
         ShadowGlobalSettings.setHandwritingEnabled(true);
         when(mInputMethodManager.getInputMethodList()).thenReturn(List.of());
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertFalse(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -102,6 +113,9 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsDisabled_noKeyboardSupport() {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(false);
         ShadowGlobalSettings.setHandwritingEnabled(true);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertFalse(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
@@ -109,13 +123,16 @@ public class AndroidStylusWritingHandlerTest {
     public void handlerIsEnabled_withFeatureEnabledAndKeyboardSupport() {
         when(mInputMethodInfo.supportsStylusHandwriting()).thenReturn(true);
         ShadowGlobalSettings.setHandwritingEnabled(true);
+        StylusWritingSettingsState.getInstance().updateAndNotify();
+        RobolectricUtil.runAllBackgroundAndUi();
+
         assertTrue(AndroidStylusWritingHandler.isEnabled(mContext));
     }
 
     @Test
     public void webContentsChanged_StylusWritingHandlerIsSet() {
         WebContents webContents = mock(WebContents.class);
-        ViewGroup containerView = mock(ViewGroup.class);
+        ViewGroup containerView = new FrameLayout(ContextUtils.getApplicationContext());
         ViewAndroidDelegate viewAndroidDelegate =
                 ViewAndroidDelegate.createBasicDelegate(containerView);
         when(webContents.getViewAndroidDelegate()).thenReturn(viewAndroidDelegate);
@@ -127,14 +144,15 @@ public class AndroidStylusWritingHandlerTest {
     @Test
     public void testAutoHandwritingIsDisabled() {
         WebContents webContents = mock(WebContents.class);
-        ViewGroup containerView = mock(ViewGroup.class);
+        ViewGroup containerView = new FrameLayout(ContextUtils.getApplicationContext());
+        containerView.setAutoHandwritingEnabled(true);
         ViewAndroidDelegate viewAndroidDelegate =
                 ViewAndroidDelegate.createBasicDelegate(containerView);
         when(webContents.getViewAndroidDelegate()).thenReturn(viewAndroidDelegate);
 
         mHandler.onWebContentsChanged(mContext, webContents);
         // Ensure we notify Android that we handle our own handwriting.
-        verify(containerView).setAutoHandwritingEnabled(false);
+        assertFalse(containerView.isAutoHandwritingEnabled());
     }
 
     @Test
@@ -148,7 +166,7 @@ public class AndroidStylusWritingHandlerTest {
      */
     @Test
     public void testStartStylusHandwriting() {
-        ViewGroup containerView = mock(ViewGroup.class);
+        ViewGroup containerView = new FrameLayout(ContextUtils.getApplicationContext());
         Rect boundsInPix = new Rect(20, 20, 80, 80);
         Point cursorPositionInPix = new Point(40, 40);
         mHandler.onEditElementFocusedForStylusWriting(
@@ -158,7 +176,7 @@ public class AndroidStylusWritingHandlerTest {
 
     @Test
     public void testStylusHandwritingLogsApiOption() {
-        ViewGroup containerView = mock(ViewGroup.class);
+        ViewGroup containerView = new FrameLayout(ContextUtils.getApplicationContext());
         Rect boundsInPix = new Rect(20, 20, 80, 80);
         Point cursorPositionInPix = new Point(40, 40);
         HistogramWatcher histogramWatcher =

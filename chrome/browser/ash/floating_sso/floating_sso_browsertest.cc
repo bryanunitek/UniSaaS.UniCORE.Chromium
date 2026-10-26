@@ -25,7 +25,6 @@
 #include "chrome/browser/ash/floating_workspace/floating_workspace_util.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/constants/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -248,7 +247,7 @@ class FloatingSsoTest : public policy::PolicyTest {
     return CHECK_DEREF(floating_sso_session_cookies_pref).IsManaged();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   FloatingSsoService& floating_sso_service() {
     return CHECK_DEREF(FloatingSsoServiceFactory::GetForProfile(profile()));

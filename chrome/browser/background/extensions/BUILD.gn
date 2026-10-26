@@ -56,16 +56,16 @@ source_set("impl") {
     "//base",
     "//chrome/app/theme:chrome_unscaled_resources_grit",
     "//chrome/browser:browser_process",
-    "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/background",
     "//chrome/browser/extensions",
     "//chrome/browser/glic",
     "//chrome/browser/lifetime",
     "//chrome/browser/lifetime:termination_notification",
+    "//chrome/browser/policy",
     "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/profiles/keep_alive",
     "//chrome/browser/status_icons",
-    "//chrome/browser/ui",
+    "//chrome/browser/ui:browser_commands",
     "//chrome/browser/ui/dialogs",
     "//chrome/browser/ui/extensions",
     "//chrome/browser/ui/profiles",
@@ -90,7 +90,10 @@ source_set("impl") {
   }
 
   if (is_win) {
-    deps += [ "//chrome/browser/startup" ]
+    deps += [
+      "//chrome/browser/startup",
+      "//chrome/browser/win",
+    ]
   }
 }
 
@@ -109,6 +112,7 @@ source_set("unit_tests") {
     "//chrome/browser/lifetime",
     "//chrome/browser/status_icons",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//components/policy/core/common:test_support",
     "//components/sync_preferences",
     "//content/public/browser",

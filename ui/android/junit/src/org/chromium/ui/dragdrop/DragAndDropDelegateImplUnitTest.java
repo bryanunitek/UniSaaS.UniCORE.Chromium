@@ -7,7 +7,6 @@ package org.chromium.ui.dragdrop;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -27,8 +26,6 @@ import android.view.View.DragShadowBuilder;
 import android.view.View.MeasureSpec;
 import android.widget.ImageView;
 
-import androidx.annotation.Nullable;
-
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -37,23 +34,43 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.Implementation;
+import org.robolectric.annotation.Implements;
+import org.robolectric.shadow.api.Shadow;
 import org.robolectric.shadows.ShadowContentResolver;
+import org.robolectric.shadows.ShadowView;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.dragdrop.DragAndDropDelegateImpl.DragTargetType;
 import org.chromium.url.JUnitTestGURLs;
 
 /** Unit tests for {@link DragAndDropDelegateImpl}. */
 @RunWith(BaseRobolectricTestRunner.class)
+@Config(shadows = DragAndDropDelegateImplUnitTest.ShadowDragView.class)
 public class DragAndDropDelegateImplUnitTest {
+    /**
+     * View#startDragAndDrop() is final (so cannot be overridden in a subclass) and returns false
+     * under Robolectric, so this shadow records the shadow builder and reports success.
+     */
+    @Implements(View.class)
+    public static class ShadowDragView extends ShadowView {
+        private DragShadowBuilder mLastDragShadowBuilder;
+
+        @Implementation
+        protected boolean startDragAndDrop(
+                ClipData data, DragShadowBuilder shadowBuilder, Object myLocalState, int flags) {
+            mLastDragShadowBuilder = shadowBuilder;
+            return true;
+        }
+    }
+
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     /** Using a window size of 1000*600 for the ease of dp / pixel calculation. */
@@ -66,11 +83,11 @@ public class DragAndDropDelegateImplUnitTest {
 
     @Mock private DragAndDropPermissions mDragAndDropPermissions;
     @Mock private DragAndDropBrowserDelegate mDragAndDropBrowserDelegate;
-    @Spy private View mContainerView;
+    private View mContainerView;
 
     private DragAndDropDelegateImpl mDragAndDropDelegateImpl;
     private DropDataProviderImpl mDropDataProviderImpl;
-    private @Nullable DragShadowBuilder mLastDragShadowBuilder;
+    private ShadowDragView mShadowContainerView;
 
     @Before
     public void setup() {
@@ -86,14 +103,8 @@ public class DragAndDropDelegateImplUnitTest {
 
         ShadowContentResolver.registerProviderInternal(
                 DropDataProviderImpl.FULL_AUTH_URI.getAuthority(), provider);
-        mContainerView = Mockito.spy(new View(context));
-        doAnswer(
-                        invocationOnMock -> {
-                            mLastDragShadowBuilder = invocationOnMock.getArgument(1);
-                            return true;
-                        })
-                .when(mContainerView)
-                .startDragAndDrop(any(), any(DragShadowBuilder.class), any(), anyInt());
+        mContainerView = new View(context);
+        mShadowContainerView = Shadow.extract(mContainerView);
         View rootView = mContainerView.getRootView();
         rootView.measure(
                 MeasureSpec.makeMeasureSpec(WINDOW_WIDTH, MeasureSpec.EXACTLY),
@@ -104,8 +115,8 @@ public class DragAndDropDelegateImplUnitTest {
     @After
     public void tearDown() {
         mDropDataProviderImpl.onDragEnd(false);
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(false);
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(false);
     }
 
     @Test
@@ -147,7 +158,6 @@ public class DragAndDropDelegateImplUnitTest {
                 0,
                 mDragAndDropDelegateImpl.getDragShadowHeight());
         assertDragTypeRecorded(DragTargetType.TEXT);
-        assertDragOutsideWebContentHistogramsRecorded(/* dropResult= */ false);
     }
 
     @Test
@@ -168,7 +178,8 @@ public class DragAndDropDelegateImplUnitTest {
                 /* dragObjRectHeight= */ 200);
         Assert.assertFalse(
                 "The DragShadowBuilder should not be AnimatedImageDragShadowBuilder.",
-                mLastDragShadowBuilder instanceof AnimatedImageDragShadowBuilder);
+                mShadowContainerView.mLastDragShadowBuilder
+                        instanceof AnimatedImageDragShadowBuilder);
         // width = scaledShadowSize + padding * 2 = 100 * 0.6 + 1 * 2 = 62
         Assert.assertEquals(
                 "Drag shadow width not match. Should do resize for image and add 1dp border.",
@@ -190,7 +201,6 @@ public class DragAndDropDelegateImplUnitTest {
                 "Cached Image bytes should be cleaned.",
                 mDropDataProviderImpl.getImageBytesForTesting());
         assertDragTypeRecorded(DragTargetType.IMAGE);
-        assertDragOutsideWebContentHistogramsRecorded(/* dropResult= */ false);
     }
 
     @Test
@@ -213,7 +223,8 @@ public class DragAndDropDelegateImplUnitTest {
                 /* dragObjRectHeight= */ 200);
         Assert.assertTrue(
                 "The DragShadowBuilder should be AnimatedImageDragShadowBuilder.",
-                mLastDragShadowBuilder instanceof AnimatedImageDragShadowBuilder);
+                mShadowContainerView.mLastDragShadowBuilder
+                        instanceof AnimatedImageDragShadowBuilder);
         // width = scaledShadowSize + padding * 2 = 100 * 0.6 + 1 * 2 = 62
         Assert.assertEquals(
                 "Drag shadow width not match. Should do resize for image and add 1dp border.",
@@ -235,7 +246,6 @@ public class DragAndDropDelegateImplUnitTest {
                 "Cached Image bytes should be cleaned.",
                 mDropDataProviderImpl.getImageBytesForTesting());
         assertDragTypeRecorded(DragTargetType.IMAGE);
-        assertDragOutsideWebContentHistogramsRecorded(/* dropResult= */ false);
     }
 
     @Test
@@ -278,7 +288,6 @@ public class DragAndDropDelegateImplUnitTest {
                 0,
                 mDragAndDropDelegateImpl.getDragShadowHeight());
         assertDragTypeRecorded(DragTargetType.LINK);
-        assertDragOutsideWebContentHistogramsRecorded(/* dropResult= */ false);
     }
 
     @Test
@@ -299,7 +308,7 @@ public class DragAndDropDelegateImplUnitTest {
                         /* dragObjRectWidth= */ 100,
                         /* dragObjRectHeight= */ 200));
 
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(true);
         Assert.assertFalse(
                 "Drag and drop should not start when isTouchExplorationEnabled=true.",
                 mDragAndDropDelegateImpl.startDragAndDrop(
@@ -312,8 +321,8 @@ public class DragAndDropDelegateImplUnitTest {
                         /* dragObjRectWidth= */ 100,
                         /* dragObjRectHeight= */ 200));
 
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(false);
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
         Assert.assertFalse(
                 "Drag and drop should not start when isPerformGesturesEnabled=true.",
                 mDragAndDropDelegateImpl.startDragAndDrop(
@@ -394,8 +403,9 @@ public class DragAndDropDelegateImplUnitTest {
                 /* dragObjRectWidth= */ 100,
                 /* dragObjRectHeight= */ 200);
 
-        Assert.assertNotNull("LastDragShadowBuilder is null.", mLastDragShadowBuilder);
-        View shadowView = mLastDragShadowBuilder.getView();
+        Assert.assertNotNull(
+                "LastDragShadowBuilder is null.", mShadowContainerView.mLastDragShadowBuilder);
+        View shadowView = mShadowContainerView.mLastDragShadowBuilder.getView();
         Assert.assertTrue(
                 "DrawShadowBuilder should host an ImageView.", shadowView instanceof ImageView);
         Assert.assertTrue(
@@ -427,7 +437,6 @@ public class DragAndDropDelegateImplUnitTest {
                 "Cached Image bytes should not be cleaned, drag is handled.",
                 mDropDataProviderImpl.getImageBytesForTesting());
         assertDragTypeRecorded(DragTargetType.IMAGE);
-        assertDragOutsideWebContentHistogramsRecorded(/* dropResult= */ true);
     }
 
     @Test
@@ -453,7 +462,6 @@ public class DragAndDropDelegateImplUnitTest {
 
         // Drop on the same view does not lead to recording of drag duration.
         assertDragTypeNotRecorded("Drag dropped on the same view.");
-        assertDropInWebContentHistogramsRecorded();
         Assert.assertNotNull(
                 "Cached Image bytes should not be cleaned, drag is handled.",
                 mDropDataProviderImpl.getImageBytesForTesting());
@@ -465,10 +473,6 @@ public class DragAndDropDelegateImplUnitTest {
         mDragAndDropDelegateImpl.onDrag(mContainerView, mockDragEvent(DragEvent.ACTION_DRAG_ENDED));
 
         assertDragTypeNotRecorded("Drag dropped on the same view.");
-        assertHistogramRecorded(
-                "Android.DragDrop.FromWebContent.DropInWebContent.Duration",
-                false,
-                "Only tracking drag started by mDragAndDropDelegateImpl#startDragAndDrop.");
     }
 
     @Test
@@ -692,27 +696,27 @@ public class DragAndDropDelegateImplUnitTest {
 
         // A11y default setting with isTouchExplorationEnabled=false and
         // isPerformGesturesEnabled=true on XR
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(false);
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
         Assert.assertTrue(
                 "Drag and drop should start.", calllStartDragAndDrop(shadowImage, dropData));
 
         // A11y setting with isTouchExplorationEnabled=true and isPerformGesturesEnabled=false on XR
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(true);
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(false);
         Assert.assertTrue(
                 "Drag and drop should start.", calllStartDragAndDrop(shadowImage, dropData));
 
         // A11y setting with isTouchExplorationEnabled=true and isPerformGesturesEnabled=true on XR
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(true);
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(true);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(true);
         Assert.assertTrue(
                 "Drag and drop should start.", calllStartDragAndDrop(shadowImage, dropData));
 
         // A11y setting with isTouchExplorationEnabled=false and isPerformGesturesEnabled=false on
         // XR
-        AccessibilityState.setIsTouchExplorationEnabledForTesting(false);
-        AccessibilityState.setIsPerformGesturesEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsTouchExplorationEnabledForTesting(false);
+        AccessibilityStateTestHelper.setIsPerformGesturesEnabledForTesting(false);
         Assert.assertTrue(
                 "Drag and drop should start.", calllStartDragAndDrop(shadowImage, dropData));
     }
@@ -746,22 +750,6 @@ public class DragAndDropDelegateImplUnitTest {
         final String errorMsg = "<" + histogram + "> is not recorded correctly.";
         Assert.assertEquals(
                 errorMsg, 1, RecordHistogram.getHistogramValueCountForTesting(histogram, type));
-    }
-
-    private void assertDragOutsideWebContentHistogramsRecorded(boolean dropResult) {
-        // Verify drop inside metrics not recorded.
-        assertHistogramRecorded(
-                "Android.DragDrop.FromWebContent.DropInWebContent.Duration",
-                false,
-                "Drop outside of web content.");
-    }
-
-    private void assertDropInWebContentHistogramsRecorded() {
-        // Verify drop inside metrics recorded.
-        assertHistogramRecorded(
-                "Android.DragDrop.FromWebContent.DropInWebContent.Duration",
-                true,
-                "Drop inside web content.");
     }
 
     private void assertHistogramRecorded(String histogram, boolean recorded, String reason) {

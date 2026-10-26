@@ -21,6 +21,7 @@
 #include "content/public/browser/speech_recognition_manager.h"
 #include "content/public/browser/speech_recognition_session_context.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "media/mojo/mojom/speech_recognition_error.mojom.h"
 #include "media/mojo/mojom/speech_recognition_result.mojom.h"
 
@@ -95,14 +96,14 @@ void ChromeSpeechRecognitionManagerDelegate::OnRecognitionEnd(int session_id) {
 void ChromeSpeechRecognitionManagerDelegate::CheckRecognitionIsAllowed(
     int session_id,
     base::OnceCallback<void(bool ask_user, bool is_allowed)> callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M162);
 
   const content::SpeechRecognitionSessionContext& context =
       SpeechRecognitionManager::GetInstance()->GetSessionContext(session_id);
 
   // Make sure that initiators (extensions/web pages) properly set the
   // |render_process_id| field, which is needed later to retrieve the profile.
-  DCHECK(context.global_id.child_id);
+  CHECK(context.global_id.child_id, base::NotFatalUntil::M162);
 
   content::GlobalRenderFrameHostId global_id = context.global_id;
   if (context.embedder_global_id.child_id) {
@@ -130,7 +131,7 @@ void ChromeSpeechRecognitionManagerDelegate::BindSpeechRecognitionContext(
     const std::string& language,
     const content::GlobalRenderFrameHostId& render_frame_host_id) {
 #if BUILDFLAG(ENABLE_SPEECH_SERVICE)
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M162);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -182,7 +183,7 @@ void ChromeSpeechRecognitionManagerDelegate::BindSpeechRecognitionContext(
 void ChromeSpeechRecognitionManagerDelegate::CheckRenderFrameType(
     base::OnceCallback<void(bool ask_user, bool is_allowed)> callback,
     content::GlobalRenderFrameHostId global_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   content::RenderFrameHost* render_frame_host =
       content::RenderFrameHost::FromID(global_id);
 

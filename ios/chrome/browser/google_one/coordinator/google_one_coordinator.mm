@@ -7,6 +7,7 @@
 #import "base/check.h"
 #import "base/functional/bind.h"
 #import "base/metrics/histogram_functions.h"
+#import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/browser/google_one/shared/google_one_deep_link_util.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
@@ -14,10 +15,11 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/google_one_commands.h"
-#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/ui/util/identity_snackbar/identity_snackbar_utils.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/public/provider/chrome/browser/google_one/google_one_api.h"
 #import "net/base/apple/url_conversions.h"
 #import "url/gurl.h"
@@ -65,7 +67,8 @@ enum class GoogleOneOutcomeMetrics {
   kUserWillLeaveApp = 8,
   kLaunchFailed = 9,
   kInvalidParameters = 10,
-  kMaxValue = kInvalidParameters
+  kInvalidParametersFallbackToOpeningURLInNewTab = 11,
+  kMaxValue = kInvalidParametersFallbackToOpeningURLInNewTab
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/ios/enums.xml:GoogleOneOutcome)
 
@@ -98,6 +101,10 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
     case GoogleOneOutcome::kGoogleOneEntryOutcomeLaunchFailed:
       return GoogleOneOutcomeMetrics::kLaunchFailed;
     case GoogleOneOutcome::kGoogleOneEntryOutcomeInvalidParameters:
+      if (opened_url) {
+        return GoogleOneOutcomeMetrics::
+            kInvalidParametersFallbackToOpeningURLInNewTab;
+      }
       return GoogleOneOutcomeMetrics::kInvalidParameters;
   }
 }
@@ -164,8 +171,12 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
   }
 
   // If the user is not signed in and there is no valid account specified in the
-  // URL, there is no account to show settings for. Cancel the action.
+  // URL, there is no account to show settings for. If there is an input URL,
+  // open it in a new tab. Otherwise, cancel the action.
   if (!identityToUse) {
+    if (_inputURL.is_valid()) {
+      [self openURL:_inputURL];
+    }
     [self flowDidCompleteWithOutcome:GoogleOneOutcome::
                                          kGoogleOneEntryOutcomeInvalidParameters
                                error:nil];
@@ -182,13 +193,15 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
         [weakSelf flowDidCompleteWithOutcome:outcome error:error];
       };
   configuration.openURLCallback = ^(NSURL* url) {
-    [weakSelf openURL:url];
+    [weakSelf openURL:net::GURLWithNSURL(url)];
   };
   // There can be only one purchase flow in the application.
-  _UIBlocker = std::make_unique<ScopedUIBlocker>(self.browser->GetSceneState(),
-                                                 UIBlockerExtent::kApplication);
+  SceneState* sceneState = self.browser->GetSceneState();
+  _UIBlocker =
+      ScopedUIBlocker::AppScoped(sceneState, sceneState.profileState.appState);
   _controller = ios::provider::CreateGoogleOneController(configuration);
   if (_inputURL.is_valid()) {
+    TriggerAccountSwitchSnackbarWithIdentity(identityToUse, self.browser);
     [_controller launchWithViewController:self.baseViewController
                                       URL:net::NSURLWithGURL(_inputURL)
                                completion:nil];
@@ -212,18 +225,15 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
 
 #pragma mark - Private
 
-- (void)openURL:(NSURL*)url {
+- (void)openURL:(const GURL&)url {
   Browser* browser = self.browser;
   if (!browser) {
     return;
   }
   _openedURL = YES;
-  OpenNewTabCommand* command = [OpenNewTabCommand
-      commandWithURLFromChrome:net::GURLWithNSURL(url)
-                   inIncognito:browser->GetProfile()->IsOffTheRecord()];
-
-  [HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands)
-      openURLInNewTab:command];
+  UrlLoadParams params = UrlLoadParams::InNewTab(url);
+  params.in_incognito = browser->GetProfile()->IsOffTheRecord();
+  UrlLoadingBrowserAgent::FromBrowser(browser)->Load(params);
 }
 
 - (void)flowDidCompleteWithOutcome:(GoogleOneOutcome)outcome

@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/platform/wtf/date_math.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -96,8 +97,8 @@ int DateComponents::MaxWeekNumberInYear() const {
              : kMaximumWeekNumber - 1;
 }
 
-static unsigned CountDigits(const String& src, unsigned start) {
-  unsigned index = start;
+static wtf_size_t CountDigits(const String& src, wtf_size_t start) {
+  wtf_size_t index = start;
   for (; index < src.length(); ++index) {
     if (!IsAsciiDigit(src[index])) {
       break;
@@ -109,14 +110,14 @@ static unsigned CountDigits(const String& src, unsigned start) {
 // Very strict integer parser. Do not allow leading or trailing whitespace
 // unlike charactersToIntStrict().
 static bool ToInt(const String& src,
-                  unsigned parse_start,
-                  unsigned parse_length,
+                  wtf_size_t parse_start,
+                  wtf_size_t parse_length,
                   int& out) {
   if (parse_start + parse_length > src.length() || !parse_length)
     return false;
   int value = 0;
-  unsigned current = parse_start;
-  unsigned end = current + parse_length;
+  wtf_size_t current = parse_start;
+  wtf_size_t end = current + parse_length;
 
   // We don't need to handle negative numbers for ISO 8601.
   for (; current < end; ++current) {
@@ -133,9 +134,9 @@ static bool ToInt(const String& src,
 }
 
 bool DateComponents::ParseYear(const String& src,
-                               unsigned start,
-                               unsigned& end) {
-  unsigned digits_length = CountDigits(src, start);
+                               wtf_size_t start,
+                               wtf_size_t& end) {
+  wtf_size_t digits_length = CountDigits(src, start);
   // Needs at least 4 digits according to the standard.
   if (digits_length < 4)
     return false;
@@ -190,9 +191,9 @@ static bool WithinHtmlDateLimits(int year,
 }
 
 bool DateComponents::ParseMonth(const String& src,
-                                unsigned start,
-                                unsigned& end) {
-  unsigned index;
+                                wtf_size_t start,
+                                wtf_size_t& end) {
+  wtf_size_t index;
   if (!ParseYear(src, start, index))
     return false;
   if (index >= src.length() || src[index] != '-')
@@ -213,9 +214,9 @@ bool DateComponents::ParseMonth(const String& src,
 }
 
 bool DateComponents::ParseDate(const String& src,
-                               unsigned start,
-                               unsigned& end) {
-  unsigned index;
+                               wtf_size_t start,
+                               wtf_size_t& end) {
+  wtf_size_t index;
   if (!ParseMonth(src, start, index))
     return false;
   // '-' and 2-digits are needed.
@@ -239,9 +240,9 @@ bool DateComponents::ParseDate(const String& src,
 }
 
 bool DateComponents::ParseWeek(const String& src,
-                               unsigned start,
-                               unsigned& end) {
-  unsigned index;
+                               wtf_size_t start,
+                               wtf_size_t& end) {
+  wtf_size_t index;
   if (!ParseYear(src, start, index))
     return false;
 
@@ -268,12 +269,12 @@ bool DateComponents::ParseWeek(const String& src,
 }
 
 bool DateComponents::ParseTime(const String& src,
-                               unsigned start,
-                               unsigned& end) {
+                               wtf_size_t start,
+                               wtf_size_t& end) {
   int hour;
   if (!ToInt(src, start, 2, hour) || hour < 0 || hour > 23)
     return false;
-  unsigned index = start + 2;
+  wtf_size_t index = start + 2;
   if (index >= src.length())
     return false;
   if (src[index] != ':')
@@ -295,7 +296,7 @@ bool DateComponents::ParseTime(const String& src,
 
       // Optional fractional second part.
       if (index < src.length() && src[index] == '.') {
-        unsigned digits_length = CountDigits(src, index + 1);
+        wtf_size_t digits_length = CountDigits(src, index + 1);
         if (digits_length > 0) {
           ++index;
           bool ok;
@@ -326,9 +327,9 @@ bool DateComponents::ParseTime(const String& src,
 }
 
 bool DateComponents::ParseDateTimeLocal(const String& src,
-                                        unsigned start,
-                                        unsigned& end) {
-  unsigned index;
+                                        wtf_size_t start,
+                                        wtf_size_t& end) {
+  wtf_size_t index;
   if (!ParseDate(src, start, index))
     return false;
   if (index >= src.length())
@@ -559,12 +560,12 @@ String DateComponents::ToStringForTime(SecondFormat format) const {
 
   switch (effective_format) {
     case SecondFormat::kNone:
-      return String::Format("%02d:%02d", hour_, minute_);
+      return Format("{:02}:{:02}", hour_, minute_);
     case SecondFormat::kSecond:
-      return String::Format("%02d:%02d:%02d", hour_, minute_, second_);
+      return Format("{:02}:{:02}:{:02}", hour_, minute_, second_);
     case SecondFormat::kMillisecond:
-      return String::Format("%02d:%02d:%02d.%03d", hour_, minute_, second_,
-                            millisecond_);
+      return Format("{:02}:{:02}:{:02}.{:03}", hour_, minute_, second_,
+                    millisecond_);
     default:
       NOTREACHED();
   }
@@ -573,17 +574,16 @@ String DateComponents::ToStringForTime(SecondFormat format) const {
 String DateComponents::ToString(SecondFormat format) const {
   switch (type_) {
     case kDate:
-      return String::Format("%04d-%02d-%02d", year_, month_ + 1, month_day_);
+      return Format("{:04}-{:02}-{:02}", year_, month_ + 1, month_day_);
     case kDateTimeLocal:
-      return StrCat(
-          {String::Format("%04d-%02d-%02dT", year_, month_ + 1, month_day_),
-           ToStringForTime(format)});
+      return Format("{:04}-{:02}-{:02}T{}", year_, month_ + 1, month_day_,
+                    ToStringForTime(format));
     case kMonth:
-      return String::Format("%04d-%02d", year_, month_ + 1);
+      return Format("{:04}-{:02}", year_, month_ + 1);
     case kTime:
       return ToStringForTime(format);
     case kWeek:
-      return String::Format("%04d-W%02d", year_, week_);
+      return Format("{:04}-W{:02}", year_, week_);
     case kInvalid:
       break;
   }

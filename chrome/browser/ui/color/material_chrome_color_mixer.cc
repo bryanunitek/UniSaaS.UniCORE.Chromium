@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/color/material_chrome_color_mixer.h"
 
 #include "base/feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -52,6 +53,27 @@ void ApplyChromeRefresh2026ColorOverrides(ui::ColorMixer& mixer) {
   }
 
   mixer[ui::kColorToolbarSearchFieldBackground] = {ui::kColorSysSurface4};
+}
+
+void ApplyChromeSettingsRefresh2026ColorOverrides(ui::ColorMixer& mixer) {
+  if (!features::IsSettingsRefresh2026Enabled()) {
+    return;
+  }
+
+  // Settings page colors.
+  mixer[kColorSettingsWebuiPageBackground] = {ui::kColorSysSurface2};
+  mixer[kColorSettingsTitleText] = {ui::kColorSysOnSurface};
+  mixer[kColorSettingsSectionBackground] = {ui::kColorSysBase};
+  mixer[kColorSettingsRowBackgroundHovered] = {ui::GetResultingPaintColor(
+      ui::kColorSysStateHover, kColorSettingsSectionBackground)};
+  mixer[kColorSettingsRowBackgroundActive] = {ui::GetResultingPaintColor(
+      ui::kColorSysStatePressed, kColorSettingsSectionBackground)};
+  mixer[kColorSettingsNavMenuItemBackground] = {ui::kColorSysTonalContainer};
+  mixer[kColorSettingsNavMenuItemForeground] = {ui::kColorSysOnSurface};
+  mixer[kColorSettingsNavMenuItemForegroundSelected] = {
+      ui::kColorSysOnTonalContainer};
+  mixer[kColorSettingsNavMenuItemIcon] = {ui::kColorSysOnSurfaceSubtle};
+  mixer[kColorToolbarSearchFieldTextColor] = {ui::kColorSysOnSurfaceSubtle};
 }
 
 }  // namespace
@@ -154,6 +176,14 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
   mixer[kColorLensOverlayToastButtonBorder] = {ui::kColorSysInverseOnSurface};
   mixer[kColorLensOverlayToastForeground] = {ui::kColorSysInverseOnSurface};
 
+  // Glic selection overlay colors.
+  // These must stay above the `ShouldApplyChromeMaterialOverrides()` guard
+  // below, as the selection overlay preselection bubble is shown regardless of
+  // whether a custom theme is installed, see b/562065771.
+  mixer[kColorGlicSelectionOverlayToast] = {ui::kColorSysInverseSurfacePrimary};
+  mixer[kColorGlicSelectionOverlayToastCancelButton] = {
+      ui::kColorSysInversePrimary};
+
   // PageInfo colors.
   mixer[kColorPageInfoPermissionBlockedOnSystemLevelDisabled] = {
       ui::kColorSysStateDisabled};
@@ -176,6 +206,31 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
   mixer[kColorProfileMenuIdentityInfoSubtitle] = {ui::kColorSysOnSurfaceSubtle};
   mixer[kColorProfileMenuPromoButtonsBackground] = {
       ui::kColorSysTonalContainer};
+
+  // App Menu colors.
+  mixer[kColorAppMenuChipBackground] = {ui::kColorSysTonalContainer};
+  mixer[kColorAppMenuChipBackgroundHovered] = {ui::GetResultingPaintColor(
+      ui::kColorSysStateHoverOnSubtle, kColorAppMenuChipBackground)};
+  mixer[kColorAppMenuChipForeground] = {ui::kColorSysOnTonalContainer};
+  mixer[kColorAppMenuYourChromeBackground] = {ui::kColorSysBaseContainer};
+  mixer[kColorAppMenuYourChromeForeground] = {
+      ui::kColorSysOnBaseTonalContainer};
+  mixer[kColorAppMenuToolsAndActionsBackground] = {
+      ui::kColorSysNeutralContainer};
+  mixer[kColorAppMenuToolsAndActionsForeground] = {ui::kColorSysOnSurface};
+  mixer[kColorAppMenuBlockButtonBackground] = {ui::kColorSysSurface};
+  mixer[kColorAppMenuBlockButtonBackgroundHovered] = {
+      ui::kColorSysStateHoverOnSubtle};
+  mixer[kColorAppMenuBlockButtonBorder] = {ui::kColorSysTonalOutline};
+  mixer[kColorAppMenuBlockButtonForeground] = {ui::kColorSysPrimary};
+  mixer[kColorAppMenuFooterButtonForeground] = {ui::kColorSysPrimary};
+  mixer[kColorAppMenuFooterButtonForegroundHovered] = {ui::kColorSysPrimary};
+  mixer[kColorAppMenuFooterButtonBackgroundHovered] = {
+      ui::kColorSysStateHoverOnSubtle};
+  mixer[kColorAppMenuZoomButtonBackground] = {
+      ui::kColorSysBaseContainerElevated};
+  mixer[kColorAppMenuZoomButtonHover] = {ui::kColorSysStateHoverOnSubtle};
+  mixer[kColorAppMenuZoomSeparator] = {ui::kColorSysNeutralOutline};
 
   // Signin bubble colors. Main background color uses the same color as the
   // profle menu background.
@@ -327,6 +382,21 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
   mixer[kColorHistoryPageBookmarkStar] = {ui::kColorSysPrimary};
   mixer[kColorHistoryPageSeparator] = {ui::kColorSysSurfaceVariant};
   mixer[kColorHistoryPageText] = {ui::kColorSysOnSurfaceSubtle};
+  // These ids exist only on Android. They map onto the Material roles that
+  // ColorProviderBridgeImpl reads from the Android theme.
+#if BUILDFLAG(IS_ANDROID)
+  const bool dark_mode =
+      key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
+  mixer[kColorHistoryPageCardBackground] = {
+      dark_mode ? ui::kColorSysSurface : ui::kColorSysSurfaceContainerLowest};
+  mixer[kColorHistoryPageMenuBackground] = {
+      dark_mode ? ui::kColorSysSurfaceContainerHigh : ui::kColorSysSurface};
+  mixer[kColorHistoryPageSearchFieldBackground] = {
+      dark_mode ? ui::kColorSysSurfaceContainerHigh
+                : ui::kColorSysSurfaceContainerLowest};
+  mixer[kColorHistoryPageSelectionToolbarBackground] = {
+      dark_mode ? ui::kColorSysSurface : ui::kColorSysSurfaceContainerHigh};
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // History Embeddings colors.
   mixer[kColorHistoryEmbeddingsBackground] = {
@@ -346,7 +416,9 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
     return;
   }
 
+  mixer[kColorActorUiHandoffButtonBackground] = {ui::kColorSysSurface};
   mixer[kColorActorUiHandoffButtonBorder] = {ui::kColorSysActorUiBorder};
+  mixer[kColorActorUiHandoffButtonForeground] = {ui::kColorSysOnSurface};
   mixer[kColorActorUiOverlayBorder] = {ui::kColorSysActorUiBorder};
   mixer[kColorActorUiOverlayBorderGlow] = {ui::kColorSysActorUiGradientEnd};
   mixer[kColorActorUiScrimStart] = {ui::kColorSysActorUiGradientStart};
@@ -407,6 +479,10 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
   mixer[kColorInfoBarButtonIcon] = {ui::kColorSysOnSurfaceSubtle};
   mixer[kColorInfoBarButtonIconDisabled] = {ui::kColorSysStateDisabled};
   mixer[kColorInfoBarForeground] = {ui::kColorSysOnSurface};
+  mixer[kColorInfoBarQueuedCountPillBackground] = {
+      ui::kColorSysNeutralContainer};
+  mixer[kColorInfoBarQueuedCountPillForeground] = {
+      ui::kColorSysOnSurfaceSubtle};
   mixer[ui::kColorInfoBarIcon] = {ui::kColorSysOnSurfaceSubtle};
   mixer[kColorMediaRouterIconActive] =
       ui::PickGoogleColor(ui::kColorSysPrimary, kColorToolbar,
@@ -427,6 +503,12 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
       ui::kColorSysStateHoverOnSubtle};
   mixer[kColorNewTabButtonInkDropFrameInactive] = {
       kColorNewTabButtonInkDropFrameActive};
+
+  // Organizer panel colors.
+  mixer[kColorOrganizerPanelBackground] = {ui::kColorSysSurface2};
+  mixer[kColorOrganizerPanelForeground] = {ui::kColorSysOnSurface};
+  mixer[kColorOrganizerPanelForegroundSubtle] = {ui::kColorSysOnSurfaceSubtle};
+  mixer[kColorOrganizerPanelDivider] = {ui::kColorSysDivider};
 
   // Omnibox chip colors.
   mixer[kColorOmniboxChipInUseActivityIndicatorBackground] = {
@@ -513,9 +595,7 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
       ui::kColorGlicTabUnderline2};
   mixer[kColorGlicInactiveTabUnderlineGradient3] = {
       ui::kColorGlicTabUnderline3};
-  mixer[kColorGlicSelectionOverlayToast] = {ui::kColorSysInverseSurfacePrimary};
-  mixer[kColorGlicSelectionOverlayToastCancelButton] = {
-      ui::kColorSysInversePrimary};
 
   ApplyChromeRefresh2026ColorOverrides(mixer);
+  ApplyChromeSettingsRefresh2026ColorOverrides(mixer);
 }

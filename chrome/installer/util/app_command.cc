@@ -9,7 +9,6 @@
 #include <stddef.h>
 
 #include "base/check.h"
-#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/win/registry.h"
@@ -33,27 +32,15 @@ std::wstring GetCommandKey(const std::wstring& name) {
 // static
 // Associate bool member variables with registry entries.
 const AppCommand::NamedBoolVar AppCommand::kNameBoolVars[] = {
-    {&AppCommand::sends_pings_, google_update::kRegSendsPingsField},
-    {&AppCommand::is_web_accessible_, google_update::kRegWebAccessibleField},
     {&AppCommand::is_auto_run_on_os_upgrade_,
      google_update::kRegAutoRunOnOSUpgradeField},
-    {&AppCommand::is_run_as_user_, google_update::kRegRunAsUserField},
 };
 
-AppCommand::AppCommand()
-    : sends_pings_(false),
-      is_web_accessible_(false),
-      is_auto_run_on_os_upgrade_(false),
-      is_run_as_user_(false) {}
+AppCommand::AppCommand() = default;
 
 AppCommand::AppCommand(const std::wstring& command_name,
                        const std::wstring& command_line)
-    : command_name_(command_name),
-      command_line_(command_line),
-      sends_pings_(false),
-      is_web_accessible_(false),
-      is_auto_run_on_os_upgrade_(false),
-      is_run_as_user_(false) {}
+    : command_name_(command_name), command_line_(command_line) {}
 
 AppCommand::AppCommand(AppCommand&&) = default;
 AppCommand::AppCommand(const AppCommand&) = default;
@@ -92,11 +79,11 @@ bool AppCommand::Initialize(const base::win::RegKey& key) {
 
   command_line_.swap(cmd_line);
 
-  for (size_t i = 0; i < std::size(kNameBoolVars); ++i) {
+  for (const NamedBoolVar& var : kNameBoolVars) {
     DWORD value = 0;  // Set default to false.
     // Note: ReadValueDW only modifies out param on success.
-    key.ReadValueDW(UNSAFE_TODO(kNameBoolVars[i]).name, &value);
-    this->*(UNSAFE_TODO(kNameBoolVars[i]).data) = (value != 0);
+    key.ReadValueDW(var.name, &value);
+    this->*(var.data) = (value != 0);
   }
 
   return true;
@@ -116,9 +103,9 @@ void AppCommand::AddCreateAppCommandWorkItems(const HKEY root_key,
                                command_line_, true)
       ->set_log_message("setting AppCommand CommandLine registry value");
 
-  for (size_t i = 0; i < std::size(kNameBoolVars); ++i) {
-    const wchar_t* var_name = UNSAFE_TODO(kNameBoolVars[i]).name;
-    bool var_data = this->*(UNSAFE_TODO(kNameBoolVars[i]).data);
+  for (const NamedBoolVar& var : kNameBoolVars) {
+    const wchar_t* var_name = var.name;
+    bool var_data = this->*(var.data);
 
     // Adds a work item to set |var_name| to DWORD 1 if |var_data| is true;
     // adds a work item to remove |var_name| otherwise.

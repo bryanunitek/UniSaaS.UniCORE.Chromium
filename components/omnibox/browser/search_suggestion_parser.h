@@ -16,13 +16,10 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
-#include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
-#include "third_party/omnibox_proto/answer_type.pb.h"
+#include "components/search_engines/search_engine_type.h"
 #include "third_party/omnibox_proto/chrome_searchbox_stats.pb.h"
-#include "third_party/omnibox_proto/entity_info.pb.h"
 #include "third_party/omnibox_proto/navigational_intent.pb.h"
-#include "third_party/omnibox_proto/rich_answer_template.pb.h"
 #include "third_party/omnibox_proto/suggest_template_info.pb.h"
 #include "third_party/omnibox_proto/types.pb.h"
 #include "url/gurl.h"
@@ -56,7 +53,7 @@ class SearchSuggestionParser {
     Result(bool from_keyword,
            int relevance,
            bool relevance_from_server,
-           AutocompleteMatchType::Type type,
+           omnibox::AutocompleteMatchType type,
            omnibox::SuggestType suggest_type,
            std::vector<int> subtypes,
            const std::string& deletion_url,
@@ -71,7 +68,7 @@ class SearchSuggestionParser {
       return match_contents_class_;
     }
 
-    AutocompleteMatchType::Type type() const { return type_; }
+    omnibox::AutocompleteMatchType type() const { return type_; }
     omnibox::SuggestType suggest_type() const { return suggest_type_; }
     const std::vector<int>& subtypes() const { return subtypes_; }
     int relevance() const { return relevance_; }
@@ -110,7 +107,7 @@ class SearchSuggestionParser {
     bool from_keyword_;
 
     // AutocompleteMatch type.
-    AutocompleteMatchType::Type type_;
+    omnibox::AutocompleteMatchType type_;
 
     // Suggestion type.
     omnibox::SuggestType suggest_type_;
@@ -148,7 +145,7 @@ class SearchSuggestionParser {
   class SuggestResult : public Result {
    public:
     SuggestResult(const std::u16string& suggestion,
-                  AutocompleteMatchType::Type type,
+                  omnibox::AutocompleteMatchType type,
                   omnibox::SuggestType suggest_type,
                   std::vector<int> subtypes,
                   bool from_keyword,
@@ -157,13 +154,12 @@ class SearchSuggestionParser {
                   bool relevance_from_server,
                   const std::u16string& input_text);
     SuggestResult(const std::u16string& suggestion,
-                  AutocompleteMatchType::Type type,
+                  omnibox::AutocompleteMatchType type,
                   omnibox::SuggestType suggest_type,
                   std::vector<int> subtypes,
                   const std::u16string& match_contents,
                   const std::u16string& match_contents_prefix,
                   const std::u16string& annotation,
-                  omnibox::EntityInfo entity_info,
                   const std::string& deletion_url,
                   bool from_keyword,
                   omnibox::NavigationalIntent navigational_intent,
@@ -174,13 +170,12 @@ class SearchSuggestionParser {
                   const std::u16string& input_text);
     SuggestResult(
         const std::u16string& suggestion,
-        AutocompleteMatchType::Type type,
+        omnibox::AutocompleteMatchType type,
         omnibox::SuggestType suggest_type,
         std::vector<int> subtypes,
         const std::u16string& match_contents,
         const std::u16string& match_contents_prefix,
         const std::u16string& annotation,
-        omnibox::EntityInfo entity_info,
         const std::string& deletion_url,
         bool from_keyword,
         omnibox::NavigationalIntent navigational_intent,
@@ -209,18 +204,6 @@ class SearchSuggestionParser {
       return suggestion_group_id_;
     }
 
-    void SetRichAnswerTemplate(
-        const omnibox::RichAnswerTemplate& answer_template);
-    const std::optional<omnibox::RichAnswerTemplate>& answer_template() const {
-      return answer_template_;
-    }
-
-    void SetAnswerType(const omnibox::AnswerType& answer_type);
-    const omnibox::AnswerType& answer_type() const { return answer_type_; }
-
-    void SetEntityInfo(const omnibox::EntityInfo&);
-    const omnibox::EntityInfo& entity_info() const { return entity_info_; }
-
     void SetSuggestTemplateInfo(
         const omnibox::SuggestTemplateInfo& suggest_template_info);
     const std::optional<omnibox::SuggestTemplateInfo>& suggest_template_info()
@@ -241,6 +224,12 @@ class SearchSuggestionParser {
     void ClassifyMatchContents(const bool allow_bolding_all,
                                const std::u16string& input_text);
 
+    // Returns the classifications describing how `annotation_` should be
+    // displayed and bolded, based on the fragments the server sent in the
+    // suggest template's secondary text. Falls back to dimming the whole
+    // annotation.
+    ACMatchClassifications ClassifyAnnotation() const;
+
     // Result:
     int CalculateRelevance(const AutocompleteInput& input,
                            bool keyword_provider_requested) const override;
@@ -252,7 +241,8 @@ class SearchSuggestionParser {
     // The contents to be displayed as prefix of match contents.
     // Used for tail suggestions to display a leading ellipsis (or some
     // equivalent character) to indicate omitted text.
-    // Only used to pass this information to about:omnibox's "Additional Info".
+    // Only used to pass this information to chrome://omnibox-internals'
+    // "Additional Info".
     std::u16string match_contents_prefix_;
 
     // Optional annotation for the |match_contents_| for disambiguation.
@@ -263,15 +253,6 @@ class SearchSuggestionParser {
     // The optional suggestion group ID used to look up the suggestion group
     // config for the group this suggestion belongs to from the server response.
     std::optional<omnibox::GroupId> suggestion_group_id_;
-
-    // Optional proto that contains answer info for rich answers.
-    std::optional<omnibox::RichAnswerTemplate> answer_template_;
-
-    // Answer type for answer verticals, including rich answers.
-    omnibox::AnswerType answer_type_ = omnibox::ANSWER_TYPE_UNSPECIFIED;
-
-    // Proto containing various pieces of data related to entity suggestions.
-    omnibox::EntityInfo entity_info_;
 
     // Proto containing generalized suggestion information.
     std::optional<omnibox::SuggestTemplateInfo> suggest_template_info_;
@@ -288,7 +269,7 @@ class SearchSuggestionParser {
    public:
     NavigationResult(const AutocompleteSchemeClassifier& scheme_classifier,
                      const GURL& url,
-                     AutocompleteMatchType::Type type,
+                     omnibox::AutocompleteMatchType type,
                      omnibox::SuggestType suggest_type,
                      std::vector<int> subtypes,
                      const std::u16string& description,
@@ -418,6 +399,11 @@ class SearchSuggestionParser {
   // The options struct for ParseSuggestResultsWithOptions
   struct ParseSuggestResultsOptions {
     bool allow_empty_suggestion = false;
+
+    // The engine that produced the response. Most engines answer with the
+    // default response format, but a few use a format of their own; see
+    // ParseSuggestResults(). SEARCH_ENGINE_OTHER selects the default format.
+    SearchEngineType search_engine_type = SEARCH_ENGINE_OTHER;
   };
 
   // Parses results from the suggest server and updates the appropriate suggest

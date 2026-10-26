@@ -16,7 +16,7 @@
 #include "base/timer/timer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/test/test_compositor_host.h"
 #include "ui/compositor/test/test_context_factories.h"
 #include "ui/compositor/test/test_utils.h"
@@ -88,7 +88,7 @@ class OverviewUiTaskPoolTest : public ::testing::Test {
       base::test::TaskEnvironment::MainThreadType::UI};
 
   std::unique_ptr<OverviewUiTaskPool> task_pool_;
-  ui::Layer root_;
+  ui::LayerTextured root_;
   std::unique_ptr<ui::TestContextFactories> context_factories_;
   std::unique_ptr<ui::TestCompositorHost> host_;
   base::TimeDelta frame_interval_;

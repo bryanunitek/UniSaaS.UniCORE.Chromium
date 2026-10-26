@@ -55,7 +55,7 @@ bool IsBrowserSigninAllowedByCommandLine() {
   if (command_line->HasSwitch(kAllowBrowserSigninArgument)) {
     std::string allowBrowserSignin =
         command_line->GetSwitchValueASCII(kAllowBrowserSigninArgument);
-    return base::ToLowerASCII(allowBrowserSignin) == "true";
+    return base::EqualsCaseInsensitiveASCII(allowBrowserSignin, "true");
   }
   // If the commandline flag is not provided, the default is true.
   return true;
@@ -84,7 +84,8 @@ bool CanEnableDiceForBuild() {
 // consistency method cannot change during the lifetime of a profile.
 signin::AccountConsistencyMethod ComputeAccountConsistencyMethod(
     Profile* profile) {
-  DCHECK(AccountConsistencyModeManager::ShouldBuildServiceForProfile(profile));
+  CHECK(AccountConsistencyModeManager::ShouldBuildServiceForProfile(profile),
+        base::NotFatalUntil::M162);
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (!ash::IsAccountManagerAvailable(profile)) {
@@ -111,8 +112,8 @@ signin::AccountConsistencyMethod ComputeAccountConsistencyMethod(
 
 AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
     : profile_(profile) {
-  DCHECK(profile_);
-  DCHECK(ShouldBuildServiceForProfile(profile));
+  CHECK(profile_, base::NotFatalUntil::M162);
+  CHECK(ShouldBuildServiceForProfile(profile), base::NotFatalUntil::M162);
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   auto* entry = g_browser_process->profile_manager()
                     ? g_browser_process->profile_manager()
@@ -137,7 +138,8 @@ AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
 #endif
 
   account_consistency_ = ComputeAccountConsistencyMethod(profile_);
-  DCHECK_EQ(account_consistency_, ComputeAccountConsistencyMethod(profile_));
+  CHECK_EQ(account_consistency_, ComputeAccountConsistencyMethod(profile_),
+           base::NotFatalUntil::M162);
   account_consistency_initialized_ = true;
 }
 

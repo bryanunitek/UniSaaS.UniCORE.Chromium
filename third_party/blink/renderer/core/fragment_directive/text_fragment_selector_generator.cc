@@ -11,6 +11,8 @@
 #include "third_party/abseil-cpp/absl/base/macros.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/interface_registry.h"
+#include "third_party/blink/renderer/core/display_lock/display_lock_document_state.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/finder/find_buffer.h"
 #include "third_party/blink/renderer/core/editing/iterators/character_iterator.h"
@@ -167,6 +169,7 @@ void TextFragmentSelectorGenerator::Trace(Visitor* visitor) const {
   visitor->Trace(suffix_iterator_);
   visitor->Trace(range_start_iterator_);
   visitor->Trace(range_end_iterator_);
+  TextFragmentFinder::Client::Trace(visitor);
 }
 
 void TextFragmentSelectorGenerator::RecordSelectorStateUma() const {
@@ -187,6 +190,15 @@ void TextFragmentSelectorGenerator::DidFindMatch(const RangeInFlatTree& match,
 
   if (did_find_match_callback_for_testing_)
     std::move(did_find_match_callback_for_testing_).Run(is_unique);
+
+  DCHECK(range_);
+  DCHECK(!range_->IsNull());
+  DCHECK(range_->IsConnected());
+
+  Document* document = range_->StartPosition().GetDocument();
+  auto forced_lock_scope =
+      document->GetDisplayLockDocumentState().GetScopedForceActivatableLocks();
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kFindInPage);
 
   if (is_unique &&
       PlainText(match.ToEphemeralRange()).LengthWithStrippedWhiteSpace() ==
@@ -222,13 +234,13 @@ void TextFragmentSelectorGenerator::AdjustSelection() {
   Node* end_container = ephemeral_range.EndPosition().ComputeContainerNode();
   Node* corrected_start =
       ResolvePositionToNode(ephemeral_range.StartPosition());
-  int corrected_start_offset =
+  wtf_size_t corrected_start_offset =
       (corrected_start->isSameNode(start_container))
           ? ephemeral_range.StartPosition().ComputeOffsetInContainerNode()
           : 0;
 
   Node* corrected_end = ResolvePositionToNode(ephemeral_range.EndPosition());
-  int corrected_end_offset =
+  wtf_size_t corrected_end_offset =
       (corrected_end->isSameNode(end_container))
           ? ephemeral_range.EndPosition().ComputeOffsetInContainerNode()
           : 0;
@@ -280,10 +292,10 @@ void TextFragmentSelectorGenerator::AdjustSelection() {
   }
 
   if (corrected_start != start_container ||
-      static_cast<int>(corrected_start_offset) !=
+      corrected_start_offset !=
           ephemeral_range.StartPosition().ComputeOffsetInContainerNode() ||
       corrected_end != end_container ||
-      static_cast<int>(corrected_end_offset) !=
+      corrected_end_offset !=
           ephemeral_range.EndPosition().ComputeOffsetInContainerNode()) {
     PositionInFlatTree start(corrected_start, corrected_start_offset);
     PositionInFlatTree end(corrected_end, corrected_end_offset);
@@ -302,9 +314,13 @@ void TextFragmentSelectorGenerator::AdjustSelection() {
 
 void TextFragmentSelectorGenerator::StartGeneration() {
   DCHECK(range_);
+  DCHECK(!range_->IsNull());
+  DCHECK(range_->IsConnected());
 
-  range_->StartPosition().GetDocument()->UpdateStyleAndLayout(
-      DocumentUpdateReason::kFindInPage);
+  Document* document = range_->StartPosition().GetDocument();
+  auto forced_lock_scope =
+      document->GetDisplayLockDocumentState().GetScopedForceActivatableLocks();
+  document->UpdateStyleAndLayout(DocumentUpdateReason::kFindInPage);
 
   // TODO(bokan): This can sometimes occur from a selection. Avoid crashing from
   // this case but this can come from a seemingly correct range so we should

@@ -37,9 +37,21 @@ export class IconFromTableElement extends CrLitElement {
       iconHandle: {type: Object},
 
       /**
+       * Whether to mirror the icon horizontally in RTL layouts. Does not
+       * mirror full-color icons (e.g. favicons).
+       */
+      flipInRtl: {type: Boolean, reflect: true, attribute: 'flip-in-rtl'},
+
+      /**
        * Internally cached information on the icon.
        */
       iconInfo_: {type: Object},
+
+      /**
+       * Whether the rendered icon is full-color (e.g. favicons) and should
+       * never be mirrored in RTL.
+       */
+      isFullColor_: {type: Boolean, reflect: true, attribute: 'is-full-color'},
     };
   }
 
@@ -47,6 +59,9 @@ export class IconFromTableElement extends CrLitElement {
     handleId: 0n,
   };
 
+  accessor flipInRtl: boolean = false;
+
+  protected accessor isFullColor_: boolean = false;
   protected accessor iconInfo_: IconInfo;
 
   private iconTable_: IconTable = IconTable.getInstance();
@@ -54,12 +69,14 @@ export class IconFromTableElement extends CrLitElement {
   constructor() {
     super();
     this.iconInfo_ = this.iconTable_.getIconInfo(this.iconHandle);
+    this.isFullColor_ = this.iconInfo_.type === IconType.kFullColorUrl;
   }
 
   override willUpdate(changedProperties: PropertyValues<this>): void {
     super.willUpdate(changedProperties);
     if (changedProperties.has('iconHandle')) {
       this.iconInfo_ = this.iconTable_.getIconInfo(this.iconHandle);
+      this.isFullColor_ = this.iconInfo_.type === IconType.kFullColorUrl;
     }
   }
 
@@ -70,13 +87,11 @@ export class IconFromTableElement extends CrLitElement {
   // Will be undefined if the icon doesn't request to be rendered in a specific
   // color (including when it's multicolor).
   protected getIconColorCss_(): string|undefined {
-    const propName =
-        (this.iconInfo_ && this.iconInfo_.type === IconType.kIconSet) ?
-        '--cr-icon-button-fill-color' :
-        'color';
-    return this.iconInfo_ && this.iconInfo_.color ?
-        `${propName}: ${skColorToRgba(this.iconInfo_.color)}` :
-        undefined;
+    if (!this.iconInfo_ || !this.iconInfo_.color) {
+      return undefined;
+    }
+    const rgba = skColorToRgba(this.iconInfo_.color);
+    return `color: ${rgba}; --iron-icon-fill-color: ${rgba};`;
   }
 }
 

@@ -141,8 +141,8 @@ public class PermissionStatusHandler implements PermissionDialogController.Obser
     public void showPermissionClapperQuietIcon(WindowAndroid window) {
         // Post the UI update to the message queue. This is critical for the Tab Switcher
         // transition.
-        // When returning to a tab with a pending Clapper request, the native side calls this method
-        // relatively early in the process. However, the Java UI triggers a couple of status icon
+        // When returning to a tab with a pending quiet notification request, the native side calls
+        // this method relatively early in the process. However, the Java UI triggers a couple of
         // updates, which clear the local UI state. If we show the icon synchronously, this
         // subsequent reset wipes out the freshly created icon.
         // By posting, we allow the icon to be shown after the StatusMediator has finished its
@@ -245,62 +245,6 @@ public class PermissionStatusHandler implements PermissionDialogController.Obser
     }
 
     /**
-     * Returns the last permission type handled by this class. This is primarily used for testing to
-     * verify that the correct permission logic was triggered.
-     */
-    public int getLastPermissionForTest() {
-        return mLastPermission;
-    }
-
-    /**
-     * Sets a callback to be run when the permission icon is shown.
-     *
-     * @param callback The callback to run.
-     */
-    public void setOnIconShownCallbackForTesting(@Nullable Runnable callback) {
-        mOnIconShownCallbackForTesting = callback;
-    }
-
-    /**
-     * Sets a callback to be run when the permission icon is dismissed.
-     *
-     * @param callback The callback to run.
-     */
-    public void setOnIconDismissedCallbackForTesting(@Nullable Runnable callback) {
-        mOnIconDismissedCallbackForTesting = callback;
-    }
-
-    /**
-     * Sets a callback to be run when a tab switch happened.
-     *
-     * @param callback The callback to run.
-     */
-    public void setTabSwitchCallbackForTesting(@Nullable Runnable callback) {
-        mTabSwitchCallbackForTesting = callback;
-    }
-
-    /**
-     * Triggers the permission icon timeout immediately for testing purposes.
-     *
-     * <p>This simulates the timeout expiring and executes the dismissal logic.
-     */
-    public void triggerIconTimeoutForTesting() {
-        if (mFinishIconAnimationRunnable != null) {
-            mHandler.removeCallbacks(mFinishIconAnimationRunnable);
-            mFinishIconAnimationRunnable.run();
-        }
-    }
-
-    /**
-     * Returns whether the permission icon timeout is currently running.
-     *
-     * @return True if the timeout is running, false otherwise.
-     */
-    public boolean isIconTimeoutRunningForTesting() {
-        return mFinishIconAnimationRunnable != null;
-    }
-
-    /**
      * Returns the configuration required to open the PageInfo dialog with the appropriate
      * permission highlighted. This is used when the user clicks on the permission icon in the
      * omnibox, ensuring they are taken directly to the relevant permission setting within PageInfo.
@@ -317,8 +261,8 @@ public class PermissionStatusHandler implements PermissionDialogController.Obser
 
     /**
      * Resets the internal state of the handler, clearing the permission icon UI state. If this is
-     * called with shouldDismissNativePrompt=true, it also dismisses the clapper quiet prompt (if
-     * one is active) by notifying the native side.
+     * called with shouldDismissNativePrompt=true, it also dismisses the quiet notification prompt
+     * (if one is active) by notifying the native side.
      *
      * @param shouldDismissNativePrompt True if we should attempt to dismiss the native prompt (e.g.
      *     user interference). False if the prompt is being handled externally (e.g. tab switch or
@@ -376,5 +320,61 @@ public class PermissionStatusHandler implements PermissionDialogController.Obser
 
     boolean isClapperQuietIconShowing() {
         return mIsQuietClapperUi;
+    }
+
+    /**
+     * Returns the last permission type handled by this class. This is primarily used for testing to
+     * verify that the correct permission logic was triggered.
+     */
+    public int getLastPermissionForTest() {
+        return mLastPermission;
+    }
+
+    /**
+     * Sets a callback to be run when the permission icon is shown.
+     *
+     * @param callback The callback to run.
+     */
+    public void setOnIconShownCallbackForTesting(@Nullable Runnable callback) {
+        mOnIconShownCallbackForTesting = callback;
+    }
+
+    /**
+     * Sets a callback to be run when the permission icon is dismissed.
+     *
+     * @param callback The callback to run.
+     */
+    public void setOnIconDismissedCallbackForTesting(@Nullable Runnable callback) {
+        mOnIconDismissedCallbackForTesting = callback;
+    }
+
+    /**
+     * Sets a callback to be run when a tab switch happened.
+     *
+     * @param callback The callback to run.
+     */
+    public void setTabSwitchCallbackForTesting(@Nullable Runnable callback) {
+        mTabSwitchCallbackForTesting = callback;
+    }
+
+    /**
+     * Triggers the permission icon timeout immediately for testing purposes.
+     *
+     * <p>This simulates the timeout expiring and executes the dismissal logic.
+     */
+    public void triggerIconTimeoutForTesting() {
+        if (mFinishIconAnimationRunnable != null) {
+            mHandler.removeCallbacks(mFinishIconAnimationRunnable);
+            mFinishIconAnimationRunnable.run();
+        }
+    }
+
+    /**
+     * Returns whether the permission icon timeout is currently running.
+     *
+     * @return True if the timeout is running, false otherwise.
+     */
+    public boolean isIconTimeoutRunningForTesting() {
+        return mFinishIconAnimationRunnable != null;
     }
 }

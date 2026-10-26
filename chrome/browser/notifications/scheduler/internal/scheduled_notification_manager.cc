@@ -32,7 +32,7 @@ namespace {
 // Comparator used to sort notification entries based on creation time.
 bool CreateTimeCompare(const NotificationEntry* lhs,
                        const NotificationEntry* rhs) {
-  DCHECK(lhs && rhs);
+  CHECK(lhs && rhs, base::NotFatalUntil::M161);
   return lhs->create_time < rhs->create_time;
 }
 
@@ -76,15 +76,16 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
   void ScheduleNotification(
       std::unique_ptr<NotificationParams> notification_params,
       ScheduleCallback callback) override {
-    DCHECK(notification_params);
+    CHECK(notification_params, base::NotFatalUntil::M161);
     std::string guid = notification_params->guid;
-    DCHECK(!guid.empty());
+    CHECK(!guid.empty(), base::NotFatalUntil::M161);
     auto type = notification_params->type;
     stats::LogNotificationLifeCycleEvent(
         stats::NotificationLifeCycleEvent::kScheduleRequest, type);
 
+    auto type_it = notifications_.find(type);
     if (!clients_.Has(type) ||
-        (notifications_.count(type) && notifications_[type].count(guid))) {
+        (type_it != notifications_.end() && type_it->second.count(guid))) {
       // TODO(xingliu): Report duplicate guid failure.
       std::move(callback).Run(false);
       return;
@@ -143,7 +144,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
   }
 
   void GetAllNotifications(Notifications* notifications) const override {
-    DCHECK(notifications);
+    CHECK(notifications, base::NotFatalUntil::M161);
     notifications->clear();
 
     for (auto it = notifications_.begin(); it != notifications_.end(); it++) {
@@ -162,7 +163,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
   void GetNotifications(SchedulerClientType type,
                         std::vector<raw_ptr<const NotificationEntry>>*
                             notifications) const override {
-    DCHECK(notifications);
+    CHECK(notifications, base::NotFatalUntil::M161);
     notifications->clear();
     const auto it = notifications_.find(type);
     if (it == notifications_.end())
@@ -172,16 +173,18 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
   }
 
   void DeleteNotifications(SchedulerClientType type) override {
-    if (!notifications_.count(type))
+    auto type_it = notifications_.find(type);
+    if (type_it == notifications_.end()) {
       return;
+    }
 
-    auto it = notifications_[type].begin();
-    while (it != notifications_[type].end()) {
+    auto it = type_it->second.begin();
+    while (it != type_it->second.end()) {
       const auto& entry = *it->second;
       ++it;
       DeleteNotification(entry, false /*should_delete_in_memory*/);
     }
-    notifications_.erase(type);
+    notifications_.erase(type_it);
   }
 
   void OnIconStoreInitialized(InitCallback callback,
@@ -312,7 +315,7 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
     // Glue the icon data to entry.
     std::unique_ptr<NotificationEntry> entry =
         std::move(notifications_[client_type][guid]);
-    DCHECK(entry);
+    CHECK(entry, base::NotFatalUntil::M161);
     for (const auto& pair : entry->icons_uuid) {
       auto icon_bundle = IconBundle(std::move(loaded_icons_map[pair.second]));
       entry->notification_data.icons.emplace(pair.first,
@@ -327,9 +330,15 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
 
   NotificationEntry* FindNotificationEntry(SchedulerClientType type,
                                            const std::string& guid) {
-    if (!notifications_.count(type) || !notifications_[type].count(guid))
+    auto type_it = notifications_.find(type);
+    if (type_it == notifications_.end()) {
       return nullptr;
-    return notifications_[type][guid].get();
+    }
+    auto guid_it = type_it->second.find(guid);
+    if (guid_it == type_it->second.end()) {
+      return nullptr;
+    }
+    return guid_it->second.get();
   }
 
   // Delete NotitificationEntry from memory and disk.
@@ -350,9 +359,13 @@ class ScheduledNotificationManagerImpl : public ScheduledNotificationManager {
     notification_store_->Delete(guid, /*callback=*/base::DoNothing());
 
     if (should_delete_in_memory) {
-      notifications_[type].erase(guid);
-      if (notifications_[type].empty())
-        notifications_.erase(type);
+      auto type_it = notifications_.find(type);
+      if (type_it != notifications_.end()) {
+        type_it->second.erase(guid);
+        if (type_it->second.empty()) {
+          notifications_.erase(type_it);
+        }
+      }
     }
   }
 

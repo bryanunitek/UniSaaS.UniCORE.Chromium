@@ -22,8 +22,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_math.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -32,7 +32,6 @@
 #include "base/types/expected_macros.h"
 #include "base/unguessable_token.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
-#include "components/services/storage/privileged/mojom/indexed_db_client_state_checker.mojom-shared.h"
 #include "components/services/storage/privileged/mojom/indexed_db_internals_types.mojom.h"
 #include "components/services/storage/public/mojom/blob_storage_context.mojom-shared.h"
 #include "content/browser/indexed_db/indexed_db_external_object.h"
@@ -258,7 +257,7 @@ void Transaction::UnregisterOpenCursor(Cursor* cursor) {
 }
 
 void Transaction::DontAllowInactiveClientToBlockOthers(
-    storage::mojom::DisallowInactiveClientReason reason) {
+    DisallowInactiveClientReason reason) {
   if (state_ == STARTED && IsTransactionBlockingOtherClients()) {
     connection_->DisallowInactiveClient(reason, base::DoNothing());
   }
@@ -316,8 +315,7 @@ void Transaction::Start() {
   // If the client is in BFCache, the transaction will get stuck, so evict it if
   // necessary.
   DontAllowInactiveClientToBlockOthers(
-      storage::mojom::DisallowInactiveClientReason::
-          kTransactionIsStartingWhileBlockingOthers);
+      DisallowInactiveClientReason::kTransactionIsStartingWhileBlockingOthers);
 
   const base::TimeDelta time_queued =
       diagnostics_.start_time - diagnostics_.creation_time;
@@ -376,8 +374,10 @@ void Transaction::CreateObjectStore(int64_t object_store_id,
                 object_store_id <= transaction.connection_->database()
                                        ->metadata()
                                        .max_object_store_id) {
-              std::move(report_bad_message_callback)
-                  .Run("Invalid object_store_id");
+              ReportBadMessage(
+                  BadMessageReason::kTransactionCreateObjectStoreInvalidId,
+                  "Invalid object_store_id",
+                  std::move(report_bad_message_callback));
               return Status::InvalidArgument("Invalid object_store_id.");
             }
 
@@ -412,7 +412,9 @@ void Transaction::Put(int64_t object_store_id,
                       std::vector<IndexedDBIndexKeys> index_keys,
                       blink::mojom::IDBTransaction::PutCallback callback) {
   if (mode_ == blink::mojom::IDBTransactionMode::ReadOnly) {
-    receiver_.ReportBadMessage("Attempted to Put on readonly txn.");
+    ReportBadMessage(BadMessageReason::kTransactionPutReadOnly,
+                     "Attempted to Put on readonly txn.",
+                     receiver_.GetBadMessageCallback());
     return;
   }
 
@@ -425,29 +427,47 @@ void Transaction::Put(int64_t object_store_id,
     return;
   }
 
-  if (input_value->bits.storage_type() ==
-      mojo_base::BigBuffer::StorageType::kInvalidBuffer) {
-    receiver_.ReportBadMessage("Attempted to Put invalid SSV.");
-    return;
-  }
-
   std::vector<IndexedDBExternalObject> external_objects;
   uint64_t total_blob_size = 0;
   if (!input_value->external_objects.empty() &&
       !CreateExternalObjects(input_value, &external_objects,
                              &total_blob_size)) {
-    receiver_.ReportBadMessage("Couldn't deserialize external objects.");
+    ReportBadMessage(BadMessageReason::kTransactionPutInvalidExternalObjects,
+                     "Couldn't deserialize external objects.",
+                     receiver_.GetBadMessageCallback());
     return;
   }
 
   // Increment the total transaction size by the size of this put.
-  preliminary_size_estimate_ +=
-      input_value->bits.size() + key.size_estimate() + total_blob_size;
+  base::ClampedNumeric<int64_t> size_estimate =
+      preliminary_size_estimate_.InBytes();
+  size_estimate += base::saturated_cast<int64_t>(input_value->bits.size());
+  size_estimate += base::saturated_cast<int64_t>(key.size_estimate());
+  size_estimate += base::saturated_cast<int64_t>(total_blob_size);
+  preliminary_size_estimate_ = base::ByteSizeDelta(size_estimate.RawValue());
   // Warm up the disk space cache.
   bucket_context_->CheckCanUseDiskSpace(preliminary_size_estimate_, {});
 
   IndexedDBValue value;
+  CHECK_NE(input_value->bits.storage_type(),
+           mojo_base::BigBuffer::StorageType::kInvalidBuffer)
+      << "Invalid buffer should have failed deserialization";
   value.bits = std::move(input_value->bits);
+  // If bits are in shared memory, make a copy in private memory to avoid TOCTOU
+  // attacks during processing (as the bits are later compressed before storage
+  // in SQLite). Note that we do this eagerly here to release the shmem handles,
+  // which is necessary to avoid potential FD exhaustion on Linux (see
+  // crbug.com/342779913). This may lead to some wasted work in some infrequent
+  // cases: if the transaction is aborted before the put is processed, for
+  // example.
+  if (bucket_context_->IsUsingSqlite()) {
+    value.bits.MakePrivateBytes();
+  } else if (value.bits.storage_type() ==
+             mojo_base::BigBuffer::StorageType::kSharedMemory) {
+    receiver_.ReportBadMessage(
+        "Value bits expected to be inlined, large values are blob-wrapped");
+    return;
+  }
   value.external_objects = std::move(external_objects);
 
   blink::mojom::IDBTransaction::PutCallback wrapped_callback =
@@ -493,12 +513,15 @@ Status Transaction::DoPut(int64_t object_store_id,
   const IndexedDBObjectStoreMetadata* object_store =
       connection_->database()->GetObjectStoreMetadataIfExists(object_store_id);
   if (!object_store) {
-    std::move(bad_message_callback).Run("Invalid object_store_id");
+    ReportBadMessage(BadMessageReason::kTransactionDoPutInvalidObjectStoreId,
+                     "Invalid object_store_id",
+                     std::move(bad_message_callback));
     return Status::InvalidArgument("Invalid object_store_id.");
   }
   for (const IndexedDBIndexKeys& it : index_keys) {
     if (!object_store->indexes.contains(it.id)) {
-      std::move(bad_message_callback).Run("Invalid index id");
+      ReportBadMessage(BadMessageReason::kTransactionDoPutInvalidIndexId,
+                       "Invalid index id", std::move(bad_message_callback));
       return Status::InvalidArgument("Invalid index id");
     }
   }
@@ -517,7 +540,8 @@ Status Transaction::DoPut(int64_t object_store_id,
   }
 
   if (!key.IsValid()) {
-    std::move(bad_message_callback).Run("Invalid key");
+    ReportBadMessage(BadMessageReason::kTransactionDoPutInvalidKey,
+                     "Invalid key", std::move(bad_message_callback));
     return Status::InvalidArgument("Invalid key");
   }
 
@@ -541,7 +565,9 @@ Status Transaction::DoPut(int64_t object_store_id,
       [&](IndexWriterError error) {
         switch (error.type) {
           case IndexWriterError::Type::kInvalidKey:
-            std::move(bad_message_callback).Run("Invalid index key");
+            ReportBadMessage(BadMessageReason::kTransactionDoPutInvalidIndexKey,
+                             "Invalid index key",
+                             std::move(bad_message_callback));
             return Status::InvalidArgument("Invalid index key");
           case IndexWriterError::Type::kBackingStoreError:
             on_put_error(
@@ -565,7 +591,9 @@ Status Transaction::DoPut(int64_t object_store_id,
   // `ASSIGN_OR_RETURN` when SQLite is the only backing store.
   if (!new_record.has_value()) {
     if (new_record.error().IsInvalidArgument()) {
-      std::move(bad_message_callback).Run(new_record.error().ToString());
+      ReportBadMessage(BadMessageReason::kTransactionDoPutInvalidRecord,
+                       new_record.error().ToString(),
+                       std::move(bad_message_callback));
     }
     return new_record.error();
   }
@@ -612,14 +640,16 @@ void Transaction::SetIndexKeys(int64_t object_store_id,
   }
 
   if (mode() != blink::mojom::IDBTransactionMode::VersionChange) {
-    mojo::ReportBadMessage(
+    ReportBadMessage(
+        BadMessageReason::kTransactionSetIndexKeysWrongMode,
         "SetIndexKeys must be called from a version change transaction.");
     return;
   }
 
   if (!primary_key.IsValid() ||
       !std::ranges::all_of(index_keys.keys, &IndexedDBKey::IsValid)) {
-    mojo::ReportBadMessage("SetIndexKeys used with invalid key.");
+    ReportBadMessage(BadMessageReason::kTransactionSetIndexKeysInvalidKey,
+                     "SetIndexKeys used with invalid key.");
     return;
   }
 
@@ -691,7 +721,8 @@ void Transaction::SetIndexKeysDone() {
   }
 
   if (mode() != blink::mojom::IDBTransactionMode::VersionChange) {
-    mojo::ReportBadMessage(
+    ReportBadMessage(
+        BadMessageReason::kTransactionSetIndexKeysDoneWrongMode,
         "SetIndexKeysDone must be called from a version change transaction.");
     return;
   }
@@ -709,7 +740,9 @@ void Transaction::SetIndexKeysDone() {
             if (transaction.pending_preemptive_events_ == 0) {
               constexpr std::string_view kErrorMessage =
                   "SetIndexKeysDone called without beginning indexing";
-              std::move(report_bad_message_callback).Run(kErrorMessage);
+              ReportBadMessage(
+                  BadMessageReason::kTransactionSetIndexKeysDoneWithoutIndexing,
+                  kErrorMessage, std::move(report_bad_message_callback));
               return Status::InvalidArgument(kErrorMessage);
             }
             return Status::OK();
@@ -723,12 +756,6 @@ void Transaction::Commit(int64_t num_errors_handled) {
   }
 
   num_errors_handled_ = num_errors_handled;
-
-  // Always allow empty or delete-only transactions.
-  if (preliminary_size_estimate_ <= 0) {
-    SetCommitFlag();
-    return;
-  }
 
   bucket_context_->CheckCanUseDiskSpace(
       preliminary_size_estimate_, base::BindOnce(&Transaction::OnQuotaCheckDone,
@@ -820,7 +847,7 @@ void Transaction::BlobWriteComplete(base::TimeTicks start_time, Status result) {
 
 Status Transaction::DoPendingCommit() {
   TRACE_EVENT1("IndexedDB", "Transaction::DoPendingCommit", "txn.id", id());
-  CHECK(is_commit_pending_, base::NotFatalUntil::M145);
+  CHECK(is_commit_pending_);
 
   timeout_timer_.Stop();
 
@@ -893,7 +920,10 @@ Status Transaction::DoPendingCommit() {
                         token_clone.InitWithNewPipeAndPassReceiver());
                     transaction->bucket_context()
                         .file_system_access_context()
-                        ->SerializeHandle(std::move(token_clone),
+                        ->SerializeHandle(transaction->bucket_context()
+                                              .bucket_info()
+                                              .storage_key,
+                                          std::move(token_clone),
                                           std::move(deliver_serialized_token));
                   },
                   ptr_factory_.GetWeakPtr())),
@@ -1152,9 +1182,9 @@ void Transaction::NotifyOfIdbInternalsRelevantChange() {
 
 void Transaction::OnInactivityTimeout() {
   // The timeout timer should only be running when these conditions are met:
-  CHECK(used_, base::NotFatalUntil::M145);
-  CHECK(task_queue_.empty(), base::NotFatalUntil::M145);
-  CHECK(preemptive_task_queue_.empty(), base::NotFatalUntil::M145);
+  CHECK(used_);
+  CHECK(task_queue_.empty());
+  CHECK(preemptive_task_queue_.empty());
 
   const size_t num_transactions_across_all_connections =
       database_->GetNumTransactionsAcrossAllConnections();
@@ -1278,7 +1308,10 @@ Transaction::VerificationCallback Transaction::ObjectStoreMustExist(
          Transaction& transaction) {
         if (!transaction.connection_->database()->IsObjectStoreIdInMetadata(
                 object_store_id)) {
-          std::move(report_bad_message_callback).Run("Invalid object_store_id");
+          ReportBadMessage(
+              BadMessageReason::kTransactionObjectStoreMustExistInvalidId,
+              "Invalid object_store_id",
+              std::move(report_bad_message_callback));
           return Status::InvalidArgument("Invalid object_store_id.");
         }
 
@@ -1297,15 +1330,21 @@ Transaction::VerificationCallback Transaction::ObjectStoreAndIndexMustExist(
          Transaction& transaction) {
         if (index_id.has_value() &&
             *index_id == IndexedDBIndexMetadata::kInvalidId) {
-          std::move(report_bad_message_callback).Run("index_id must be valid");
+          ReportBadMessage(
+              BadMessageReason::
+                  kTransactionObjectStoreAndIndexMustExistInvalidIndexId,
+              "index_id must be valid", std::move(report_bad_message_callback));
           return Status::InvalidArgument("index_id must be valid.");
         }
         if (!transaction.connection_->database()
                  ->IsObjectStoreIdAndMaybeIndexIdInMetadata(
                      object_store_id,
                      index_id.value_or(IndexedDBIndexMetadata::kInvalidId))) {
-          std::move(report_bad_message_callback)
-              .Run("Invalid object_store_id or index_id");
+          ReportBadMessage(
+              BadMessageReason::
+                  kTransactionObjectStoreAndIndexMustExistInvalidIds,
+              "Invalid object_store_id or index_id",
+              std::move(report_bad_message_callback));
           return Status::InvalidArgument(
               "Invalid object_store_id or index_id.");
         }

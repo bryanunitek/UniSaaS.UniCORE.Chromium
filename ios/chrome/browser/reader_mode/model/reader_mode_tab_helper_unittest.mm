@@ -25,7 +25,6 @@
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
 #import "ios/chrome/browser/reader_mode/model/constants.h"
-#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_test.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_source_tab_helper.h"
@@ -755,28 +754,9 @@ TEST_F(ReaderModeTabHelperTest, TestDistillationCompletedAfterTimeout) {
   EXPECT_TRUE(reader_mode_tab_helper()->IsActive());
 }
 
-class ReaderModeTabHelperOptimizationGuideTest
-    : public ReaderModeTabHelperTest {
- public:
-  void SetUp() override {
-    feature_list_.InitAndEnableFeature(
-        kEnableReaderModeOptimizationGuideEligibility);
-
-    ReaderModeTabHelperTest::SetUp();
-  }
-
-  void TearDown() override {
-    ReaderModeTabHelperTest::TearDown();
-    feature_list_.Reset();
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
 // Tests that reader mode is eligible when the OptimizationGuideService provides
 // a hint on an eligible page.
-TEST_F(ReaderModeTabHelperOptimizationGuideTest, EligibilityForEligiblePage) {
+TEST_F(ReaderModeTabHelperTest, EligibilityForEligiblePage) {
   GURL test_url("https://test.url/");
   SetReaderModeState(web_state(), test_url,
                      ReaderModeHeuristicResult::kReaderModeEligible, "",
@@ -803,7 +783,7 @@ TEST_F(ReaderModeTabHelperOptimizationGuideTest, EligibilityForEligiblePage) {
 
 // Tests that reader mode is not eligible when the heuristic is not eligible
 // regardless of the OptimizationGuideService hint.
-TEST_F(ReaderModeTabHelperOptimizationGuideTest,
+TEST_F(ReaderModeTabHelperTest,
        EligibilityForNotEligiblePage) {
   GURL test_url("https://test.url/");
   SetReaderModeState(
@@ -833,7 +813,7 @@ TEST_F(ReaderModeTabHelperOptimizationGuideTest,
 
 // Tests that reader mode is not eligible when the OptimizationGuideService hint
 // returns ineligibility.
-TEST_F(ReaderModeTabHelperOptimizationGuideTest,
+TEST_F(ReaderModeTabHelperTest,
        NotEligibleWithOptimizationGuide) {
   GURL test_url("https://test.url/");
   SetReaderModeState(web_state(), test_url,
@@ -896,9 +876,6 @@ TEST_P(ReaderModeTabHelperWithEligibilityTest, TriggerHeuristicOnPageLoad) {
 TEST_P(ReaderModeTabHelperWithEligibilityTest,
        TriggerReadabilityHeuristicOnPageLoad) {
   ReaderModeHeuristicResult eligibility = GetEligibility();
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableReadabilityHeuristic);
 
   histogram_tester_.ExpectTotalCount(kReaderModeHeuristicResultHistogram, 0);
   ASSERT_EQ(0u, GetHeuristicResultEntries().size());

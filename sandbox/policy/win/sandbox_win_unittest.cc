@@ -21,7 +21,6 @@
 #include "base/scoped_native_library.h"
 #include "base/strings/string_util.h"
 #include "base/test/scoped_amount_of_physical_memory_override.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/types/expected.h"
 #include "base/win/security_descriptor.h"
 #include "base/win/sid.h"
@@ -456,55 +455,64 @@ TEST_F(SandboxWinTest, GeneratedPolicyTestNoSandbox) {
 
 TEST_F(SandboxWinTest, GetJobMemoryLimit) {
 #if defined(ARCH_CPU_64_BITS)
-  // Test GPU with physical memory > 64GB.
+  // Test ODML with physical memory > 64GB.
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(65));
-    std::optional<size_t> memory_limit =
-        SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(64).InBytes()));
+        base::GiB(65));
+    std::optional<size_t> memory_limit = SandboxWin::GetJobMemoryLimit(
+        sandbox::mojom::Sandbox::kOnDeviceModelExecution);
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiB(64).InBytes()));
   }
 
-  // Test GPU with physical memory > 32GB
+  // Test ODML with physical memory > 32GB
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(33));
-    std::optional<size_t> memory_limit =
-        SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(32).InBytes()));
+        base::GiB(33));
+    std::optional<size_t> memory_limit = SandboxWin::GetJobMemoryLimit(
+        sandbox::mojom::Sandbox::kOnDeviceModelExecution);
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiB(32).InBytes()));
   }
 
-  // Test GPU with physical memory > 16GB
+  // Test ODML with physical memory > 16GB
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(17));
-    std::optional<size_t> memory_limit =
-        SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(16).InBytes()));
+        base::GiB(17));
+    std::optional<size_t> memory_limit = SandboxWin::GetJobMemoryLimit(
+        sandbox::mojom::Sandbox::kOnDeviceModelExecution);
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiB(16).InBytes()));
   }
 
-  // Test GPU with physical memory < 16GB
+  // Test ODML with physical memory < 16GB
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(8));
+        base::GiB(8));
+    std::optional<size_t> memory_limit = SandboxWin::GetJobMemoryLimit(
+        sandbox::mojom::Sandbox::kOnDeviceModelExecution);
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiB(8).InBytes()));
+  }
+
+  // Test that GPU has high (1TB) memory limit.
+  {
+    base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+        base::GiB(8));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(8).InBytes()));
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::TiB(1).InBytes()));
   }
 
   // Test that Renderer has high (1TB) memory limit.
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(8));
+        base::GiB(8));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kRenderer);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::TiBU(1).InBytes()));
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::TiB(1).InBytes()));
   }
 #else
   // Test 32-bit processes don't get a limit.
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(8));
+        base::GiB(8));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kRenderer);
     EXPECT_FALSE(memory_limit.has_value());

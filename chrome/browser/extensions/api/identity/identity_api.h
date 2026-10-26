@@ -8,10 +8,12 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/callback_list.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -26,8 +28,8 @@
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
-#include "extensions/browser/event_router.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
 #include "google_apis/gaia/gaia_id.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -40,6 +42,10 @@ class Profile;
 
 namespace extensions {
 
+class EventRouter;
+class ExtensionPrefs;
+struct Event;
+
 class IdentityAPI : public BrowserContextKeyedAPI,
                     public signin::IdentityManager::Observer {
  public:
@@ -47,9 +53,9 @@ class IdentityAPI : public BrowserContextKeyedAPI,
   ~IdentityAPI() override;
 
   // Request serialization queue for getAuthToken.
-  IdentityMintRequestQueue* mint_queue();
+  IdentityMintRequestQueue& mint_queue();
 
-  IdentityTokenCache* token_cache();
+  IdentityTokenCache& token_cache();
 
   // GAIA id cache.
   void SetGaiaIdForExtension(const std::string& extension_id,
@@ -61,6 +67,14 @@ class IdentityAPI : public BrowserContextKeyedAPI,
   // If refresh tokens have been loaded, erases GAIA ids of accounts that are no
   // longer signed in to Chrome for all extensions.
   void EraseStaleGaiaIdsForAllExtensions();
+
+  // Tracks active web auth flows to prevent concurrent popups from the same
+  // extension. Returns a scoped closure that will automatically stop tracking
+  // when it's destroyed.
+  // Returns a null closure if the flow couldn't be started because another flow
+  // is already in progress for the same extension.
+  [[nodiscard]] base::ScopedClosureRunner StartTrackingWebAuthFlow(
+      const extensions::ExtensionId& extension_id);
 
   // BrowserContextKeyedAPI:
   void Shutdown() override;
@@ -128,6 +142,11 @@ class IdentityAPI : public BrowserContextKeyedAPI,
   void OnRefreshTokensLoaded() override;
   void OnRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info) override;
+  void OnErrorStateOfRefreshTokenUpdatedForAccount(
+      const CoreAccountInfo& account_info,
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
   // NOTE: This class must listen for this callback rather than
   // OnRefreshTokenRemovedForAccount() to obtain the Gaia ID of the removed
   // account.
@@ -141,6 +160,9 @@ class IdentityAPI : public BrowserContextKeyedAPI,
   void HandleSkipUIForTesting(base::OnceClosure on_complete);
 #endif
 
+ private:
+  void StopTrackingWebAuthFlow(const extensions::ExtensionId& extension_id);
+
   const raw_ptr<Profile> profile_;
   const raw_ptr<signin::IdentityManager> identity_manager_;
   const raw_ptr<ExtensionPrefs> extension_prefs_;
@@ -151,6 +173,8 @@ class IdentityAPI : public BrowserContextKeyedAPI,
   // Contains Gaia Id of accounts known to extensions.
   base::flat_set<GaiaId> accounts_known_to_extensions_;
 
+  base::flat_set<extensions::ExtensionId> active_web_auth_flows_;
+
   OnSignInChangedCallback on_signin_changed_callback_for_testing_;
 
   base::OnceCallbackList<void()> on_shutdown_callback_list_;
@@ -160,8 +184,8 @@ class IdentityAPI : public BrowserContextKeyedAPI,
   std::vector<base::OnceClosure> on_chrome_signin_dialog_completed_;
   // Should only be set in unittests.
   base::OnceCallback<void(base::OnceClosure)> skip_ui_for_testing_callback_;
-  base::WeakPtrFactory<IdentityAPI> weak_ptr_factory_{this};
 #endif
+  base::WeakPtrFactory<IdentityAPI> weak_ptr_factory_{this};
 };
 
 template <>

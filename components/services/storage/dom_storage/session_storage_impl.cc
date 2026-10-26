@@ -16,6 +16,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/not_fatal_until.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
@@ -78,6 +79,11 @@ SessionStorageImpl::~SessionStorageImpl() {
 void SessionStorageImpl::BindNamespace(
     const std::string& namespace_id,
     mojo::PendingReceiver<blink::mojom::SessionStorageNamespace> receiver) {
+  if (!IsNamespaceIdValid(namespace_id)) {
+    receiver_.ReportBadMessage(kInvalidNamespaceIdError);
+    return;
+  }
+
   if (connection_state_ != CONNECTION_FINISHED) {
     RunWhenConnected(base::BindOnce(&SessionStorageImpl::BindNamespace,
                                     weak_ptr_factory_.GetWeakPtr(),
@@ -128,6 +134,11 @@ void SessionStorageImpl::BindStorageArea(
 }
 
 void SessionStorageImpl::CreateNamespace(const std::string& namespace_id) {
+  if (!IsNamespaceIdValid(namespace_id)) {
+    receiver_.ReportBadMessage(kInvalidNamespaceIdError);
+    return;
+  }
+
   if (namespaces_.find(namespace_id) != namespaces_.end())
     return;
 
@@ -139,6 +150,12 @@ void SessionStorageImpl::CloneNamespace(
     const std::string& clone_from_namespace_id,
     const std::string& clone_to_namespace_id,
     mojom::SessionStorageCloneType clone_type) {
+  if (!IsNamespaceIdValid(clone_from_namespace_id) ||
+      !IsNamespaceIdValid(clone_to_namespace_id)) {
+    receiver_.ReportBadMessage(kInvalidNamespaceIdError);
+    return;
+  }
+
   if (namespaces_.find(clone_to_namespace_id) != namespaces_.end()) {
     // Non-immediate clones expect to be paired with a |Clone| from the mojo
     // namespace object. If that clone has already happened, then we don't need
@@ -204,6 +221,11 @@ void SessionStorageImpl::CloneNamespace(
 
 void SessionStorageImpl::DeleteNamespace(const std::string& namespace_id,
                                          bool should_persist) {
+  if (!IsNamespaceIdValid(namespace_id)) {
+    receiver_.ReportBadMessage(kInvalidNamespaceIdError);
+    return;
+  }
+
   auto namespace_it = namespaces_.find(namespace_id);
   // If the namespace has pending clones, do the clone now before destroying it.
   if (namespace_it != namespaces_.end()) {
@@ -218,6 +240,25 @@ void SessionStorageImpl::DeleteNamespace(const std::string& namespace_id,
       }
       namespace_ptr->CloneAllNamespacesWaitingForClone(database_.get(),
                                                        &metadata_, namespaces_);
+    }
+
+    // This namespace is still waiting for the `Clone()` call from the renderer
+    // that owns the source namespace. That call travels on a different pipe
+    // than this deletion, so it can still arrive. Tell the source namespace to
+    // drop it, as otherwise `RegisterShallowClonedNamespace()` would recreate
+    // this namespace with nobody left to delete it. This only applies to
+    // namespaces that are not persisted: window creation being refused after
+    // the renderer requested the clone always deletes without persisting,
+    // whereas a persisted namespace belongs to a window that was created, and
+    // its clone still has to be populated for session restore.
+    if (!should_persist &&
+        namespace_ptr->state() ==
+            SessionStorageNamespaceImpl::State::kNotPopulatedAndPendingClone) {
+      auto parent_it = namespaces_.find(
+          namespace_ptr->pending_population_from_parent_namespace());
+      if (parent_it != namespaces_.end()) {
+        parent_it->second->AbandonChildNamespaceWaitingForClone(namespace_id);
+      }
     }
 
     // The object hierarchy uses iterators bound to the metadata object, so
@@ -272,6 +313,11 @@ void SessionStorageImpl::GetUsage(GetUsageCallback callback) {
 void SessionStorageImpl::DeleteStorage(const blink::StorageKey& storage_key,
                                        const std::string& namespace_id,
                                        DeleteStorageCallback callback) {
+  if (!IsNamespaceIdValid(namespace_id)) {
+    receiver_.ReportBadMessage(kInvalidNamespaceIdError);
+    return;
+  }
+
   if (connection_state_ != CONNECTION_FINISHED) {
     RunWhenConnected(base::BindOnce(&SessionStorageImpl::DeleteStorage,
                                     weak_ptr_factory_.GetWeakPtr(), storage_key,
@@ -341,10 +387,26 @@ void SessionStorageImpl::ShutDown() {
   // Nothing to do if no connection to the database was ever finished.
   if (connection_state_ == CONNECTION_FINISHED) {
     // Flush any uncommitted data.
-    for (const auto& it : data_maps_) {
-      auto* area = it.second->storage_area();
-      area->ScheduleImmediateCommit();
+    for (const auto& [map_id, data_map] : data_maps_) {
+      data_map->storage_area()->ScheduleImmediateCommit();
     }
+  }
+
+  for (const auto& [map_id, data_map] : data_maps_) {
+    StorageAreaImpl* area = data_map->storage_area();
+    // Record data loss, which happens when this storage area destructs before
+    // persisting changes to `database_`.
+    //
+    // TODO(crbug.com/503422295): Monitor these histograms and if dropping
+    // changes is common then handle that here.
+    const bool data_loss_during_migration =
+        area->HasPendingCommit() && database_ && database_->is_migrating();
+
+    base::UmaHistogramBoolean("Storage.SessionStorage.MigrationDroppedChanges",
+                              data_loss_during_migration);
+
+    base::UmaHistogramBoolean("Storage.SessionStorage.ShutdownDroppedChanges",
+                              area->has_pending_load_read_write_tasks());
   }
 }
 
@@ -490,22 +552,31 @@ void SessionStorageImpl::OnDataMapDestruction(int64_t map_id) {
 }
 
 void SessionStorageImpl::OnCommitResult(DbStatus status) {
+  // Previous commit errors deleted and recreated the database below. Ignore
+  // additional errors from the old database while waiting for the new database
+  // to open. The `!database_` check additionally handles the case where
+  // recovery failed completely and we are now running without a database.
+  if (connection_state_ != CONNECTION_FINISHED || !database_) {
+    return;
+  }
   if (status.ok()) {
+    const DatabaseMetricsType metrics_type = database_->metrics_type();
     if (commit_error_count_ > 0 && tried_to_recover_from_commit_errors_) {
       base::UmaHistogramEnumeration(
-          "Storage.SessionStorage.Recovery.CommitErrorThresholdExceeded",
+          base::StrCat(
+              {"Storage.SessionStorage.Recovery.CommitErrorThresholdExceeded",
+               MaybeGetOnDiskExperimentalSuffix(metrics_type)}),
           DomStorageDatabaseRecoveryOutcome::
               kTransientErrorsAfterAttemptedRecovery);
     }
-    RecordCommitErrorCountAtReset("SessionStorage", commit_error_count_);
+    RecordCommitErrorCountAtReset("SessionStorage", commit_error_count_,
+                                  metrics_type);
     commit_error_count_ = 0;
     return;
   }
 
-  if (connection_state_ != CONNECTION_FINISHED) {
-    // Previous commit errors deleted and recreated the database below.  Ignore
-    // additional errors from the old database while waiting for the new
-    // database to open.
+  if (database_ && database_->is_migrating()) {
+    // Don't delete the source database while a migration is in progress.
     return;
   }
 
@@ -516,7 +587,9 @@ void SessionStorageImpl::OnCommitResult(DbStatus status) {
       // are still having problems: there isn't really anything left to try, so
       // just ignore errors.
       base::UmaHistogramEnumeration(
-          "Storage.SessionStorage.Recovery.CommitErrorThresholdExceeded",
+          base::StrCat(
+              {"Storage.SessionStorage.Recovery.CommitErrorThresholdExceeded",
+               MaybeGetOnDiskExperimentalSuffix(database_->metrics_type())}),
           DomStorageDatabaseRecoveryOutcome::
               kOngoingErrorsAfterAttemptedRecovery);
       return;
@@ -599,11 +672,18 @@ void SessionStorageImpl::DeleteNamespacesFromMetadataAndDatabase(
   CHECK_EQ(connection_state_, CONNECTION_FINISHED);
 
   // Remove each namespace from `metadata_`.
+  std::vector<std::string> namespaces_to_delete;
   std::vector<DomStorageDatabase::MapLocator> maps_to_delete;
-  for (const std::string& namespace_id : namespace_ids) {
+  for (std::string& namespace_id : namespace_ids) {
     std::map<blink::StorageKey,
              scoped_refptr<DomStorageDatabase::SharedMapLocator>>
         namespace_to_delete = metadata_.TakeNamespace(namespace_id);
+
+    if (namespace_to_delete.empty()) {
+      // An empty namespace is already deleted.
+      continue;
+    }
+    namespaces_to_delete.push_back(std::move(namespace_id));
 
     // Find unreferenced map key/value pairs to delete from `database_`.
     for (auto& [storage_key, map_locator] : namespace_to_delete) {
@@ -614,10 +694,11 @@ void SessionStorageImpl::DeleteNamespacesFromMetadataAndDatabase(
   }
 
   // Delete the namespaces and map key/values from `database_`.
-  if (!database_) {
+  if (namespaces_to_delete.empty() || !database_) {
     return;
   }
-  database_->DeleteSessions(std::move(namespace_ids), std::move(maps_to_delete),
+  database_->DeleteSessions(std::move(namespaces_to_delete),
+                            std::move(maps_to_delete),
                             base::BindOnce(&SessionStorageImpl::OnCommitResult,
                                            weak_ptr_factory_.GetWeakPtr()));
 }
@@ -754,10 +835,13 @@ void SessionStorageImpl::PurgeAllNamespaceDataMaps() {
 
 void SessionStorageImpl::DeleteAndRecreateDatabase(
     DomStorageRecoveryReason reason) {
+  CHECK(database_);
+  const DatabaseMetricsType metrics_type = database_->metrics_type();
+
   // Record the reason that initiated this recovery cycle. Only the first
   // reason is kept when recovery re-enters (e.g. open-fail after destroy).
   if (!recovery_state_) {
-    recovery_state_.emplace(reason, in_memory_);
+    recovery_state_.emplace(reason, metrics_type);
   }
 
   // We're about to set database_ to null, so delete the StorageAreas
@@ -768,9 +852,9 @@ void SessionStorageImpl::DeleteAndRecreateDatabase(
   // StorageAreas to be queued until the connection is complete.
   connection_state_ = CONNECTION_IN_PROGRESS;
   receiver_.Pause();
-  RecordCommitErrorCountAtReset("SessionStorage", commit_error_count_);
+  RecordCommitErrorCountAtReset("SessionStorage", commit_error_count_,
+                                metrics_type);
   commit_error_count_ = 0;
-  CHECK(database_);
   database_.reset();
 
   bool recreate_in_memory = false;

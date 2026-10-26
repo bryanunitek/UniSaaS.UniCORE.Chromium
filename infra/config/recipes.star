@@ -217,6 +217,10 @@ build_recipe(
 )
 
 build_recipe(
+    name = "recipe:chromium/crowbar",
+)
+
+build_recipe(
     name = "recipe:chromium/eval_prompts",
     bootstrappable = True,
 )
@@ -228,6 +232,11 @@ build_recipe(
 
 build_recipe(
     name = "recipe:chromium/mega_cq_launcher",
+)
+
+build_recipe(
+    name = "recipe:chromium/rts_complement_runner",
+    bootstrappable = POLYMORPHIC,
 )
 
 build_recipe(
@@ -311,10 +320,6 @@ build_recipe(
 )
 
 build_recipe(
-    name = "recipe:reclient_reclient_comparison",
-)
-
-build_recipe(
     name = "recipe:requires_testing_checker",
 )
 
@@ -353,9 +358,4 @@ build_recipe(
 
 infra_recipe = _recipe_for_package(
     "infra/recipe_bundles/chromium.googlesource.com/infra/infra",
-)
-
-infra_recipe(
-    name = "recipe:infra/crowbar",
-    recipe = "crowbar",
 )

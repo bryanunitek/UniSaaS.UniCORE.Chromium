@@ -16,13 +16,14 @@
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/test/integration/passwords_helper.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_test.h"
@@ -31,6 +32,7 @@ namespace {
 
 using browsing_data::BrowsingDataCounter;
 using password_manager::PasswordForm;
+using password_manager::PasswordString;
 
 class PasswordsCounterTest : public InProcessBrowserTest {
  public:
@@ -71,12 +73,12 @@ class PasswordsCounterTest : public InProcessBrowserTest {
   }
 
   void SetPasswordsDeletionPref(bool value) {
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         browsing_data::prefs::kDeletePasswords, value);
   }
 
   void SetDeletionPeriodPref(browsing_data::TimePeriod period) {
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         browsing_data::prefs::kDeleteTimePeriod, static_cast<int>(period));
   }
 
@@ -147,7 +149,7 @@ class PasswordsCounterTest : public InProcessBrowserTest {
     result.url = GURL(origin);
     if (!blocked_by_user) {
       result.username_value = base::ASCIIToUTF16(username);
-      result.password_value = u"hunter2";
+      result.password_value = PasswordString(u"hunter2");
     }
     result.blocked_by_user = blocked_by_user;
     result.date_created = time_;
@@ -175,7 +177,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, SameDomain) {
   AddLogin("https://www.chrome.com", "user1", false);
   AddLogin("https://www.chrome.com", "user2", false);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
@@ -197,7 +199,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, blocklisted) {
   AddLogin("https://www.google.com", "", true);
   AddLogin("https://www.chrome.com", "", true);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
@@ -221,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, PrefChanged) {
   AddLogin("https://www.google.com", "user", false);
   AddLogin("https://www.chrome.com", "user", false);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
@@ -242,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, PrefChanged) {
 IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, StoreChanged) {
   AddLogin("https://www.google.com", "user", false);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
@@ -277,7 +279,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, PeriodChanged) {
   RevertTimeInDays(30);
   AddLogin("https://www.chrome.com", "user", false);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
@@ -325,7 +327,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, MostCommonDomains) {
   SetTimesUsed(2);
   AddLogin("https://www.chrome.com", "user", false);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
@@ -345,7 +347,7 @@ IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, MostCommonDomains) {
 // Tests that the counter doesn't crash if restarted in a quick succession.
 // TODO(crbug.com/40918960): Upgrade this test to use SigninDataCounter.
 IN_PROC_BROWSER_TEST_F(PasswordsCounterTest, MultipleRestarts) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   browsing_data::PasswordsCounter counter(
       ProfilePasswordStoreFactory::GetForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),

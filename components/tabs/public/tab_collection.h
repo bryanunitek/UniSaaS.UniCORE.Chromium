@@ -5,7 +5,9 @@
 #ifndef COMPONENTS_TABS_PUBLIC_TAB_COLLECTION_H_
 #define COMPONENTS_TABS_PUBLIC_TAB_COLLECTION_H_
 
+#include <concepts>
 #include <cstddef>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <optional>
@@ -51,7 +53,7 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
     STACK_ALLOCATED();
 
    public:
-    using iterator_category = std::forward_iterator_tag;
+    using iterator_category = std::bidirectional_iterator_tag;
     using value_type = tabs::TabInterface*;
     using difference_type = ptrdiff_t;
     using pointer = value_type;
@@ -63,6 +65,7 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
                 bool is_end = false);
     explicit TabIterator(TabInterface* tab);
     TabIterator(const TabIterator& iterator);
+    TabIterator& operator=(const TabIterator& iterator);
     ~TabIterator();
 
     pointer operator->() const { return cur_; }
@@ -79,6 +82,17 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
       return it;
     }
 
+    TabIterator& operator--() {
+      Prev();
+      return *this;
+    }
+
+    TabIterator operator--(int) {
+      TabIterator it(*this);
+      Prev();
+      return it;
+    }
+
     bool operator==(const TabIterator& other) const {
       return cur_ == other.cur_;
     }
@@ -86,6 +100,7 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
    private:
     TabIterator(const tabs::TabCollection* root, bool is_end);
     void Next();
+    void Prev();
 
     // Contains information of the index within a collection to access during
     // the tree traversal. Multiple frames can be stored in the stack which
@@ -95,27 +110,38 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
       size_t index;
     };
 
-    // Points to the currently accessed tab during iteration.
-    raw_ptr<tabs::TabInterface> cur_;
-
-    // Points to the root tab collection that the iterator is traversing.
-    raw_ptr<const tabs::TabCollection> root_;
-
     // A stack used to maintain the traversal state for inorder traversal
     // of tabs within the TabCollection hierarchy. Each Frame on the stack
     // is a TabCollection in the current path of traversal, along
     // with the index of the next child to be visited. This is implemented as a
     // vector to take advantage of reserving memory for performance reasons.
     std::vector<Frame> stack_;
+
+    // Points to the currently accessed tab during iteration.
+    raw_ptr<tabs::TabInterface> cur_;
+
+    // Points to the root tab collection that the iterator is traversing.
+    raw_ptr<const tabs::TabCollection> root_;
   };
 
   using iterator = TabIterator;
   using const_iterator = TabIterator;
+  using reverse_iterator = std::reverse_iterator<TabIterator>;
+  using const_reverse_iterator = std::reverse_iterator<TabIterator>;
 
   const_iterator begin() const {
     return TabIterator(GetPassKey(), this, false);
   }
+
   const_iterator end() const { return TabIterator(GetPassKey(), this, true); }
+
+  const_reverse_iterator rbegin() const {
+    return std::make_reverse_iterator(end());
+  }
+
+  const_reverse_iterator rend() const {
+    return std::make_reverse_iterator(begin());
+  }
 
   // Type describes the various kinds of tab collections:
   // - TABSTRIP:  The main container for tabs in a browser window.
@@ -124,7 +150,7 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
   // - GROUP:     A container to grouped tabs.
   // - SPLIT:     A container for split tabs.
   // LINT.IfChange(TYPE)
-  enum class Type {
+  enum class Type : uint8_t {
     MIN,
     TABSTRIP = MIN,
     PINNED,
@@ -199,13 +225,18 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
   void OnTabRemovedFromTree();
 
   // Manipulate direct child tabs.
-  TabInterface* AddTab(std::unique_ptr<TabInterface> tab, size_t index);
+  TabInterface* AddTab(ScopedTab tab, size_t index);
+  template <typename T>
+    requires std::derived_from<T, TabInterface>
+  TabInterface* AddTab(std::unique_ptr<T> tab, size_t index) {
+    return AddTab(ScopedTab(tab.release()), index);
+  }
+
   // Removes the tab if it is a direct child of this collection. This is then
-  // returned to the caller as an unique_ptr. If the tab is not present it will
+  // returned to the caller as a ScopedTab. If the tab is not present it will
   // crash. This may overridden to return nullptr if the collection does not
   // support removing tabs.
-  [[nodiscard]] virtual std::unique_ptr<TabInterface> MaybeRemoveTab(
-      TabInterface* tab);
+  [[nodiscard]] virtual ScopedTab MaybeRemoveTab(TabInterface* tab);
 
   // Manipulate direct child collections.
   // Adds a collection as a direct child of this collection. If this succeeds it
@@ -302,14 +333,14 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
     return base::PassKey<TabCollection>();
   }
 
-  // Total number of tabs in the collection.
-  size_t recursive_tab_count_ = 0;
-
  private:
-  raw_ptr<TabCollection> parent_ = nullptr;
   Type type_;
   TypeEnumSet supported_child_collections_;
   bool supports_tabs_;
+  bool notify_immediately_ = true;
+
+  // Total number of tabs in the collection.
+  size_t recursive_tab_count_ = 0;
 
   // Mutable to allow adding/removing `TabCollectionObserver`'s through a const
   // TabCollection inorder to avoid updates to the collection.
@@ -318,15 +349,33 @@ class TabCollection : public SupportsHandles<TabCollectionHandleFactory> {
   // batched notifications to allow for delayed propagation.
   std::vector<base::OnceClosure> pending_notifications_;
 
-  bool notify_immediately_ = true;
-
   // Underlying implementation for the storage of children.
   std::unique_ptr<TabCollectionStorage> impl_;
+
+  raw_ptr<TabCollection> parent_ = nullptr;
+
+  friend class TabCollectionStorage;
 };
 
 using TabCollectionHandle = TabCollection::Handle;
 using TabCollectionNodeHandle = TabCollection::NodeHandle;
 using TabCollectionNodes = TabCollection::NodeHandles;
+
+class TabIteratorRange {
+  STACK_ALLOCATED();
+
+ public:
+  TabIteratorRange(TabCollection::TabIterator begin,
+                   TabCollection::TabIterator end)
+      : begin_(begin), end_(end) {}
+
+  TabCollection::TabIterator begin() const { return begin_; }
+  TabCollection::TabIterator end() const { return end_; }
+
+ private:
+  TabCollection::TabIterator begin_;
+  TabCollection::TabIterator end_;
+};
 
 }  // namespace tabs
 

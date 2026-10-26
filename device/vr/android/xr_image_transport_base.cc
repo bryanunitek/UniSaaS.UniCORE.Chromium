@@ -81,7 +81,8 @@ void XrImageTransportBase::OnMailboxBridgeReady(XrInitStatusCallback callback) {
 
 bool XrImageTransportBase::ResizeSharedBuffer(WebXrPresentationState* webxr,
                                               const gfx::Size& size,
-                                              WebXrSharedBuffer* buffer) {
+                                              WebXrSharedBuffer* buffer,
+                                              GrSurfaceOrigin surface_origin) {
   CHECK(IsOnGlThread());
 
   if (buffer->shared_image && buffer->shared_image->size() == size) {
@@ -111,7 +112,7 @@ bool XrImageTransportBase::ResizeSharedBuffer(WebXrPresentationState* webxr,
   // The SharedImages created here will eventually be transferred to other
   // processes to have their contents read/written via WebGL for WebXR.
   gpu::SharedImageUsageSet shared_image_usage =
-      gpu::SHARED_IMAGE_USAGE_SCANOUT | gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
+      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
       gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
 
   // If the XRSession is producing frames with WebGPU then the appropriate usage
@@ -131,7 +132,7 @@ bool XrImageTransportBase::ResizeSharedBuffer(WebXrPresentationState* webxr,
   gmb_handle.android_hardware_buffer = buffer->scoped_ahb_handle.Clone();
 
   buffer->shared_image = mailbox_bridge_->CreateSharedImage(
-      std::move(gmb_handle), format, size, gfx::ColorSpace(),
+      std::move(gmb_handle), format, size, gfx::ColorSpace(), surface_origin,
       shared_image_usage, buffer->sync_token);
   CHECK(buffer->shared_image);
 
@@ -185,7 +186,10 @@ WebXrSharedBuffer* XrImageTransportBase::TransferFrame(
 
   WebXrSharedBuffer* shared_buffer =
       webxr->GetAnimatingFrame()->shared_buffer.get();
-  ResizeSharedBuffer(webxr, frame_size, shared_buffer);
+  GrSurfaceOrigin surface_origin = IsWebGPUSession()
+                                       ? kTopLeft_GrSurfaceOrigin
+                                       : kBottomLeft_GrSurfaceOrigin;
+  ResizeSharedBuffer(webxr, frame_size, shared_buffer, surface_origin);
   // Sanity check that the lazily created/resized buffer looks valid.
   DCHECK(shared_buffer->shared_image);
   DCHECK(shared_buffer->local_eglimage.is_valid());
@@ -199,7 +203,6 @@ WebXrSharedBuffer* XrImageTransportBase::TransferFrame(
   // it's only eligible for reuse after all reads from it are complete, meaning
   // that it's transitioned through "processing" and "rendering" states back
   // to "animating".
-  DCHECK(shared_buffer->sync_token.HasData());
   DVLOG(2) << ": SyncToken=" << shared_buffer->sync_token.ToDebugString();
 
   return shared_buffer;

@@ -73,30 +73,25 @@
   switch (type) {
       // Main page toggles.
     case CustomizationToggleType::kMostVisited:
-      return DefaultSymbolWithPointSize(kHistorySymbol, kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolHistory, kToggleIconPointSize);
     case CustomizationToggleType::kMagicStack:
-      return DefaultSymbolWithPointSize(kMagicStackSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolMagicStack, kToggleIconPointSize);
     case CustomizationToggleType::kDiscover:
-      return DefaultSymbolWithPointSize(kDiscoverFeedSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolDiscoverFeed, kToggleIconPointSize);
 
       // Magic Stack page toggles.
     case CustomizationToggleType::kSafetyCheck:
-      return DefaultSymbolWithPointSize(kCheckmarkShieldSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolCheckmarkShield, kToggleIconPointSize);
     case CustomizationToggleType::kTapResumption:
-      return DefaultSymbolWithPointSize(kMacbookAndIPhoneSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolMacbookAndIPhone, kToggleIconPointSize);
     case CustomizationToggleType::kTips:
-      return DefaultSymbolWithPointSize(kListBulletClipboardSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolListBulletClipboard,
+                                 kToggleIconPointSize);
     case CustomizationToggleType::kShopCard: {
       UIImageSymbolConfiguration* fallbackImageConfig =
           [UIImageSymbolConfiguration
               configurationWithWeight:UIImageSymbolWeightLight];
-      return CustomSymbolWithConfiguration(kDownTrendSymbol,
-                                           fallbackImageConfig);
+      return SymbolWithConfiguration(SymbolDownTrend, fallbackImageConfig);
       NOTREACHED();
     }
   }
@@ -224,7 +219,7 @@
   switch (page) {
     case CustomizationMenuPage::kMain:
       return l10n_util::GetNSString(
-          IDS_IOS_HOME_CUSTOMIZATION_MAIN_PAGE_NAVIGATION_TITLE);
+          IDS_IOS_NEW_TAB_PAGE_CUSTOMIZATION_MAIN_PAGE_NAVIGATION_TITLE);
     case CustomizationMenuPage::kMagicStack:
       return l10n_util::GetNSString(
           IDS_IOS_HOME_CUSTOMIZATION_MAGIC_STACK_TITLE);

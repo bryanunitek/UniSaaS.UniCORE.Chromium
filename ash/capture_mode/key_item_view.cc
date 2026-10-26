@@ -37,55 +37,26 @@ constexpr char kGoogleSansFont[] = "Google Sans";
 constexpr int kKeyItemViewFontSize = 18;
 constexpr int kKeyItemViewLineHeight = 24;
 
-SkColor GetColor() {
-  return capture_mode_util::GetColorProviderForNativeTheme()->GetColor(
-      cros_tokens::kCrosSysSystemBaseElevated);
-}
-
 }  // namespace
 
 KeyItemView::KeyItemView(ui::KeyboardCode key_code)
     : key_code_(key_code),
-      shadow_(SystemShadow::CreateShadowOnTextureLayer(
-          SystemShadow::Type::kElevation4)) {
+      shadow_(SystemDecoration::CreateShadowOnNinePatchLayerForView(
+          this,
+          SystemDecoration::ShadowType::kElevation4)) {
   SetPaintToLayer();
-  SetBackground(
-      views::CreateRoundedRectBackground(GetColor(), kKeyItemHeight / 2));
   layer()->SetFillsBoundsOpaquely(false);
+  SetBackground(views::CreateRoundedRectBackground(
+      cros_tokens::kCrosSysSystemBaseElevated, kKeyItemHeight / 2));
 
   capture_mode_util::SetHighlightBorder(
       this, kKeyItemHeight / 2,
       views::HighlightBorder::Type::kHighlightBorderOnShadow);
 
-  shadow_->SetRoundedCornerRadius(kKeyItemHeight / 2);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kKeyItemHeight / 2.0f));
 }
 
 KeyItemView::~KeyItemView() = default;
-
-void KeyItemView::AddedToWidget() {
-  // Since the layer of the shadow has to be added as a sibling to this view's
-  // layer, we need to wait until the view is added to the widget.
-  auto* parent = layer()->parent();
-  parent->Add(shadow_->GetLayer());
-  parent->StackAtBottom(shadow_->GetLayer());
-
-  // Make the shadow observe the color provider source change to update the
-  // colors.
-  shadow_->ObserveColorProviderSource(GetWidget());
-}
-
-void KeyItemView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  // The shadow layer is a sibling of this view's layer, and should have the
-  // same bounds. Need to update the location of the shadow when the key items
-  // in the combo change position and/or size.
-  shadow_->SetContentBounds(layer()->bounds());
-}
-
-void KeyItemView::OnThemeChanged() {
-  views::View::OnThemeChanged();
-  GetBackground()->SetColor(GetColor());
-  SchedulePaint();
-}
 
 void KeyItemView::Layout(PassKey) {
   const auto bounds = GetContentsBounds();

@@ -10,12 +10,22 @@ private enum Constants {
   static let compactHeightSheetWidth: CGFloat = 568
 }
 
+/// Non-generic protocol used to capture `self` in KVO observation closures without
+/// capturing the non-Sendable generic metatype `Content.Type`.
+@MainActor
+private protocol OverflowMenuSizing: AnyObject, Sendable {
+  var scrollView: UIScrollView? { get }
+  func updatePreferredContentSize(contentSize: CGSize)
+}
+
 // UIHostingController subclass for the overflow menu. Mostly used to set
 // preferredContentSize in compact height environments.
-class OverflowMenuHostingController<Content>: UIHostingController<Content> where Content: View {
+class OverflowMenuHostingController<Content>: UIHostingController<Content>, OverflowMenuSizing,
+  @unchecked Sendable
+where Content: View {
   let uiConfiguration: OverflowMenuUIConfiguration
   private var contentSizeObservation: NSKeyValueObservation?
-  private var scrollView: UIScrollView?
+  fileprivate var scrollView: UIScrollView?
   private var lastLaidOutBoundsSize: CGSize = .zero
 
   init(rootView: Content, uiConfiguration: OverflowMenuUIConfiguration) {
@@ -46,11 +56,16 @@ class OverflowMenuHostingController<Content>: UIHostingController<Content> where
     preferredContentSize =
       traitCollection.verticalSizeClass == .compact ? compactHeightPreferredContentSize : .zero
 
-    uiConfiguration.presentingViewControllerHorizontalSizeClass =
-      presentingViewController?.traitCollection.horizontalSizeClass == .regular
-      ? .regular : .compact
-    uiConfiguration.presentingViewControllerVerticalSizeClass =
-      presentingViewController?.traitCollection.verticalSizeClass == .regular ? .regular : .compact
+    // Preserve the initial size classes passed to `uiConfiguration` if
+    // `presentingViewController` is nil (e.g. before presentation completes or
+    // when hosted directly in unit tests).
+    if let presentingViewController = presentingViewController {
+      uiConfiguration.presentingViewControllerHorizontalSizeClass =
+        presentingViewController.traitCollection.horizontalSizeClass == .regular
+        ? .regular : .compact
+      uiConfiguration.presentingViewControllerVerticalSizeClass =
+        presentingViewController.traitCollection.verticalSizeClass == .regular ? .regular : .compact
+    }
   }
 
   override func viewWillAppear(_ animated: Bool) {
@@ -76,11 +91,16 @@ class OverflowMenuHostingController<Content>: UIHostingController<Content> where
     preferredContentSize =
       traitCollection.verticalSizeClass == .compact ? compactHeightPreferredContentSize : .zero
 
-    uiConfiguration.presentingViewControllerHorizontalSizeClass =
-      presentingViewController?.traitCollection.horizontalSizeClass == .regular
-      ? .regular : .compact
-    uiConfiguration.presentingViewControllerVerticalSizeClass =
-      presentingViewController?.traitCollection.verticalSizeClass == .regular ? .regular : .compact
+    if let presentingViewController = presentingViewController {
+      uiConfiguration.presentingViewControllerHorizontalSizeClass =
+        presentingViewController.traitCollection.horizontalSizeClass == .regular
+        ? .regular : .compact
+      uiConfiguration.presentingViewControllerVerticalSizeClass =
+        presentingViewController.traitCollection.verticalSizeClass == .regular ? .regular : .compact
+    }
+    if let scrollView = scrollView {
+      updatePreferredContentSize(contentSize: scrollView.contentSize)
+    }
   }
 
   // MARK: - Private
@@ -98,15 +118,17 @@ class OverflowMenuHostingController<Content>: UIHostingController<Content> where
 
     self.scrollView = scrollView
 
+    let sizingTarget: any
+    OverflowMenuSizing = self
     contentSizeObservation = scrollView.observe(\.contentSize, options: [.initial, .new]) {
-      [weak self] _, _ in
-      guard let self = self else { return }
+      [weak sizingTarget] _, _ in
+      guard let sizingTarget = sizingTarget else { return }
       // Swift KVO closures run in a non-isolated context. Since both `UIScrollView`
       // and this class are `@MainActor` (main thread)-isolated, wrap the update in an
       // asynchronous Task on `@MainActor` to safely access UI properties.
       Task { @MainActor in
-        if let scrollView = self.scrollView {
-          self.updatePreferredContentSize(contentSize: scrollView.contentSize)
+        if let scrollView = sizingTarget.scrollView {
+          sizingTarget.updatePreferredContentSize(contentSize: scrollView.contentSize)
         }
       }
     }
@@ -114,13 +136,14 @@ class OverflowMenuHostingController<Content>: UIHostingController<Content> where
 
   /// Updates the view controller's `preferredContentSize` based on the scroll
   /// view's content size, top insets, and bottom safe area. This is restricted
-  /// to iPhone portrait to preserve default popover sizing on iPad.
-  private func updatePreferredContentSize(contentSize: CGSize) {
-    // Only update preferredContentSize dynamically in regular height (portrait iPhone).
+  /// to compact-width regular-height presentations to preserve default popover
+  /// sizing in regular-width environments.
+  fileprivate func updatePreferredContentSize(contentSize: CGSize) {
+    // Only update preferredContentSize dynamically in compact-width regular-height.
     // In compact height (landscape iPhone), use compactHeightPreferredContentSize.
-    // On iPad, keep default popover sizing (.zero).
+    // In regular width (iPad or unfolded Duo), keep default popover sizing (.zero).
     guard
-      traitCollection.userInterfaceIdiom == .phone
+      uiConfiguration.presentingViewControllerHorizontalSizeClass == .compact
         && traitCollection.verticalSizeClass == .regular
     else { return }
 

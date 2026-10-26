@@ -115,7 +115,7 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
   PaintArtifactCompositor& operator=(const PaintArtifactCompositor&) = delete;
   ~PaintArtifactCompositor() override;
 
-  void Trace(Visitor*) const;
+  void Trace(Visitor*) const override;
 
   struct ViewportProperties {
     STACK_ALLOCATED();
@@ -188,15 +188,17 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
   // noncomposited nodes, and is used for Scroll Unification to generate scroll
   // nodes for noncomposited scrollers to complete the compositor's scroll
   // property tree.
-  void Update(const PaintArtifact& artifact,
-              const ViewportProperties& viewport_properties,
-              const StackScrollTranslationVector& scroll_translation_nodes,
-              Vector<std::unique_ptr<cc::ViewTransitionRequest>> requests);
+  void Update(
+      const PaintArtifact& artifact,
+      const ViewportProperties& viewport_properties,
+      const StackTransformPaintPropertyNodeVector& scroll_translation_nodes,
+      Vector<std::unique_ptr<cc::ViewTransitionRequest>> requests);
 
   bool DirectlyUpdateCompositedOpacityValue(const EffectPaintPropertyNode&);
   bool DirectlyUpdateScrollOffsetTransform(const TransformPaintPropertyNode&);
   bool DirectlyUpdateTransform(const TransformPaintPropertyNode&);
   bool DirectlyUpdatePageScaleTransform(const TransformPaintPropertyNode&);
+  bool DirectlyUpdateScrollingContentsCullRect(const ScrollPaintPropertyNode&);
 
   // Directly sets cc::ScrollTree::current_scroll_offset. This doesn't affect
   // cc::TransformNode::scroll_offset (which will be synched with blink
@@ -206,7 +208,8 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
 
   void DropCompositorScrollDeltaNextCommit(CompositorElementId);
 
-  uint32_t GetMainThreadRepaintReasons(const ScrollPaintPropertyNode&) const;
+  cc::MainThreadRepaintReasons GetMainThreadRepaintReasons(
+      const ScrollPaintPropertyNode&) const;
   // Returns true if the scroll node is currently composited in cc.
   // TODO(crbug.com/40517276): Remove this function after launching
   // RasterInducingScroll.
@@ -224,11 +227,10 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
     get_canvas_snapshot_callback_ = std::move(callback);
   }
 
-  bool HasCanvasChildPaintRecord(DOMNodeId child_id) const;
-  std::optional<CanvasChildPaintRecord> GetCanvasChildPaintRecord(
-      DOMNodeId child_id) const;
-  const CanvasChildPaintState* GetCanvasChildPaintState(
-      DOMNodeId child_id) const;
+  std::optional<CanvasDrawablePaintRecord> GetCanvasDrawablePaintRecord(
+      DOMNodeId drawable_id) const;
+  const CanvasDrawablePaintState* GetCanvasDrawablePaintState(
+      DOMNodeId drawable_id) const;
 
   // Called when the local frame view that owns this compositor is
   // going to be removed from its frame.
@@ -261,10 +263,6 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
   // Invalidates the scrollbar layer. Returns true if the scrollbar layer is
   // found by `element_id`.
   bool SetScrollbarNeedsDisplay(CompositorElementId element_id);
-
-  // Sets color for solid color scrollbar layer. Returns true if the scrollbar
-  // layer is found by `element_id`.
-  bool SetScrollbarSolidColor(CompositorElementId element_id, SkColor4f color);
 
   bool ShouldAlwaysUpdateOnScroll() const {
     return should_always_update_on_scroll_;
@@ -323,6 +321,8 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
   PendingLayer::CompositingType ChunkCompositingType(const PaintArtifact&,
                                                      const PaintChunk&) const;
 
+  void AddRangeDependentScroll(const PropertyTreeState&);
+
   static void UpdateRenderSurfaceForEffects(
       cc::EffectTree&,
       const cc::LayerList&,
@@ -355,7 +355,7 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
 
   class OldPendingLayerMatcher;
   PendingLayers pending_layers_;
-  HashMap<DOMNodeId, wtf_size_t> canvas_child_layer_map_;
+  HashMap<DOMNodeId, wtf_size_t> canvas_drawable_layer_map_;
   GetCanvasSnapshotCallback get_canvas_snapshot_callback_;
 
   class Layerizer;
@@ -370,6 +370,11 @@ class PLATFORM_EXPORT PaintArtifactCompositor final
   // scrolling (including raster-inducing and main-thread repainted).
   HeapHashMap<Member<const TransformPaintPropertyNode>, ScrollTranslationInfo>
       painted_scroll_translations_;
+
+  // Scroll nodes whose painted scroll ranges (i.e. scrolling contents cull
+  // rects) the last layerization result depended on. We'll need a full update
+  // if any of these scroll nodes' scrolling contents cull rects change.
+  HeapHashSet<Member<const ScrollPaintPropertyNode>> range_dependent_scrolls_;
 
   friend class PaintArtifactCompositorTest;
 };

@@ -11,18 +11,16 @@
 #include "base/containers/to_vector.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/address_test_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_hierarchies.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_profile_comparator.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_test_api.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/geo/alternative_state_name_map_test_utils.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map_test_util.h"
 #include "components/autofill/core/browser/geo/country_data.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -49,68 +47,11 @@ TEST_F(AddressTest, GetCountry) {
 
   address.SetInfo(ADDRESS_HOME_COUNTRY, u"US", "en-US");
   EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"United States");
-  EXPECT_EQ(address.GetInfo(AutofillType(ADDRESS_HOME_COUNTRY), "en-US"),
-            u"United States");
-  EXPECT_EQ(address.GetInfo(
-                AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-                "en-US"),
-            u"US");
+  EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"US");
 
   address.SetRawInfo(ADDRESS_HOME_COUNTRY, u"CA");
   EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"Canada");
-  EXPECT_EQ(address.GetInfo(AutofillType(ADDRESS_HOME_COUNTRY), "en-US"),
-            u"Canada");
-  EXPECT_EQ(address.GetInfo(
-                AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-                "en-US"),
-            u"CA");
-}
-
-// Test that country data can be properly returned as either a country code or a
-// full country name that can even be localized.
-TEST_F(AddressTest, SetHtmlCountryCodeTypeWithFullCountryName) {
-  Address address(kLegacyHierarchyCountryCode);
-  EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"");
-
-  AutofillType autofill_type(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true);
-
-  // Test that the country value can be set and retrieved if it is not
-  // a country code but a full country name.
-  address.SetInfo(autofill_type, u"Germany", "en-US");
-  EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"Germany");
-  EXPECT_EQ(address.GetInfo(
-                AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-                "en-US"),
-            u"DE");
-
-  // Reset the country and verify that the reset works as expected.
-  address.SetInfo(autofill_type, u"", "en-US");
-  EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"");
-  EXPECT_EQ(address.GetInfo(
-                AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-                "en-US"),
-            u"");
-
-  // Test that the country value can be set and retrieved if it is not
-  // a country code but a full country name with a non-standard locale.
-  address.SetInfo(autofill_type, u"deutschland", "de");
-  EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"Germany");
-  EXPECT_EQ(address.GetInfo(
-                AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-                "en-US"),
-            u"DE");
-
-  // Reset the country.
-  address.SetInfo(autofill_type, u"", "en-US");
-
-  // Test that the country is still stored correctly with a supplied
-  // country code.
-  address.SetInfo(autofill_type, u"DE", "en-US");
-  EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"Germany");
-  EXPECT_EQ(address.GetInfo(
-                AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true),
-                "en-US"),
-            u"DE");
+  EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"CA");
 }
 
 // Test that we properly detect country codes appropriate for each country.
@@ -143,27 +84,20 @@ TEST_F(AddressTest, SetCountry) {
   EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"");
   EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"");
 
-  // Test setting the country based on an HTML field type.
-  AutofillType html_type_country_code =
-      AutofillType(ADDRESS_HOME_COUNTRY, /*is_country_code=*/true);
-  address.SetInfo(html_type_country_code, u"US", "en-US");
+  address.SetInfo(ADDRESS_HOME_COUNTRY, u"US", "en-US");
   EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"US");
   EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"United States");
 
-  // Test case-insensitivity when setting the country based on an HTML field
-  // type.
-  address.SetInfo(html_type_country_code, u"cA", "en-US");
+  // Test case-insensitivity when setting a country code.
+  address.SetInfo(ADDRESS_HOME_COUNTRY, u"cA", "en-US");
   EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"CA");
   EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"Canada");
 
-  // Test setting the country based on invalid data with an HTML field type.
-  address.SetInfo(html_type_country_code, u"unknown", "en-US");
-  EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"");
-  EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"");
-
-  // Test incorrect use of country codes (when a country name is passed
-  // as a country code).
-  address.SetInfo(html_type_country_code, u"日本", "ja-JP");
+  // Test non-standard / localized country names.
+  address.SetInfo(ADDRESS_HOME_COUNTRY, u"deutschland", "de");
+  EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"DE");
+  EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "de"), u"Deutschland");
+  address.SetInfo(ADDRESS_HOME_COUNTRY, u"日本", "ja-JP");
   EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"JP");
   EXPECT_EQ(address.GetInfo(ADDRESS_HOME_COUNTRY, "en-US"), u"Japan");
 }
@@ -194,8 +128,8 @@ TEST_F(AddressTest, IsCountry) {
     SCOPED_TRACE(valid_match);
     FieldTypeSet matching_types;
     address.GetMatchingTypes(ASCIIToUTF16(valid_match), "US", &matching_types);
-    ASSERT_EQ(1U, matching_types.size());
-    EXPECT_EQ(ADDRESS_HOME_COUNTRY, *matching_types.begin());
+    ASSERT_EQ(matching_types.size(), 1U);
+    EXPECT_EQ(*matching_types.begin(), ADDRESS_HOME_COUNTRY);
   }
 
   const char* const kInvalidMatches[] = {"United", "Garbage"};
@@ -203,7 +137,7 @@ TEST_F(AddressTest, IsCountry) {
     FieldTypeSet matching_types;
     address.GetMatchingTypes(ASCIIToUTF16(invalid_match), "US",
                              &matching_types);
-    EXPECT_EQ(0U, matching_types.size());
+    EXPECT_EQ(matching_types.size(), 0U);
   }
 
   // Make sure that garbage values don't match when the country code is empty.
@@ -211,7 +145,7 @@ TEST_F(AddressTest, IsCountry) {
   EXPECT_EQ(address.GetRawInfo(ADDRESS_HOME_COUNTRY), u"");
   FieldTypeSet matching_types;
   address.GetMatchingTypes(u"Garbage", "US", &matching_types);
-  EXPECT_EQ(0U, matching_types.size());
+  EXPECT_EQ(matching_types.size(), 0U);
 }
 
 // Verifies that Address::GetInfo() correctly combines address lines.
@@ -439,15 +373,11 @@ TEST_F(AddressTest, SetStreetAddressRejectsAddressesWithTrailingBlankLines) {
 // Verifies that the merging-related methods for structured addresses are
 // implemented correctly. This is not a test of the merging logic itself.
 TEST_F(AddressTest, TestMergeStructuredAddresses) {
-  AutofillProfileComparator profile_comparator("en-US");
-
   // The two zip codes have a is-substring relation and are mergeable.
   AutofillProfile profile1("1", AutofillProfile::RecordType::kAccount,
                            AddressCountryCode(kLegacyHierarchyCountryCode));
   AutofillProfile profile2("2", AutofillProfile::RecordType::kAccount,
                            AddressCountryCode(kLegacyHierarchyCountryCode));
-  // Two empty profiles are mergeable by default.
-  EXPECT_TRUE(profile_comparator.AreMergeable(profile1, profile2));
   // We use SetProfileInfo instead of SetRawInfo as it calls
   // FinalizeAfterImport() making it more similar to how the tree is handled in
   // prod - which is recommended as we're using tree's interfaces for merging.
@@ -457,8 +387,6 @@ TEST_F(AddressTest, TestMergeStructuredAddresses) {
   test::SetProfileInfo(
       &profile2,
       test::SetProfileInfoOptionsBuilder().with_zipcode("1234").Build());
-
-  EXPECT_TRUE(profile_comparator.AreMergeable(profile1, profile2));
 
   base::Time old_time;
   ASSERT_TRUE(
@@ -471,12 +399,16 @@ TEST_F(AddressTest, TestMergeStructuredAddresses) {
   profile2.usage_history().set_use_date(old_time);
   // The merging should maintain the value because profile2 is not more
   // recently used.
-  profile1.MergeDataFrom(profile2, "en-US");
+  EXPECT_EQ(
+      profile1.MergeDataFrom(profile2, "en-US"),
+      AutofillProfile::ProfileMergeResult::kMergeSucceededWithoutModification);
   EXPECT_EQ(profile1.GetRawInfo(ADDRESS_HOME_ZIP), u"12345");
   // Once it is more recently used, the value from profile2 should be copied
   // into profile1.
   profile2.usage_history().set_use_date(new_time);
-  profile1.MergeDataFrom(profile2, "en-US");
+  EXPECT_EQ(
+      profile1.MergeDataFrom(profile2, "en-US"),
+      AutofillProfile::ProfileMergeResult::kMergeSucceededWithModification);
   EXPECT_EQ(profile1.GetRawInfo(ADDRESS_HOME_ZIP), u"1234");
 
   // With a second incompatible ZIP code the addresses are not mergeable
@@ -487,7 +419,8 @@ TEST_F(AddressTest, TestMergeStructuredAddresses) {
   test::SetProfileInfo(
       &profile3,
       test::SetProfileInfoOptionsBuilder().with_zipcode("67890").Build());
-  EXPECT_FALSE(profile_comparator.AreMergeable(profile1, profile3));
+  EXPECT_EQ(profile1.MergeDataFrom(profile3, "en-US"),
+            AutofillProfile::ProfileMergeResult::kMergeFailed);
 }
 
 // Tests that if only one of the structured addresses in a merge operation has

@@ -1308,7 +1308,7 @@ TEST(StaticAVIFTests, SizeAvailableBeforeAllDataReceived) {
       "image/avif", segment_reader, /*data_complete=*/false,
       ImageDecoder::kAlphaPremultiplied, ImageDecoder::kDefaultBitDepth,
       ColorBehavior::kTag, cc::AuxImage::kDefault,
-      Platform::GetMaxDecodedImageBytes(), SkISize::MakeEmpty(),
+      Platform::GetMaxDecodedImageBytes(), gfx::Size(),
       ImageDecoder::AnimationOption::kUnspecified);
   EXPECT_FALSE(decoder->IsSizeAvailable());
 
@@ -1334,7 +1334,7 @@ TEST(StaticAVIFTests, ProgressiveDecoding) {
       "image/avif", segment_reader, /*data_complete=*/false,
       ImageDecoder::kAlphaPremultiplied, ImageDecoder::kDefaultBitDepth,
       ColorBehavior::kTag, cc::AuxImage::kDefault,
-      Platform::GetMaxDecodedImageBytes(), SkISize::MakeEmpty(),
+      Platform::GetMaxDecodedImageBytes(), gfx::Size(),
       ImageDecoder::AnimationOption::kUnspecified);
 
   Vector<char> data = ReadFile("/images/resources/avif/tiger_3layer_1res.avif");
@@ -1401,7 +1401,7 @@ TEST(StaticAVIFTests, IncrementalDecoding) {
       "image/avif", segment_reader, /*data_complete=*/false,
       ImageDecoder::kAlphaPremultiplied, ImageDecoder::kDefaultBitDepth,
       ColorBehavior::kTag, cc::AuxImage::kDefault,
-      Platform::GetMaxDecodedImageBytes(), SkISize::MakeEmpty(),
+      Platform::GetMaxDecodedImageBytes(), gfx::Size(),
       ImageDecoder::AnimationOption::kUnspecified);
 
   Vector<char> data =
@@ -1518,6 +1518,26 @@ TEST(StaticAVIFTests, UnsupportedTransferFunctionInColrProperty) {
                    true);
   EXPECT_FALSE(decoder->IsSizeAvailable());
   EXPECT_TRUE(decoder->Failed());
+}
+
+TEST(StaticAVIFTests, ZeroVersionIccProfileDecodesWithRustIcc) {
+  // The 'colr' prof box in this image contains an ICC profile whose header
+  // declares an invalid profile version of 0.0, as emitted by some image
+  // export pipelines found in the wild. The Rust ICC parser (moxcms) used
+  // to reject such files, but now accepts them and treats them as v2 profiles.
+  std::unique_ptr<ImageDecoder> decoder = CreateAVIFDecoder();
+  decoder->SetData(ReadFileToSharedBuffer(
+                       "/images/resources/avif/red-icc-version-zero.avif"),
+                   true);
+  // Rust ICC parser will accept color profile despite having invalid version.
+  EXPECT_TRUE(decoder->IsSizeAvailable());
+  EXPECT_FALSE(decoder->Failed());
+  EXPECT_TRUE(decoder->HasEmbeddedColorProfile());
+  ASSERT_EQ(decoder->FrameCount(), 1u);
+  ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
+  ASSERT_TRUE(frame);
+  EXPECT_EQ(ImageFrame::kFrameComplete, frame->GetStatus());
+  EXPECT_FALSE(decoder->Failed());
 }
 
 TEST(StaticAVIFTests, ClapPropertyZeroOrigin) {

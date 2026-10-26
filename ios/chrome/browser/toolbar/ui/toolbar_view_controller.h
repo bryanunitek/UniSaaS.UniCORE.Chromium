@@ -8,6 +8,7 @@
 #import <UIKit/UIKit.h>
 
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
+#import "ios/chrome/browser/location_bar/ui_bundled/location_bar_content_size_delegate.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_ui_updating.h"
 #import "ios/chrome/browser/toolbar/ui/toolbar_consumer.h"
 
@@ -15,8 +16,8 @@
 @protocol BannerPromoViewDelegate;
 @protocol BrowserCoordinatorCommands;
 @class LayoutGuideCenter;
-@class LayoutState;
 @protocol PopupMenuCommands;
+@class SceneLayoutState;
 @protocol SceneCommands;
 @class TabGroupIndicatorView;
 @class ToolbarButtonFactory;
@@ -24,9 +25,11 @@
 @protocol ToolbarMutator;
 
 // View controller for the toolbar.
-@interface ToolbarViewController : UIViewController <FullscreenUIElement,
-                                                     PopupMenuUIUpdating,
-                                                     ToolbarConsumer>
+@interface ToolbarViewController
+    : UIViewController <FullscreenUIElement,
+                        LocationBarContentSizeDelegate,
+                        PopupMenuUIUpdating,
+                        ToolbarConsumer>
 
 // Handler for the browser coordinator commands.
 @property(nonatomic, weak) id<BrowserCoordinatorCommands>
@@ -54,19 +57,16 @@
 @property(nonatomic, strong) LayoutGuideCenter* layoutGuideCenter;
 
 // The layout state.
-@property(nonatomic, weak) LayoutState* layoutState;
+@property(nonatomic, weak) SceneLayoutState* layoutState;
 
-// Whether this toolbar is currently visible or not.
-@property(nonatomic, assign) BOOL visible;
+// Whether this toolbar contains the omnibox.
+@property(nonatomic, readonly) BOOL hasOmnibox;
 
 // Whether this toolbar is currently showing a promo banner.
 @property(nonatomic, readonly) BOOL bannerPromoVisible;
 
 // Delegate for banner promo interactions.
 @property(nonatomic, weak) id<BannerPromoViewDelegate> bannerPromoDelegate;
-
-// The location bar in this toolbar.
-@property(nonatomic, strong) UIViewController* locationBarViewController;
 
 // Initializer for the toolbar, in `incognito` and `topPosition` or not.
 - (instancetype)initInIncognito:(BOOL)incognito
@@ -76,6 +76,9 @@
 - (instancetype)initWithCoder:(NSCoder*)coder NS_UNAVAILABLE;
 - (instancetype)initWithNibName:(NSString*)nibNameOrNil
                          bundle:(NSBundle*)nibBundleOrNil NS_UNAVAILABLE;
+
+// Triggers the animation for the slide in of the toolbar.
+- (void)triggerToolbarSlideInAnimation;
 
 // Shows/Hides the location bar.
 - (void)setLocationBarHidden:(BOOL)hidden;
@@ -89,6 +92,17 @@
 
 // Sets the tab group indicator view.
 - (void)setTabGroupIndicatorView:(TabGroupIndicatorView*)view;
+
+// Sets the location bar in this toolbar and the layout guide on its steady
+// view.
+- (void)setLocationBarViewController:
+            (UIViewController*)locationBarViewController
+            andSteadyViewLayoutGuide:(UILayoutGuide*)steadyViewLayoutGuide;
+
+// Sets the text-only location bar in this toolbar (used for fullscreen
+// animation).
+- (void)setTextOnlyLocationBarViewController:
+    (UIViewController*)textOnlyLocationBarViewController;
 
 @end
 

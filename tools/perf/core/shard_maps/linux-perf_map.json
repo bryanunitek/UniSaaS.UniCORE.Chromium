@@ -8,7 +8,7 @@
                 "abridged": false
             },
             "rendering.desktop": {
-                "end": 51,
+                "end": 84,
                 "abridged": false
             }
         },
@@ -22,42 +22,49 @@
             },
             "load_library_perf_tests": {
                 "path": "load_library_perf_tests"
+            },
+            "partition_alloc_perftests": {
+                "arguments": [
+                    "--test-launcher-jobs=1",
+                    "--test-launcher-retry-limit=0"
+                ],
+                "path": "partition_alloc_perftests"
             }
         },
         "crossbench": {
             "jetstream2.crossbench": {
                 "crossbench_name": "jetstream_2",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "motionmark1.3.crossbench": {
                 "crossbench_name": "motionmark_1.3",
                 "arguments": [
-                    "--enable-field-trials"
-                ]
-            },
-            "speedometer3.crossbench": {
-                "crossbench_name": "speedometer_3",
-                "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "blink-ai.crossbench": {
                 "crossbench_name": "blink-ai",
                 "arguments": []
             },
+            "speedometer3.crossbench": {
+                "crossbench_name": "speedometer_3",
+                "arguments": [
+                    "--enable-field-trials=benchmarking"
+                ]
+            },
             "jetstream3-turbolev_future.crossbench": {
                 "crossbench_name": "jetstream_3",
                 "arguments": [
                     "--js-flags=--turbolev-future",
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "jetstream3.crossbench": {
                 "crossbench_name": "jetstream_3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             }
         }
@@ -65,8 +72,8 @@
     "1": {
         "benchmarks": {
             "rendering.desktop": {
-                "begin": 51,
-                "end": 164,
+                "begin": 84,
+                "end": 217,
                 "abridged": false
             }
         },
@@ -74,19 +81,19 @@
             "jetstream2.crossbench": {
                 "crossbench_name": "jetstream_2",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "motionmark1.3.crossbench": {
                 "crossbench_name": "motionmark_1.3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "speedometer3.crossbench": {
                 "crossbench_name": "speedometer_3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             }
         }
@@ -94,8 +101,10 @@
     "2": {
         "benchmarks": {
             "rendering.desktop": {
-                "begin": 164,
-                "end": 331,
+                "begin": 217,
+                "abridged": false
+            },
+            "rendering.desktop.notracing": {
                 "abridged": false
             }
         },
@@ -103,32 +112,25 @@
             "jetstream2.crossbench": {
                 "crossbench_name": "jetstream_2",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "motionmark1.3.crossbench": {
                 "crossbench_name": "motionmark_1.3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "speedometer3.crossbench": {
                 "crossbench_name": "speedometer_3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             }
         }
     },
     "3": {
         "benchmarks": {
-            "rendering.desktop": {
-                "begin": 331,
-                "abridged": false
-            },
-            "rendering.desktop.notracing": {
-                "abridged": false
-            },
             "system_health.common_desktop": {
                 "abridged": false
             }
@@ -148,32 +150,32 @@
             "jetstream2.crossbench": {
                 "crossbench_name": "jetstream_2",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "motionmark1.3.crossbench": {
                 "crossbench_name": "motionmark_1.3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             },
             "speedometer3.crossbench": {
                 "crossbench_name": "speedometer_3",
                 "arguments": [
-                    "--enable-field-trials"
+                    "--enable-field-trials=benchmarking"
                 ]
             }
         }
     },
     "extra_infos": {
         "num_stories": 459,
-        "predicted_min_shard_time": 2443.0,
-        "predicted_min_shard_index": 2,
-        "predicted_max_shard_time": 2455.0,
+        "predicted_min_shard_time": 2294.0,
+        "predicted_min_shard_index": 3,
+        "predicted_max_shard_time": 2304.0,
         "predicted_max_shard_index": 0,
-        "shard #0": 2455.0,
-        "shard #1": 2444.0,
-        "shard #2": 2443.0,
-        "shard #3": 2444.0
+        "shard #0": 2304.0,
+        "shard #1": 2301.0,
+        "shard #2": 2297.0,
+        "shard #3": 2294.0
     }
 }

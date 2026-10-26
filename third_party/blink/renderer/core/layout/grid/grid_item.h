@@ -235,9 +235,8 @@ struct CORE_EXPORT GridItemData : public GarbageCollected<GridItemData> {
   GridTrackSizingDirection RelativeDirectionInSubgrid(
       GridTrackSizingDirection track_direction) const {
     DCHECK(IsSubgrid());
-    const bool is_for_columns =
-        is_parallel_with_root_grid == (track_direction == kForColumns);
-    return is_for_columns ? kForColumns : kForRows;
+    return is_parallel_with_root_grid ? track_direction
+                                      : OppositeDirection(track_direction);
   }
 
   // Returns the relative direction this subgrid's coordinate system. If
@@ -495,6 +494,11 @@ class CORE_EXPORT GridItems : public GarbageCollected<GridItems> {
     return {begin(), /* end */ {&item_data_, item_data_.size()}};
   }
 
+  Range<false> ItemsSubgriddedToParent() {
+    return {/* begin */ {&item_data_, first_subgridded_item_index_},
+            /* end */ {&item_data_, item_data_.size()}};
+  }
+
   Iterator<true> begin() const { return {&item_data_, 0}; }
   Iterator<true> end() const {
     return {&item_data_, first_subgridded_item_index_};
@@ -502,6 +506,11 @@ class CORE_EXPORT GridItems : public GarbageCollected<GridItems> {
 
   Range<true> IncludeSubgriddedItems() const {
     return {begin(), /* end */ {&item_data_, item_data_.size()}};
+  }
+
+  Range<true> ItemsSubgriddedToParent() const {
+    return {/* begin */ {&item_data_, first_subgridded_item_index_},
+            /* end */ {&item_data_, item_data_.size()}};
   }
 
   bool IsEmpty() const { return item_data_.empty(); }

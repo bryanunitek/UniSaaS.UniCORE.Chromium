@@ -23,7 +23,8 @@ class TrapTest : public test::Test {
   }
 
  private:
-  const IpczHandle node_{CreateNode(reference_drivers::kSyncReferenceDriver)};
+  const IpczHandle node_{
+      CreateNode(reference_drivers::GetSyncReferenceDriver())};
 };
 
 TEST_F(TrapTest, RemoveOnClose) {
@@ -58,6 +59,62 @@ TEST_F(TrapTest, RemoveOnClose) {
   EXPECT_TRUE(closure_trap_removed);
 
   Close(a);
+}
+
+TEST_F(TrapTest, RemoveOnMerge) {
+  auto [a, b] = OpenPortals();
+  auto [c, d] = OpenPortals();
+
+  int removed_traps = 0;
+  const IpczTrapConditions conditions = {
+      .size = sizeof(conditions),
+      .flags = IPCZ_TRAP_NEW_LOCAL_PARCEL,
+  };
+  for (IpczHandle portal : {b, c}) {
+    ASSERT_EQ(IPCZ_RESULT_OK,
+              Trap(portal, conditions, [&](const IpczTrapEvent& e) {
+                EXPECT_EQ(IPCZ_TRAP_REMOVED | IPCZ_TRAP_WITHIN_API_CALL,
+                          e.condition_flags);
+                ++removed_traps;
+                // The merged route must be usable from the removal handler.
+                VerifyEndToEndLocal(a, d);
+              }));
+  }
+
+  EXPECT_EQ(0, removed_traps);
+  ASSERT_EQ(IPCZ_RESULT_OK, Merge(b, c));
+  EXPECT_EQ(2, removed_traps);
+
+  CloseAll({a, d});
+}
+
+TEST_F(TrapTest, PreserveOnFailedMerge) {
+  auto [a, b] = OpenPortals();
+  auto [c, d] = OpenPortals();
+
+  int removed_traps = 0;
+  const IpczTrapConditions conditions = {
+      .size = sizeof(conditions),
+      .flags = IPCZ_TRAP_REMOVED,
+  };
+  for (IpczHandle portal : {b, c}) {
+    ASSERT_EQ(IPCZ_RESULT_OK,
+              Trap(portal, conditions, [&](const IpczTrapEvent& e) {
+                EXPECT_EQ(IPCZ_TRAP_REMOVED | IPCZ_TRAP_WITHIN_API_CALL,
+                          e.condition_flags);
+                ++removed_traps;
+              }));
+  }
+
+  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT, Merge(b, b));
+  EXPECT_EQ(IPCZ_RESULT_INVALID_ARGUMENT, Merge(b, a));
+  ASSERT_EQ(IPCZ_RESULT_OK, Put(b, "!"));
+  EXPECT_EQ(IPCZ_RESULT_FAILED_PRECONDITION, Merge(b, c));
+  EXPECT_EQ(0, removed_traps);
+
+  VerifyEndToEndLocal(c, d);
+  CloseAll({a, b, c, d});
+  EXPECT_EQ(2, removed_traps);
 }
 
 TEST_F(TrapTest, PeerClosed) {
@@ -307,14 +364,14 @@ TEST_F(TrapTest, MultipleTraps) {
 }
 
 TEST_F(TrapTest, SyncTransportWithinAPICall) {
-  const auto& kDriver = reference_drivers::kSyncReferenceDriver;
-  const IpczHandle node_a = CreateNode(kDriver, IPCZ_CREATE_NODE_AS_BROKER);
-  const IpczHandle node_b = CreateNode(kDriver);
+  const IpczDriver& driver = reference_drivers::GetSyncReferenceDriver();
+  const IpczHandle node_a = CreateNode(driver, IPCZ_CREATE_NODE_AS_BROKER);
+  const IpczHandle node_b = CreateNode(driver);
 
   IpczDriverHandle t0, t1;
-  kDriver.CreateTransports(IPCZ_INVALID_DRIVER_HANDLE,
-                           IPCZ_INVALID_DRIVER_HANDLE, IPCZ_NO_FLAGS, nullptr,
-                           &t0, &t1);
+  driver.CreateTransports(IPCZ_INVALID_DRIVER_HANDLE,
+                          IPCZ_INVALID_DRIVER_HANDLE, IPCZ_NO_FLAGS, nullptr,
+                          &t0, &t1);
 
   IpczHandle a, b;
   ipcz().ConnectNode(node_a, t0, 1, IPCZ_NO_FLAGS, nullptr, &a);

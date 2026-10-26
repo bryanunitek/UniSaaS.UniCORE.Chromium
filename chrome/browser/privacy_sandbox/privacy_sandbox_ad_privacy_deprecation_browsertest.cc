@@ -4,7 +4,8 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
@@ -37,55 +38,38 @@ class PrivacySandboxAdPrivacyDeprecationTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationTest,
                        PRE_PrefsSetToFalse) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPrivacySandboxM1TopicsEnabled, true);
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPrivacySandboxM1FledgeEnabled, true);
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPrivacySandboxM1AdMeasurementEnabled, true);
 }
 
 IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationTest,
                        PrefsSetToFalse) {
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kPrivacySandboxM1TopicsEnabled));
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kPrivacySandboxM1FledgeEnabled));
-  EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kPrivacySandboxM1AdMeasurementEnabled));
 }
 
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_SettingsRoutesRedirect DISABLED_SettingsRoutesRedirect
+#else
+#define MAYBE_SettingsRoutesRedirect SettingsRoutesRedirect
+#endif
 IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationTest,
-                       AttributionInternalsWebUINull) {
-  GURL kUrl("chrome://attribution-internals");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kUrl));
+                       MAYBE_SettingsRoutesRedirect) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(web_contents);
-  EXPECT_TRUE(web_contents->GetPrimaryMainFrame()->IsErrorDocument());
-  EXPECT_EQ(web_contents->GetWebUI(), nullptr);
-}
-
-IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationTest,
-                       SettingsRoutesRedirect) {
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   GURL base_settings_url("chrome://settings/");
   for (const char* url_string : kAdPrivacyUrls) {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(url_string)));
     EXPECT_EQ(web_contents->GetLastCommittedURL(), base_settings_url);
   }
-}
-
-IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationTest,
-                       TopicsInternalsWebUINull) {
-  GURL kUrl("chrome://topics-internals");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kUrl));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(web_contents);
-  EXPECT_TRUE(web_contents->GetPrimaryMainFrame()->IsErrorDocument());
-  EXPECT_EQ(web_contents->GetWebUI(), nullptr);
 }
 
 class PrivacySandboxAdPrivacyDeprecationDisabledTest
@@ -101,61 +85,22 @@ class PrivacySandboxAdPrivacyDeprecationDisabledTest
 
 IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationDisabledTest,
                        PRE_PrefsNotSetToFalse) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPrivacySandboxM1TopicsEnabled, true);
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPrivacySandboxM1FledgeEnabled, true);
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPrivacySandboxM1AdMeasurementEnabled, true);
 }
 
 IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationDisabledTest,
                        PrefsNotSetToFalse) {
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kPrivacySandboxM1TopicsEnabled));
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kPrivacySandboxM1FledgeEnabled));
-  EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kPrivacySandboxM1AdMeasurementEnabled));
-}
-
-IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationDisabledTest,
-                       AttributionInternalsWebUINotNull) {
-  GURL kUrl("chrome://attribution-internals");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kUrl));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(web_contents);
-  EXPECT_FALSE(web_contents->GetPrimaryMainFrame()->IsErrorDocument());
-  EXPECT_NE(web_contents->GetWebUI(), nullptr);
-}
-
-#if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
-#define MAYBE_SettingsRoutesDoNotRedirect DISABLED_SettingsRoutesDoNotRedirect
-#else
-#define MAYBE_SettingsRoutesDoNotRedirect SettingsRoutesDoNotRedirect
-#endif
-// TODO(https://crbug.com/529969968): Flaky on Linux debug.
-IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationDisabledTest,
-                       MAYBE_SettingsRoutesDoNotRedirect) {
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  for (const char* url_string : kAdPrivacyUrls) {
-    GURL url(url_string);
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-    EXPECT_EQ(web_contents->GetLastCommittedURL(), url);
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(PrivacySandboxAdPrivacyDeprecationDisabledTest,
-                       TopicsInternalsWebUINotNull) {
-  GURL kUrl("chrome://topics-internals");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), kUrl));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(web_contents);
-  EXPECT_FALSE(web_contents->GetPrimaryMainFrame()->IsErrorDocument());
-  EXPECT_NE(web_contents->GetWebUI(), nullptr);
 }
 
 }  // namespace privacy_sandbox

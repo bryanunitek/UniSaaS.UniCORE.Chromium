@@ -20,6 +20,8 @@ namespace drive_picker {
 // `FpopService` to check whether the user has accepted the disclaimer.
 class DriveDisclaimerController {
  public:
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.contextual_search
+  // GENERATED_JAVA_PREFIX_TO_STRIP: k
   enum class DisclaimerStatus {
     kAccepted,
     kNotAccepted,
@@ -31,6 +33,15 @@ class DriveDisclaimerController {
     // backend configurations). Callers should handle this by avoiding prompting
     // the user, as they cannot modify this setting.
     kRestricted,
+  };
+
+  // Represents the raw eligibility status returned by the FPOP API.
+  // These values mirror the internal `ConsentEligibilityStatus` proto enum.
+  enum class ConsentEligibilityStatus {
+    kUnknown = 0,
+    kCanConsent = 1,
+    kCannotConsent = 2,
+    kAlreadyConsented = 3,
   };
 
   // Converts a DisclaimerStatus to its string representation.
@@ -50,10 +61,11 @@ class DriveDisclaimerController {
       base::OnceCallback<void(DisclaimerStatus status)> completion_callback);
 
  private:
-  void OnGetFacsResponse(
+  void OnShouldShowMobileConsentFlowResponse(
       base::OnceCallback<void(DisclaimerStatus status)> completion_callback,
       bool success,
-      const footprints::oneplatform::GetFacsResponse& response);
+      const footprints::oneplatform::ShouldShowMobileConsentFlowResponse&
+          response);
 
   std::unique_ptr<contextual_search::FpopService> fpop_service_;
   base::WeakPtrFactory<DriveDisclaimerController> weak_factory_{this};

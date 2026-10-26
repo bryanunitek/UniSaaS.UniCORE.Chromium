@@ -12,8 +12,9 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_handle_util.h"
+#include "base/win/windows_version.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/utility/sandbox_delegate_data.mojom.h"
@@ -53,7 +54,7 @@ bool AudioInitializeConfig(sandbox::TargetConfig* config) {
   // https://cs.chromium.org/chromium/src/media/audio/win/audio_low_latency_input_win.cc
   // Use USER_RESTRICTED_NON_ADMIN over USER_NON_ADMIN to prevent failures when
   // AppLocker and similar application whitelisting solutions are in place.
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
 
   // Custom default policy allowing audio drivers to read device properties
   // (https://crbug.com/883326).
@@ -76,7 +77,7 @@ bool AudioInitializeConfig(sandbox::TargetConfig* config) {
 
 // Sets the sandbox policy for the network service process.
 bool NetworkInitializeConfig(sandbox::TargetConfig* config) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
   // LPAC sandbox is enabled, so do not use a restricted token.
   auto result = config->SetTokenLevel(sandbox::USER_UNPROTECTED,
                                       sandbox::USER_UNPROTECTED);
@@ -112,7 +113,7 @@ bool NetworkInitializeConfig(sandbox::TargetConfig* config) {
 
 // Sets the sandbox policy for the print backend service process.
 bool PrintBackendInitializeConfig(sandbox::TargetConfig* config) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
   // Print Backend policy lockdown level must be at least USER_LIMITED and
   // delayed integrity level INTEGRITY_LEVEL_LOW, otherwise ::OpenPrinter()
   // will fail with error code ERROR_ACCESS_DENIED (0x5).
@@ -130,7 +131,7 @@ std::string UtilityAppContainerId(base::CommandLine& cmd_line) {
 }
 
 bool IconReaderInitializeConfig(sandbox::TargetConfig* config) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
 
   auto result = config->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
                                       sandbox::USER_LOCKDOWN);
@@ -158,7 +159,7 @@ bool OnDeviceModelExecutionInitializeConfig(
     sandbox::TargetConfig* config,
     base::CommandLine& cmd_line,
     sandbox::mojom::Sandbox sandbox_type) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
   // USER_RESTRICTED breaks the Direct3D backend, so for now we can only go as
   // low as USER_LIMITED.
   sandbox::ResultCode result = config->SetTokenLevel(
@@ -170,7 +171,7 @@ bool OnDeviceModelExecutionInitializeConfig(
 }
 
 bool WebNNModelCompilationInitializeConfig(sandbox::TargetConfig* config) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
 
   // Two-stage WebNN compiler sandbox (see crbug.com/500769395 and
   // content/utility/webnn/webnn_sandbox_init.cc):
@@ -223,16 +224,31 @@ bool WebNNModelCompilationInitializeConfig(sandbox::TargetConfig* config) {
     return false;
   }
 
-  // Add MITIGATION_WIN32K_DISABLE to the *startup* mitigation set
-  // (AddWin32kLockdownPolicy calls SetProcessMitigations, not
-  // SetDelayedProcessMitigations). The broker passes this through
-  // PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY to CreateProcess, so the kernel
-  // rejects every Win32k syscall from the child from its very first
-  // instruction of user code. This is safe because the third-party
-  // execution-provider preload helper invoked in stage 2 only needs
-  // D3D12 / DirectML / DXCore code paths, none of which require user32
-  // or gdi32.
-  result = sandbox::policy::SandboxWin::AddWin32kLockdownPolicy(config);
+  // Add MITIGATION_WIN32K_DISABLE to the *startup* mitigation set.
+  // The broker passes this through PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY
+  // to CreateProcess, so the kernel rejects every Win32k syscall from the
+  // child from its very first instruction of user code.
+  //
+  // Intentionally NOT calling AddWin32kLockdownPolicy() here because it
+  // may call SetFakeGdiInit(), which installs Export Address Table hooks that
+  // let gdi32.dll appear to load successfully (fake GdiDllInitialize returns
+  // TRUE) while leaving the GDI shared memory section unmapped. ORT's
+  // device discovery through DXGI may call
+  // gdi32!DdQueryDisplaySettingsUniqueness, which reads from that shared
+  // section. The fake-init state causes an AV because the section base is NULL.
+  //
+  // Fake GDI init only exists because winmm.dll (timeGetTime) depended on
+  // user32/gdi32 up to Windows 10 RS1. Skipping it is therefore only safe on
+  // RS1 and later.
+  if (base::win::GetVersion() < base::win::Version::WIN10_RS1) {
+    return false;
+  }
+  // TODO(crbug.com/535696699): Replace this block with
+  // AddWin32kLockdownPolicy() once ORT no longer touches GDI during device
+  // discovery.
+  sandbox::MitigationFlags flags = config->GetProcessMitigations();
+  flags |= sandbox::MITIGATION_WIN32K_DISABLE;
+  result = config->SetProcessMitigations(flags);
   if (result != sandbox::SBOX_ALL_OK) {
     return false;
   }
@@ -262,7 +278,7 @@ bool WebNNModelCompilationInitializeConfig(sandbox::TargetConfig* config) {
 bool XrCompositingInitializeConfig(sandbox::TargetConfig* config,
                                    base::CommandLine& cmd_line,
                                    sandbox::mojom::Sandbox sandbox_type) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
   // TODO(crbug.com/41412553): Try to harden the XR Compositor
   // sandbox to use mitigations and restrict the token.
 
@@ -303,7 +319,26 @@ bool XrCompositingInitializeConfig(sandbox::TargetConfig* config,
 
 bool ScreenAIInitializeConfig(sandbox::TargetConfig* config,
                               sandbox::mojom::Sandbox sandbox_type) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
+
+  auto result = config->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                                      sandbox::USER_LOCKDOWN);
+  if (result != sandbox::SBOX_ALL_OK) {
+    return false;
+  }
+
+  result = sandbox::policy::SandboxWin::SetJobLevel(
+      sandbox_type, sandbox::JobLevel::kLimitedUser, 0, config);
+  if (result != sandbox::SBOX_ALL_OK) {
+    return false;
+  }
+
+  return true;
+}
+
+bool PlatformRuntimeInitializeConfig(sandbox::TargetConfig* config,
+                                     sandbox::mojom::Sandbox sandbox_type) {
+  CHECK(!config->IsConfigured());
 
   auto result = config->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
                                       sandbox::USER_LOCKDOWN);
@@ -376,7 +411,7 @@ bool UtilitySandboxedProcessLauncherDelegate::ShouldLaunchElevated() {
 
 bool UtilitySandboxedProcessLauncherDelegate::InitializeConfig(
     sandbox::TargetConfig* config) {
-  DCHECK(!config->IsConfigured());
+  CHECK(!config->IsConfigured(), base::NotFatalUntil::M159);
   if (sandbox_type_ == sandbox::mojom::Sandbox::kAudio) {
     if (!AudioInitializeConfig(config)) {
       return false;
@@ -414,6 +449,12 @@ bool UtilitySandboxedProcessLauncherDelegate::InitializeConfig(
 
   if (sandbox_type_ == sandbox::mojom::Sandbox::kScreenAI) {
     if (!ScreenAIInitializeConfig(config, sandbox_type_)) {
+      return false;
+    }
+  }
+
+  if (sandbox_type_ == sandbox::mojom::Sandbox::kPlatformRuntime) {
+    if (!PlatformRuntimeInitializeConfig(config, sandbox_type_)) {
       return false;
     }
   }

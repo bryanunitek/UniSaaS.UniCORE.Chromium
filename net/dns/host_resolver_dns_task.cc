@@ -19,6 +19,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/tick_clock.h"
 #include "base/types/optional_util.h"
+#include "net/base/ech_mode.h"
 #include "net/base/features.h"
 #include "net/base/network_handle.h"
 #include "net/dns/address_sorter.h"
@@ -90,12 +91,13 @@ base::DictValue NetLogResults(const HostResolverDnsTask::Results& results) {
 }
 
 void RecordResolveTimeDiff(const char* histogram_variant,
-                           base::TimeTicks start_time,
                            base::TimeTicks first_record_end_time,
                            base::TimeTicks second_record_end_time) {
-  CHECK_LE(start_time, first_record_end_time);
-  CHECK_LE(first_record_end_time, second_record_end_time);
-  base::TimeDelta diff = second_record_end_time - first_record_end_time;
+  // TimeTicks::Now() (e.g., CLOCK_MONOTONIC on Linux) can slightly go backwards
+  // across CPU cores due to TSC skew. Clamp negative diffs to zero instead of
+  // CHECK-crashing.
+  base::TimeDelta diff = std::max(
+      base::TimeDelta(), second_record_end_time - first_record_end_time);
 
   base::UmaHistogramTimes(
       base::StrCat({"Net.Dns.ResolveTimeDiff2.", histogram_variant}), diff);
@@ -113,10 +115,8 @@ void RecordResolveTimeDiff(const char* histogram_variant,
 // TODO(crbug.com/40269419): Delete once results are always sorted as individual
 // transactions complete.
 std::vector<IPEndPoint> ExtractAddressResultsForSort(
-    HostResolverDnsTask::Results& results,
-    bool is_happy_eyeballs_v3_enabled) {
-  CHECK(!base::FeatureList::IsEnabled(features::kUseHostResolverCache) &&
-        !is_happy_eyeballs_v3_enabled);
+    HostResolverDnsTask::Results& results) {
+  CHECK(!base::FeatureList::IsEnabled(features::kUseHostResolverCache));
 
   // To simplify processing, assume no more than one result per address query
   // type.
@@ -219,6 +219,15 @@ std::vector<IPEndPoint> ExtractAddressResultsForSort(
   return endpoints_to_sort;
 }
 
+// Returns whether an HTTPS/SVCB response is required for `host`.
+bool DetermineIfHttpsSvcbRequired(bool is_secure_dns, EchMode ech_mode) {
+  if (is_secure_dns && features::kUseDnsHttpsSvcbEnforceSecureResponse.Get()) {
+    return true;
+  }
+
+  return ech_mode == EchMode::kStrict;
+}
+
 }  // namespace
 
 HostResolverDnsTask::SingleTransactionResults::SingleTransactionResults(
@@ -269,12 +278,15 @@ HostResolverDnsTask::HostResolverDnsTask(
       tick_clock_(tick_clock),
       task_start_time_(tick_clock_->NowTicks()),
       fallback_available_(fallback_available),
-      https_svcb_options_(https_svcb_options) {
+      https_svcb_options_(https_svcb_options),
+      ech_mode_(
+          resolve_context->GetEchMode(host_.GetHostnameWithoutBrackets())),
+      https_svcb_required_(DetermineIfHttpsSvcbRequired(secure(), ech_mode_)) {
   DCHECK(client_);
   DCHECK(delegate_);
 
   if (!secure()) {
-    DCHECK(client_->CanUseInsecureDnsTransactions());
+    DCHECK(client_->CanUseInsecureDnsTransactions(ech_mode_));
   }
 
   PushTransactionsNeeded(MaybeDisableAdditionalQueries(query_types));
@@ -296,7 +308,7 @@ void HostResolverDnsTask::StartNextTransaction() {
   transactions_needed_.pop_front();
 
   DCHECK(IsAddressType(transaction_info->type) || secure() ||
-         client_->CanQueryAdditionalTypesViaInsecureDns());
+         client_->CanQueryAdditionalTypesViaInsecureDns(ech_mode_));
 
   // Record how long this transaction has been waiting to be created.
   base::TimeDelta time_queued = tick_clock_->NowTicks() - task_start_time_;
@@ -364,7 +376,8 @@ DnsQueryTypeSet HostResolverDnsTask::MaybeDisableAdditionalQueries(
   }
 
   if (types.Has(DnsQueryType::HTTPS)) {
-    if (!secure() && !client_->CanQueryAdditionalTypesViaInsecureDns()) {
+    if (!secure() &&
+        !client_->CanQueryAdditionalTypesViaInsecureDns(ech_mode_)) {
       https_disabled_ = true;
       types.Remove(DnsQueryType::HTTPS);
     } else {
@@ -379,8 +392,7 @@ DnsQueryTypeSet HostResolverDnsTask::MaybeDisableAdditionalQueries(
 void HostResolverDnsTask::PushTransactionsNeeded(DnsQueryTypeSet query_types) {
   DCHECK(transactions_needed_.empty());
 
-  if (query_types.Has(DnsQueryType::HTTPS) &&
-      features::kUseDnsHttpsSvcbEnforceSecureResponse.Get() && secure()) {
+  if (query_types.Has(DnsQueryType::HTTPS) && https_svcb_required_) {
     query_types.Remove(DnsQueryType::HTTPS);
     transactions_needed_.push_back(std::make_unique<TransactionInfo>(
         DnsQueryType::HTTPS, TransactionErrorBehavior::kFatalOrEmpty));
@@ -466,8 +478,7 @@ void HostResolverDnsTask::OnTimeout() {
 
     switch (transaction->type) {
       case DnsQueryType::HTTPS:
-        DCHECK(!secure() ||
-               !features::kUseDnsHttpsSvcbEnforceSecureResponse.Get());
+        DCHECK(!https_svcb_required_);
         if (httpssvc_metrics_) {
           // Don't record provider ID for timeouts. It is not precisely known
           // at this level which provider is actually to blame for the
@@ -637,22 +648,43 @@ void HostResolverDnsTask::OnDnsTransactionComplete(
     case DnsQueryType::A:
       a_record_end_time_ = now;
       if (!aaaa_record_end_time_.is_null()) {
-        RecordResolveTimeDiff("AAAABeforeA", task_start_time_,
-                              aaaa_record_end_time_, a_record_end_time_);
+        RecordResolveTimeDiff("AAAABeforeA", aaaa_record_end_time_,
+                              a_record_end_time_);
+      }
+      if (!https_record_end_time_.is_null()) {
+        if (aaaa_record_end_time_.is_null()) {
+          RecordResolveTimeDiff("HTTPSBeforeFirstAddress",
+                                https_record_end_time_, a_record_end_time_);
+        } else {
+          RecordResolveTimeDiff("HTTPSBeforeLastAddress",
+                                https_record_end_time_, a_record_end_time_);
+        }
       }
       break;
     case DnsQueryType::AAAA:
       aaaa_record_end_time_ = now;
       if (!a_record_end_time_.is_null()) {
-        RecordResolveTimeDiff("ABeforeAAAA", task_start_time_,
-                              a_record_end_time_, aaaa_record_end_time_);
+        RecordResolveTimeDiff("ABeforeAAAA", a_record_end_time_,
+                              aaaa_record_end_time_);
+      }
+      if (!https_record_end_time_.is_null()) {
+        if (a_record_end_time_.is_null()) {
+          RecordResolveTimeDiff("HTTPSBeforeFirstAddress",
+                                https_record_end_time_, aaaa_record_end_time_);
+        } else {
+          RecordResolveTimeDiff("HTTPSBeforeLastAddress",
+                                https_record_end_time_, aaaa_record_end_time_);
+        }
       }
       break;
     case DnsQueryType::HTTPS: {
+      https_record_end_time_ = now;
       base::TimeTicks first_address_end_time =
-          std::min(a_record_end_time_, aaaa_record_end_time_);
+          (!a_record_end_time_.is_null() && !aaaa_record_end_time_.is_null())
+              ? std::min(a_record_end_time_, aaaa_record_end_time_)
+              : std::max(a_record_end_time_, aaaa_record_end_time_);
       if (!first_address_end_time.is_null()) {
-        RecordResolveTimeDiff("AddressRecordBeforeHTTPS", task_start_time_,
+        RecordResolveTimeDiff("AddressRecordBeforeHTTPS",
                               first_address_end_time, now);
       }
       break;
@@ -661,8 +693,9 @@ void HostResolverDnsTask::OnDnsTransactionComplete(
       break;
   }
 
-  if (base::FeatureList::IsEnabled(features::kUseHostResolverCache) ||
-      delegate_->IsHappyEyeballsV3Enabled()) {
+  if (transaction_info->type == DnsQueryType::AAAA &&
+      (base::FeatureList::IsEnabled(features::kUseHostResolverCache) ||
+       delegate_->ShouldSortTransactionsIndividually())) {
     SortTransactionAndHandleResults(std::move(transaction_info),
                                     std::move(results).value());
   } else {
@@ -697,8 +730,9 @@ bool HostResolverDnsTask::IsFatalTransactionFailure(
   if (transaction_error == OK || (transaction_error == ERR_NAME_NOT_RESOLVED &&
                                   response && response->IsValid())) {
     error = HttpsTransactionError::kNoError;
-  } else if (!secure()) {
-    // HTTPS failures are never fatal via insecure DNS.
+  } else if (!secure() && !https_svcb_required_) {
+    // When an HTTPS/SVCB response is not required, HTTPS failures are never
+    // fatal via insecure DNS.
     DCHECK(transaction_info.error_behavior !=
            TransactionErrorBehavior::kFatalOrEmpty);
     error = HttpsTransactionError::kInsecureError;
@@ -708,7 +742,7 @@ bool HostResolverDnsTask::IsFatalTransactionFailure(
              transaction_error == ERR_DNS_OTHER_FAILURE) {
     // For server failures, only SERVFAIL is fatal.
     error = HttpsTransactionError::kNonFatalError;
-  } else if (features::kUseDnsHttpsSvcbEnforceSecureResponse.Get()) {
+  } else if (https_svcb_required_) {
     DCHECK(transaction_info.error_behavior ==
            TransactionErrorBehavior::kFatalOrEmpty);
     error = HttpsTransactionError::kFatalErrorEnabled;
@@ -725,6 +759,8 @@ bool HostResolverDnsTask::IsFatalTransactionFailure(
 void HostResolverDnsTask::SortTransactionAndHandleResults(
     std::unique_ptr<TransactionInfo> transaction_info,
     Results transaction_results) {
+  CHECK_EQ(transaction_info->type, DnsQueryType::AAAA);
+
   // Expect at most 1 data result in an individual transaction.
   CHECK_LE(std::ranges::count_if(
                transaction_results,
@@ -750,6 +786,10 @@ void HostResolverDnsTask::SortTransactionAndHandleResults(
   }
 
   if (!endpoints_to_sort.empty()) {
+    DCHECK(std::ranges::all_of(endpoints_to_sort, [](const IPEndPoint& e) {
+      return e.address().IsIPv6();
+    }));
+
     // More async work to do, so insert `transaction_info` back onto
     // `transactions_in_progress_`.
     base::WeakPtr<TransactionInfo> transaction_info_ptr =
@@ -911,12 +951,12 @@ void HostResolverDnsTask::OnTransactionsFinished(
 
   timeout_timer_.Stop();
 
-  // If using HostResolverCache or Happy Eyeballs v3, transactions are already
-  // invidvidually sorted on completion.
+  // If using HostResolverCache or individual transaction sort, transactions are
+  // already individually sorted on completion.
   if (!base::FeatureList::IsEnabled(features::kUseHostResolverCache) &&
-      !delegate_->IsHappyEyeballsV3Enabled()) {
-    std::vector<IPEndPoint> endpoints_to_sort = ExtractAddressResultsForSort(
-        saved_results_, delegate_->IsHappyEyeballsV3Enabled());
+      !delegate_->ShouldSortTransactionsIndividually()) {
+    std::vector<IPEndPoint> endpoints_to_sort =
+        ExtractAddressResultsForSort(saved_results_);
 
     // Need to sort if results contain at least one IPv6 address.
     if (!endpoints_to_sort.empty()) {
@@ -940,7 +980,7 @@ void HostResolverDnsTask::OnSortComplete(base::TimeTicks sort_start_time,
                                          bool success,
                                          std::vector<IPEndPoint> sorted) {
   CHECK(!base::FeatureList::IsEnabled(features::kUseHostResolverCache));
-  CHECK(!delegate_->IsHappyEyeballsV3Enabled());
+  CHECK(!delegate_->ShouldSortTransactionsIndividually());
 
   if (!success) {
     OnFailure(ERR_DNS_SORT_ERROR, /*allow_fallback=*/true, &results);
@@ -1117,9 +1157,8 @@ void HostResolverDnsTask::MaybeStartTimeoutTimer() {
       timeout_min = https_svcb_options_.insecure_extra_time_min;
     }
 
-    // Skip timeout for secure requests if the timeout would be a fatal
-    // failure.
-    if (secure() && features::kUseDnsHttpsSvcbEnforceSecureResponse.Get()) {
+    // Skip timeout if an HTTPS/SVCB response is required.
+    if (https_svcb_required_) {
       timeout_max = base::TimeDelta();
       extra_time_percent = 0;
       timeout_min = base::TimeDelta();

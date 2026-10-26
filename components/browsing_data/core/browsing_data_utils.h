@@ -38,7 +38,9 @@ enum class BrowsingDataType {
   HOSTED_APPS_DATA = 7,
   // Only for Android:
   TABS = 8,
-  MAX_VALUE = TABS,
+  // Only for Desktop:
+  SKILLS = 9,
+  MAX_VALUE = SKILLS,
 };
 // LINT.ThenChange(/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_browser_proxy.ts:BrowsingDataType)
 
@@ -71,8 +73,7 @@ enum class TimePeriod {
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.browsing_data
 //
-// Note: Make sure to keep in sync with DeleteBrowsingDataAction defined in
-//   chrome/browser/resources/settings/site_settings/metrics_browser_proxy.ts
+// LINT.IfChange(DeleteBrowsingDataAction)
 enum class DeleteBrowsingDataAction {
   kClearBrowsingDataDialog = 0,
   kClearBrowsingDataOnExit = 1,
@@ -85,6 +86,10 @@ enum class DeleteBrowsingDataAction {
   kRwsDeleteAllData = 8,
   kMaxValue = kRwsDeleteAllData,
 };
+// LINT.ThenChange(
+//   //chrome/browser/resources/settings/metrics_browser_proxy.ts:DeleteBrowsingDataAction,
+//   //tools/metrics/histograms/metadata/privacy/enums.xml:DeleteBrowsingDataAction
+// )
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.

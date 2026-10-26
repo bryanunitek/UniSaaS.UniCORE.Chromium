@@ -23,12 +23,11 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.preferences.Pref;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
@@ -46,13 +45,12 @@ import org.chromium.google_apis.gaia.GaiaId;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DoNotBatch(reason = "Layout and behavior are dependent on setup params for the activity.")
-@DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
 public class PriceNotificationSettingsFragmentTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public final SettingsActivityTestRule<PriceNotificationSettingsFragment> mTestRule =
-            new SettingsActivityTestRule<>(PriceNotificationSettingsFragment.class);
+    public final SettingsTestRule<PriceNotificationSettingsFragment> mTestRule =
+            new SettingsTestRule<>(PriceNotificationSettingsFragment.class);
 
     @Rule
     public final FreshCtaTransitTestRule mActivityTestRule =
@@ -61,6 +59,8 @@ public class PriceNotificationSettingsFragmentTest {
     @Mock private IdentityServicesProvider mIdentityServicesProvider;
 
     @Mock private IdentityManager mIdentityManager;
+
+    @Mock private SigninManager mSigninManager;
 
     @Mock private PrefService mPrefs;
     private WebPageStation mPage;
@@ -74,6 +74,7 @@ public class PriceNotificationSettingsFragmentTest {
                 .thenReturn(
                         new AccountInfo.Builder("user@example.com", new GaiaId("12345")).build());
         when(mIdentityServicesProvider.getIdentityManager(any())).thenReturn(mIdentityManager);
+        when(mIdentityServicesProvider.getSigninManager(any())).thenReturn(mSigninManager);
 
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
     }

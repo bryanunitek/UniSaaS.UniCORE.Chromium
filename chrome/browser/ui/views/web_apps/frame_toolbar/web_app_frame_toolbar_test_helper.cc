@@ -13,7 +13,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_future.h"
-#include "chrome/browser/ui/browser.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
@@ -68,7 +68,8 @@ webapps::AppId WebAppFrameToolbarTestHelper::InstallAndLaunchWebApp(
   webapps::AppId app_id = InstallWebApp(profile, start_url);
   content::TestNavigationObserver navigation_observer(start_url);
   navigation_observer.StartWatchingNewWebContents();
-  Browser* app_browser = web_app::LaunchWebAppBrowser(profile, app_id);
+  BrowserWindowInterface* app_browser =
+      web_app::LaunchWebAppBrowser(profile, app_id);
   navigation_observer.WaitForNavigationFinished();
 
   SetViewFromAppBrowser(app_browser);
@@ -76,20 +77,20 @@ webapps::AppId WebAppFrameToolbarTestHelper::InstallAndLaunchWebApp(
 }
 
 webapps::AppId WebAppFrameToolbarTestHelper::InstallAndLaunchWebApp(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const GURL& start_url) {
   return InstallAndLaunchWebApp(browser->GetProfile(), start_url);
 }
 
 webapps::AppId WebAppFrameToolbarTestHelper::InstallAndLaunchCustomWebApp(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::unique_ptr<web_app::WebAppInstallInfo> web_app_info,
     const GURL& start_url) {
   webapps::AppId app_id = web_app::test::InstallWebApp(browser->GetProfile(),
                                                        std::move(web_app_info));
   content::TestNavigationObserver navigation_observer(start_url);
   navigation_observer.StartWatchingNewWebContents();
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowser(browser->GetProfile(), app_id);
   navigation_observer.WaitForNavigationFinished();
 
@@ -266,7 +267,7 @@ void WebAppFrameToolbarTestHelper::TestDraggableRegions() {
   // region is defined in the kTestHTML of WebAppFrameToolbarTestHelper's
   // LoadWindowControlsOverlayTestPageWithDataAndGetURL.
   gfx::Point draggable_point(100, 100);
-  views::View::ConvertPointToTarget(browser_view()->contents_web_view(),
+  views::View::ConvertPointToTarget(browser_view()->GetContentsView(),
                                     frame_view, &draggable_point);
 
   EXPECT_EQ(frame_view->NonClientHitTest(draggable_point), HTCAPTION);
@@ -277,7 +278,7 @@ void WebAppFrameToolbarTestHelper::TestDraggableRegions() {
   // Validate that a point marked "app-region: no-drag" within a draggable
   // region is not draggable.
   gfx::Point non_draggable_point(106, 106);
-  views::View::ConvertPointToTarget(browser_view()->contents_web_view(),
+  views::View::ConvertPointToTarget(browser_view()->GetContentsView(),
                                     frame_view, &non_draggable_point);
 
   EXPECT_EQ(frame_view->NonClientHitTest(non_draggable_point), HTCLIENT);
@@ -314,7 +315,7 @@ BrowserView* WebAppFrameToolbarTestHelper::OpenPopup(
     const std::string& window_open_script) {
   content::ExecuteScriptAsync(browser_view_->GetActiveWebContents(),
                               window_open_script);
-  Browser* popup = ui_test_utils::WaitForBrowserToOpen();
+  BrowserWindowInterface* popup = ui_test_utils::WaitForBrowserToOpen();
   EXPECT_NE(app_browser_, popup);
   EXPECT_TRUE(popup);
 
@@ -357,8 +358,8 @@ void WebAppFrameToolbarTestHelper::SetOriginTextLabelForTesting(
   origin_text_view()->label_->SetText(label_text);
 }
 
-Browser* WebAppFrameToolbarTestHelper::app_browser() {
-  return app_browser_ ? app_browser_->GetBrowserForMigrationOnly() : nullptr;
+BrowserWindowInterface* WebAppFrameToolbarTestHelper::app_browser() {
+  return app_browser_;
 }
 
 void WebAppFrameToolbarTestHelper::SetViewFromAppBrowser(

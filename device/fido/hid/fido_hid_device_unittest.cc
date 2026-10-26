@@ -15,7 +15,9 @@
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/extend.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -26,7 +28,6 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "device/fido/fido_device.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/fido_test_data.h"
 #include "device/fido/hid/fake_hid_impl_for_testing.h"
 #include "device/fido/hid/fido_hid_message.h"
@@ -102,10 +103,10 @@ std::vector<uint8_t> CreateMockInitResponse(
     base::span<const uint8_t> nonce,
     base::span<const uint8_t> channel_id,
     base::span<const uint8_t> payload = base::span<const uint8_t>()) {
-  auto init_response = fido_parsing_utils::Materialize(kInitResponsePrefix);
-  fido_parsing_utils::Append(&init_response, nonce);
-  fido_parsing_utils::Append(&init_response, channel_id);
-  fido_parsing_utils::Append(&init_response, payload);
+  auto init_response = base::ToVector(kInitResponsePrefix);
+  base::Extend(init_response, nonce);
+  base::Extend(init_response, channel_id);
+  base::Extend(init_response, payload);
   init_response.resize(64);
   return init_response;
 }
@@ -113,8 +114,8 @@ std::vector<uint8_t> CreateMockInitResponse(
 // Returns HID keep alive message encoded into HID packet format.
 std::vector<uint8_t> GetKeepAliveHidMessage(
     base::span<const uint8_t> channel_id) {
-  auto response = fido_parsing_utils::Materialize(channel_id);
-  fido_parsing_utils::Append(&response, kMockKeepAliveResponseSuffix);
+  auto response = base::ToVector(channel_id);
+  base::Extend(response, kMockKeepAliveResponseSuffix);
   response.resize(64);
   return response;
 }
@@ -123,15 +124,15 @@ std::vector<uint8_t> GetKeepAliveHidMessage(
 std::vector<uint8_t> CreateMockResponseWithChannelId(
     base::span<const uint8_t> channel_id,
     base::span<const uint8_t> response_buffer) {
-  auto response = fido_parsing_utils::Materialize(channel_id);
-  fido_parsing_utils::Append(&response, response_buffer);
+  auto response = base::ToVector(channel_id);
+  base::Extend(response, response_buffer);
   response.resize(64);
   return response;
 }
 
 // Returns a APDU encoded U2F version request for testing.
 std::vector<uint8_t> GetMockDeviceRequest() {
-  return fido_parsing_utils::Materialize(kMockU2fRequest);
+  return base::ToVector(kMockU2fRequest);
 }
 
 device::mojom::HidDeviceInfoPtr TestHidDevice() {
@@ -316,8 +317,7 @@ TEST_F(FidoHidDeviceTest, TestDeviceError) {
 }
 
 TEST_F(FidoHidDeviceTest, TestRetryChannelAllocation) {
-  constexpr uint8_t kIncorrectNonce[] = {0x00, 0x00, 0x00, 0x00,
-                                         0x00, 0x00, 0x00, 0x00};
+  constexpr std::array<uint8_t, 8> kIncorrectNonce = {};
   auto hid_device = TestHidDevice();
 
   // Replace device HID connection with custom client connection bound to mock
@@ -429,14 +429,11 @@ TEST_F(FidoHidDeviceTest, TestKeepAliveMessage) {
 
 // InvertChannelID inverts all the bits in the given channel ID. This is used to
 // create a channel ID that will not be equal to the expected channel ID.
-std::array<uint8_t, 4> InvertChannelID(
-    const std::array<uint8_t, 4> channel_id) {
-  std::array<uint8_t, 4> ret;
-  UNSAFE_TODO(memcpy(ret.data(), channel_id.data(), ret.size()));
-  for (size_t i = 0; i < ret.size(); i++) {
-    ret[i] ^= 0xff;
+std::array<uint8_t, 4> InvertChannelID(std::array<uint8_t, 4> channel_id) {
+  for (uint8_t& byte : channel_id) {
+    byte ^= 0xff;
   }
-  return ret;
+  return channel_id;
 }
 
 TEST_F(FidoHidDeviceTest, TestMessageOnOtherChannel) {

@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/core/events/current_input_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/page/create_window.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -60,6 +61,16 @@ class NavigationPolicyTest : public testing::Test {
     base::AutoReset<const WebInputEvent*> current_event_change(
         &CurrentInputEvent::current_input_event_, &event);
     return NavigationPolicyForCreateWindow(features);
+  }
+
+  bool UserRequestedPolicyForCreateWindow(int modifiers,
+                                          WebMouseEvent::Button button) {
+    WebMouseEvent event(WebInputEvent::Type::kMouseUp, modifiers,
+                        WebInputEvent::GetStaticTimeStampForTests());
+    event.button = button;
+    base::AutoReset<const WebInputEvent*> current_event_change(
+        &CurrentInputEvent::current_input_event_, &event);
+    return UserRequestedNavigationPolicyForCreateWindow();
   }
 
   Event* GetEvent(int modifiers, WebMouseEvent::Button button) {
@@ -95,17 +106,6 @@ class NavigationPolicyTest : public testing::Test {
   }
 
   WebWindowFeatures features;
-};
-
-class NavigationPolicyWithSplitViewEnabledTest : public NavigationPolicyTest {
- protected:
-  void SetUp() override {
-    WebRuntimeFeatures::EnableFeatureFromString("SplitViewLinkOpen", true);
-  }
-
-  void TearDown() override {
-    WebRuntimeFeatures::EnableFeatureFromString("SplitViewLinkOpen", false);
-  }
 };
 
 TEST_F(NavigationPolicyTest, LeftClick) {
@@ -334,6 +334,100 @@ TEST_F(NavigationPolicyTest, NotResizableForcesPopup) {
             NavigationPolicyForCreateWindow(features));
 }
 
+TEST_F(NavigationPolicyTest, SplitNotResizableDoesNotForcePopup) {
+  features.is_split = true;
+  features.resizable = false;
+  EXPECT_EQ(kNavigationPolicyNewForegroundTab,
+            NavigationPolicyForCreateWindow(features));
+  features.is_popup = true;
+  EXPECT_EQ(kNavigationPolicyNewPopup,
+            NavigationPolicyForCreateWindow(features));
+}
+
+// The renderer chooses the fallback policy for a split request. The browser
+// decides whether to create the split.
+TEST_F(NavigationPolicyTest, Split) {
+  ScopedWindowOpenSplitTabForTest split_tab_enabled{true};
+
+  static const struct {
+    const char* feature_string;
+    NavigationPolicy policy;
+  } kCases[] = {
+      {"split", kNavigationPolicyNewForegroundTab},
+      {"split, something", kNavigationPolicyNewForegroundTab},
+      {"split, width=400, height=300", kNavigationPolicyNewForegroundTab},
+      {"split, resizable=0", kNavigationPolicyNewForegroundTab},
+      {"split, location=0, menubar=0", kNavigationPolicyNewForegroundTab},
+      {"split, splitposition=left, splitsize=30",
+       kNavigationPolicyNewForegroundTab},
+      {"split, noopener", kNavigationPolicyNewForegroundTab},
+      {"split, popup", kNavigationPolicyNewPopup},
+      {"popup, split", kNavigationPolicyNewPopup},
+      {"split, popup=0", kNavigationPolicyNewForegroundTab},
+      {"popup=0, split", kNavigationPolicyNewForegroundTab},
+      {"split=0", kNavigationPolicyNewPopup},
+      {"splitposition=left", kNavigationPolicyNewPopup},
+  };
+
+  for (const auto& test : kCases) {
+    EXPECT_EQ(test.policy,
+              NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
+                  test.feature_string, /*dom_window=*/nullptr)))
+        << "Testing '" << test.feature_string << "'";
+  }
+}
+
+TEST_F(NavigationPolicyTest, SplitDisabled) {
+  ScopedWindowOpenSplitTabForTest split_tab_enabled{false};
+
+  static const struct {
+    const char* feature_string;
+    NavigationPolicy policy;
+  } kCases[] = {
+      // Without support, "split" is an unrecognized feature, so the legacy
+      // popup heuristic applies.
+      {"split", kNavigationPolicyNewPopup},
+      {"popup=0, split", kNavigationPolicyNewForegroundTab},
+  };
+
+  for (const auto& test : kCases) {
+    EXPECT_EQ(test.policy,
+              NavigationPolicyForCreateWindow(GetWindowFeaturesFromString(
+                  test.feature_string, /*dom_window=*/nullptr)))
+        << "Testing '" << test.feature_string << "'";
+  }
+}
+
+TEST_F(NavigationPolicyTest, UserRequestedPolicyForCreateWindow) {
+#if BUILDFLAG(IS_MAC)
+  const int new_tab_modifier = WebInputEvent::kMetaKey;
+#else
+  const int new_tab_modifier = WebInputEvent::kControlKey;
+#endif
+  const WebMouseEvent::Button left = WebMouseEvent::Button::kLeft;
+
+  // No input event, or no modifiers.
+  EXPECT_FALSE(UserRequestedNavigationPolicyForCreateWindow());
+  EXPECT_FALSE(UserRequestedPolicyForCreateWindow(0, left));
+  // The download modifier is ignored for a new window.
+  EXPECT_FALSE(
+      UserRequestedPolicyForCreateWindow(WebInputEvent::kAltKey, left));
+
+  // Background tab.
+  EXPECT_TRUE(UserRequestedPolicyForCreateWindow(new_tab_modifier, left));
+  EXPECT_TRUE(
+      UserRequestedPolicyForCreateWindow(0, WebMouseEvent::Button::kMiddle));
+  // Foreground tab.
+  EXPECT_TRUE(UserRequestedPolicyForCreateWindow(
+      new_tab_modifier | WebInputEvent::kShiftKey, left));
+  // New window.
+  EXPECT_TRUE(
+      UserRequestedPolicyForCreateWindow(WebInputEvent::kShiftKey, left));
+  // Split view.
+  EXPECT_TRUE(UserRequestedPolicyForCreateWindow(
+      new_tab_modifier | WebInputEvent::kAltKey, left));
+}
+
 TEST_F(NavigationPolicyTest, EventLeftClick) {
   int modifiers = 0;
   WebMouseEvent::Button button = WebMouseEvent::Button::kLeft;
@@ -436,9 +530,7 @@ TEST_F(NavigationPolicyTest, EventAltClickWithDifferentUserEvent) {
             GetPolicyFromEvent(modifiers, button, 0, button));
 }
 
-
-TEST_F(NavigationPolicyWithSplitViewEnabledTest,
-       EventAltControlOrMetaLeftClick) {
+TEST_F(NavigationPolicyTest, EventAltControlOrMetaLeftClick) {
 #if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey | WebInputEvent::kAltKey;
 #else
@@ -449,8 +541,7 @@ TEST_F(NavigationPolicyWithSplitViewEnabledTest,
             NavigationPolicyFromEvent(GetEvent(modifiers, button)));
 }
 
-TEST_F(NavigationPolicyWithSplitViewEnabledTest,
-       EventAltControlOrMetaLeftClickWithUserEvent) {
+TEST_F(NavigationPolicyTest, EventAltControlOrMetaLeftClickWithUserEvent) {
 #if BUILDFLAG(IS_MAC)
   int modifiers = WebInputEvent::kMetaKey | WebInputEvent::kAltKey;
 #else

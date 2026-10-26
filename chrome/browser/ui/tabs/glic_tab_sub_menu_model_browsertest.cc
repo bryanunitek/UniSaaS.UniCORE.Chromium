@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/tabs/glic_tab_sub_menu_model.h"
 
+#include <optional>
+
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
@@ -14,15 +16,16 @@
 #include "chrome/browser/glic/host/glic_features.mojom.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_instance.h"
+#include "chrome/browser/glic/public/glic_invoke_options.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/service/glic_instance_coordinator_impl.h"
 #include "chrome/browser/glic/service/glic_instance_impl.h"
 #include "chrome/browser/glic/service/glic_ui_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/tabs/tab_menu_model.h"
+#include "chrome/browser/ui/tabs/tab_menu_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_switches.h"
@@ -30,6 +33,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
+#include "ui/base/page_transition_types.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/constants/chromeos_features.h"
@@ -107,7 +111,7 @@ class GlicTabSubMenuModelTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
-    GlicEnabling::SetBypassEnablementChecksForTesting(true);
+    scoped_glic_bypass_.emplace();
     glic::GlicKeyedService::Get(browser()->GetProfile())
         ->enabling()
         .SetCompletedFre(glic::prefs::FreStatus::kCompleted);
@@ -115,7 +119,7 @@ class GlicTabSubMenuModelTest : public InProcessBrowserTest {
   }
 
   void TearDownOnMainThread() override {
-    GlicEnabling::SetBypassEnablementChecksForTesting(false);
+    scoped_glic_bypass_.reset();
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
@@ -135,6 +139,8 @@ class GlicTabSubMenuModelTest : public InProcessBrowserTest {
         &service->instance_coordinator());
   }
 
+  std::optional<GlicEnabling::ScopedBypassEnablementChecksForTesting>
+      scoped_glic_bypass_;
   base::test::ScopedFeatureList feature_list_;
 };
 
@@ -146,7 +152,7 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest, GlicSubMenuOpens) {
   // TabStripModel::CommandGlicShare is present in the menu.
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
   auto menu = std::make_unique<TabMenuModel>(
-      /*delegate=*/nullptr, browser()->GetFeatures().tab_menu_model_delegate(),
+      /*delegate=*/nullptr, TabMenuModelDelegate::From(browser()),
       tab_strip_model, /*index=*/0);
 
   size_t index = 0;
@@ -342,7 +348,7 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest, SwitchToRecentConversation) {
   ASSERT_EQ(5u, recents.size());
 
   auto menu = std::make_unique<TabMenuModel>(
-      /*delegate=*/nullptr, browser()->GetFeatures().tab_menu_model_delegate(),
+      /*delegate=*/nullptr, TabMenuModelDelegate::From(browser()),
       tab_strip_model, /*index=*/0);
 
   std::optional<size_t> share_index =
@@ -375,7 +381,7 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest, SwitchToRecentConversation) {
   tab_strip_model->SetSelectionFromModel(selection);
 
   menu = std::make_unique<TabMenuModel>(
-      /*delegate=*/nullptr, browser()->GetFeatures().tab_menu_model_delegate(),
+      /*delegate=*/nullptr, TabMenuModelDelegate::From(browser()),
       tab_strip_model, /*index=*/1);
 
   share_index = menu->GetIndexOfCommandId(TabStripModel::CommandGlicShare);
@@ -447,8 +453,8 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest,
   // Open the context menu without pinning anything
   TestMenuDelegate delegate(tab_strip_model, 0);
   auto menu = std::make_unique<TabMenuModel>(
-      &delegate, browser()->GetFeatures().tab_menu_model_delegate(),
-      tab_strip_model, /*index=*/0);
+      &delegate, TabMenuModelDelegate::From(browser()), tab_strip_model,
+      /*index=*/0);
 
   // Verify that the "Unshare with Gemini" command isn't shown
   bool unshare_command_found = false;
@@ -483,7 +489,12 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest, UnshareCommandShown) {
   glic::GlicTabPinningWaiter waiter(&service->active_instance_sharing_manager(),
                                     handles_to_wait_for);
 
-  service->instance_coordinator().CreateNewConversationForTabs({tab});
+  glic::GlicInvokeOptions options(
+      glic::mojom::InvocationSource::kTabContextMenu);
+  options.target = glic::Target(*tab, glic::NewConversation());
+  options.tab_sharing = glic::TabSharingOptions(
+      {tab->GetHandle()}, glic::GlicPinTrigger::kContextMenu);
+  service->instance_coordinator().Invoke(std::move(options));
   waiter.Wait();
 
   // Select both tabs and open the context menu.
@@ -495,8 +506,8 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest, UnshareCommandShown) {
 
   TestMenuDelegate delegate(tab_strip_model, 0);
   auto menu = std::make_unique<TabMenuModel>(
-      &delegate, browser()->GetFeatures().tab_menu_model_delegate(),
-      tab_strip_model, /*index=*/0);
+      &delegate, TabMenuModelDelegate::From(browser()), tab_strip_model,
+      /*index=*/0);
 
   // Verify that the "Unshare with Gemini" command is shown
   int unshare_command_index = -1;
@@ -539,7 +550,12 @@ IN_PROC_BROWSER_TEST_F(
     std::vector<tabs::TabHandle> handles_to_wait_for = {tab0->GetHandle()};
     glic::GlicTabPinningWaiter waiter(
         &service->active_instance_sharing_manager(), handles_to_wait_for);
-    service->instance_coordinator().CreateNewConversationForTabs({tab0});
+    glic::GlicInvokeOptions options(
+        glic::mojom::InvocationSource::kTabContextMenu);
+    options.target = glic::Target(*tab0, glic::NewConversation());
+    options.tab_sharing = glic::TabSharingOptions(
+        {tab0->GetHandle()}, glic::GlicPinTrigger::kContextMenu);
+    service->instance_coordinator().Invoke(std::move(options));
     waiter.Wait();
   }
 
@@ -549,7 +565,12 @@ IN_PROC_BROWSER_TEST_F(
     std::vector<tabs::TabHandle> handles_to_wait_for = {tab1->GetHandle()};
     glic::GlicTabPinningWaiter waiter(
         &service->active_instance_sharing_manager(), handles_to_wait_for);
-    service->instance_coordinator().CreateNewConversationForTabs({tab1});
+    glic::GlicInvokeOptions options(
+        glic::mojom::InvocationSource::kTabContextMenu);
+    options.target = glic::Target(*tab1, glic::NewConversation());
+    options.tab_sharing = glic::TabSharingOptions(
+        {tab1->GetHandle()}, glic::GlicPinTrigger::kContextMenu);
+    service->instance_coordinator().Invoke(std::move(options));
     waiter.Wait();
   }
 
@@ -557,8 +578,8 @@ IN_PROC_BROWSER_TEST_F(
   // This tests the background/inactive conversation pinned status.
   TestMenuDelegate delegate(tab_strip_model, 0);
   auto menu = std::make_unique<TabMenuModel>(
-      &delegate, browser()->GetFeatures().tab_menu_model_delegate(),
-      tab_strip_model, /*index=*/0);
+      &delegate, TabMenuModelDelegate::From(browser()), tab_strip_model,
+      /*index=*/0);
 
   // Verify that the "Unshare with Gemini" command is shown
   int unshare_command_index = -1;
@@ -652,7 +673,12 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest,
     std::vector<tabs::TabHandle> handles_to_wait_for = {tab->GetHandle()};
     glic::GlicTabPinningWaiter waiter(
         &service->active_instance_sharing_manager(), handles_to_wait_for);
-    service->instance_coordinator().CreateNewConversationForTabs({tab});
+    glic::GlicInvokeOptions options(
+        glic::mojom::InvocationSource::kTabContextMenu);
+    options.target = glic::Target(*tab, glic::NewConversation());
+    options.tab_sharing = glic::TabSharingOptions(
+        {tab->GetHandle()}, glic::GlicPinTrigger::kContextMenu);
+    service->instance_coordinator().Invoke(std::move(options));
     waiter.Wait();
   }
   EXPECT_TRUE(
@@ -676,6 +702,46 @@ IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest,
   // Verify it is still unpinned.
   EXPECT_FALSE(
       service->active_instance_sharing_manager().IsTabPinned(tab->GetHandle()));
+}
+
+IN_PROC_BROWSER_TEST_F(GlicTabSubMenuModelTest,
+                       CreateNewChatWithMultipleTabsOrderMatchesTabStrip) {
+  // Ensure Glic is enabled for the profile.
+  EXPECT_TRUE(GlicEnabling::IsReadyForProfile(browser()->GetProfile()));
+
+  TabStripModel* tab_strip_model = browser()->tab_strip_model();
+  for (int i = 1; i <= 5; i++) {
+    ASSERT_TRUE(
+        AddTabAtIndex(i, GURL("about:blank"), ui::PAGE_TRANSITION_LINK));
+  }
+
+  ui::ListSelectionModel selection;
+  for (int i = 0; i <= 5; i++) {
+    selection.AddIndexToSelection(i);
+  }
+  selection.set_active(0);
+  tab_strip_model->SetSelectionFromModel(selection);
+
+  auto submenu_model =
+      std::make_unique<GlicTabSubMenuModel>(tab_strip_model, 0);
+  submenu_model->ExecuteCommand(TabStripModel::CommandGlicCreateNewChat, 0);
+
+  GlicKeyedService* service = GetGlicKeyedService();
+  std::vector<tabs::TabHandle> handles_to_wait_for;
+  for (int i = 0; i <= 5; i++) {
+    handles_to_wait_for.push_back(
+        tab_strip_model->GetTabAtIndex(i)->GetHandle());
+  }
+  glic::GlicTabPinningWaiter waiter(&service->active_instance_sharing_manager(),
+                                    handles_to_wait_for);
+  waiter.Wait();
+
+  auto pinned_tabs = service->active_instance_sharing_manager().GetPinnedTabs();
+  ASSERT_EQ(6u, pinned_tabs.size());
+
+  for (size_t i = 0; i <= 5; i++) {
+    EXPECT_EQ(tab_strip_model->GetTabAtIndex(i), pinned_tabs[i]);
+  }
 }
 
 }  // namespace glic

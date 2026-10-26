@@ -25,6 +25,10 @@ import androidx.annotation.VisibleForTesting;
 import androidx.core.view.ViewCompat;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.metrics.RecordUserAction;
@@ -36,6 +40,7 @@ import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.omnibox.AutocompleteSchemeClassifier;
 import org.chromium.components.omnibox.OmniboxUrlEmphasizer;
+import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.security_state.SecurityStateModel;
 import org.chromium.components.url_formatter.UrlFormatter;
@@ -60,7 +65,6 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.List;
@@ -71,6 +75,9 @@ public class PageInfoController
         implements PageInfoMainController,
                 ModalDialogProperties.Controller,
                 SystemSettingsActivityRequiredListener {
+    @JniType("::PageInfoControllerAndroid")
+    interface NativePageInfoControllerAndroid extends JniTypeToken {}
+
     @IntDef({
         OpenedFromSource.MENU,
         OpenedFromSource.TOOLBAR,
@@ -96,7 +103,7 @@ public class PageInfoController
     private final PageInfoControllerDelegate mDelegate;
 
     // A pointer to the C++ object for this UI.
-    private long mNativePageInfoController;
+    private @Nullable JniUniquePtr<NativePageInfoControllerAndroid> mNativePageInfoController;
 
     // The main PageInfo view.
     private final PageInfoView mView;
@@ -127,6 +134,14 @@ public class PageInfoController
 
     // Reference to last created PageInfoController for testing.
     private static @Nullable WeakReference<PageInfoController> sLastPageInfoControllerForTesting;
+
+    /**
+     * Whether the current site is displaying a suspicious site warning. Unlike phishing or malware
+     * sites (which present full-page interstitials), suspicious sites use PageInfo to display
+     * warnings and action buttons. When true, PageInfo uses a static warning icon
+     * (ic_public_off_24dp) and suppresses replacing it with the site's fetched favicon.
+     */
+    private boolean mIsSuspiciousSite;
 
     // Used to show Site settings from Page Info UI.
     private final PermissionParamsListBuilder mPermissionParamsListBuilder;
@@ -212,6 +227,10 @@ public class PageInfoController
             }
         }
 
+        mIsSuspiciousSite =
+                SecurityStateModel.getMaliciousContentStatusForWebContents(mWebContents)
+                        == ConnectionMaliciousContentStatus.WARNABLE_SUSPICIOUS_SITE;
+
         // Setup Container.
         mContainer = new PageInfoContainer(mContext);
         boolean useDarkText = !ColorUtils.inNightMode(mContext);
@@ -244,6 +263,13 @@ public class PageInfoController
                         /* showCloseButton= */ !isSheet() || mDelegate.isAccessibilityEnabled(),
                         /* closeButtonClickCallback= */ this::dismiss);
         mContainer.setParams(containerParams);
+        if (mIsSuspiciousSite) {
+            mContainer.setFavicon(
+                    SettingsUtils.getTintedIcon(
+                            mContext,
+                            org.chromium.components.browser_ui.styles.R.drawable
+                                    .ic_public_off_24dp));
+        }
 
         // Setup View.
         PageInfoView.Params viewParams = new PageInfoView.Params();
@@ -254,8 +280,8 @@ public class PageInfoController
         mDelegate.getFavicon(
                 mFullUrl,
                 favicon -> {
-                    // Return early if PageInfo has been dismissed.
-                    if (mDialog == null) return;
+                    // Return early if PageInfo has been dismissed or site is suspicious.
+                    if (mDialog == null || mIsSuspiciousSite) return;
 
                     if (favicon != null) {
                         mContainer.setFavicon(favicon);
@@ -280,7 +306,9 @@ public class PageInfoController
                         this,
                         mView.getConnectionSecurityView(),
                         mView.getConnectionRowView(),
-                        mWebContents);
+                        mWebContents,
+                        mDelegate,
+                        publisher);
         mSubpageControllers.add(mConnectionSecurityController);
         mPermissionsController =
                 new PageInfoPermissionsController(
@@ -349,7 +377,7 @@ public class PageInfoController
                 };
 
         mDialog = dialog;
-        if (mNativePageInfoController != 0) {
+        if (mNativePageInfoController != null) {
             dialog.show();
         }
 
@@ -400,12 +428,51 @@ public class PageInfoController
     }
 
     /**
-     * Sets the connection security summary and detailed description strings. These strings may be
-     * overridden based on the state of the Android UI.
+     * Sets the connection security summary and detailed description strings, and configures UI for
+     * suspicious site warnings.
      */
+    // TODO(crbug.com/532598590): Refactor suspicious site UI configuration out of
+    // setSecurityDescription into a dedicated method (e.g. configureSuspiciousSiteUi).
     @CalledByNative
-    private void setSecurityDescription(String summary, String details) {
-        mConnectionController.setSecurityDescription(summary, details);
+    public void setSecurityDescription(String summary, String details, boolean isSuspiciousSite) {
+        mIsSuspiciousSite = isSuspiciousSite;
+        mConnectionController.setSecurityDescription(summary, details, isSuspiciousSite);
+        // Synchronize suspicious site state to native controller. In production this is set by
+        // SetIdentityInfo, but is required for testing environments where setSecurityDescription
+        // is invoked directly from Java tests without going through SetIdentityInfo.
+        if (mNativePageInfoController != null) {
+            PageInfoControllerJni.get()
+                    .setIsSuspiciousSite(mNativePageInfoController, isSuspiciousSite);
+        }
+        if (isSuspiciousSite) {
+            mContainer.setFavicon(
+                    SettingsUtils.getTintedIcon(
+                            mContext,
+                            org.chromium.components.browser_ui.styles.R.drawable
+                                    .ic_public_off_24dp));
+            mView.getBackToSafetyButton()
+                    .setOnClickListener(
+                            v -> {
+                                if (mNativePageInfoController != null) {
+                                    PageInfoControllerJni.get()
+                                            .onSuspiciousSiteBackToSafety(
+                                                    mNativePageInfoController);
+                                }
+                                dismiss();
+                            });
+            mView.getMarkAsSafeButton()
+                    .setOnClickListener(
+                            v -> {
+                                if (mNativePageInfoController != null) {
+                                    PageInfoControllerJni.get()
+                                            .onSuspiciousSiteMarkAsSafe(mNativePageInfoController);
+                                }
+                                dismiss();
+                            });
+            mView.setSuspiciousSiteButtonsVisible(true);
+        } else {
+            mView.setSuspiciousSiteButtonsVisible(false);
+        }
     }
 
     /**
@@ -422,23 +489,6 @@ public class PageInfoController
     @CalledByNative
     private void showConnectionSecurityInfo() {
         mConnectionSecurityController.showSecurityInfo();
-    }
-
-    /** Updates the Topic view if present. */
-    @CalledByNative
-    private void setAdPersonalizationInfo(boolean hasJoinedUserToInterestGroup, String[] topics) {
-        // This logic is a little weird. On Android we already have separate controllers for most
-        // PageInfo components and they usually update themselves. On Desktop we still have one big
-        // controller. Here we are reusing Desktop controller to update the Android component.
-        // In the future the Desktop logic will hopefully be split as well and then we can remove
-        // this logic here.
-        for (PageInfoSubpageController controller : mSubpageControllers) {
-            if (controller instanceof PageInfoAdPersonalizationController) {
-                ((PageInfoAdPersonalizationController) controller)
-                        .setAdPersonalizationInfo(
-                                hasJoinedUserToInterestGroup, Arrays.asList(topics));
-            }
-        }
     }
 
     @Override
@@ -472,7 +522,7 @@ public class PageInfoController
 
     @Override
     public void onDismiss(PropertyModel model, @DialogDismissalCause int dismissalCause) {
-        assert mNativePageInfoController != 0;
+        assert mNativePageInfoController != null;
         while (!mCurrentSubpageControllers.isEmpty()) {
             PageInfoSubpageController currentSubpageController =
                     mCurrentSubpageControllers.removeFirst();
@@ -481,8 +531,8 @@ public class PageInfoController
 
         destroy();
 
-        PageInfoControllerJni.get().destroy(mNativePageInfoController);
-        mNativePageInfoController = 0;
+        mNativePageInfoController.destroy();
+        mNativePageInfoController = null;
         if (mPendingRunAfterDismissTask != null) {
             mPendingRunAfterDismissTask.run();
         }
@@ -490,8 +540,8 @@ public class PageInfoController
 
     @Override
     public void recordAction(@PageInfoAction int action) {
-        assert mNativePageInfoController != 0;
-        if (mNativePageInfoController != 0) {
+        assert mNativePageInfoController != null;
+        if (mNativePageInfoController != null) {
             PageInfoControllerJni.get().recordPageInfoAction(mNativePageInfoController, action);
         }
     }
@@ -499,7 +549,7 @@ public class PageInfoController
     @Override
     public void refreshPermissions() {
         mPermissionParamsListBuilder.clearPermissionEntries();
-        if (mNativePageInfoController != 0) {
+        if (mNativePageInfoController != null) {
             PageInfoControllerJni.get().updatePermissions(mNativePageInfoController);
         }
     }
@@ -557,18 +607,20 @@ public class PageInfoController
         Window window = activity.getWindow();
         if (window == null || !ViewCompat.isAttachedToWindow(window.getDecorView())) return;
 
-        if (source == OpenedFromSource.MENU) {
-            RecordUserAction.record("MobileWebsiteSettingsOpenedFromMenu");
-        } else if (source == OpenedFromSource.TOOLBAR) {
-            RecordUserAction.record("MobileWebsiteSettingsOpenedFromToolbar");
-        } else if (source == OpenedFromSource.VR) {
-            RecordUserAction.record("MobileWebsiteSettingsOpenedFromVR");
-        } else if (source == OpenedFromSource.WEBAPK_SNACKBAR) {
-            RecordUserAction.record("MobileWebsiteSettingsOpenedFromWebApkSnackbar");
-        } else if (source == OpenedFromSource.PERMISSION_PROMPT) {
-            RecordUserAction.record("MobileWebsiteSettingsOpenedFromPermissionPrompt");
-        } else {
-            assert false : "Invalid source passed";
+        switch (source) {
+            case OpenedFromSource.MENU ->
+                    RecordUserAction.record("MobileWebsiteSettingsOpenedFromMenu");
+            case OpenedFromSource.TOOLBAR ->
+                    RecordUserAction.record("MobileWebsiteSettingsOpenedFromToolbar");
+            case OpenedFromSource.VR ->
+                    RecordUserAction.record("MobileWebsiteSettingsOpenedFromVR");
+            case OpenedFromSource.WEBAPK_SNACKBAR ->
+                    RecordUserAction.record("MobileWebsiteSettingsOpenedFromWebApkSnackbar");
+            case OpenedFromSource.PERMISSION_PROMPT ->
+                    RecordUserAction.record("MobileWebsiteSettingsOpenedFromPermissionPrompt");
+            default -> {
+                assert false : "Invalid source passed";
+            }
         }
 
         sLastPageInfoControllerForTesting =
@@ -590,15 +642,16 @@ public class PageInfoController
                 : null;
     }
 
-    @NativeMethods
-    interface Natives {
-        long init(PageInfoController controller, WebContents webContents);
+    @Override
+    public void openSafeBrowsingHelpCenter() {
+        if (mNativePageInfoController != null) {
+            PageInfoControllerJni.get().openSafeBrowsingHelpCenter(mNativePageInfoController);
+        }
+    }
 
-        void destroy(long nativePageInfoControllerAndroid);
-
-        void recordPageInfoAction(long nativePageInfoControllerAndroid, int action);
-
-        void updatePermissions(long nativePageInfoControllerAndroid);
+    @Override
+    public void updateConnectionWrapperVisibility() {
+        mView.updateConnectionWrapperVisibility();
     }
 
     @Override
@@ -669,5 +722,24 @@ public class PageInfoController
         if (mDialog != null) {
             mDialog.dismiss(true);
         }
+    }
+
+    @NativeMethods
+    interface Natives {
+        @Nullable JniUniquePtr<NativePageInfoControllerAndroid> init(
+                PageInfoController controller, WebContents webContents);
+
+        void recordPageInfoAction(JniPtr<NativePageInfoControllerAndroid> self, int action);
+
+        void updatePermissions(JniPtr<NativePageInfoControllerAndroid> self);
+
+        void onSuspiciousSiteBackToSafety(JniPtr<NativePageInfoControllerAndroid> self);
+
+        void onSuspiciousSiteMarkAsSafe(JniPtr<NativePageInfoControllerAndroid> self);
+
+        void openSafeBrowsingHelpCenter(JniPtr<NativePageInfoControllerAndroid> self);
+
+        void setIsSuspiciousSite(
+                JniPtr<NativePageInfoControllerAndroid> self, boolean isSuspiciousSite);
     }
 }

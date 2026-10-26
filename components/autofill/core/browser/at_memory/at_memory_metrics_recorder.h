@@ -9,27 +9,30 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/token.h"
 #include "base/types/optional_ref.h"
-#include "components/accessibility_annotator/core/annotation_reducer/memory_data_type.h"
+#include "components/autofill/core/browser/integrators/at_memory/memory_search_result.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/ui/autofill_suggestion_delegate.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/signatures.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/gurl.h"
-
-namespace accessibility_annotator {
-struct MemorySearchResults;
-}  // namespace accessibility_annotator
 
 namespace optimization_guide {
 class ModelQualityLogEntry;
 class ModelQualityLogsUploaderService;
 }  // namespace optimization_guide
+
+namespace ukm {
+class UkmRecorder;
+}  // namespace ukm
 
 namespace autofill {
 
@@ -53,71 +56,183 @@ enum class AtMemoryQueryCompletedStatus {
   kMaxValue = kInternalError
 };
 
-// Encapsulates the state and logging logic for the @memory search funnel.
-// This class tracks the progression of a user's interaction with the @memory
+// LINT.IfChange(AutofillAtMemoryUiSessionOutcome)
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// Key terminal outcome events for an AtMemory UI session.
+enum class AtMemoryUiSessionOutcome {
+  // The popup was dismissed before any search query was submitted.
+  kDismissedBeforeQuery = 0,
+  // A query was submitted, but the popup was dismissed before receiving any
+  // query response.
+  kDismissedBeforeResults = 1,
+  // A query completed, but the query returned empty results when the popup
+  // was dismissed.
+  kDismissedEmptyResults = 2,
+  // The last query response returned suggestions, but the popup was dismissed
+  // without accepting a suggestion.
+  kDismissedResultsBeforeAcceptance = 3,
+  // A suggestion was accepted, but not filled (e.g. authentication failed or
+  // was cancelled).
+  kSuggestionAcceptedNotFilled = 4,
+  // A suggestion was accepted and successfully filled.
+  kSuggestionFilled = 5,
+  kMaxValue = kSuggestionFilled,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAtMemoryUiSessionOutcome)
+
+// LINT.IfChange(AutofillAtMemoryStateRestored)
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// Describes which persisted search state (if any) was restored when the
+// AtMemory popup was shown with search statefulness enabled.
+enum class AtMemoryStateRestored {
+  // No search state was persisted for the field, so the popup started from the
+  // initial (empty query) state.
+  kNewSession = 0,
+  // A query that was typed but not submitted was restored.
+  kRestoredWithExistingQuery = 1,
+  // A submitted query whose response was still pending was restored.
+  kRestoredWhileSearching = 2,
+  // A submitted query together with its final response (results or an error)
+  // was restored.
+  kRestoredWithResponse = 3,
+  kMaxValue = kRestoredWithResponse,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAtMemoryStateRestored)
+
+// Encapsulates the state and logging logic for the AtMemory search funnel.
+// This class tracks the progression of a user's interaction with the AtMemory
 // suggestions, from the initial display to the submission of a query.
 class AtMemoryMetricsRecorder {
  public:
   AtMemoryMetricsRecorder(
       optimization_guide::ModelQualityLogsUploaderService* uploader_service,
+      ukm::UkmRecorder* ukm_recorder,
+      ukm::SourceId ukm_source_id,
       GURL url,
       std::u16string_view title,
+      const FieldGlobalId& field_id,
       FormSignature form_signature,
       FieldSignature field_signature);
   AtMemoryMetricsRecorder(const AtMemoryMetricsRecorder&) = delete;
   AtMemoryMetricsRecorder& operator=(const AtMemoryMetricsRecorder&) = delete;
   ~AtMemoryMetricsRecorder();
 
-  // Records that the popup UI was successfully displayed to the user.
-  // This emits the "PopupDisplayed" metric. This method is idempotent; only
-  // the first call per session will record metrics, and subsequent calls
-  // with potentially different trigger sources are ignored. This is consistent
-  // with the popup lifecycle, where a change in trigger mechanism would
-  // typically result in the popup being hidden and a new session starting.
+  // Records that the popup UI was displayed to the user and emits
+  // "Autofill.AtMemory.SearchBarDisplayed" once per display. Repeated calls
+  // while the popup stays visible (e.g. when its suggestions are updated) are
+  // ignored until `OnPopupHidden()` is called. With search statefulness a
+  // session can span several displays; the trigger source of the first one is
+  // kept for the session-level UKM.
   void OnPopupShown(
       AutofillSuggestionTriggerSource trigger_source,
-      base::optional_ref<const AutofillSuggestionDelegate::SuggestionMetadata>
-          parent_suggestion_metadata);
+      const AutofillSuggestionDelegate::SuggestionUiMetadata& metadata);
+
+  // Records that the popup UI was hidden, so the next `OnPopupShown()` counts
+  // as a new display.
+  void OnPopupHidden();
+
+  // Records which persisted search state (if any) was restored when the popup
+  // was displayed. Emits "Autofill.AtMemory.StateRestored".
+  void OnStateRestored(AtMemoryStateRestored state_restored);
 
   // Records that a search query was submitted during this session.
   void OnQuerySubmitted(std::u16string_view query);
 
   // Records that a response for the pending query was received.
-  void OnQueryResponseReceived(
-      const accessibility_annotator::MemorySearchResults& result);
+  void OnQueryResponseReceived(const MemorySearchResults& result);
 
   // Records that a suggestion was accepted during this session.
+  using MemorySourcesBitmask = std::underlying_type_t<MemoryEntrySourceType>;
   void OnSuggestionAccepted(
-      accessibility_annotator::MemoryDataType memory_data_type,
+      MemoryDataType memory_data_type,
+      MemorySourcesBitmask sources_bitmask = 0,
       base::optional_ref<const AutofillSuggestionDelegate::SuggestionMetadata>
           metadata = std::nullopt);
 
   // Records that the suggestion was successfully filled.
   void MarkFilled();
 
+  // Returns if a suggestion was successfully filled this session.
+  bool IsFilled() const { return suggestion_filled_in_session_; }
+
+  // LINT.IfChange(FetchPiiSource)
+  // The source of PII data fetched during filling.
+  enum class FetchPiiSource {
+    kAutofillAi = 0,
+    kCreditCard = 1,
+    kIban = 2,
+    kPersonalContext = 3,
+    kMaxValue = kPersonalContext,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/histograms.xml:Autofill.AtMemory.Latency.FetchPii)
+
   // Records the start time of the asynchronous PII fetching process.
-  void OnFetchPiiStarted();
+  void OnFetchPiiStarted(FetchPiiSource source);
 
   // Records the completion of the asynchronous PII fetching process.
   void OnFetchPiiCompleted();
 
+  size_t query_count() const { return query_count_; }
+  size_t query_results_count() const { return query_results_count_; }
+
  private:
   friend class AtMemoryMetricsRecorderTestApi;
 
-  // Emits the `SuggestionAccepted` metric if `suggestion_accepted_` is not
-  // `std::nullopt`.
+  bool CanLogUkm() const;
+
+  // Emits the record in `ukm_search_query_builder_` if it exists.
+  void MaybeFlushSearchQueryUkm();
+
+  // Emits the `SuggestionAccepted` metric if non-empty query results were
+  // received for the query.
   void MaybeLogSuggestionAccepted();
 
   // The unique identifier of the session. A session begins when the popup is
   // first shown to the user and ends when it is hidden. Popup updates (e.g.,
   // due to typing in the search bar) do not change the session.
   const base::Token session_id_token_;
-  // The trigger source of the popup. It is `std::nullopt` until `OnPopupShown`
-  // is called, serving as a signal that the popup was shown.
+
+  // The URL of the primary page the user triggered the AtMemory search on.
+  const GURL url_;
+
+  // The title of the primary page the user triggered the AtMemory search on.
+  const std::u16string title_;
+
+  // Identifiers of the field that the user triggered AtMemory on.
+  const FieldGlobalId field_id_;
+  const FormSignature form_signature_;
+  const FieldSignature field_signature_;
+
+  // The trigger source of the first display of the popup in this session. It
+  // is `std::nullopt` until `OnPopupShown` is called, serving as a signal that
+  // the popup was shown.
   std::optional<AutofillMetrics::AtMemoryTriggerSource> source_;
-  bool query_submitted_ = false;
-  // The pending log entry to be uploaded to MQLS for the query.
-  std::unique_ptr<optimization_guide::ModelQualityLogEntry> pending_log_entry_;
+
+  // Whether the popup is currently displayed, i.e. `OnPopupShown` was called
+  // and `OnPopupHidden` was not called since.
+  bool is_popup_displayed_ = false;
+
+  // Counts the number of queries submitted during this session.
+  size_t query_count_ = 0;
+
+  // Counts the number of query responses received during this session. Used
+  // by UMA session outcome metrics to determine if the session was dismissed
+  // before receiving results.
+  size_t query_response_count_ = 0;
+
+  // Number of search results for the last query shown to the user.
+  size_t query_results_count_ = 0;
+
+  // Whether any suggestion has been accepted during the lifetime of `this`.
+  bool suggestion_accepted_in_session_ = false;
+
+  // Whether any suggestion has been filled during the lifetime of `this`.
+  bool suggestion_filled_in_session_ = false;
+
   // The timer that measures the time between the query being submitted and
   // the suggestions being shown to the user. It is `std::nullopt` until
   // `OnQuerySubmitted` is called and will be reset when the query response was
@@ -129,36 +244,39 @@ class AtMemoryMetricsRecorder {
   struct {
     // Whether a non-empty query response has been received.
     bool suggestions_received = false;
-    std::optional<accessibility_annotator::MemoryDataType> accepted_data_type;
+
+    // Whether a suggestion was accepted in response to the last user query.
+    bool suggestion_accepted = false;
   } suggestion_acceptance_;
 
-  // Whether any suggestion has been accepted during the lifetime of `this`
-  // recorder.
-  bool suggestion_accepted_in_session_ = false;
+  // Information about the asynchronous fetch/unmask process of PII.
+  struct {
+    std::optional<FetchPiiSource> source;
 
-  // Counts the number of queries submitted during this session.
-  size_t query_count_ = 0;
+    // The start time of the asynchronous fetch/unmask process.
+    std::optional<base::TimeTicks> start_time;
 
-  bool was_filled_ = false;
-  // The start time of the asynchronous fetch/unmask process.
-  std::optional<base::TimeTicks> fetch_pii_start_time_;
-  // The duration of the successful asynchronous fetch/unmask process.
-  std::optional<base::TimeDelta> fetch_pii_duration_;
+    // The duration of the successful asynchronous fetch/unmask process.
+    std::optional<base::TimeDelta> duration;
+  } fetch_pii_;
 
-  // The URL of the primary page the user triggered the @memory search on.
-  const GURL url_;
-  // The title of the primary page the user triggered the @memory search on.
-  const std::u16string title_;
+  // Members related to UKM:
 
-  // The form and field signature of the form the user triggered the @memory search on, or
-  // 0 if no form was involved.
-  const FormSignature form_signature_;
-  const FieldSignature field_signature_;
+  const raw_ptr<ukm::UkmRecorder> ukm_recorder_;
+  const ukm::SourceId ukm_source_id_;
 
-  // The uploader service used to log metrics to MQLS. Not owned. Guaranteed to
-  // outlive `this`.
-  raw_ptr<optimization_guide::ModelQualityLogsUploaderService>
+  // Used to assemble the data emitted in an `AtMemory.SearchQuery` record.
+  std::optional<ukm::builders::AtMemory_SearchQuery> ukm_search_query_builder_;
+
+  // Members related to MQLS:
+
+  // The uploader service used to log metrics to MQLS. Guaranteed to outlive
+  // `this`.
+  const raw_ptr<optimization_guide::ModelQualityLogsUploaderService>
       uploader_service_;
+
+  // The pending log entry to be uploaded to MQLS for the query.
+  std::unique_ptr<optimization_guide::ModelQualityLogEntry> pending_log_entry_;
 };
 
 }  // namespace autofill

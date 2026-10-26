@@ -12,6 +12,7 @@ when determining serial tests, these functions can be used as stand-ins.
 import collections
 import functools
 import logging
+import os
 import platform
 import re
 import shlex
@@ -20,14 +21,12 @@ import sys
 from typing import Any
 
 # vpython-provided modules.
-import psutil  # pylint: disable=import-error
+import psutil
 
 from gpu_tests import constants
 
 if sys.platform == 'win32':
-  # pylint: disable=import-error
   from win32com import client  # type: ignore
-  # pylint: enable=import-error
 else:
   client = None
 
@@ -67,6 +66,11 @@ def IsLinux() -> bool:
 @functools.lru_cache(maxsize=1)
 def IsMac() -> bool:
   return sys.platform == 'darwin'
+
+
+@functools.lru_cache(maxsize=1)
+def IsWayland() -> bool:
+  return 'WAYLAND_DISPLAY' in os.environ
 
 
 @functools.lru_cache(maxsize=1)
@@ -183,22 +187,26 @@ def _lspci() -> list[list[str]]:
   list(Bus, Type, Vendor [ID], Device [ID], extra...)
   """
   try:
-    process = subprocess.run(['lspci', '-mm', '-nn'],
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE,
-                             text=True,
-                             check=True)
+    process = subprocess.run(
+      ['lspci', '-mm', '-nn'],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      text=True,
+      check=True,
+    )
   except FileNotFoundError:
     logging.warning(
-        'Failed to find lspci to enumerate GPUs. This is expected to happen '
-        'when running on a host for a remote platform such as Android and can '
-        'be safely ignored in those cases.')
+      'Failed to find lspci to enumerate GPUs. This is expected to happen '
+      'when running on a host for a remote platform such as Android and can '
+      'be safely ignored in those cases.'
+    )
     return []
   except subprocess.CalledProcessError:
     logging.warning(
-        'Running lspci failed, cannot enumerate GPUs. This is expected to '
-        'happen when running on a host for a remote platform such as Fuchsia '
-        'and can be safely ignored in those cases.')
+      'Running lspci failed, cannot enumerate GPUs. This is expected to '
+      'happen when running on a host for a remote platform such as Fuchsia '
+      'and can be safely ignored in those cases.'
+    )
     return []
   return [shlex.split(line) for line in process.stdout.splitlines()]
 
@@ -229,9 +237,9 @@ def _GetAvailableGpusLinux() -> list[_Gpu]:
 
 
 def _get_system_profiler(data_type: str) -> dict:
-  process = subprocess.run(['system_profiler', data_type, '-xml'],
-                           stdout=subprocess.PIPE,
-                           check=True)
+  process = subprocess.run(
+    ['system_profiler', data_type, '-xml'], stdout=subprocess.PIPE, check=True
+  )
   plist = plistlib.loads(process.stdout)  # pytype: disable=name-error
   return plist[0].get('_items', [])
 
@@ -242,7 +250,7 @@ def _GetAvailableGpusMac() -> list[_Gpu]:
   # Effectively copied from Swarming's get_gpu() in api/platforms/osx.py.
   # This applies to all helper functions called from here as well.
   for gpu in _get_system_profiler('SPDisplaysDataType'):
-    if not 'spdisplays_device-id' in gpu:
+    if 'spdisplays_device-id' not in gpu:
       # Apple Silicon GPUs don't show up as PCI-e devices, so they require
       # separate detection code.
       gpu_list.append(_HandleAppleGpu(gpu))
@@ -252,8 +260,10 @@ def _GetAvailableGpusMac() -> list[_Gpu]:
 
 
 def _HandleAppleGpu(gpu: dict) -> _Gpu:
-  if ('spdisplays_vendor' not in gpu
-      or gpu['spdisplays_vendor'] != 'sppci_vendor_Apple'):
+  if (
+    'spdisplays_vendor' not in gpu
+    or gpu['spdisplays_vendor'] != 'sppci_vendor_Apple'
+  ):
     raise RuntimeError('_HandleAppleGpu() called with non-Apple GPU')
   if 'sppci_model' not in gpu:
     raise RuntimeError('No model found for Apple GPU')
@@ -303,7 +313,8 @@ def _HandleNonAppleGpu(gpu: dict) -> _Gpu:
 
   if vendor_id is None:
     raise RuntimeError(
-        f'Unable to determine GPU vendor ID. Raw GPU info: {gpu}')
+      f'Unable to determine GPU vendor ID. Raw GPU info: {gpu}'
+    )
 
   return _Gpu(vendor_id, device_id)
 

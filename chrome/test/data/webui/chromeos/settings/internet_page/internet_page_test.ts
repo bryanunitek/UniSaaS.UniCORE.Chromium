@@ -491,7 +491,7 @@ suite('<settings-internet-page>', () => {
             `VPNs prohibited by policy: ${
                 vpnProhibited}, always on VPN set by policy: ${
                   !!arcVpnAlwaysOnPackageNamePrefValue}, ` +
-                `setDoesDisconnectProhibitedAlwaysOnVpnPrefs allowed ` +
+                'setDoesDisconnectProhibitedAlwaysOnVpnPrefs allowed ' +
                 `by policy: ${manualDisconnectionAllowed}`,
             async () => {
           await init();
@@ -992,7 +992,6 @@ suite('<settings-internet-page>', () => {
       });
 
   test('Navigate to/from APN subpage', async () => {
-    loadTimeData.overrideValues({isApnRevampEnabled: true});
     await navigateToApnSubpage();
     assertEquals(Router.getInstance().currentRoute, routes.APN);
     assertTrue(!!internetPage.shadowRoot!.querySelector('apn-subpage'));
@@ -1016,7 +1015,6 @@ suite('<settings-internet-page>', () => {
   test(
       'Create apn button opens dialogs and clicking cancel button removes it',
       async () => {
-        loadTimeData.overrideValues({isApnRevampEnabled: true});
         await navigateToApnSubpage();
         const subpage = internetPage.shadowRoot!.querySelector('apn-subpage');
         assertTrue(!!subpage);
@@ -1057,7 +1055,6 @@ suite('<settings-internet-page>', () => {
       'Discover more apns button opens dialog and clicking cancel button ' +
           'removes it',
       async () => {
-        loadTimeData.overrideValues({isApnRevampEnabled: true});
         await navigateToApnSubpage();
         const subpage = internetPage.shadowRoot!.querySelector('apn-subpage');
         assertTrue(!!subpage);
@@ -1098,7 +1095,6 @@ suite('<settings-internet-page>', () => {
       });
 
   test('Navigate to APN subpage and remove cellular properties.', async () => {
-    loadTimeData.overrideValues({isApnRevampEnabled: true});
     await navigateToApnSubpage();
     assertEquals(routes.APN, Router.getInstance().currentRoute);
     assertTrue(!!internetPage.shadowRoot!.querySelector('apn-subpage'));
@@ -1118,7 +1114,6 @@ suite('<settings-internet-page>', () => {
   test(
       'Navigate to APN subpage without providing guid as parameter',
       async () => {
-        loadTimeData.overrideValues({isApnRevampEnabled: true});
         await navigateToCellularDetailPage();
         const windowPopstatePromise = eventToPromise('popstate', window);
         Router.getInstance().navigateTo(routes.APN);
@@ -1133,7 +1128,6 @@ suite('<settings-internet-page>', () => {
             'reached',
         async () => {
           document.body.style.direction = languageDirection;
-          loadTimeData.overrideValues({isApnRevampEnabled: true});
           await navigateToApnSubpage();
           const getCreateCustomApnTooltip = () =>
               internetPage.shadowRoot!.querySelector<PaperTooltipElement>(
@@ -1191,12 +1185,11 @@ suite('<settings-internet-page>', () => {
 
   [true, false].forEach(isApnRevampAndAllowApnModificationPolicyEnabled => {
     test(
-        `Managed APN UI states when ` +
+        'Managed APN UI states when ' +
             `isApnRevampAndAllowApnModificationPolicyEnabled is ${
                 isApnRevampAndAllowApnModificationPolicyEnabled}`,
         async () => {
           loadTimeData.overrideValues({
-            isApnRevampEnabled: true,
             isApnRevampAndAllowApnModificationPolicyEnabled:
                 isApnRevampAndAllowApnModificationPolicyEnabled,
           });

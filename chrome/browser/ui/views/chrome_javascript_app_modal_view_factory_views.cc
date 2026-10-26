@@ -6,7 +6,6 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/ui/blocked_content/popunder_preventer.h"
-#include "chrome/browser/ui/javascript_dialogs/chrome_app_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/javascript_dialogs/chrome_javascript_app_modal_dialog_view_factory.h"
 #include "chrome/browser/ui/views/javascript_app_modal_event_blocker.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -80,6 +79,15 @@ class ChromeJavaScriptAppModalDialogViews
 };
 
 void AdjustWidgetBoundsIfOffscreen(views::Widget* widget) {
+  // Without global screen coordinates (e.g. Wayland), the screen origin of
+  // the browser window is unknown, so the dialog bounds cannot be compared
+  // with a display's work area. Moving the dialog into that work area can
+  // place it outside its parent window, where it stays invisible while it
+  // blocks input to every browser window.
+  if (!constrained_window::SupportsGlobalScreenCoordinates()) {
+    return;
+  }
+
   gfx::Rect widget_bounds = widget->GetWindowBoundsInScreen();
   gfx::Rect screen_rect =
       display::Screen::Get()
@@ -118,9 +126,4 @@ void InstallChromeJavaScriptAppModalDialogViewFactory() {
   javascript_dialogs::AppModalDialogManager::GetInstance()
       ->SetNativeDialogFactory(
           base::BindRepeating(&CreateViewsJavaScriptDialog));
-}
-
-void SetChromeAppModalDialogManagerDelegate() {
-  javascript_dialogs::AppModalDialogManager::GetInstance()->SetDelegate(
-      std::make_unique<ChromeAppModalDialogManagerDelegate>());
 }

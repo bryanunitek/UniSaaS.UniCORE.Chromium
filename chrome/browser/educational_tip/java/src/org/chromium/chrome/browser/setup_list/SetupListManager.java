@@ -110,9 +110,6 @@ public class SetupListManager
                     ModuleType.ADDRESS_BAR_PLACEMENT_PROMO);
     // TODO(crbug.com/469425754): Deprecate module and cleanup related logic.
     // ModuleType.DEFAULT_BROWSER_PROMO,
-    // ModuleType.SIGN_IN_PROMO,
-    // ModuleType.SAVE_PASSWORDS_PROMO,
-    // ModuleType.PASSWORD_CHECKUP_PROMO,
 
     private static final Set<Integer> BASE_SETUP_LIST_SET = new HashSet<>(BASE_SETUP_LIST_ORDER);
 
@@ -276,7 +273,7 @@ public class SetupListManager
         return LazyHolder.sInstance;
     }
 
-    private boolean isSetupListAllowed() {
+    private static boolean isSetupListAllowed() {
         return ChromeFeatureList.sAndroidSetupList.isEnabled() && !isFirstRunTriggered();
     }
 
@@ -297,7 +294,7 @@ public class SetupListManager
     }
 
     /** Returns the module type list for the two-cell container. */
-    public List<Integer> getTwoCellContainerModuleTypes() {
+    public static List<Integer> getTwoCellContainerModuleTypes() {
         return List.of(TWO_CELL_CONTAINER_MODULE_TYPE);
     }
 

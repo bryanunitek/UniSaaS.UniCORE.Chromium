@@ -16,13 +16,12 @@ void ShowBadFlagsSnackbar(content::WebContents* web_contents,
                           const std::u16string& message) {
   JNIEnv* env = base::android::AttachCurrentThread();
   ui::ViewAndroid* view_android = web_contents->GetNativeView();
-  DCHECK(view_android);
+  CHECK(view_android, base::NotFatalUntil::M161);
   ui::WindowAndroid* window_android = view_android->GetWindowAndroid();
   if (!window_android)
     return;
   chrome::Java_BadFlagsSnackbarManager_show(
-      env, window_android->GetJavaObject(),
-      base::android::ConvertUTF16ToJavaString(env, message));
+      env, window_android->GetJavaObject(), message);
 }
 
 DEFINE_JNI(BadFlagsSnackbarManager)

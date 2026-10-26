@@ -7,7 +7,6 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
-#include "components/optimization_guide/core/model_execution/multimodal_message.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -24,6 +23,12 @@ class MockRemoteModelExecutor : public RemoteModelExecutor {
                const google::protobuf::MessageLite& request_metadata,
                const ModelExecutionOptions& options,
                OptimizationGuideModelExecutionResultCallback callback),
+              (override));
+  MOCK_METHOD(std::unique_ptr<RemoteModelExecutionSession>,
+              StartStreamingSession,
+              (ModelBasedCapabilityKey feature,
+               const StreamingModelExecutionOptions& options,
+               OptimizationGuideModelExecutionStreamingCallback callback),
               (override));
 };
 

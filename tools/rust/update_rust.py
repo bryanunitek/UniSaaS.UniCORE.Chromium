@@ -26,29 +26,36 @@ from pathlib import Path
 
 # Add Clang scripts to path so we can import them later (if running within a
 # Chromium checkout.)
-# Note: Imports cannot be done until after the --print-rust-revision flag
+# Note: Imports cannot be done until after the --print-revision flag
 # has been processed, since that needs to work when running this script
 # in isolation.
 sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'clang',
-                 'scripts'))
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', 'clang', 'scripts'
+    )
+)
 
-# These fields are written by //tools/clang/scripts/upload_revision.py, and
-# should not be changed manually.
-# They are also read by build/config/compiler/BUILD.gn.
-RUST_REVISION = 'b998449636a48e2c4a362809085b600a0174e1f2'
-RUST_SUB_REVISION = 5
-
-# The revision of Crubit to use from https://github.com/google/crubit
+# The revisions of rustc, crubit, and bindgen to use, from
+# https://github.com/google/rust-lang/rust,
+# https://github.com/google/crubit, and
+# https://github.com/rust-lang/rust-bindgen/tags
+# respectively.
 #
-# If changing the CRUBIT_REVISION but not the RUST_REVISION, bump the
-# RUST_SUB_REVISION to generate a unique package name.
-CRUBIT_REVISION = 'de30c70a405bd60f09168cfa596150bad1eb9ce9'
+# Do NOT CHANGE these fields if you don't know what you're doing -- see
+# https://chromium.googlesource.com/chromium/src/+/main/docs/updating_clang.md
+# Reverting problematic toolchain rolls is safe, though.
+RUST_REVISION = '8a9dd7abdf013ec10cfeaaa3685feba18ef1c90c'
+CRUBIT_REVISION = 'd757594f6f7ac27c0cf9c8ea63d9136f8e1f77ae'
+BINDGEN_REVISION = '73c69d681eec90b84ffba4f993b5fb2f19580781'
+# If you change the above without changing RUST_REVISION, increment this.
+RUST_SUB_REVISION = 1
 
 # Hash of src/stage0.json, which itself contains the stage0 toolchain hashes.
 # We trust the Rust build system checks, but to ensure it is not tampered with
 # itself check the hash.
-STAGE0_JSON_SHA256 = 'ee610c286b028bb69a7778b566a2a4352ef0d8ca5499700d7c9cfa70fa92b306'
+STAGE0_JSON_SHA256 = (
+    '84cb05d6b379ca6409e82a11e2cf19ffe3a4414a36be85de53ad7ecc78181f2f'
+)
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 CHROMIUM_DIR = os.path.abspath(os.path.join(THIS_DIR, '..', '..'))
@@ -61,6 +68,7 @@ VERSION_SRC_PATH = os.path.join(RUST_TOOLCHAIN_OUT_DIR, VERSION_SRC_FILENAME)
 
 def GetRustClangRevision():
     from update import CLANG_REVISION
+
     return f'{RUST_REVISION}-{RUST_SUB_REVISION}-{CLANG_REVISION}'
 
 
@@ -81,31 +89,62 @@ def GetStampVersion():
 def main():
     parser = argparse.ArgumentParser(
         description='Update Rust package',
-        formatter_class=argparse.RawTextHelpFormatter)
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     parser.add_argument(
         '--print-revision',
-        choices=['rust', 'installed', 'validate'],
-        help='Print the rust revision then quit. Possible formats:\n'
-        '- rust: print only the expected rust revision (without clang).\n'
-        '  Can be run outside of a Chromium checkout.\n'
-        '- installed: print the installed package version (including both\n'
+        nargs='?',
+        const='all',
+        choices=[
+            'all',
+            'rust',
+            'crubit',
+            'bindgen',
+            'stage0',
+            'installed',
+            'validate',
+        ],
+        help='Print the revision then quit. Possible formats:\n'
+        '- all (default): print all expected revisions.\n'
+        '- rust: print the expected rust revision (without clang).\n'
+        '- crubit: print the expected crubit revision.\n'
+        '- bindgen: print the expected bindgen revision.\n'
+        '- stage0: print the expected stage0.json hash.\n'
+        '- installed: print the installed rust version (including both\n'
         '  rust and clang revisions), without checking that it matches the\n'
         '  expected version in this file.\n'
-        '- validate: print the expected package version, and ensure it\n'
-        '  matches the installed package.')
+        '- validate: print the expected rust version, and ensure it\n'
+        '  matches the installed rust version.\n'
+        'All options besides `installed` and `validate` can be run outside\n'
+        'of a Chromium checkout.',
+    )
     parser.add_argument('--output-dir', help='Where to extract the package.')
 
     args = parser.parse_args()
 
-    if args.print_revision == 'rust':
-        print(f'{RUST_REVISION}-{RUST_SUB_REVISION}')
+    revisions = {
+        'rust': f'{RUST_REVISION}-{RUST_SUB_REVISION}',
+        'crubit': CRUBIT_REVISION,
+        'bindgen': BINDGEN_REVISION,
+        'stage0': STAGE0_JSON_SHA256,
+    }
+    if args.print_revision == 'all':
+        for name, rev in revisions.items():
+            print(f'{name}: {rev}')
+        return 0
+    elif args.print_revision in revisions:
+        print(f'{args.print_revision}: {revisions[args.print_revision]}')
         return 0
     elif args.print_revision:
         stamp_version = GetStampVersion()
-        if (args.print_revision == 'validate'
-                and stamp_version != GetRustClangRevision()):
-            print(f'The expected Rust version is {GetRustClangRevision()} '
-                  f'but the actual version is {stamp_version}')
+        if (
+            args.print_revision == 'validate'
+            and stamp_version != GetRustClangRevision()
+        ):
+            print(
+                f'The expected Rust version is {GetRustClangRevision()} '
+                f'but the actual version is {stamp_version}'
+            )
             print('Did you run "gclient sync"?')
             return 1
         print(stamp_version)
@@ -117,8 +156,7 @@ def main():
         output_dir = os.path.abspath(args.output_dir)
         VERSION_SRC_PATH = os.path.join(output_dir, VERSION_SRC_FILENAME)
 
-    from update import (DownloadAndUnpack, GetDefaultHostOs,
-                        GetPlatformUrlPrefix)
+    from update import DownloadAndUnpack, GetDefaultHostOs, GetPlatformUrlPrefix
 
     platform_prefix = GetPlatformUrlPrefix(GetDefaultHostOs())
 
@@ -135,7 +173,8 @@ def main():
     # from the first class dep and the dir needs to be cleared.
     if os.path.exists(output_dir):
         if version == GetStampVersion() and not glob.glob(
-                os.path.join(output_dir, '.*_is_first_class_gcs')):
+            os.path.join(output_dir, '.*_is_first_class_gcs')
+        ):
             return 0
 
     if os.path.exists(output_dir):
@@ -145,7 +184,7 @@ def main():
         url = f'{platform_prefix}rust-toolchain-{version}.tar.xz'
         DownloadAndUnpack(url, output_dir)
     except urllib.error.HTTPError as e:
-        print(f'error: Failed to download Rust package')
+        print('error: Failed to download Rust package')
         return 1
 
     # Ensure the newly extracted package has the correct version.

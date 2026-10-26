@@ -16,7 +16,7 @@ import {assertExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import type {OsSyncBrowserProxy, OsSyncPrefs} from './os_sync_browser_proxy.js';
@@ -92,23 +92,17 @@ export class OsSyncControlsSubpageElement extends
     Setting.kSplitSyncOnOff,
   ]);
 
-  override hidden: boolean;
-  private areDataTypeTogglesDisabled_: boolean;
-  private supportedSettingsIds: Set<Setting>;
-  private browserProxy_: OsSyncBrowserProxy;
-  private osSyncPrefs: OsSyncPrefs|undefined;
-  private cachedOsSyncPrefs_: Partial<Record<keyof OsSyncPrefs, any>>|null;
-
-  constructor() {
-    super();
-    this.browserProxy_ = OsSyncBrowserProxyImpl.getInstance();
-
-    /**
-     * Caches the individually selected synced data types. This is used to
-     * be able to restore the selections after checking and unchecking Sync All.
-     */
-    this.cachedOsSyncPrefs_ = null;
-  }
+  declare hidden: boolean;
+  declare private areDataTypeTogglesDisabled_: boolean;
+  private browserProxy_: OsSyncBrowserProxy =
+      OsSyncBrowserProxyImpl.getInstance();
+  declare private osSyncPrefs: OsSyncPrefs|undefined;
+  /**
+   * Caches the individually selected synced data types. This is used to
+   * be able to restore the selections after checking and unchecking Sync All.
+   */
+  private cachedOsSyncPrefs_: Partial<Record<keyof OsSyncPrefs, any>>|null =
+      null;
 
   override connectedCallback(): void {
     super.connectedCallback();

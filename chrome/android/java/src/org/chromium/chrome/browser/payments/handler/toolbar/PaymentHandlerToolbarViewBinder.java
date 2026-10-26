@@ -20,10 +20,10 @@ import org.chromium.ui.modelutil.PropertyModel;
 /* package */ class PaymentHandlerToolbarViewBinder {
     /* package */ static void bind(
             PropertyModel model, PaymentHandlerToolbarView view, PropertyKey propertyKey) {
-        if (PaymentHandlerToolbarProperties.URL == propertyKey) {
+        if (PaymentHandlerToolbarProperties.ORIGIN == propertyKey) {
             String origin =
-                    UrlFormatter.formatUrlForSecurityDisplay(
-                            model.get(PaymentHandlerToolbarProperties.URL),
+                    UrlFormatter.formatOriginForSecurityDisplay(
+                            model.get(PaymentHandlerToolbarProperties.ORIGIN),
                             SchemeDisplay.OMIT_HTTP_AND_HTTPS);
             view.mOriginView.setText(origin);
         } else if (PaymentHandlerToolbarProperties.TITLE == propertyKey) {
@@ -44,16 +44,23 @@ import org.chromium.ui.modelutil.PropertyModel;
             view.mSecurityIconView.setContentDescription(description);
         } else if (PaymentHandlerToolbarProperties.SECURITY_ICON_ON_CLICK_CALLBACK == propertyKey) {
             view.mSecurityIconView.setOnClickListener(
-                    (v) -> {
-                        model.get(PaymentHandlerToolbarProperties.SECURITY_ICON_ON_CLICK_CALLBACK)
-                                .run();
-                    });
+                    _ ->
+                            model.get(
+                                            PaymentHandlerToolbarProperties
+                                                    .SECURITY_ICON_ON_CLICK_CALLBACK)
+                                    .run());
         } else if (PaymentHandlerToolbarProperties.CLOSE_BUTTON_ON_CLICK_CALLBACK == propertyKey) {
             view.mCloseButton.setOnClickListener(
-                    (v) -> {
-                        model.get(PaymentHandlerToolbarProperties.CLOSE_BUTTON_ON_CLICK_CALLBACK)
-                                .run();
-                    });
+                    _ ->
+                            model.get(
+                                            PaymentHandlerToolbarProperties
+                                                    .CLOSE_BUTTON_ON_CLICK_CALLBACK)
+                                    .run());
+        } else if (PaymentHandlerToolbarProperties.CLOSE_BUTTON_VISIBILITY == propertyKey) {
+            view.mCloseButton.setVisibility(
+                    model.get(PaymentHandlerToolbarProperties.CLOSE_BUTTON_VISIBILITY)
+                            ? View.VISIBLE
+                            : View.GONE);
         }
     }
 }

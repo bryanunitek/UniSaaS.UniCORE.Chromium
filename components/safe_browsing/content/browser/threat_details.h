@@ -236,9 +236,8 @@ class ThreatDetails {
   // Called when the report is complete. Runs |done_callback_|.
   void AllDone();
 
-  // `this` is owned by TriggerManager which prevents this from outliving
-  // the WebContents.
-  raw_ptr<content::WebContents> web_contents_ = nullptr;
+  base::WeakPtr<content::WebContents> web_contents_;
+  const WebContentsKey web_contents_key_;
 
   scoped_refptr<BaseUIManager> ui_manager_;
 
@@ -320,6 +319,9 @@ class ThreatDetails {
   // Whether this ThreatDetails should be included as Product Specific Data as
   // part of a HaTS survey response.
   bool is_hats_candidate_;
+
+  // Whether the security interstitial tab was closed by the user.
+  bool is_tab_closed_ = false;
 
   // Whether ThreatDetails should be sent to Safe Browsing.
   bool should_send_report_;

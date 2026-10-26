@@ -15,6 +15,8 @@
 
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -328,12 +330,11 @@ LanguageSettingsPrivateEnableLanguageFunction::Run() {
   std::unique_ptr<translate::TranslatePrefs> translate_prefs =
       CreateTranslatePrefsForBrowserContext(browser_context());
 
-  std::vector<std::string> languages;
-  translate_prefs->GetLanguageList(&languages);
-  std::string chrome_language = language_code;
-  language::ToChromeLanguageSynonym(&chrome_language);
-
-  translate_prefs->AddToLanguageList(language_code, /*force_blocked=*/false);
+  if (std::optional<base::i18n::LanguageTag> parsed_tag =
+          base::i18n::LanguageTagConverter::GetInstance().FromString(
+              language_code)) {
+    translate_prefs->AddToLanguageList(*parsed_tag, /*force_blocked=*/false);
+  }
 
   return RespondNow(NoArguments());
 }
@@ -354,12 +355,11 @@ LanguageSettingsPrivateDisableLanguageFunction::Run() {
   std::unique_ptr<translate::TranslatePrefs> translate_prefs =
       CreateTranslatePrefsForBrowserContext(browser_context());
 
-  std::vector<std::string> languages;
-  translate_prefs->GetLanguageList(&languages);
-  std::string chrome_language = language_code;
-  language::ToChromeLanguageSynonym(&chrome_language);
-
-  translate_prefs->RemoveFromLanguageList(language_code);
+  if (std::optional<base::i18n::LanguageTag> parsed_tag =
+          base::i18n::LanguageTagConverter::GetInstance().FromString(
+              language_code)) {
+    translate_prefs->RemoveFromLanguageList(*parsed_tag);
+  }
 
   return RespondNow(NoArguments());
 }
@@ -576,7 +576,7 @@ LanguageSettingsPrivateGetSpellcheckWordsFunction::GetSpellcheckWords() const {
   SpellcheckService* service =
       SpellcheckServiceFactory::GetForContext(browser_context());
   SpellcheckCustomDictionary* dictionary = service->GetCustomDictionary();
-  DCHECK(dictionary->IsLoaded());
+  CHECK(dictionary->IsLoaded(), base::NotFatalUntil::M161);
 
   // TODO(michaelpg): Sort using app locale.
   base::ListValue word_list;
@@ -705,7 +705,7 @@ void PopulateInputMethodListFromDescriptors(
   UErrorCode error = U_ZERO_ERROR;
   std::unique_ptr<icu::Collator> collator(
       icu::Collator::createInstance(error));  // use current ICU locale
-  DCHECK(U_SUCCESS(error));
+  CHECK(U_SUCCESS(error), base::NotFatalUntil::M161);
 
   // Map of sorted [display name -> input methods].
   std::map<std::u16string, language_settings_private::InputMethod,

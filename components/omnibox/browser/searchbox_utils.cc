@@ -10,12 +10,17 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
+#include "base/strings/strcat.h"
+#include "base/strings/utf_string_conversions.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/navigation_metrics/navigation_metrics.h"
 #include "components/omnibox/browser/actions/omnibox_action.h"
 #include "components/omnibox/browser/actions/omnibox_action_concepts.h"
+#include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
+#include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 #if !BUILDFLAG(IS_IOS)
@@ -29,43 +34,122 @@
 #include "components/omnibox/browser/omnibox_logging_utils.h"
 #include "components/omnibox/browser/omnibox_metrics_constants.h"
 #include "components/omnibox/browser/page_classification_functions.h"
+#if !BUILDFLAG(IS_IOS)
+#include "components/omnibox/browser/vector_icons.h"  // nogncheck
+#endif                                                // !BUILDFLAG(IS_IOS)
 #include "components/omnibox/browser/verbatim_match.h"
+#include "components/omnibox/common/omnibox_features.h"
+#include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/sessions/core/session_id.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/vector_icons/vector_icons.h"
 #include "net/cookies/cookie_util.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/gfx/vector_icon_types.h"
 
 using metrics::OmniboxEventProto;
 
 namespace searchbox {
 
+InteractionMetricsTracker::InteractionMetricsTracker() = default;
+
+InteractionMetricsTracker::~InteractionMetricsTracker() = default;
+
+void InteractionMetricsTracker::FocusChanged(bool focused) {
+  if (focused) {
+    last_omnibox_focus_ = base::TimeTicks::Now();
+    focus_resulted_in_navigation_ = false;
+  } else {
+    if (!last_omnibox_focus_.is_null()) {
+      base::UmaHistogramEnumeration(
+          "Omnibox.FocusResultedInNavigation",
+          focus_resulted_in_navigation_
+              ? FocusResultedInNavigationType::kNavigationNoAttachments
+              : FocusResultedInNavigationType::kNoNavigationNoAttachments);
+    }
+    last_omnibox_focus_ = base::TimeTicks();
+  }
+}
+
+AutocompleteMatch GenerateDotComMatch(
+    OmniboxClient* client,
+    AutocompleteController* autocomplete_controller,
+    const AutocompleteInput& original_input,
+    const std::u16string& text_for_desired_tld_navigation,
+    AutocompleteInput* generated_input) {
+  AutocompleteInput input(
+      text_for_desired_tld_navigation, original_input.cursor_position(), "com",
+      original_input.current_page_classification(),
+      client->GetSchemeClassifier(),
+      client->ShouldDefaultTypedNavigationsToHttps(), 0, false);
+  input.set_prevent_inline_autocomplete(
+      original_input.prevent_inline_autocomplete());
+  input.set_in_keyword_mode(original_input.in_keyword_mode());
+  input.set_allow_exact_keyword_match(
+      original_input.allow_exact_keyword_match());
+  input.set_omit_asynchronous_matches(
+      original_input.omit_asynchronous_matches());
+  input.set_focus_type(original_input.focus_type());
+
+  if (generated_input) {
+    *generated_input = input;
+  }
+
+  AutocompleteMatch match = VerbatimMatchForInput(
+      autocomplete_controller->history_url_provider(),
+      autocomplete_controller->autocomplete_provider_client(), input,
+      input.canonicalized_url(), false);
+
+  base::UmaHistogramBoolean("Omnibox.Search.CtrlEnter.ResolvedAsUrl",
+                            match.destination_url.is_valid());
+  return match;
+}
+
+AutocompleteSnapshot::AutocompleteSnapshot() = default;
+
+AutocompleteSnapshot::AutocompleteSnapshot(const AutocompleteInput& input,
+                                           AutocompleteResult result)
+    : input(input), result(std::move(result)) {}
+
+AutocompleteSnapshot::AutocompleteSnapshot(AutocompleteSnapshot&&) noexcept =
+    default;
+
+AutocompleteSnapshot& AutocompleteSnapshot::operator=(
+    AutocompleteSnapshot&&) noexcept = default;
+
+AutocompleteSnapshot::~AutocompleteSnapshot() = default;
+
+AutocompleteSnapshot MakeAutocompleteSnapshot(
+    const AutocompleteController* controller) {
+  DCHECK(controller);
+  return AutocompleteSnapshot(controller->input(),
+                              controller->result().CopyForSnapshot());
+}
+
 void OpenMatch(
     AutocompleteController* autocomplete_controller,
     OmniboxClient* client,
+    const AutocompleteSnapshot& snapshot,
     OmniboxPopupSelection selection,
     AutocompleteMatch match,
     WindowOpenDisposition disposition,
-    base::TimeTicks searchbox_focused_timestamp,
-    base::TimeTicks first_modification_timestamp,
-    base::TimeTicks match_selection_timestamp,
-    OmniboxEventProto::KeywordModeEntryMethod keyword_mode_entry_method) {
+    const InteractionMetricsTracker& metrics_tracker,
+    OmniboxEventProto::KeywordModeEntryMethod keyword_mode_entry_method,
+    const std::u16string& pasted_text) {
   const base::TimeTicks now = base::TimeTicks::Now();
-
-  // TODO(crbug.com/530254690): Use the input associated with the result
-  //  holding the match.
-  const AutocompleteInput& input = autocomplete_controller->input();
-  const AutocompleteResult& result = autocomplete_controller->result();
-
-  // TODO(crbug.com/530287131): Determine whether this still needs to be
-  //  received and used here.
-  const std::u16string pasted_text;
+  const AutocompleteInput& input = snapshot.input;
+  const AutocompleteResult& result = snapshot.result;
 
   // If the user is executing an action, this will be non-null and some match
   // opening and metrics behavior will be adjusted accordingly.
   OmniboxAction* action = nullptr;
-  if (selection.state == OmniboxPopupSelection::NORMAL &&
+  if (selection.state == OmniboxPopupSelection::LineState::kNormal &&
       match.takeover_action) {
-    DCHECK_NE(match_selection_timestamp, base::TimeTicks());
+    DCHECK_NE(metrics_tracker.match_selection_timestamp(), base::TimeTicks());
     action = match.takeover_action.get();
   } else if (selection.IsAction()) {
     DCHECK_LT(selection.action_index, match.actions.size());
@@ -80,22 +164,24 @@ void OpenMatch(
 
   // NULL_RESULT_MESSAGE matches are informational only and cannot be acted
   // upon. Immediately return when attempting to open one.
-  if (match.type == AutocompleteMatchType::NULL_RESULT_MESSAGE && !action) {
+  if (match.type == omnibox::AutocompleteMatchType::kNullResultMessage &&
+      !action) {
     return;
   }
 
   // Switch the window disposition to SWITCH_TO_TAB for open tab matches that
   // originated while in keyword mode, or for tab switch actions.
   const bool is_open_tab_match =
-      match.from_keyword && match.type == AutocompleteMatchType::OPEN_TAB;
+      match.from_keyword &&
+      match.type == omnibox::AutocompleteMatchType::kOpenTab;
   const bool is_tab_switch_action =
       action && action->ActionId() == OmniboxActionId::TAB_SWITCH;
   if (is_open_tab_match || is_tab_switch_action) {
-    disposition = WindowOpenDisposition::SWITCH_TO_TAB;
+    disposition = WindowOpenDisposition::kSwitchToTab;
   }
 
   base::TimeDelta elapsed_time_since_user_first_modified_omnibox =
-      now - first_modification_timestamp;
+      now - metrics_tracker.time_user_first_modified_omnibox();
   autocomplete_controller
       ->UpdateMatchDestinationURLWithAdditionalSearchboxStats(
           elapsed_time_since_user_first_modified_omnibox, &match);
@@ -133,9 +219,9 @@ void OpenMatch(
   }
   base::TimeDelta elapsed_time_since_user_focused_searchbox =
       default_time_delta;
-  if (!searchbox_focused_timestamp.is_null()) {
+  if (!metrics_tracker.last_omnibox_focus().is_null()) {
     elapsed_time_since_user_focused_searchbox =
-        now - searchbox_focused_timestamp;
+        now - metrics_tracker.last_omnibox_focus();
     // Only record focus to open time when a focus actually happened (as
     // opposed to, say, dragging a link onto the omnibox).
     omnibox::LogFocusToOpenTime(
@@ -164,9 +250,9 @@ void OpenMatch(
 
       /*is_popup_open=*/true,
       dropdown_ignored ? OmniboxPopupSelection(0) : selection, disposition,
-      /*is_paste_and_go=*/false, SessionID::InvalidValue(), page_classification,
-      elapsed_time_since_user_first_modified_omnibox, completed_length,
-      elapsed_time_since_last_change_to_default_match,
+      /*is_paste_and_go=*/!pasted_text.empty(), SessionID::InvalidValue(),
+      page_classification, elapsed_time_since_user_first_modified_omnibox,
+      completed_length, elapsed_time_since_last_change_to_default_match,
       dropdown_ignored ? fake_single_entry_result : result, destination_url,
       is_incognito, input.IsZeroSuggest(), match.session);
   DCHECK(dropdown_ignored ||
@@ -180,7 +266,7 @@ void OpenMatch(
   log.input_state = input.input_state();
   log.ukm_source_id = client->GetUKMSourceId();
 
-  if ((disposition == WindowOpenDisposition::CURRENT_TAB) &&
+  if ((disposition == WindowOpenDisposition::kCurrentTab) &&
       client->CurrentPageExists()) {
     // If we know the destination is being opened in the current tab,
     // we can easily get the tab ID.  (If it's being opened in a new
@@ -201,7 +287,8 @@ void OpenMatch(
   if (auto* geolocation_header_service =
           autocomplete_controller->autocomplete_provider_client()
               ->GetGeolocationHeaderService()) {
-    geolocation_header_service->RecordInlineLocationSuggestionClicked(match);
+    geolocation_header_service->MaybeRecordInlineLocationSuggestionClicked(
+        match);
   }
 #endif  // !BUILDFLAG(IS_IOS)
 
@@ -215,7 +302,7 @@ void OpenMatch(
     if (ui::PageTransitionTypeIncludingQualifiersIs(
             match.transition, ui::PAGE_TRANSITION_KEYWORD) ||
         match.provider->type() ==
-            AutocompleteProvider::TYPE_UNSCOPED_EXTENSION) {
+            AutocompleteProvider::Type::kUnscopedExtension) {
       // User is in keyword mode or accepted an unscoped extension suggestion,
       // increment usage count for the keyword.
       searchbox::EmitAcceptedKeywordSuggestionHistogram(
@@ -264,55 +351,106 @@ void OpenMatch(
   }
 
   if (action) {
-    const int enter_starter_pack_id = client->ExecuteAction(
-        action, disposition, match_selection_timestamp,
+    client->ExecuteAction(
+        action, disposition, metrics_tracker.match_selection_timestamp(),
         *(autocomplete_controller->autocomplete_provider_client()));
-    if (enter_starter_pack_id != 0 && template_url_service) {
-      // TODO(crbug.com/531796992): Signal keyword mode entry if any actions
-      //  do return a nonzero starter pack ID. May be deprecated; if only the
-      //  toolbelt feature was using this, it can be simplified/removed.
-      template_url_starter_pack_data::StarterPackId starter_pack_id =
-          static_cast<template_url_starter_pack_data::StarterPackId>(
-              enter_starter_pack_id);
-      if (template_url_service->FindStarterPackTemplateURL(starter_pack_id)) {
-        return;
-      }
-    }
-  } else {
-    RecordNonActionSearchMetrics(template_url_service, match, is_incognito,
-                                 match_selection_timestamp);
-
-    bookmarks::BookmarkModel* bookmark_model = client->GetBookmarkModel();
-    if (bookmark_model && bookmark_model->IsBookmarked(destination_url)) {
-      client->OnBookmarkLaunched();
-    }
-
-    // TODO(crbug.com/531810530): Ensure this doesn't need to be plumbed in
-    //  as with OmniboxEditModel::OpenMatch. Might be refactored there too.
-    GURL alternate_nav_url = AutocompleteResult::ComputeAlternateNavUrl(
-        input, match, autocomplete_controller->autocomplete_provider_client());
-
-    AutocompleteInput alternate_input(
-        input.text(), page_classification, client->GetSchemeClassifier(),
-        client->ShouldDefaultTypedNavigationsToHttps(), 0, false);
-    alternate_input.set_current_url(client->GetURL());
-    alternate_input.set_current_title(client->GetTitle());
-
-    AutocompleteMatch alternative_nav_match = VerbatimMatchForInput(
-        autocomplete_controller->history_url_provider(),
-        autocomplete_controller->autocomplete_provider_client(),
-        alternate_input, alternate_nav_url, false);
-
-    client->OnAutocompleteAccept(
-        destination_url, match.post_content.get(), disposition,
-        ui::PageTransitionFromInt(match.transition |
-                                  ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-        match.type, match_selection_timestamp,
-        input.added_default_scheme_to_typed_url(),
-        input.typed_url_had_http_scheme() &&
-            match.type == AutocompleteMatchType::URL_WHAT_YOU_TYPED,
-        input.text(), match, alternative_nav_match);
+    return;
   }
+
+  RecordNonActionSearchMetrics(template_url_service, match, is_incognito,
+                               metrics_tracker.match_selection_timestamp());
+
+  bookmarks::BookmarkModel* bookmark_model = client->GetBookmarkModel();
+  if (bookmark_model && bookmark_model->IsBookmarked(destination_url)) {
+    client->OnBookmarkLaunched();
+  }
+
+  GURL alternate_nav_url = AutocompleteResult::ComputeAlternateNavUrl(
+      input, match, autocomplete_controller->autocomplete_provider_client());
+
+  AutocompleteInput alternate_input(
+      input.text(), page_classification, client->GetSchemeClassifier(),
+      client->ShouldDefaultTypedNavigationsToHttps(), 0, false);
+  alternate_input.set_current_url(client->GetURL());
+  alternate_input.set_current_title(client->GetTitle());
+
+  AutocompleteMatch alternative_nav_match = VerbatimMatchForInput(
+      autocomplete_controller->history_url_provider(),
+      autocomplete_controller->autocomplete_provider_client(), alternate_input,
+      alternate_nav_url, false);
+
+  client->OnAutocompleteAccept(
+      destination_url, match.post_content.get(), disposition,
+      ui::PageTransitionFromInt(match.transition |
+                                ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
+      match.type, metrics_tracker.match_selection_timestamp(),
+      input.added_default_scheme_to_typed_url(),
+      input.typed_url_had_http_scheme() &&
+          match.type == omnibox::AutocompleteMatchType::kUrlWhatYouTyped,
+      input.text(), match, alternative_nav_match);
+}
+
+void ClassifyString(OmniboxClient* client,
+                    const std::u16string& text,
+                    bool in_keyword_mode,
+                    bool allow_exact_keyword_match,
+                    AutocompleteMatch* match,
+                    GURL* alternate_nav_url) {
+  DCHECK(match);
+  AutocompleteClassifier* classifier = client->GetAutocompleteClassifier();
+  if (classifier) {
+    classifier->Classify(text, in_keyword_mode, allow_exact_keyword_match,
+                         client->GetPageClassification(/*is_prefetch=*/false),
+                         match, alternate_nav_url);
+  }
+}
+
+bool CanPasteAndGo(OmniboxClient* client, const std::u16string& text) {
+  if (!client->IsPasteAndGoEnabled()) {
+    return false;
+  }
+
+  AutocompleteMatch match;
+  ClassifyString(client, text, /*in_keyword_mode=*/false,
+                 /*allow_exact_keyword_match=*/false, &match, nullptr);
+  return match.destination_url.is_valid();
+}
+
+void PasteAndGo(AutocompleteController* autocomplete_controller,
+                OmniboxClient* client,
+                const std::u16string& text,
+                const InteractionMetricsTracker& metrics_tracker,
+                metrics::OmniboxEventProto::KeywordModeEntryMethod
+                    keyword_mode_entry_method) {
+  DCHECK(CanPasteAndGo(client, text));
+
+  AutocompleteInput input = autocomplete_controller->input();
+  AutocompleteMatch match;
+  GURL alternate_nav_url;
+  ClassifyString(client, text, /*in_keyword_mode=*/false,
+                 /*allow_exact_keyword_match=*/false, &match,
+                 &alternate_nav_url);
+
+  GURL upgraded_url;
+  if (match.type == omnibox::AutocompleteMatchType::kUrlWhatYouTyped &&
+      client->ShouldDefaultTypedNavigationsToHttps() &&
+      AutocompleteInput::ShouldUpgradeToHttps(text, match.destination_url, 0,
+                                              false, &upgraded_url)) {
+    DCHECK(upgraded_url.is_valid());
+    match.destination_url = upgraded_url;
+    input.set_added_default_scheme_to_typed_url(true);
+  } else {
+    input.set_added_default_scheme_to_typed_url(false);
+  }
+
+  // `input` is a modified copy of the controller's input, so pair it with the
+  // controller's result rather than using a snapshot of the live state.
+  const AutocompleteSnapshot snapshot(
+      input, autocomplete_controller->result().CopyForSnapshot());
+  OpenMatch(autocomplete_controller, client, snapshot,
+            OmniboxPopupSelection(OmniboxPopupSelection::kNoMatch), match,
+            WindowOpenDisposition::kCurrentTab, metrics_tracker,
+            keyword_mode_entry_method, text);
 }
 
 void RecordNonActionSearchMetrics(TemplateURLService* template_url_service,
@@ -358,7 +496,322 @@ void RecordSuggestionUsedMetrics(const AutocompleteMatch& match) {
   base::UmaHistogramEnumeration("Omnibox.SuggestionUsed.RichAutocompletion",
                                 match.rich_autocompletion_triggered);
   LOCAL_HISTOGRAM_BOOLEAN("Omnibox.EventCount", true);
-  omnibox::answer_data_parser::LogAnswerUsed(match.answer_type);
+}
+
+WindowOpenDisposition ComputeOpenDispositionFromModifiersAndLogToUma(
+    bool shift,
+    bool control,
+    bool alt,
+    bool command) {
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(OpenMatchWithKeyboardModifiers)
+  enum class OpenMatchWithKeyboardModifiers {
+    kNoModifier = 0,
+    kCtrl = 1,
+    kAlt = 2,
+    kCtrlAlt = 3,
+    kShiftCommand = 4,
+    kCtrlShiftCommand = 5,
+    kAltShift = 6,
+    kCtrlAltShift = 7,
+    kCommand = 8,
+    kCtrlCommand = 9,
+    kShift = 10,
+    kCtrlShift = 11,
+    kMaxValue = kCtrlShift,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/omnibox/enums.xml:OpenMatchWithKeyboardModifiers)
+
+  WindowOpenDisposition disposition = WindowOpenDisposition::kCurrentTab;
+  OpenMatchWithKeyboardModifiers metric_value;
+  if (alt && !shift) {
+    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlAlt
+                           : OpenMatchWithKeyboardModifiers::kAlt;
+    disposition = WindowOpenDisposition::kNewForegroundTab;
+  } else if (shift && command) {
+    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlShiftCommand
+                           : OpenMatchWithKeyboardModifiers::kShiftCommand;
+    disposition = WindowOpenDisposition::kNewForegroundTab;
+  } else if (alt && shift) {
+    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlAltShift
+                           : OpenMatchWithKeyboardModifiers::kAltShift;
+    disposition = WindowOpenDisposition::kNewBackgroundTab;
+  } else if (command && !shift) {
+    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlCommand
+                           : OpenMatchWithKeyboardModifiers::kCommand;
+    disposition = WindowOpenDisposition::kNewBackgroundTab;
+  } else if (shift && !alt) {
+    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrlShift
+                           : OpenMatchWithKeyboardModifiers::kShift;
+    disposition = WindowOpenDisposition::kNewWindow;
+  } else {
+    metric_value = control ? OpenMatchWithKeyboardModifiers::kCtrl
+                           : OpenMatchWithKeyboardModifiers::kNoModifier;
+  }
+  base::UmaHistogramEnumeration("Omnibox.OpenMatchWithKeyboardModifiers",
+                                metric_value);
+  return disposition;
+}
+
+KeywordLabelNames GetKeywordLabelNames(const std::u16string& keyword,
+                                       const TemplateURLService* service) {
+  KeywordLabelNames names;
+  if (!service) {
+    return names;
+  }
+
+  const TemplateURL* template_url = service->GetTemplateURLForKeyword(keyword);
+  if (template_url) {
+    names.short_name = template_url->AdjustedShortNameForLocaleDirection();
+    names.full_name = template_url->GetFullName();
+    return names;
+  }
+
+  names.full_name =
+      l10n_util::GetStringFUTF16(IDS_OMNIBOX_KEYWORD_TEXT_MD, names.short_name);
+  return names;
+}
+
+const gfx::VectorIcon& GetKeywordVectorIcon(const TemplateURL& turl) {
+#if BUILDFLAG(IS_IOS)
+  return gfx::VectorIcon::EmptyIcon();
+#else
+  using StarterPackId = template_url_starter_pack_data::StarterPackId;
+
+  // 1. Handle starter pack `@` keywords
+  switch (turl.starter_pack_id()) {
+    case StarterPackId::kGemini:
+      return omnibox::kSparkIcon;
+    case StarterPackId::kAiMode:
+      return features::IsRoundedIconsEnabled() ? omnibox::kSearchSparkIcon
+                                               : omnibox::kSearchSparkOldIcon;
+    case StarterPackId::kBookmarks:
+      return features::IsRoundedIconsEnabled()
+                 ? omnibox::kStarFilledIcon
+                 : omnibox::kStarActiveChromeRefreshOldIcon;
+    case StarterPackId::kHistory:
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kHistoryIcon
+                 : vector_icons::kHistoryChromeRefreshOldIcon;
+    case StarterPackId::kTabs:
+      return features::IsRoundedIconsEnabled()
+                 ? omnibox::kChromeProductIcon
+                 : omnibox::kProductChromeRefreshOldIcon;
+    default:
+      break;
+  }
+
+  if (turl.featured_by_policy()) {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+    if (turl.CreatedByEnterpriseSearchAggregatorPolicy()) {
+      return base::FeatureList::IsEnabled(omnibox::kUseAgentspace25Logo)
+                 ? vector_icons::kGoogleAgentspaceMonochromeLogo25Icon
+                 : vector_icons::kGoogleAgentspaceMonochromeLogoIcon;
+    }
+#endif
+    return features::IsRoundedIconsEnabled()
+               ? omnibox::kPublicIcon
+               : omnibox::kPageChromeRefreshOldIcon;
+  }
+
+  // 2. Fallback for generic site keywords (e.g. youtube.com, google.com)
+  return features::IsRoundedIconsEnabled()
+             ? vector_icons::kSearchIcon
+             : vector_icons::kSearchChromeRefreshOldIcon;
+#endif  // BUILDFLAG(IS_IOS)
+}
+
+std::u16string GetAccessibilityLabelForSelection(
+    const AutocompleteResult& result,
+    const OmniboxPopupSelection& selection,
+    const std::u16string& header_text,
+    const std::u16string& match_text,
+    bool include_positional_info,
+    const TemplateURLService* template_url_service,
+    int* label_prefix_length) {
+  const size_t line = selection.line;
+  CHECK_NE(line, OmniboxPopupSelection::kNoMatch);
+  CHECK_LT(line, result.size());
+
+  const AutocompleteMatch& match = result.match_at(line);
+
+  if (match.type == omnibox::AutocompleteMatchType::kHistoryEmbeddingsAnswer) {
+    // This match type is a special case that puts its primary meaningful
+    // content (the answer) into the `description` and repurposes other fields.
+    // So using `fill_into_edit` or `inline_autocompletion` or even just match
+    // `contents` doesn't make sense in this case. Instead, we provide the
+    // screen reader with the header ("Summary") and then the answer in
+    // `description`, and finally the URL details in `contents` (includes date).
+    return omnibox::AutocompleteMatchToAccessibilityLabel(
+        match, header_text,
+        base::StrCat({
+            match.history_embeddings_answer_header_text,
+            match.description,
+            match.contents,
+        }),
+        line, result.size(), u"", label_prefix_length);
+  }
+
+  int additional_message_id = 0;
+  std::u16string additional_message;
+  // This switch statement should be updated when new selection types are added.
+  static_assert(static_cast<int>(OmniboxPopupSelection::LineState::kMaxValue) ==
+                8);
+  switch (selection.state) {
+    case OmniboxPopupSelection::LineState::kNormal: {
+      int available_actions_count = 0;
+      if (line + 1 < result.size() && result.match_at(line + 1).IsToolbelt()) {
+        additional_message_id = IDS_ACC_OMNIBOX_TOOLBELT_NEXT_SUFFIX;
+      }
+      if (OmniboxPopupSelection(line,
+                                OmniboxPopupSelection::LineState::kKeywordMode)
+              .IsControlPresentOnMatch(result)) {
+        additional_message_id = IDS_ACC_KEYWORD_SUFFIX;
+        available_actions_count++;
+      }
+      if (OmniboxPopupSelection(
+              line, OmniboxPopupSelection::LineState::kFocusedButtonAction)
+              .IsControlPresentOnMatch(result)) {
+        additional_message =
+            match.GetActionAt(0u)->GetLabelStrings().accessibility_suffix;
+        available_actions_count++;
+      }
+      if (OmniboxPopupSelection(
+              line, OmniboxPopupSelection::LineState::kFocusedButtonThumbsUp)
+              .IsControlPresentOnMatch(result)) {
+        // No need to set `additional_message_id`. Thumbs up and thumbs down
+        // button are always present together; `additional_message_id` is set to
+        // `IDS_ACC_MULTIPLE_ACTIONS_SUFFIX` further down.
+        available_actions_count++;
+      }
+      if (OmniboxPopupSelection(
+              line, OmniboxPopupSelection::LineState::kFocusedButtonThumbsDown)
+              .IsControlPresentOnMatch(result)) {
+        // No need to set `additional_message_id`. Thumbs up and thumbs down
+        // button are always present together; `additional_message_id` is set to
+        // `IDS_ACC_MULTIPLE_ACTIONS_SUFFIX` further down.
+        available_actions_count++;
+      }
+      if (OmniboxPopupSelection(
+              line,
+              OmniboxPopupSelection::LineState::kFocusedButtonRemoveSuggestion)
+              .IsControlPresentOnMatch(result)) {
+        additional_message_id = IDS_ACC_REMOVE_SUGGESTION_SUFFIX;
+        available_actions_count++;
+      }
+      if (available_actions_count > 1) {
+        additional_message_id = IDS_ACC_MULTIPLE_ACTIONS_SUFFIX;
+      }
+
+      break;
+    }
+    case OmniboxPopupSelection::LineState::kKeywordMode: {
+      CHECK(!match.associated_keyword.empty());
+      const TemplateURL* turl = AutocompleteMatch::GetTemplateURLWithKeyword(
+          template_url_service, match.associated_keyword, "");
+      std::u16string replacement_string =
+          turl ? turl->short_name() : match.contents;
+      bool ask_keyword = turl && turl->is_ask_type();
+      // For featured search engines, we also want to add the shortcut name.
+      if (AutocompleteMatch::IsFeaturedSearchType(match.type)) {
+        int message_id = ask_keyword ? IDS_ACC_ASK_KEYWORD_MODE_WITH_SHORTCUT
+                                     : IDS_ACC_KEYWORD_MODE_WITH_SHORTCUT;
+        return l10n_util::GetStringFUTF16(message_id, match.keyword,
+                                          replacement_string);
+      }
+      int message_id =
+          ask_keyword ? IDS_ACC_ASK_KEYWORD_MODE : IDS_ACC_KEYWORD_MODE;
+      return l10n_util::GetStringFUTF16(message_id, replacement_string);
+    }
+    case OmniboxPopupSelection::LineState::kFocusedButtonAction: {
+      // When pedal button is focused, the autocomplete suggestion isn't
+      // read because it's not relevant to the button's action.
+      // When dealing with toolbelt actions, we need to ensure that the proper
+      // action a11y label is announced based on the action index.
+      DCHECK(match.GetActionAt(selection.action_index));
+      return match.GetActionAt(selection.action_index)
+          ->GetLabelStrings()
+          .accessibility_hint;
+    }
+    case OmniboxPopupSelection::LineState::kFocusedButtonThumbsUp:
+      additional_message_id = IDS_ACC_THUMBS_UP_SUGGESTION_FOCUSED_PREFIX;
+      break;
+    case OmniboxPopupSelection::LineState::kFocusedButtonThumbsDown:
+      additional_message_id = IDS_ACC_THUMBS_DOWN_SUGGESTION_FOCUSED_PREFIX;
+      break;
+    case OmniboxPopupSelection::LineState::kFocusedButtonRemoveSuggestion:
+      additional_message_id = match.IsIphSuggestion()
+                                  ? IDS_ACC_DISMISS_CHROME_TIP_FOCUSED_PREFIX
+                                  : IDS_ACC_REMOVE_SUGGESTION_FOCUSED_PREFIX;
+      break;
+    case OmniboxPopupSelection::LineState::kFocusedIphLink:
+      return base::StrCat(
+          {match_text, u" ",
+           omnibox::AutocompleteMatchToAccessibilityLabel(
+               match, header_text, match.iph_link_text, line, 0,
+               l10n_util::GetStringUTF16(IDS_ACC_OMNIBOX_IPH_LINK_SELECTED),
+               label_prefix_length)});
+    case OmniboxPopupSelection::LineState::kCtrlEnter:
+    default:
+      break;
+  }
+  if (additional_message_id != 0 && additional_message.empty()) {
+    additional_message = l10n_util::GetStringUTF16(additional_message_id);
+  }
+
+  // If there's a button focused, we don't want the "n of m" message announced.
+  if (selection.IsButtonFocused()) {
+    include_positional_info = false;
+  }
+
+  size_t total_matches = include_positional_info ? result.size() : 0;
+
+  // For informational matches, the relevant text is in contents.
+  std::u16string announcement_text =
+      match.type == omnibox::AutocompleteMatchType::kNullResultMessage
+          ? match.contents
+          : match_text;
+  return omnibox::AutocompleteMatchToAccessibilityLabel(
+      match, header_text, announcement_text, line, total_matches,
+      additional_message, label_prefix_length);
+}
+
+std::u16string GetAccessibilityLabelForFollowingIphSuggestion(
+    const AutocompleteInput& input,
+    const AutocompleteResult& result,
+    const OmniboxPopupSelection& selection,
+    TemplateURLService* template_url_service,
+    bool aim_button_visible) {
+  CHECK_NE(selection.line, OmniboxPopupSelection::kNoMatch);
+
+  std::u16string label;
+  const size_t next_line = selection.line + 1;
+  if (next_line < result.size()) {
+    const AutocompleteMatch& next_match = result.match_at(next_line);
+    // Only append lookahead suffixes for non-interactive (no link) IPH tips.
+    // Interactive IPH suggestions (disclaimers/promos with links) are focusable
+    // and will be read directly when they receive selection focus.
+    if (next_match.IsIphSuggestion() && next_match.iph_link_url.is_empty()) {
+      label =
+          l10n_util::GetStringFUTF16(IDS_ACC_CHROME_TIP, next_match.contents);
+
+      // Iff the next selection (the next time the user presses tab) is the
+      // remove suggestion button for the IPH row, also append its a11y label.
+      auto next_selection = selection.GetNextSelection(
+          input, result, template_url_service, aim_button_visible,
+          OmniboxPopupSelection::Direction::kForward,
+          OmniboxPopupSelection::Step::kStateOrLine);
+      if (next_selection.line == next_line &&
+          next_selection.state == OmniboxPopupSelection::LineState::
+                                      kFocusedButtonRemoveSuggestion) {
+        label = l10n_util::GetStringFUTF16(IDS_ACC_DISMISS_CHROME_TIP_SUFFIX,
+                                           label);
+      }
+    }
+  }
+
+  return label;
 }
 
 }  // namespace searchbox

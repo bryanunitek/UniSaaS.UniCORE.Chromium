@@ -4,6 +4,7 @@
 
 #include "services/audio/input_stream.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
@@ -22,11 +23,15 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/functions.h"
-#include "services/audio/ml_model_manager.h"
 #include "services/audio/stream_factory.h"
 #include "services/audio/test/mock_log.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+#include "media/webrtc/ml_model_handle.h"  // nogncheck
+#include "services/audio/test/mock_ml_model_manager.h"
+#endif
 
 using testing::_;
 using testing::NiceMock;
@@ -38,29 +43,14 @@ namespace audio {
 
 namespace {
 
-const uint32_t kDefaultSharedMemoryCount = 10;
-const bool kDoEnableAGC = true;
-const bool kDoNotEnableAGC = false;
-const bool kValidStream = true;
-const bool kInvalidStream = false;
-const bool kMuted = true;
-const bool kNotMuted = false;
-const char* kDefaultDeviceId = "default";
-
-class MockMlModelManager : public MlModelManager {
- public:
-  std::unique_ptr<MlModelHandle> GetModel(
-      mojom::MlModelType model_type) override {
-    if (model_type == mojom::MlModelType::kResidualEchoEstimation) {
-      model_requested_ = true;
-    }
-    return nullptr;
-  }
-  bool model_requested() { return model_requested_; }
-
- private:
-  bool model_requested_ = false;
-};
+constexpr uint32_t kDefaultSharedMemoryCount = 10;
+constexpr bool kDoEnableAGC = true;
+constexpr bool kDoNotEnableAGC = false;
+constexpr bool kValidStream = true;
+constexpr bool kInvalidStream = false;
+constexpr bool kMuted = true;
+constexpr bool kNotMuted = false;
+constexpr char kDefaultDeviceId[] = "default";
 
 class MockStreamClient : public media::mojom::AudioInputStreamClient {
  public:
@@ -143,10 +133,23 @@ class AudioServiceInputStreamTest : public testing::Test {
       : audio_manager_(std::make_unique<media::TestAudioThread>(false)),
         stream_factory_(&audio_manager_,
                         /*aecdump_recording_manager=*/nullptr,
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
                         &mock_ml_model_manager_),
+#else
+                        /*ml_model_manager=*/nullptr),
+#endif
         stream_factory_receiver_(
             &stream_factory_,
-            remote_stream_factory_.BindNewPipeAndPassReceiver()) {}
+            remote_stream_factory_.BindNewPipeAndPassReceiver()) {
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+    ON_CALL(mock_ml_model_manager_,
+            GetModel(mojom::MlModelType::kResidualEchoEstimation))
+        .WillByDefault([this]() {
+          residual_echo_model_requested_ = true;
+          return nullptr;
+        });
+#endif
+  }
 
   AudioServiceInputStreamTest(const AudioServiceInputStreamTest&) = delete;
   AudioServiceInputStreamTest& operator=(const AudioServiceInputStreamTest&) =
@@ -227,7 +230,10 @@ class AudioServiceInputStreamTest : public testing::Test {
  protected:
   base::test::TaskEnvironment scoped_task_env_;
   media::MockAudioManager audio_manager_;
-  MockMlModelManager mock_ml_model_manager_;
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  std::atomic<bool> residual_echo_model_requested_{false};
+  NiceMock<MockMlModelManager> mock_ml_model_manager_;
+#endif
   media::mojom::AudioProcessingConfigPtr processing_config_ = nullptr;
   StreamFactory stream_factory_;
   mojo::Remote<media::mojom::AudioStreamFactory> remote_stream_factory_;
@@ -603,7 +609,7 @@ TEST_F(AudioServiceInputStreamTest, ResidualEchoEstimationModelRequested) {
   EXPECT_CALL(observer(), BindingConnectionError());
   remote_stream.reset();
   EXPECT_TRUE(base::test::RunUntil(
-      [&]() { return mock_ml_model_manager_.model_requested(); }));
+      [&]() { return residual_echo_model_requested_.load(); }));
 }
 #endif
 

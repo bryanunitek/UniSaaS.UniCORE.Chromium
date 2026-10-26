@@ -28,19 +28,19 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.RecentlyClosedEntriesManager;
 import org.chromium.chrome.browser.app.appmenu.AppMenuItemTheme;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.ntp.RecentlyClosedBulkEvent;
-import org.chromium.chrome.browser.ntp.RecentlyClosedEntry;
-import org.chromium.chrome.browser.ntp.RecentlyClosedGroup;
-import org.chromium.chrome.browser.ntp.RecentlyClosedTab;
-import org.chromium.chrome.browser.ntp.RecentlyClosedWindow;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper;
 import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper.ForeignSession;
 import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper.ForeignSessionTab;
 import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper.ForeignSessionWindow;
+import org.chromium.chrome.browser.recent_tabs.RecentlyClosedBulkEvent;
+import org.chromium.chrome.browser.recent_tabs.RecentlyClosedEntriesManager;
+import org.chromium.chrome.browser.recent_tabs.RecentlyClosedEntry;
+import org.chromium.chrome.browser.recent_tabs.RecentlyClosedGroup;
+import org.chromium.chrome.browser.recent_tabs.RecentlyClosedTab;
+import org.chromium.chrome.browser.recent_tabs.RecentlyClosedWindow;
 import org.chromium.chrome.browser.tabbed_mode.AppMenuUnitTestUtils.MenuItem;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
@@ -207,7 +207,7 @@ public class HistoryItemBuilderUnitTest {
         List<MenuItem> expectedTitles =
                 new ArrayList<>(
                         Arrays.asList(
-                                item(R.string.menu_history),
+                                item(R.string.menu_open_history),
                                 item(R.string.menu_recent_tabs),
                                 item(0),
                                 item(R.string.recent_tabs),
@@ -279,7 +279,7 @@ public class HistoryItemBuilderUnitTest {
         List<MenuItem> expectedTitles =
                 new ArrayList<>(
                         Arrays.asList(
-                                item(R.string.menu_history),
+                                item(R.string.menu_open_history),
                                 item(R.string.menu_recent_tabs),
                                 item(0),
                                 item(R.string.recent_tabs),
@@ -338,7 +338,7 @@ public class HistoryItemBuilderUnitTest {
         List<MenuItem> expectedTitles =
                 new ArrayList<>(
                         Arrays.asList(
-                                item(R.string.menu_history),
+                                item(R.string.menu_open_history),
                                 item(R.string.menu_recent_tabs),
                                 item(0),
                                 item(R.string.recent_tabs),
@@ -429,7 +429,7 @@ public class HistoryItemBuilderUnitTest {
         List<MenuItem> expectedTitles =
                 new ArrayList<>(
                         Arrays.asList(
-                                item(R.string.menu_history),
+                                item(R.string.menu_open_history),
                                 item(R.string.menu_recent_tabs),
                                 item(0),
                                 item(R.string.recent_tabs),
@@ -457,7 +457,7 @@ public class HistoryItemBuilderUnitTest {
         List<MenuItem> expectedTitles =
                 new ArrayList<>(
                         Arrays.asList(
-                                item(R.string.menu_history),
+                                item(R.string.menu_open_history),
                                 item(R.string.menu_recent_tabs),
                                 item(0),
                                 item(R.string.recent_tabs),
@@ -491,6 +491,7 @@ public class HistoryItemBuilderUnitTest {
                                 item(R.id.open_history_menu_id),
                                 item(R.id.recent_tabs_menu_id),
                                 item(R.id.divider_line_id),
+                                item(R.id.your_devices_header_menu_id),
                                 item(
                                         R.id.recent_entry_menu_item,
                                         item(R.id.recent_entry_foreign_tab_menu_item),
@@ -499,9 +500,10 @@ public class HistoryItemBuilderUnitTest {
         List<MenuItem> expectedTitles =
                 new ArrayList<>(
                         Arrays.asList(
-                                item(R.string.menu_history),
+                                item(R.string.menu_open_history),
                                 item(R.string.menu_recent_tabs),
                                 item(0),
+                                item(R.string.menu_your_devices_header),
                                 item("Laptop", item("Tab 1 Title"), item("Tab 2 Title"))));
 
         List<ListItem> items =
@@ -515,7 +517,7 @@ public class HistoryItemBuilderUnitTest {
 
         assertMenuTitlesAreEqual(items, expectedTitles);
 
-        ListItem laptopSessionItem = items.get(3);
+        ListItem laptopSessionItem = items.get(4);
         List<ListItem> laptopSubmenu =
                 laptopSessionItem
                         .model

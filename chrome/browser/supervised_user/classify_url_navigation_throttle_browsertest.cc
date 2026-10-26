@@ -7,7 +7,8 @@
 #include "base/functional/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/supervised_user/supervised_user_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/supervised_user/supervision_mixin.h"
@@ -32,7 +33,7 @@ class ClassifyUrlNavigationThrottleTest
 
  protected:
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
   content::test::PrerenderTestHelper& prerender_helper() {
     return prerender_helper_;
@@ -60,7 +61,7 @@ class ClassifyUrlNavigationThrottleTest
 IN_PROC_BROWSER_TEST_F(ClassifyUrlNavigationThrottleTest,
                        RecordsAllowedOnManualList) {
   GURL allowed_url = embedded_test_server()->GetURL(kExampleHost, "/");
-  supervised_user_test_util::SetManualFilterForHost(browser()->profile(),
+  supervised_user_test_util::SetManualFilterForHost(browser()->GetProfile(),
                                                     kExampleHost,
                                                     /*allowlist=*/true);
 
@@ -74,7 +75,7 @@ IN_PROC_BROWSER_TEST_F(ClassifyUrlNavigationThrottleTest,
 IN_PROC_BROWSER_TEST_F(ClassifyUrlNavigationThrottleTest,
                        RecordsThrottledFromManualBlocklist) {
   GURL throttled_url = embedded_test_server()->GetURL(kExampleHost, "/");
-  supervised_user_test_util::SetManualFilterForHost(browser()->profile(),
+  supervised_user_test_util::SetManualFilterForHost(browser()->GetProfile(),
                                                     kExampleHost,
                                                     /*allowlist=*/false);
 

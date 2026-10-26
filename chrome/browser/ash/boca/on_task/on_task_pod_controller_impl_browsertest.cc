@@ -18,18 +18,20 @@
 #include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/boca/on_task/on_task_locked_session_window_tracker.h"
 #include "chrome/browser/ash/boca/on_task/on_task_system_web_app_manager_impl.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/chromeos/locked_state/locked_state_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ash/components/boca/boca_metrics_util.h"
 #include "chromeos/ash/components/boca/proto/bundle.pb.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "components/sessions/core/session_id.h"
 #include "content/public/test/browser_test.h"
@@ -39,6 +41,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -50,6 +53,14 @@ namespace {
 
 class OnTaskPodControllerImplBrowserTestBase : public InProcessBrowserTest {
  protected:
+  bool IsLockedForOnTask(BrowserWindowInterface* browser) {
+    if (::features::IsUseUnifiedLockedStateControllerEnabled()) {
+      return chromeos::LockedStateController::From(browser)
+          ->IsLockedForOnTask();
+    }
+    return boca::OnTaskLockedController::From(browser)->is_locked_for_on_task();
+  }
+
   void SetUpOnMainThread() override {
     ash::SystemWebAppManager::Get(profile())->InstallSystemAppsForTesting();
     system_web_app_manager_ =
@@ -63,14 +74,13 @@ class OnTaskPodControllerImplBrowserTestBase : public InProcessBrowserTest {
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
-  Browser* FindBocaSystemWebAppBrowser() {
+  BrowserWindowInterface* FindBocaSystemWebAppBrowser() {
     ash::BrowserDelegate* delegate = ash::FindSystemWebAppBrowser(
         profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
-    return delegate ? delegate->GetBrowser().GetBrowserForMigrationOnly()
-                    : nullptr;
+    return delegate ? &delegate->GetBrowser() : nullptr;
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   LockedSessionWindowTracker* window_tracker() {
     return LockedSessionWindowTrackerFactory::GetInstance()
@@ -92,22 +102,19 @@ class OnTaskPodControllerImplBrowserTestBase : public InProcessBrowserTest {
 
 class OnTaskPodControllerImplSetupBrowserTest
     : public OnTaskPodControllerImplBrowserTestBase,
-      public ::testing::WithParamInterface<bool> {
+      public ::testing::WithParamInterface<std::tuple<bool, bool>> {
  protected:
   OnTaskPodControllerImplSetupBrowserTest() {
-    std::vector<base::test::FeatureRef> enabled_features{
-        features::kBoca, features::kBocaConsumer,
-        features::kOnDeviceSpeechRecognition};
-    std::vector<base::test::FeatureRef> disabled_features;
-    if (IsOnTaskPodEnabled()) {
-      enabled_features.push_back(features::kBocaOnTaskPod);
-    } else {
-      disabled_features.push_back(features::kBocaOnTaskPod);
-    }
-    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
+    scoped_feature_list_.InitWithFeatureStates(
+        {{features::kBoca, true},
+         {features::kBocaConsumer, true},
+         {features::kOnDeviceSpeechRecognition, true},
+         {features::kBocaOnTaskPod, IsOnTaskPodEnabled()},
+         {::features::kUseUnifiedLockedStateController,
+          std::get<1>(GetParam())}});
   }
 
-  bool IsOnTaskPodEnabled() { return GetParam(); }
+  bool IsOnTaskPodEnabled() { return std::get<0>(GetParam()); }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -120,14 +127,14 @@ IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplSetupBrowserTest,
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. Verify that the pod is set
   // up only when the feature flag is enabled.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -145,19 +152,22 @@ IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplSetupBrowserTest,
 
 INSTANTIATE_TEST_SUITE_P(OnTaskPodControllerImplSetupBrowserTests,
                          OnTaskPodControllerImplSetupBrowserTest,
-                         ::testing::Bool());
+                         ::testing::Combine(::testing::Bool(),
+                                            ::testing::Bool()));
 
 class OnTaskPodControllerImplBrowserTest
-    : public OnTaskPodControllerImplBrowserTestBase {
+    : public OnTaskPodControllerImplBrowserTestBase,
+      public ::testing::WithParamInterface<bool> {
  protected:
   OnTaskPodControllerImplBrowserTest() {
     // Enable Boca and consumer experience for testing purposes. This is used
     // to set up the Boca SWA for OnTask.
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kBoca, features::kBocaConsumer,
-                              features::kBocaOnTaskPod,
-                              features::kOnDeviceSpeechRecognition},
-        /*disabled_features=*/{});
+    scoped_feature_list_.InitWithFeatureStates(
+        {{features::kBoca, true},
+         {features::kBocaConsumer, true},
+         {features::kBocaOnTaskPod, true},
+         {features::kOnDeviceSpeechRecognition, true},
+         {::features::kUseUnifiedLockedStateController, GetParam()}});
   }
 
   void SetUpOnMainThread() override {
@@ -186,46 +196,46 @@ class OnTaskPodControllerImplBrowserTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        DestroyPodOnWindowClose) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
-  boca_app_browser->tab_strip_model()->CloseAllTabs();
+  boca_app_browser->GetTabStripModel()->CloseAllTabs();
   content::RunAllTasksUntilIdle();
   EXPECT_THAT(on_task_pod_controller(), IsNull());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        HidePodWhenWindowHidden) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -236,21 +246,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_FALSE(on_task_pod_controller()->GetPodWidgetForTesting()->IsVisible());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        ShowPodWhenWindowShown) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -265,21 +275,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_TRUE(on_task_pod_controller()->GetPodWidgetForTesting()->IsVisible());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        DestroyPodOnWindowTrackerReset) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -289,28 +299,28 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_THAT(on_task_pod_controller(), IsNull());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        BackAndForwardButtonDisabled) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(
       window_id, tab_url, ::boca::LockedNavigationOptions::DOMAIN_NAVIGATION);
@@ -324,28 +334,28 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   ASSERT_FALSE(on_task_pod_controller()->CanNavigateToNextPage());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        ForwardButtonDisabled) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -361,7 +371,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   ASSERT_FALSE(on_task_pod_controller()->CanNavigateToNextPage());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, BackButtonDisabled) {
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest, BackButtonDisabled) {
   base::UserActionTester actions;
 
   // Launch OnTask SWA.
@@ -369,21 +379,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, BackButtonDisabled) {
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -407,7 +417,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, BackButtonDisabled) {
       actions.GetActionCount(boca::kBocaOnTaskActionOfStudentNavigateBack), 1);
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        NavigateBackAndForward) {
   base::UserActionTester actions;
 
@@ -416,21 +426,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -464,28 +474,28 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
       1);
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        DifferentTabsWithDifferentPod) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn two new tabs for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url_1 = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url_1,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -509,7 +519,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   ASSERT_FALSE(on_task_pod_controller()->CanNavigateToNextPage());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, ReloadCurrentTab) {
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest, ReloadCurrentTab) {
   base::UserActionTester actions;
 
   // Launch OnTask SWA.
@@ -517,21 +527,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, ReloadCurrentTab) {
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(
       window_id, tab_url, ::boca::LockedNavigationOptions::DOMAIN_NAVIGATION);
@@ -553,28 +563,28 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, ReloadCurrentTab) {
             2);
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        DisablePinTabStripFunctionalityWhenUnlocked) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -582,21 +592,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_FALSE(on_task_pod_controller()->CanToggleTabStripVisibility());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        EnablePinTabStripFunctionalityWhenLocked) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -605,7 +615,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -613,7 +623,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_TRUE(on_task_pod_controller()->CanToggleTabStripVisibility());
 }
 
-IN_PROC_BROWSER_TEST_F(
+IN_PROC_BROWSER_TEST_P(
     OnTaskPodControllerImplBrowserTest,
     EnablePinTabStripFunctionalityWhenLockedAndPinAnotherWindow) {
   // Launch OnTask SWA.
@@ -621,14 +631,14 @@ IN_PROC_BROWSER_TEST_F(
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -637,7 +647,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -645,27 +655,27 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(on_task_pod_controller()->CanToggleTabStripVisibility());
 
   // Pin another browser.
-  Browser* const new_browser = browser();
+  BrowserWindowInterface* const new_browser = browser();
   chrome::NewTab(new_browser, NewTabTypes::kNoUserAction);
   aura::Window* const new_window = new_browser->GetWindow()->GetNativeWindow();
   PinWindow(new_window, /*trusted=*/true);
   ASSERT_TRUE(on_task_pod_controller()->CanToggleTabStripVisibility());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, HidePodWhenPaused) {
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest, HidePodWhenPaused) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -680,21 +690,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, HidePodWhenPaused) {
   EXPECT_FALSE(on_task_pod_controller()->CanToggleTabStripVisibility());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        ShowPodWhenUnpaused) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -724,7 +734,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_TRUE(on_task_pod_controller()->CanToggleTabStripVisibility());
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        ShowAndHideTabStripWhenTogglePinTabStripButton) {
   base::UserActionTester actions;
 
@@ -733,14 +743,14 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -749,7 +759,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   ASSERT_THAT(on_task_pod_controller(), NotNull());
 
   // Spawn a new tab for testing purposes.
-  auto* const tab_strip_model = boca_app_browser->tab_strip_model();
+  auto* const tab_strip_model = boca_app_browser->GetTabStripModel();
   const GURL tab_url = embedded_test_server()->GetURL("/title1.html");
   CreateBackgroundTabAndWait(window_id, tab_url,
                              ::boca::LockedNavigationOptions::OPEN_NAVIGATION);
@@ -768,21 +778,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
             2);
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        RepositionPodOnWindowBoundsChanged) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -816,7 +826,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
                            kPodHorizontalBorder));
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, SetPodSnapLocation) {
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest, SetPodSnapLocation) {
   base::UserActionTester actions;
 
   // Launch OnTask SWA.
@@ -824,14 +834,14 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, SetPodSnapLocation) {
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -885,7 +895,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest, SetPodSnapLocation) {
             1);
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        RepositionPodWhenSnapLocationAndLocked) {
   base::UserActionTester actions;
 
@@ -894,14 +904,14 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -957,21 +967,21 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
             1);
 }
 
-IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
+IN_PROC_BROWSER_TEST_P(OnTaskPodControllerImplBrowserTest,
                        FocusShouldEscapePod) {
   // Launch OnTask SWA.
   base::test::TestFuture<bool> launch_future;
   system_web_app_manager()->LaunchSystemWebAppAsync(
       launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Get());
-  Browser* const boca_app_browser = FindBocaSystemWebAppBrowser();
+  BrowserWindowInterface* const boca_app_browser =
+      FindBocaSystemWebAppBrowser();
   ASSERT_THAT(boca_app_browser, NotNull());
-  ASSERT_TRUE(boca::OnTaskLockedController::From(boca_app_browser)
-                  ->is_locked_for_on_task());
+  ASSERT_TRUE(IsLockedForOnTask(boca_app_browser));
 
   // Set up window tracker to track the app window. This is when the OnTask pod
   // is set up.
-  const SessionID window_id = boca_app_browser->session_id();
+  const SessionID window_id = boca_app_browser->GetSessionID();
   ASSERT_TRUE(window_id.is_valid());
   system_web_app_manager()->SetWindowTrackerForSystemWebAppWindow(
       window_id, /*observers=*/{});
@@ -1003,6 +1013,10 @@ IN_PROC_BROWSER_TEST_F(OnTaskPodControllerImplBrowserTest,
   EXPECT_NE(on_task_pod_view->reload_tab_button_for_testing(),
             focus_manager->GetFocusedView());
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         OnTaskPodControllerImplBrowserTest,
+                         ::testing::Bool());
 
 }  // namespace
 }  // namespace ash

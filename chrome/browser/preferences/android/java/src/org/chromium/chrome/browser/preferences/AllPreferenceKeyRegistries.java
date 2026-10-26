@@ -4,12 +4,16 @@
 
 package org.chromium.chrome.browser.preferences;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.shared_preferences.KnownPreferenceKeyRegistries;
 import org.chromium.base.shared_preferences.PreferenceKeyRegistry;
+import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.CheckDiscard;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.cached_flags.CachedFlagsSharedPreferences;
 
 import java.util.Set;
@@ -18,13 +22,16 @@ import java.util.Set;
 @NullMarked
 public class AllPreferenceKeyRegistries {
     @VisibleForTesting
-    static final Set<PreferenceKeyRegistry> KNOWN_REGISTRIES =
-            Set.of(
-                    ChromeSharedPreferences.REGISTRY,
-                    CachedFlagsSharedPreferences.REGISTRY,
-                    MultiInstanceSharedPreferences.REGISTRY);
+    static final @Nullable Set<PreferenceKeyRegistry> KNOWN_REGISTRIES =
+            BuildConfig.ENABLE_ASSERTS
+                    ? Set.of(
+                            assertNonNull(ChromeSharedPreferences.REGISTRY),
+                            assertNonNull(CachedFlagsSharedPreferences.REGISTRY))
+                    : null;
 
     public static void initializeKnownRegistries() {
-        KnownPreferenceKeyRegistries.initializeKnownRegistries(KNOWN_REGISTRIES);
+        if (KNOWN_REGISTRIES != null) {
+            KnownPreferenceKeyRegistries.initializeKnownRegistries(KNOWN_REGISTRIES);
+        }
     }
 }

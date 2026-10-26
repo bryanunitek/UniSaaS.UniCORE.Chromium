@@ -41,25 +41,16 @@ void GetAllSettingsOnBackendSequence(base::DictValue* out,
   signal->Signal();
 }
 
-base::DictValue GetAllSettings(Profile* profile, const std::string& id) {
-  base::WaitableEvent signal(base::WaitableEvent::ResetPolicy::AUTOMATIC,
-                             base::WaitableEvent::InitialState::NOT_SIGNALED);
-  base::DictValue settings;
-  extensions::StorageFrontend::Get(profile)->RunWithStorage(
-      ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(id),
-      extensions::settings_namespace::SYNC,
-      base::BindOnce(&GetAllSettingsOnBackendSequence, &settings, &signal));
-  signal.Wait();
-  return settings;
-}
-
 bool AreSettingsSame(Profile* expected_profile,
                      Profile* actual_profile,
                      std::ostream* os) {
   const extensions::ExtensionSet& extensions =
       ExtensionRegistry::Get(expected_profile)->enabled_extensions();
-  if (extensions.size() !=
-      ExtensionRegistry::Get(actual_profile)->enabled_extensions().size()) {
+  const extensions::ExtensionSet& actual_extensions =
+      ExtensionRegistry::Get(actual_profile)->enabled_extensions();
+  if (extensions.size() != actual_extensions.size()) {
+    *os << "Expected " << extensions.size() << " enabled extensions, got "
+        << actual_extensions.size();
     return false;
   }
 
@@ -67,8 +58,8 @@ bool AreSettingsSame(Profile* expected_profile,
   for (extensions::ExtensionSet::const_iterator it = extensions.begin();
        it != extensions.end(); ++it) {
     const std::string& id = (*it)->id();
-    base::DictValue expected(GetAllSettings(expected_profile, id));
-    base::DictValue actual(GetAllSettings(actual_profile, id));
+    base::DictValue expected(GetExtensionSettings(expected_profile, id));
+    base::DictValue actual(GetExtensionSettings(actual_profile, id));
     if (expected != actual) {
       *os << "Expected " << ToJson(expected) << " got " << ToJson(actual);
       same = false;
@@ -99,6 +90,18 @@ bool AllExtensionSettingsSame(
 }
 
 }  // namespace
+
+base::DictValue GetExtensionSettings(Profile* profile, const std::string& id) {
+  base::WaitableEvent signal(base::WaitableEvent::ResetPolicy::AUTOMATIC,
+                             base::WaitableEvent::InitialState::NOT_SIGNALED);
+  base::DictValue settings;
+  extensions::StorageFrontend::Get(profile)->RunWithStorage(
+      ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(id),
+      extensions::settings_namespace::SYNC,
+      base::BindOnce(&GetAllSettingsOnBackendSequence, &settings, &signal));
+  signal.Wait();
+  return settings;
+}
 
 void SetExtensionSettings(Profile* profile,
                           const std::string& id,

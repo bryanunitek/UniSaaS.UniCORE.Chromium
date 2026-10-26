@@ -4,6 +4,13 @@
 
 #include "components/autofill/content/browser/integrators/email_verifier/email_verifier_delegate.h"
 
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "base/json/values_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -12,6 +19,7 @@
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
 #include "components/autofill/content/browser/test_autofill_driver_injector.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
@@ -24,20 +32,27 @@
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
-#include "components/autofill/core/browser/strike_databases/email_verification_strike_database.h"
+#include "components/autofill/core/browser/logging/log_receiver.h"
+#include "components/autofill/core/browser/logging/log_router.h"
+#include "components/autofill/core/browser/strike_databases/evp/email_verification_not_signed_in_strike_database.h"
+#include "components/autofill/core/browser/strike_databases/evp/email_verification_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/payments/test_strike_database.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
 #include "components/page_load_metrics/browser/test_metrics_web_contents_observer_embedder.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/runtime_feature_state/runtime_feature_state_document_data.h"
 #include "content/public/browser/webid/email_verifier.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
-#include "net/base/schemeful_site.h"
+#include "services/metrics/public/cpp/metrics_utils.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/origin_trials/scoped_test_origin_trial_policy.h"
 #include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_context.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
@@ -46,18 +61,23 @@ namespace autofill {
 namespace {
 
 using ::base::test::RunOnceCallback;
+using ::base::test::RunOnceCallbackRepeatedly;
 using ::content::webid::EmailVerifier;
 using ::testing::_;
+using ::testing::AllOf;
 using ::testing::AnyNumber;
+using ::testing::Contains;
 using ::testing::DoAll;
+using ::testing::HasSubstr;
 using ::testing::NiceMock;
+using ::testing::Not;
 using ::testing::Return;
 
 class MockEmailVerifier : public EmailVerifier {
  public:
   MOCK_METHOD(void,
               CheckIfVerifiable,
-              (const std::string&, IsVerifiableCallback),
+              (const std::string&, base::OnceClosure, IsVerifiableCallback),
               (override));
   MOCK_METHOD(void,
               Verify,
@@ -69,23 +89,25 @@ class MockAutofillDriver : public TestContentAutofillDriver {
  public:
   using TestContentAutofillDriver::TestContentAutofillDriver;
   MOCK_METHOD(void,
+              GetNonceForEmailVerification,
+              (FieldGlobalId email_field_id,
+               base::OnceCallback<void(const std::optional<std::string>&)>),
+              (override));
+  MOCK_METHOD(void,
               SendEmailVerificationToken,
               (FieldGlobalId email_field_id,
                const std::string& email,
-               FieldGlobalId token_field_id,
                const std::string& presentation_token),
-              (override));
-  MOCK_METHOD(void,
-              UpdateEmailVerificationState,
-              (const FieldGlobalId& email_field_id,
-               mojom::EmailVerificationState state),
               (override));
 };
 
 class MockEmailVerifierDelegateObserver
     : public EmailVerifierDelegate::Observer {
  public:
-  MOCK_METHOD(void, OnFlowCompleted, (EvpAutofillFlowResult), (override));
+  MOCK_METHOD(void,
+              OnFlowCompleted,
+              (const EmailVerifierDelegate::RequestMetrics&),
+              (override));
 };
 
 class TestRuntimeFeatureStateContext
@@ -94,6 +116,25 @@ class TestRuntimeFeatureStateContext
   TestRuntimeFeatureStateContext() {
     feature_overrides_
         [blink::mojom::RuntimeFeature::kEmailVerificationProtocol] = true;
+  }
+};
+
+class TestThirdPartyRuntimeFeatureStateContext
+    : public blink::RuntimeFeatureStateContext {
+ public:
+  explicit TestThirdPartyRuntimeFeatureStateContext(
+      std::string_view token =
+          // Well-formed third-party token for EmailVerificationProtocol on
+          // https://example.com:443 generated with generate_token.py:
+          // generate_token.py example.com EmailVerificationProtocol
+          // --is-third-party --expire-timestamp=2000000000
+      "A+FzImNfohO7M6qFRK5nUdnhKh2nl0sl4aFu8gGr4m4WX8H3pa9ugjPmCg3cYm8mP8"
+      "HPNS1IQ/b2MzkrBjoW4gcAAAB5eyJvcmlnaW4iOiAiaHR0cHM6Ly9leGFtcGxlLmNvb"
+      "To0NDMiLCAiZmVhdHVyZSI6ICJFbWFpbFZlcmlmaWNhdGlvblByb3RvY29sIiwgImV4"
+      "cGlyeSI6IDIwMDAwMDAwMDAsICJpc1RoaXJkUGFydHkiOiB0cnVlfQ==") {
+    possible_third_party_feature_overrides_
+        [blink::mojom::RuntimeFeature::kEmailVerificationProtocol]
+            .push_back(std::string(token));
   }
 };
 
@@ -106,11 +147,17 @@ class MockAutofillClient : public TestContentAutofillClient {
   MOCK_METHOD(void,
               ShowEmailVerificationPopup,
               (const gfx::RectF&,
-               const net::SchemefulSite&,
+               const url::Origin&,
                const std::u16string&,
                base::OnceCallback<
-                   void(AutofillClient::EmailVerificationPermissionUiResult)>),
+                   void(AutofillClient::EmailVerificationPermissionUiStatus)>),
               (override));
+  MOCK_METHOD(void, HideEmailVerificationPopup, (), (override));
+  MOCK_METHOD(void,
+              ShowEmailVerificationLoadingToast,
+              (base::OnceClosure),
+              (override));
+  MOCK_METHOD(void, ShowEmailVerificationErrorToast, (), (override));
 
   EmailVerifierDelegate& delegate() { return *delegate_; }
 
@@ -118,6 +165,30 @@ class MockAutofillClient : public TestContentAutofillClient {
   std::unique_ptr<EmailVerifierDelegate> delegate_ =
       std::make_unique<EmailVerifierDelegate>(this);
 };
+
+namespace {
+
+// Records the entries logged to chrome://autofill-internals while it is alive.
+class RecordingLogReceiver : public LogReceiver {
+ public:
+  explicit RecordingLogReceiver(LogRouter& log_router)
+      : log_router_(log_router) {
+    log_router_->RegisterReceiver(this);
+  }
+  ~RecordingLogReceiver() override { log_router_->UnregisterReceiver(this); }
+
+  void LogEntry(const base::DictValue& entry) override {
+    entries_.push_back(entry.DebugString());
+  }
+
+  const std::vector<std::string>& entries() const { return entries_; }
+
+ private:
+  const raw_ref<LogRouter> log_router_;
+  std::vector<std::string> entries_;
+};
+
+}  // namespace
 
 class EmailVerifierDelegateTestBase
     : public content::RenderViewHostTestHarness {
@@ -143,6 +214,31 @@ class EmailVerifierDelegateTestBase
     }
     content::RuntimeFeatureStateDocumentData::CreateForCurrentDocument(
         main_rfh(), TestRuntimeFeatureStateContext());
+
+    ON_CALL(driver(), GetNonceForEmailVerification(_, _))
+        .WillByDefault(RunOnceCallbackRepeatedly<1>("test_nonce"));
+    log_receiver_.emplace(client().log_router());
+  }
+
+  void TearDown() override {
+    log_receiver_.reset();
+    content::RenderViewHostTestHarness::TearDown();
+  }
+
+  // Expects that an email verification flow that finished with the flow result
+  // described by `message` was logged to chrome://autofill-internals.
+  void ExpectFlowResultLogged(std::string_view message) {
+    EXPECT_THAT(log_receiver_->entries(),
+                Contains(AllOf(HasSubstr("EmailVerification"),
+                               HasSubstr("Email verification flow finished"),
+                               HasSubstr(std::string(message)))));
+  }
+
+  // Expects that no finished email verification flow was logged to
+  // chrome://autofill-internals.
+  void ExpectNoFlowResultLogged() {
+    EXPECT_THAT(log_receiver_->entries(),
+                Not(Contains(HasSubstr("Email verification flow finished"))));
   }
 
   MockAutofillClient& client() {
@@ -178,8 +274,9 @@ class EmailVerifierDelegateTestBase
                   .name = u"verification_token",
                   .nonce = u"test_nonce",
                   .autocomplete_attribute = "email-verification-token",
-                  .form_control_type =
-                      FormControlType::kInputHiddenEmailVerification},
+                  // Using kInputText is arbitrary here because FormControlType
+                  // has no kInputHidden representation.
+                  .form_control_type = FormControlType::kInputText},
              },
          .host_frame = driver().GetFrameToken()});
   }
@@ -198,7 +295,7 @@ class EmailVerifierDelegateTestBase
       const std::string& email = "johndoe@hades.com") {
     content::webid::EmailVerifier::Result result;
     result.email = email;
-    result.issuer_site = net::SchemefulSite(GURL("https://example.com"));
+    result.issuer_origin = url::Origin::Create(GURL("https://example.com"));
     return result;
   }
 
@@ -215,41 +312,49 @@ class EmailVerifierDelegateTestBase
   void SetUpVerificationExpectations(
       const FormStructure& form,
       const std::string& email = "johndoe@hades.com",
-      AutofillClient::EmailVerificationPermissionUiResult popup_result =
-          AutofillClient::EmailVerificationPermissionUiResult::kAccepted) {
-    EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _))
-        .WillOnce(RunOnceCallback<1>(CreateVerifiableResult(email)));
-    EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                              form.field(0)->global_id(),
-                              mojom::EmailVerificationState::kLoading))
-        .Times(AnyNumber());
+      AutofillClient::EmailVerificationPermissionUiStatus ui_status =
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed) {
+    EXPECT_CALL(driver(),
+                GetNonceForEmailVerification(form.field(0)->global_id(), _))
+        .WillOnce(RunOnceCallback<1>("test_nonce"));
+    EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+        .WillOnce([this](const std::string& email_arg,
+                         base::OnceClosure on_dns_resolved,
+                         EmailVerifier::IsVerifiableCallback callback) {
+          std::move(on_dns_resolved).Run();
+          std::move(callback).Run(
+              CreateVerifiableResult(email_arg),
+              blink::mojom::EmailVerificationRequestResult::kSuccess,
+              base::Milliseconds(100));
+        });
+    const bool is_accepted =
+        ui_status ==
+        AutofillClient::EmailVerificationPermissionUiStatus::kAllowed;
 
-    if (popup_result ==
-        AutofillClient::EmailVerificationPermissionUiResult::kAccepted) {
+    if (is_accepted) {
       EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
-          .WillOnce(
-              RunOnceCallback<2>(std::optional<std::string>("test_token")));
+          .WillOnce(RunOnceCallback<2>(
+              std::optional<std::string>("test_token"),
+              blink::mojom::EmailVerificationRequestResult::kSuccess,
+              base::Milliseconds(200)));
 
-      EXPECT_CALL(driver(), SendEmailVerificationToken(
-                                form.field(0)->global_id(), email,
-                                form.field(1)->global_id(), "test_token"));
-      EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                                form.field(0)->global_id(),
-                                mojom::EmailVerificationState::kVerified));
+      EXPECT_CALL(client(), HideEmailVerificationPopup);
+      EXPECT_CALL(client(),
+                  ShowEmailVerifiedToast(GURL("https://example.com")));
+      EXPECT_CALL(driver(),
+                  SendEmailVerificationToken(form.field(0)->global_id(), email,
+                                             "test_token"));
+
     } else {
       EXPECT_CALL(email_verifier(), Verify).Times(0);
       EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
-      EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                                form.field(0)->global_id(),
-                                mojom::EmailVerificationState::kNone));
+      EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
     }
 
     EXPECT_CALL(client(), ShowEmailVerificationPopup)
         .WillOnce(
             DoAll(base::test::RunClosure(popup_shown_run_loop_.QuitClosure()),
-                  RunOnceCallback<3>(popup_result)));
-
-    EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+                  RunOnceCallback<3>(ui_status)));
   }
 
  protected:
@@ -257,6 +362,7 @@ class EmailVerifierDelegateTestBase
 
  private:
   test::AutofillUnitTestEnvironment autofill_test_environment_;
+  std::optional<RecordingLogReceiver> log_receiver_;
   TestAutofillClientInjector<MockAutofillClient> autofill_client_injector_;
   TestAutofillDriverInjector<MockAutofillDriver> autofill_driver_injector_;
   TestAutofillManagerInjector<TestBrowserAutofillManager>
@@ -310,10 +416,13 @@ TEST_F(EmailVerifierDelegateTest, VerificationTriggered) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kTokenSentToRenderer, 1);
+  ExpectFlowResultLogged(
+      "Success: the email verification token was sent to the renderer.");
 }
 
 TEST_F(EmailVerifierDelegateTest, TokenSharedSuccess) {
   base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
   FormStructure* form = SetUpValidForm();
 
   SetUpVerificationExpectations(*form);
@@ -322,21 +431,46 @@ TEST_F(EmailVerifierDelegateTest, TokenSharedSuccess) {
 
   popup_shown_run_loop_.Run();
 
-  histogram_tester.ExpectBucketCount(
+  histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kTokenSentToRenderer, 1);
-  histogram_tester.ExpectBucketCount("Blink.Evp.Autofill.FlowResult",
-                                     EvpAutofillFlowResult::kSuccess, 0);
+  ExpectFlowResultLogged(
+      "Success: the email verification token was sent to the renderer.");
+  histogram_tester.ExpectBucketCount("Blink.Evp.Autofill.FormSubmitted", true,
+                                     0);
+  EXPECT_EQ(
+      0u,
+      ukm_recorder
+          .GetEntriesByName(
+              ukm::builders::Blink_EmailVerificationProtocol_FormSubmission::
+                  kEntryName)
+          .size());
 
-  // Clear expectations on client to avoid conflict with ShowEmailVerifiedToast.
+  // Clear expectations on client.
   testing::Mock::VerifyAndClearExpectations(&client());
 
-  EXPECT_CALL(client(), ShowEmailVerifiedToast(GURL("https://example.com")));
+  // Verify that form submission records metrics without re-showing the toast.
+  EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
   delegate().OnBeforeFormWithEmailVerificationTokenSubmitted(
-      manager(), form->ToFormData(), form->field(1)->global_id());
+      manager(), form->ToFormData(), form->field(0)->global_id());
 
-  histogram_tester.ExpectBucketCount("Blink.Evp.Autofill.FlowResult",
-                                     EvpAutofillFlowResult::kSuccess, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kTokenSentToRenderer, 1);
+  histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FormSubmitted", true,
+                                      1);
+
+  auto form_submission_entries = ukm_recorder.GetEntriesByName(
+      ukm::builders::Blink_EmailVerificationProtocol_FormSubmission::
+          kEntryName);
+  ASSERT_EQ(1u, form_submission_entries.size());
+  const ukm::mojom::UkmEntry* form_submission_entry =
+      form_submission_entries[0];
+  ukm_recorder.ExpectEntryMetric(
+      form_submission_entry,
+      ukm::builders::Blink_EmailVerificationProtocol_FormSubmission::
+          kAutofill_FormSubmittedName,
+      1);
 }
 
 TEST_F(EmailVerifierDelegateTest, ObserverNotified) {
@@ -346,8 +480,11 @@ TEST_F(EmailVerifierDelegateTest, ObserverNotified) {
   NiceMock<MockEmailVerifierDelegateObserver> observer;
   delegate().AddObserver(&observer);
 
-  EXPECT_CALL(observer,
-              OnFlowCompleted(EvpAutofillFlowResult::kTokenSentToRenderer));
+  EXPECT_CALL(
+      observer,
+      OnFlowCompleted(testing::Field(
+          &EmailVerifierDelegate::RequestMetrics::autofill_flow_result,
+          testing::Optional(EvpAutofillFlowResult::kTokenSentToRenderer))));
 
   TriggerDefaultFormFill(*form);
 
@@ -363,7 +500,7 @@ TEST_F(EmailVerifierDelegateTest, VerificationDeclined) {
 
   SetUpVerificationExpectations(
       *form, "johndoe@hades.com",
-      AutofillClient::EmailVerificationPermissionUiResult::kDeclined);
+      AutofillClient::EmailVerificationPermissionUiStatus::kDeclined);
 
   client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
   EmailVerificationStrikeDatabase strike_db(client().GetStrikeDatabase());
@@ -388,6 +525,7 @@ TEST_F(EmailVerifierDelegateTest, VerificationDeclined) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kUserDeclinedPermissionPrompt, 1);
+  ExpectFlowResultLogged("The user declined the permission prompt.");
 }
 
 // Verifies that if the prompt is dismissed (not declined), no strikes are
@@ -398,7 +536,7 @@ TEST_F(EmailVerifierDelegateTest, VerificationDismissed) {
 
   SetUpVerificationExpectations(
       *form, "johndoe@hades.com",
-      AutofillClient::EmailVerificationPermissionUiResult::kIgnored);
+      AutofillClient::EmailVerificationPermissionUiStatus::kUserAborted);
 
   client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
   EmailVerificationStrikeDatabase strike_db(client().GetStrikeDatabase());
@@ -423,6 +561,9 @@ TEST_F(EmailVerifierDelegateTest, VerificationDismissed) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kUserIgnoredPermissionPrompt, 1);
+  ExpectFlowResultLogged(
+      "The permission prompt or loading UI was dismissed, ignored or could not "
+      "be shown.");
 }
 
 // Verifies that if the base feature is explicitly overridden to disabled,
@@ -489,18 +630,25 @@ TEST_F(EmailVerifierDelegateTest, NoNonce) {
       ::features::kEmailVerificationProtocol};
 
   FormData form_data = test::GetFormData(
-      {.fields = {
-           {.role = EMAIL_ADDRESS,
-            .label = u"Email",
-            .name = u"email",
-            .value = u"Triggering field (filled)",
-            .form_control_type = FormControlType::kInputEmail},
-       }});
+      {.fields =
+           {
+               {.role = EMAIL_ADDRESS,
+                .label = u"Email",
+                .name = u"email",
+                .value = u"Triggering field (filled)",
+                .form_control_type = FormControlType::kInputEmail},
+           },
+       .host_frame = driver().GetFrameToken()});
 
   manager().AddSeenForm(form_data, {EMAIL_ADDRESS});
-  const FormStructure* form =
-      manager().FindCachedFormById(form_data.global_id());
+  FormStructure* form =
+      test_api(manager()).FindCachedFormById(form_data.global_id());
   ASSERT_TRUE(form);
+  form->field(0)->set_autofilled_type(EMAIL_ADDRESS);
+
+  EXPECT_CALL(driver(),
+              GetNonceForEmailVerification(form->field(0)->global_id(), _))
+      .WillOnce(RunOnceCallback<1>(std::nullopt));
 
   EXPECT_CALL(email_verifier(), Verify).Times(0);
 
@@ -546,22 +694,31 @@ TEST_F(EmailVerifierDelegateTest, VerificationFails) {
 
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("test@example.com", _))
-      .WillOnce(RunOnceCallback<1>(CreateVerifiableResult("test@example.com")));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("test@example.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult("test@example.com"),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
 
   base::RunLoop verify_called_run_loop;
   EXPECT_CALL(email_verifier(), Verify)
-      .WillOnce(
-          DoAll(base::test::RunClosure(verify_called_run_loop.QuitClosure()),
-                RunOnceCallback<2>(std::nullopt)));
+      .WillOnce(DoAll(
+          base::test::RunClosure(verify_called_run_loop.QuitClosure()),
+          RunOnceCallback<2>(
+              std::nullopt,
+              blink::mojom::EmailVerificationRequestResult::kTokenNoResponse,
+              base::Milliseconds(50))));
 
   EXPECT_CALL(client(), ShowEmailVerificationPopup)
       .WillOnce(RunOnceCallback<3>(
-          AutofillClient::EmailVerificationPermissionUiResult::kAccepted));
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
 
-  // When the verification fails, the event is not dispatched.
+  // Simulating token verification failure by returning std::nullopt and
+  // kTokenNoResponse ensures that the token is not dispatched to the renderer,
+  // no success toast is shown, and the error toast is displayed instead.
   EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
   EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+  EXPECT_CALL(client(), ShowEmailVerificationErrorToast);
 
   AutofillProfile profile = test::GetFullProfile();
   profile.SetInfoWithVerificationStatus(EMAIL_ADDRESS, u"test@example.com",
@@ -579,6 +736,8 @@ TEST_F(EmailVerifierDelegateTest, VerificationFails) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kVerificationFailed, 1);
+  ExpectFlowResultLogged(
+      "The issuer did not issue a valid email verification token.");
 }
 
 // Verifies that if the base feature is in its default state (enabled by
@@ -601,6 +760,108 @@ TEST_F(EmailVerifierDelegateTestBase, OriginTrialNotEnabledWithoutOverride) {
   EXPECT_CALL(email_verifier(), Verify).Times(0);
   EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
   EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetRawInfo(EMAIL_ADDRESS, u"test@example.com");
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+}
+
+// Verifies that when a third-party Origin Trial token matching the email domain
+// is present on the page (without a first-party Origin Trial token),
+// verification is triggered.
+TEST_F(EmailVerifierDelegateTestBase, ThirdPartyOriginTrialEnabled) {
+  blink::ScopedTestOriginTrialPolicy test_origin_trial_policy;
+  if (content::RuntimeFeatureStateDocumentData::GetForCurrentDocument(
+          main_rfh())) {
+    content::RuntimeFeatureStateDocumentData::DeleteForCurrentDocument(
+        main_rfh());
+  }
+  content::RuntimeFeatureStateDocumentData::CreateForCurrentDocument(
+      main_rfh(), TestThirdPartyRuntimeFeatureStateContext());
+
+  FormStructure* form = SetUpValidForm();
+
+  // With test@example.com matching the 3P OT token origin https://example.com,
+  // CheckIfVerifiable should be called.
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("test@example.com", _, _));
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetRawInfo(EMAIL_ADDRESS, u"test@example.com");
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+}
+
+// Verifies that when a third-party Origin Trial token is present, but the email
+// domain does not match the origin of the token, verification is NOT triggered.
+TEST_F(EmailVerifierDelegateTestBase, ThirdPartyOriginTrialMismatch) {
+  blink::ScopedTestOriginTrialPolicy test_origin_trial_policy;
+  if (content::RuntimeFeatureStateDocumentData::GetForCurrentDocument(
+          main_rfh())) {
+    content::RuntimeFeatureStateDocumentData::DeleteForCurrentDocument(
+        main_rfh());
+  }
+  content::RuntimeFeatureStateDocumentData::CreateForCurrentDocument(
+      main_rfh(), TestThirdPartyRuntimeFeatureStateContext());
+
+  FormStructure* form = SetUpValidForm();
+
+  // test@otherdomain.com does not match the 3P OT token origin
+  // https://example.com, so CheckIfVerifiable should never be called.
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable).Times(0);
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetRawInfo(EMAIL_ADDRESS, u"test@otherdomain.com");
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+}
+
+// Verifies that a third-party Origin Trial token registered directly under
+// subdomain.example.com does not match apex test@example.com, so verification
+// is NOT triggered.
+TEST_F(EmailVerifierDelegateTestBase,
+       ThirdPartyOriginTrialSubdomainTokenDoesNotMatchApexEmail) {
+  blink::ScopedTestOriginTrialPolicy test_origin_trial_policy;
+  // Well-formed third-party token for EmailVerificationProtocol on
+  // https://subdomain.example.com:443 generated with generate_token.py:
+  // generate_token.py subdomain.example.com EmailVerificationProtocol
+  // --is-third-party --expire-timestamp=2000000000
+  static constexpr char kSubdomainThirdPartyToken[] =
+      "A0L29NjK8oFXkDwPqLsGYRdyuWkNtHjfqUGI9DN52FP4YibYhzerReoClCCf/1cvJyXhQi4"
+      "LlwZO0i6Py1/ZQQEAAACDeyJvcmlnaW4iOiAiaHR0cHM6Ly9zdWJkb21haW4uZXhhbXBsZ"
+      "S5jb206NDQzIiwgImZlYXR1cmUiOiAiRW1haWxWZXJpZmljYXRpb25Qcm90b2NvbCIsICJ"
+      "leHBpcnkiOiAyMDAwMDAwMDAwLCAiaXNUaGlyZFBhcnR5IjogdHJ1ZX0=";
+
+  if (content::RuntimeFeatureStateDocumentData::GetForCurrentDocument(
+          main_rfh())) {
+    content::RuntimeFeatureStateDocumentData::DeleteForCurrentDocument(
+        main_rfh());
+  }
+  content::RuntimeFeatureStateDocumentData::CreateForCurrentDocument(
+      main_rfh(),
+      TestThirdPartyRuntimeFeatureStateContext(kSubdomainThirdPartyToken));
+
+  FormStructure* form = SetUpValidForm();
+
+  // test@example.com (origin https://example.com) does not match the 3P OT
+  // token origin https://subdomain.example.com, so CheckIfVerifiable should
+  // never be called.
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable).Times(0);
 
   AutofillProfile profile = test::GetFullProfile();
   profile.SetRawInfo(EMAIL_ADDRESS, u"test@example.com");
@@ -710,6 +971,9 @@ TEST_F(EmailVerifierDelegateTest, BlockedByStrikes) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kStrikeDatabaseBlock, 1);
+  ExpectFlowResultLogged(
+      "Blocked because the user declined or dismissed the permission prompt "
+      "for this email address too many times.");
 }
 
 TEST_F(EmailVerifierDelegateTest, ClearsStrikesOnAccept) {
@@ -739,6 +1003,303 @@ TEST_F(EmailVerifierDelegateTest, ClearsStrikesOnAccept) {
       0);
 }
 
+// Verifies that when the user is logged out, 1 strike is added to the
+// not-signed-in strike database, but not to the main strike database.
+TEST_F(EmailVerifierDelegateTest, NotSignedInAddsStrike) {
+  base::HistogramTester histogram_tester;
+  FormStructure* form = SetUpValidForm();
+
+  std::string email_utf8 = "johndoe@hades.com";
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email_utf8, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          std::nullopt,
+          blink::mojom::EmailVerificationRequestResult::kUserLoggedOut,
+          base::Milliseconds(100)));
+
+  client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
+  EmailVerificationStrikeDatabase strike_db(client().GetStrikeDatabase());
+  EmailVerificationNotSignedInStrikeDatabase not_signed_in_strike_db(
+      client().GetStrikeDatabase());
+
+  TriggerDefaultFormFill(*form);
+
+  // 1 strike added to not-signed-in strike database.
+  EXPECT_EQ(not_signed_in_strike_db.GetStrikes(
+                EmailVerificationNotSignedInStrikeDatabase::GetId(email_utf8)),
+            1);
+  // 0 strikes added to main strike database.
+  EXPECT_EQ(
+      strike_db.GetStrikes(EmailVerificationStrikeDatabase::GetId(email_utf8)),
+      0);
+
+  histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
+                                      EvpAutofillFlowResult::kNotVerifiable, 1);
+  ExpectFlowResultLogged("The email address is not verifiable.");
+}
+
+// Verifies that non-logged-out failures (e.g. DNS fetch failure) do not add
+// strikes to the not-signed-in strike database.
+TEST_F(EmailVerifierDelegateTest,
+       OtherCheckIfVerifiableFailureDoesNotAddStrike) {
+  base::HistogramTester histogram_tester;
+  FormStructure* form = SetUpValidForm();
+
+  std::string email_utf8 = "johndoe@hades.com";
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email_utf8, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          std::nullopt,
+          blink::mojom::EmailVerificationRequestResult::kDnsFetchFailed,
+          base::Milliseconds(100)));
+
+  client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
+  EmailVerificationNotSignedInStrikeDatabase not_signed_in_strike_db(
+      client().GetStrikeDatabase());
+
+  TriggerDefaultFormFill(*form);
+
+  EXPECT_EQ(not_signed_in_strike_db.GetStrikes(
+                EmailVerificationNotSignedInStrikeDatabase::GetId(email_utf8)),
+            0);
+
+  histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
+                                      EvpAutofillFlowResult::kNotVerifiable, 1);
+  ExpectFlowResultLogged("The email address is not verifiable.");
+}
+
+// Verifies that when an email reaches 3 strikes in the not-signed-in strike
+// database, verification is blocked before CheckIfVerifiable is called.
+TEST_F(EmailVerifierDelegateTest, BlockedByNotSignedInStrikes) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedFeatureList feature_list{
+      ::features::kEmailVerificationProtocol};
+
+  FormStructure* form = SetUpValidForm();
+
+  client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
+  EmailVerificationNotSignedInStrikeDatabase not_signed_in_strike_db(
+      client().GetStrikeDatabase());
+  not_signed_in_strike_db.AddStrikes(
+      3, EmailVerificationNotSignedInStrikeDatabase::GetId("test@example.com"));
+
+  // CheckIfVerifiable, Verify, and ShowEmailVerificationPopup should NOT be
+  // called!
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable).Times(0);
+  EXPECT_CALL(email_verifier(), Verify).Times(0);
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+  EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
+  EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetInfoWithVerificationStatus(EMAIL_ADDRESS, u"test@example.com",
+                                        "en-US",
+                                        VerificationStatus::kUserVerified);
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kNotSignedInStrikeDatabaseBlock, 1);
+  ExpectFlowResultLogged(
+      "Blocked because the user was repeatedly not signed in to the issuer "
+      "with this email address.");
+}
+
+// Verifies that when the user accepts the verification prompt, strikes in the
+// not-signed-in strike database are cleared.
+TEST_F(EmailVerifierDelegateTest, ClearsNotSignedInStrikesOnAccept) {
+  base::test::ScopedFeatureList feature_list{
+      ::features::kEmailVerificationProtocol};
+
+  FormStructure* form = SetUpValidForm();
+
+  client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
+  EmailVerificationNotSignedInStrikeDatabase not_signed_in_strike_db(
+      client().GetStrikeDatabase());
+  std::string email_utf8 = "johndoe@hades.com";
+
+  not_signed_in_strike_db.AddStrikes(
+      2, EmailVerificationNotSignedInStrikeDatabase::GetId(email_utf8));
+  ASSERT_FALSE(not_signed_in_strike_db.ShouldBlockFeature(
+      EmailVerificationNotSignedInStrikeDatabase::GetId(email_utf8)));
+
+  SetUpVerificationExpectations(*form);
+
+  TriggerDefaultFormFill(*form);
+
+  popup_shown_run_loop_.Run();
+
+  // Verify that strikes in not-signed-in database are cleared.
+  EXPECT_EQ(not_signed_in_strike_db.GetStrikes(
+                EmailVerificationNotSignedInStrikeDatabase::GetId(email_utf8)),
+            0);
+}
+
+// Verifies that when a user already allowed EVP (already_allowed == true),
+// strikes in the not-signed-in strike database are cleared upon a successful
+// verifiable check.
+TEST_F(EmailVerifierDelegateTest, ClearsNotSignedInStrikesWhenAlreadyAllowed) {
+  FormStructure* form = SetUpValidForm();
+  FieldGlobalId field_id = form->field(0)->global_id();
+  std::string email = "johndoe@hades.com";
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set(email, std::move(email_dict));
+
+  client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
+  EmailVerificationNotSignedInStrikeDatabase not_signed_in_strike_db(
+      client().GetStrikeDatabase());
+  not_signed_in_strike_db.AddStrikes(
+      2, EmailVerificationNotSignedInStrikeDatabase::GetId(email));
+  ASSERT_EQ(not_signed_in_strike_db.GetStrikes(
+                EmailVerificationNotSignedInStrikeDatabase::GetId(email)),
+            2);
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(email),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(RunOnceCallback<2>(
+          std::optional<std::string>("test_token"),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(200)));
+
+  EXPECT_CALL(client(), ShowEmailVerificationLoadingToast);
+  EXPECT_CALL(client(), HideEmailVerificationPopup);
+  EXPECT_CALL(client(), ShowEmailVerifiedToast(GURL("https://example.com")));
+
+  EXPECT_CALL(driver(),
+              SendEmailVerificationToken(field_id, email, "test_token"));
+
+  TriggerDefaultFormFill(*form);
+
+  EXPECT_EQ(not_signed_in_strike_db.GetStrikes(
+                EmailVerificationNotSignedInStrikeDatabase::GetId(email)),
+            0);
+}
+
+// Verifies that invoking the cancel callback from
+// ShowEmailVerificationLoadingToast aborts the in-flight verification request.
+TEST_F(EmailVerifierDelegateTest,
+       ShowEmailVerificationLoadingToast_CancelAbortsVerification) {
+  FormStructure* form = SetUpValidForm();
+  std::string email = "johndoe@hades.com";
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set(email, std::move(email_dict));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(email),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+
+  base::OnceClosure cancel_cb;
+  EXPECT_CALL(client(), ShowEmailVerificationLoadingToast)
+      .WillOnce([&](base::OnceClosure cb) { cancel_cb = std::move(cb); });
+
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _));
+
+  NiceMock<MockEmailVerifierDelegateObserver> observer;
+  delegate().AddObserver(&observer);
+
+  TriggerDefaultFormFill(*form);
+
+  ASSERT_TRUE(cancel_cb);
+
+  EXPECT_CALL(observer,
+              OnFlowCompleted(testing::Field(
+                  &EmailVerifierDelegate::RequestMetrics::autofill_flow_result,
+                  testing::Optional(
+                      EvpAutofillFlowResult::kUserIgnoredPermissionPrompt))));
+
+  std::move(cancel_cb).Run();
+  delegate().RemoveObserver(&observer);
+}
+
+// Verifies that when StrikeDatabase is null (e.g. Incognito or disabled),
+// logged-out responses, permission decisions, and already-allowed checks
+// execute safely without crashing.
+TEST_F(EmailVerifierDelegateTest, NullStrikeDatabase_Safe) {
+  base::test::ScopedFeatureList feature_list{
+      ::features::kEmailVerificationProtocol};
+
+  FormStructure* form = SetUpValidForm();
+  std::string email = "johndoe@hades.com";
+
+  // Ensure StrikeDatabase is null.
+  ASSERT_EQ(client().GetStrikeDatabase(), nullptr);
+
+  // 1. Logged out response is safe with null strike database.
+  {
+    base::HistogramTester histogram_tester;
+    EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+        .WillOnce(RunOnceCallback<2>(
+            std::nullopt,
+            blink::mojom::EmailVerificationRequestResult::kUserLoggedOut,
+            base::Milliseconds(100)));
+
+    TriggerDefaultFormFill(*form);
+
+    histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
+                                        EvpAutofillFlowResult::kNotVerifiable,
+                                        1);
+    ExpectFlowResultLogged("The email address is not verifiable.");
+  }
+
+  // 2. Permission prompt Decline is safe with null strike database.
+  {
+    base::HistogramTester histogram_tester;
+    EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+        .WillOnce(RunOnceCallback<2>(
+            CreateVerifiableResult(email),
+            blink::mojom::EmailVerificationRequestResult::kSuccess,
+            base::Milliseconds(100)));
+    EXPECT_CALL(client(), ShowEmailVerificationPopup)
+        .WillOnce(RunOnceCallback<3>(
+            AutofillClient::EmailVerificationPermissionUiStatus::kDeclined));
+    EXPECT_CALL(email_verifier(), Verify).Times(0);
+
+    TriggerDefaultFormFill(*form);
+
+    histogram_tester.ExpectUniqueSample(
+        "Blink.Evp.Autofill.FlowResult",
+        EvpAutofillFlowResult::kUserDeclinedPermissionPrompt, 1);
+    ExpectFlowResultLogged("The user declined the permission prompt.");
+  }
+
+  // 3. Permission prompt Allow is safe with null strike database.
+  {
+    SetUpVerificationExpectations(*form);
+
+    TriggerDefaultFormFill(*form);
+
+    popup_shown_run_loop_.Run();
+  }
+}
+
 TEST_F(EmailVerifierDelegateTest, OnFillOrPreviewFieldVerificationTriggered) {
   FormStructure* form = SetUpValidForm();
 
@@ -755,26 +1316,30 @@ TEST_F(EmailVerifierDelegateTest, OnFillOrPreviewFieldVerificationTriggered) {
   popup_shown_run_loop_.Run();
 }
 
-// Verifies that ShowEmailVerificationPopup receives a valid `issuer_site`
+// Verifies that ShowEmailVerificationPopup receives a valid `issuer_origin`
 // that is not moved-from (which would trigger a SchemeHostPort::IsValid()
 // crash).
-TEST_F(EmailVerifierDelegateTest, Regression_ShowPopupReceivesValidIssuerSite) {
+TEST_F(EmailVerifierDelegateTest,
+       Regression_ShowPopupReceivesValidIssuerOrigin) {
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce(RunOnceCallback<1>(CreateVerifiableResult()));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
 
   base::RunLoop run_loop;
   EXPECT_CALL(client(), ShowEmailVerificationPopup)
-      .WillOnce([&](const gfx::RectF&, const net::SchemefulSite& issuer_site,
+      .WillOnce([&](const gfx::RectF&, const url::Origin& issuer_origin,
                     const std::u16string&,
                     base::OnceCallback<void(
-                        AutofillClient::EmailVerificationPermissionUiResult)>
+                        AutofillClient::EmailVerificationPermissionUiStatus)>
                         callback) {
-        // Access issuer_site to verify it is not moved-from.
-        ASSERT_TRUE(issuer_site.GetURL().is_valid());
+        // Access issuer_origin to verify it is not moved-from.
+        ASSERT_TRUE(issuer_origin.GetURL().is_valid());
         std::move(callback).Run(
-            AutofillClient::EmailVerificationPermissionUiResult::kDeclined);
+            AutofillClient::EmailVerificationPermissionUiStatus::kDeclined);
         run_loop.Quit();
       });
 
@@ -798,8 +1363,9 @@ TEST_F(EmailVerifierDelegateTest, TokenFieldHasNoNonce) {
                 .name = u"verification_token",
                 .nonce = u"",  // Empty nonce!
                 .autocomplete_attribute = "email-verification-token",
-                .form_control_type =
-                    FormControlType::kInputHiddenEmailVerification},
+                // Using kInputText is arbitrary here because FormControlType
+                // has no kInputHidden representation.
+                .form_control_type = FormControlType::kInputText},
            },
        .host_frame = driver().GetFrameToken()});
   manager().AddSeenForm(form_data, {EMAIL_ADDRESS, UNKNOWN_TYPE});
@@ -807,6 +1373,10 @@ TEST_F(EmailVerifierDelegateTest, TokenFieldHasNoNonce) {
       test_api(manager()).FindCachedFormById(form_data.global_id());
   ASSERT_TRUE(form);
   form->field(0)->set_autofilled_type(EMAIL_ADDRESS);
+
+  EXPECT_CALL(driver(),
+              GetNonceForEmailVerification(form->field(0)->global_id(), _))
+      .WillOnce(RunOnceCallback<1>(""));
 
   EXPECT_CALL(email_verifier(), Verify).Times(0);
   EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
@@ -817,6 +1387,9 @@ TEST_F(EmailVerifierDelegateTest, TokenFieldHasNoNonce) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kTokenFieldHasNoNonce, 1);
+  ExpectFlowResultLogged(
+      "The email verification token field has no nonce or an empty nonce "
+      "attribute.");
 }
 
 TEST_F(EmailVerifierDelegateTest, UserPrefDisabled) {
@@ -836,6 +1409,8 @@ TEST_F(EmailVerifierDelegateTest, UserPrefDisabled) {
   histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
                                       EvpAutofillFlowResult::kUserPrefDisabled,
                                       1);
+  ExpectFlowResultLogged(
+      "The user turned off email verification in the settings.");
 }
 
 // Verifies that if the driver becomes inactive before OnIsVerifiable is called,
@@ -846,8 +1421,8 @@ TEST_F(EmailVerifierDelegateTest, DriverInactiveBeforeIsVerifiable) {
 
   // Capture the callback to run it asynchronously.
   EmailVerifier::IsVerifiableCallback saved_callback;
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce([&](const std::string&,
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce([&](const std::string&, base::OnceClosure,
                     EmailVerifier::IsVerifiableCallback callback) {
         saved_callback = std::move(callback);
       });
@@ -865,11 +1440,15 @@ TEST_F(EmailVerifierDelegateTest, DriverInactiveBeforeIsVerifiable) {
       AutofillDriver::LifecycleState::kInactive);
 
   // Run the callback.
-  std::move(saved_callback).Run(CreateVerifiableResult());
+  std::move(saved_callback)
+      .Run(CreateVerifiableResult(),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(100));
 
   histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
                                       EvpAutofillFlowResult::kDriverInactive,
                                       1);
+  ExpectFlowResultLogged("The frame became inactive during the flow.");
 }
 
 // Verifies that if the driver becomes inactive after the popup is shown but
@@ -878,18 +1457,20 @@ TEST_F(EmailVerifierDelegateTest, DriverInactiveBeforeDecision) {
   base::HistogramTester histogram_tester;
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce(RunOnceCallback<1>(CreateVerifiableResult()));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
 
   // Capture the popup decision callback.
-  base::OnceCallback<void(AutofillClient::EmailVerificationPermissionUiResult)>
+  base::OnceCallback<void(AutofillClient::EmailVerificationPermissionUiStatus)>
       saved_decision_callback;
   EXPECT_CALL(client(), ShowEmailVerificationPopup)
       .WillOnce(
-          [&](const gfx::RectF&, const net::SchemefulSite&,
-              const std::u16string&,
+          [&](const gfx::RectF&, const url::Origin&, const std::u16string&,
               base::OnceCallback<void(
-                  AutofillClient::EmailVerificationPermissionUiResult)>
+                  AutofillClient::EmailVerificationPermissionUiStatus)>
                   callback) { saved_decision_callback = std::move(callback); });
 
   // Ensure verification is not triggered.
@@ -905,11 +1486,12 @@ TEST_F(EmailVerifierDelegateTest, DriverInactiveBeforeDecision) {
 
   // Run the decision callback.
   std::move(saved_decision_callback)
-      .Run(AutofillClient::EmailVerificationPermissionUiResult::kAccepted);
+      .Run(AutofillClient::EmailVerificationPermissionUiStatus::kAllowed);
 
   histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
                                       EvpAutofillFlowResult::kDriverInactive,
                                       1);
+  ExpectFlowResultLogged("The frame became inactive during the flow.");
 }
 
 // Verifies that if the driver becomes inactive after the decision is made but
@@ -918,12 +1500,15 @@ TEST_F(EmailVerifierDelegateTest, DriverInactiveBeforeResponse) {
   base::HistogramTester histogram_tester;
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce(RunOnceCallback<1>(CreateVerifiableResult()));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
 
   EXPECT_CALL(client(), ShowEmailVerificationPopup)
       .WillOnce(RunOnceCallback<3>(
-          AutofillClient::EmailVerificationPermissionUiResult::kAccepted));
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
 
   // Capture the verification response callback.
   EmailVerifier::OnEmailVerifiedCallback saved_response_callback;
@@ -946,25 +1531,90 @@ TEST_F(EmailVerifierDelegateTest, DriverInactiveBeforeResponse) {
 
   // Run the response callback.
   std::move(saved_response_callback)
-      .Run(std::optional<std::string>("test_token"));
+      .Run(std::optional<std::string>("test_token"),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(200));
 
   histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
                                       EvpAutofillFlowResult::kDriverInactive,
                                       1);
+  ExpectFlowResultLogged("The frame became inactive during the flow.");
+}
+
+// Verifies that if a page navigation completes while a CheckIfVerifiable
+// request is in-flight, kPageNavigatedDuringCheckIfVerifiable is recorded.
+TEST_F(EmailVerifierDelegateTest, PageNavigatedDuringCheckIfVerifiable) {
+  base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  FormStructure* form = SetUpValidForm();
+
+  // Capture the CheckIfVerifiable callback and keep it in-flight.
+  EmailVerifier::IsVerifiableCallback saved_is_verifiable_callback;
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce([&](const std::string&, base::OnceClosure,
+                    EmailVerifier::IsVerifiableCallback callback) {
+        saved_is_verifiable_callback = std::move(callback);
+      });
+
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+  EXPECT_CALL(email_verifier(), Verify).Times(0);
+
+  TriggerDefaultFormFill(*form);
+
+  ASSERT_TRUE(saved_is_verifiable_callback);
+
+  // Simulate primary main frame navigation committing while CheckIfVerifiable
+  // is in-flight.
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL("https://other-example.com"));
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kPageNavigatedDuringCheckIfVerifiable, 1);
+  ExpectFlowResultLogged(
+      "The page navigated or the form was submitted while checking whether the "
+      "email address is verifiable.");
+  auto entries = ukm_recorder.GetEntriesByName(
+      ukm::builders::Blink_EmailVerificationProtocol::kEntryName);
+  ASSERT_EQ(1u, entries.size());
+  ukm_recorder.ExpectEntryMetric(
+      entries[0],
+      ukm::builders::Blink_EmailVerificationProtocol::kAutofill_FlowResultName,
+      static_cast<int64_t>(
+          EvpAutofillFlowResult::kPageNavigatedDuringCheckIfVerifiable));
+
+  // If the network response returns after navigation, running the callback
+  // should be a no-op because pending_request_metrics_ was reset.
+  std::move(saved_is_verifiable_callback)
+      .Run(CreateVerifiableResult(),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(100));
+
+  // Verify no additional metric was logged.
+  histogram_tester.ExpectTotalCount("Blink.Evp.Autofill.FlowResult", 1);
+  EXPECT_EQ(1u,
+            ukm_recorder
+                .GetEntriesByName(
+                    ukm::builders::Blink_EmailVerificationProtocol::kEntryName)
+                .size());
 }
 
 // Verifies that if a page navigation completes while a verification request is
 // in-flight, kPageNavigatedDuringVerification is recorded.
 TEST_F(EmailVerifierDelegateTest, PageNavigatedDuringVerification) {
   base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce(RunOnceCallback<1>(CreateVerifiableResult()));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
 
   EXPECT_CALL(client(), ShowEmailVerificationPopup)
       .WillOnce(RunOnceCallback<3>(
-          AutofillClient::EmailVerificationPermissionUiResult::kAccepted));
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
 
   // Capture the verification response callback and keep it in-flight.
   EmailVerifier::OnEmailVerifiedCallback saved_response_callback;
@@ -986,14 +1636,122 @@ TEST_F(EmailVerifierDelegateTest, PageNavigatedDuringVerification) {
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kPageNavigatedDuringVerification, 1);
+  ExpectFlowResultLogged(
+      "The page navigated or the form was submitted while the token was being "
+      "issued.");
+  auto entries = ukm_recorder.GetEntriesByName(
+      ukm::builders::Blink_EmailVerificationProtocol::kEntryName);
+  ASSERT_EQ(1u, entries.size());
+  ukm_recorder.ExpectEntryMetric(
+      entries[0],
+      ukm::builders::Blink_EmailVerificationProtocol::kAutofill_FlowResultName,
+      static_cast<int64_t>(
+          EvpAutofillFlowResult::kPageNavigatedDuringVerification));
 
   // If the network response returns after navigation, running the callback
-  // should be a no-op because in_flight_verify_count_ was reset.
+  // should be a no-op because pending_request_metrics_ was reset.
   std::move(saved_response_callback)
-      .Run(std::optional<std::string>("test_token"));
+      .Run(std::optional<std::string>("test_token"),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(200));
 
   // Verify no additional metric was logged.
   histogram_tester.ExpectTotalCount("Blink.Evp.Autofill.FlowResult", 1);
+  EXPECT_EQ(1u,
+            ukm_recorder
+                .GetEntriesByName(
+                    ukm::builders::Blink_EmailVerificationProtocol::kEntryName)
+                .size());
+}
+
+// Verifies that if a page navigation occurs while DNS lookup is in-flight,
+// the flow records kPageNavigatedDuringCheckIfVerifiable and subsequent
+// callbacks are safely ignored.
+TEST_F(EmailVerifierDelegateTest, PageNavigatedDuringDnsLookup) {
+  base::HistogramTester histogram_tester;
+  FormStructure* form = SetUpValidForm();
+
+  base::OnceClosure saved_dns_callback;
+  EmailVerifier::IsVerifiableCallback saved_is_verifiable_callback;
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce([&](const std::string&, base::OnceClosure on_dns_resolved,
+                    EmailVerifier::IsVerifiableCallback callback) {
+        saved_dns_callback = std::move(on_dns_resolved);
+        saved_is_verifiable_callback = std::move(callback);
+      });
+
+
+  TriggerDefaultFormFill(*form);
+
+  ASSERT_TRUE(saved_dns_callback);
+  ASSERT_TRUE(saved_is_verifiable_callback);
+
+  // Simulate primary main frame navigation committing while DNS lookup is
+  // in-flight.
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL("https://other-example.com"));
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kPageNavigatedDuringCheckIfVerifiable, 1);
+  ExpectFlowResultLogged(
+      "The page navigated or the form was submitted while checking whether the "
+      "email address is verifiable.");
+
+  // When DNS resolution completes after navigation, it is safely ignored.
+  std::move(saved_dns_callback).Run();
+
+  // When CheckIfVerifiable completes, it should also be a no-op.
+  std::move(saved_is_verifiable_callback)
+      .Run(CreateVerifiableResult(),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(100));
+
+  histogram_tester.ExpectTotalCount("Blink.Evp.Autofill.FlowResult", 1);
+}
+
+// Verifies that filling a form without an EVP token field does not populate
+// pending request metrics or emit metrics on subsequent page navigation.
+TEST_F(EmailVerifierDelegateTest, NoTokenField_NoMetricsOnNavigation) {
+  base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+
+  // Set up a form with an email field but NO verification token field.
+  FormData form_data = test::GetFormData(
+      {.description_for_logging = "StandardForm",
+       .fields =
+           {
+               {.label = u"Email",
+                .name = u"email",
+                .value = u"Triggering field (filled)",
+                .form_control_type = FormControlType::kInputEmail},
+           },
+       .host_frame = driver().GetFrameToken()});
+  manager().AddSeenForm(form_data, {EMAIL_ADDRESS});
+  FormStructure* form =
+      test_api(manager()).FindCachedFormById(form_data.global_id());
+  ASSERT_TRUE(form);
+  form->field(0)->set_autofilled_type(EMAIL_ADDRESS);
+
+  EXPECT_CALL(driver(),
+              GetNonceForEmailVerification(form->field(0)->global_id(), _))
+      .WillOnce(RunOnceCallback<1>(std::nullopt));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable).Times(0);
+  EXPECT_CALL(email_verifier(), Verify).Times(0);
+
+  TriggerDefaultFormFill(*form);
+
+  // Simulate primary main frame navigation committing.
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL("https://other-example.com"));
+
+  // Verify that NO flow result was emitted (neither UMA nor UKM).
+  histogram_tester.ExpectTotalCount("Blink.Evp.Autofill.FlowResult", 0);
+  ExpectNoFlowResultLogged();
+  auto entries = ukm_recorder.GetEntriesByName(
+      ukm::builders::Blink_EmailVerificationProtocol::kEntryName);
+  EXPECT_TRUE(entries.empty());
 }
 
 // Verifies that focus loss on an email field only triggers verification if the
@@ -1054,8 +1812,9 @@ TEST_F(EmailVerifierDelegateTest,
                 .name = u"verification_token",
                 .nonce = u"test_nonce",
                 .autocomplete_attribute = "email-verification-token",
-                .form_control_type =
-                    FormControlType::kInputHiddenEmailVerification},
+                // Using kInputText is arbitrary here because FormControlType
+                // has no kInputHidden representation.
+                .form_control_type = FormControlType::kInputText},
            },
        .host_frame = driver().GetFrameToken()});
   manager().AddSeenForm(
@@ -1083,7 +1842,7 @@ TEST_F(EmailVerifierDelegateTest,
   // Set up expectations in sequence
   // Part 1: Expect 5 sequential triggers
   for (int i = 0; i < 5; ++i) {
-    EXPECT_CALL(email_verifier(), CheckIfVerifiable(emails[i], _))
+    EXPECT_CALL(email_verifier(), CheckIfVerifiable(emails[i], _, _))
         .InSequence(s);
   }
 
@@ -1096,13 +1855,13 @@ TEST_F(EmailVerifierDelegateTest,
 
   // Part 3: 6th field trigger (evicts 1)
   std::string email6 = "user6@example.com";
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email6, _)).InSequence(s);
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email6, _, _)).InSequence(s);
 
   EXPECT_CALL(checkpoint, Call(3)).InSequence(s);
 
   // Part 4: Blur email1 again (triggers because evicted)
   std::string email1 = "user1@example.com";
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email1, _)).InSequence(s);
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email1, _, _)).InSequence(s);
 
   EXPECT_CALL(checkpoint, Call(4)).InSequence(s);
 
@@ -1180,77 +1939,725 @@ TEST_F(EmailVerifierDelegateTest,
   checkpoint.Call(4);
 }
 
-// Verifies that when email verification is triggered on a form fill, the
-// delegate immediately notifies the driver to show a loading state on the email
-// field while verification check is pending.
-TEST_F(EmailVerifierDelegateTest, UpdateEmailVerificationStateLoading) {
-  FormStructure* form = SetUpValidForm();
-
-  SetUpVerificationExpectations(*form);
-
-  EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                            form->field(0)->global_id(),
-                            mojom::EmailVerificationState::kLoading));
-
-  TriggerDefaultFormFill(*form);
-
-  popup_shown_run_loop_.Run();
-}
-
 // Verifies that when the verification check determines the user is logged out
-// (not verifiable), the delegate updates the state to kLoggedOutOrUnsupported.
-TEST_F(EmailVerifierDelegateTest,
-       UpdateEmailVerificationStateLoggedOutOrUnsupported) {
+// (not verifiable), the flow records kNotVerifiable.
+TEST_F(EmailVerifierDelegateTest, FlowResultLoggedOutOrUnsupported) {
   base::HistogramTester histogram_tester;
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce(RunOnceCallback<1>(std::nullopt));
-
-  EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                            form->field(0)->global_id(),
-                            mojom::EmailVerificationState::kLoading));
-
-  EXPECT_CALL(driver(),
-              UpdateEmailVerificationState(
-                  form->field(0)->global_id(),
-                  mojom::EmailVerificationState::kLoggedOutOrUnsupported));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          std::nullopt,
+          blink::mojom::EmailVerificationRequestResult::kUserLoggedOut,
+          base::Milliseconds(100)));
 
   TriggerDefaultFormFill(*form);
 
   histogram_tester.ExpectUniqueSample("Blink.Evp.Autofill.FlowResult",
                                       EvpAutofillFlowResult::kNotVerifiable, 1);
+  ExpectFlowResultLogged("The email address is not verifiable.");
 }
 
-// Verifies that when the verification request fails, the delegate updates the
-// state to kFailed.
-TEST_F(EmailVerifierDelegateTest, UpdateEmailVerificationStateFailed) {
+// Verifies that when the verification request fails, the flow records
+// kVerificationFailed.
+TEST_F(EmailVerifierDelegateTest, FlowResultFailed) {
   base::HistogramTester histogram_tester;
   FormStructure* form = SetUpValidForm();
 
-  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _))
-      .WillOnce(RunOnceCallback<1>(CreateVerifiableResult()));
-
-  EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                            form->field(0)->global_id(),
-                            mojom::EmailVerificationState::kLoading));
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce([this](const std::string& email_arg,
+                       base::OnceClosure on_dns_resolved,
+                       EmailVerifier::IsVerifiableCallback callback) {
+        std::move(on_dns_resolved).Run();
+        std::move(callback).Run(
+            CreateVerifiableResult(email_arg),
+            blink::mojom::EmailVerificationRequestResult::kSuccess,
+            base::Milliseconds(100));
+      });
 
   EXPECT_CALL(client(), ShowEmailVerificationPopup)
       .WillOnce(RunOnceCallback<3>(
-          AutofillClient::EmailVerificationPermissionUiResult::kAccepted));
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
+  EXPECT_CALL(client(), HideEmailVerificationPopup);
+  EXPECT_CALL(client(), ShowEmailVerificationErrorToast);
 
+  // Verify returning std::nullopt simulates token retrieval failure, which
+  // dismisses the first-run prompt and triggers
+  // ShowEmailVerificationErrorToast.
   EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
-      .WillOnce(RunOnceCallback<2>(std::nullopt));
-
-  EXPECT_CALL(driver(), UpdateEmailVerificationState(
-                            form->field(0)->global_id(),
-                            mojom::EmailVerificationState::kFailed));
+      .WillOnce(RunOnceCallback<2>(
+          std::nullopt,
+          blink::mojom::EmailVerificationRequestResult::kTokenNoResponse,
+          base::Milliseconds(50)));
 
   TriggerDefaultFormFill(*form);
 
   histogram_tester.ExpectUniqueSample(
       "Blink.Evp.Autofill.FlowResult",
       EvpAutofillFlowResult::kVerificationFailed, 1);
+  ExpectFlowResultLogged(
+      "The issuer did not issue a valid email verification token.");
+}
+
+// Verifies that declining a mixed-case email records a strike against the
+// lowercased email, and filling the email in any casing later correctly blocks
+// on reaching the strike limit.
+TEST_F(EmailVerifierDelegateTest,
+       MixedCaseEmailDeclinedAddsStrikeAndBlocksLaterFills) {
+  base::test::ScopedFeatureList feature_list{
+      ::features::kEmailVerificationProtocol};
+
+  FormStructure* form = SetUpValidForm();
+  std::string normalized_email = "mixedcase@example.com";
+  std::string raw_email = "MixedCase@Example.COM";
+
+  client().set_test_strike_database(std::make_unique<TestStrikeDatabase>());
+  EmailVerificationStrikeDatabase strike_db(client().GetStrikeDatabase());
+  std::string strike_id =
+      EmailVerificationStrikeDatabase::GetId(normalized_email);
+
+  // 1. Fill mixed-case email (u"MixedCase@Example.COM") and decline prompt
+  // (which displays normalized email).
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(raw_email, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(raw_email),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+  EXPECT_CALL(client(), ShowEmailVerificationPopup(
+                            _, _, base::UTF8ToUTF16(normalized_email), _))
+      .WillOnce(RunOnceCallback<3>(
+          AutofillClient::EmailVerificationPermissionUiStatus::kDeclined));
+  EXPECT_CALL(email_verifier(), Verify).Times(0);
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetRawInfo(EMAIL_ADDRESS, base::UTF8ToUTF16(raw_email));
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+
+  // Strike is recorded against lowercased email ID.
+  EXPECT_EQ(strike_db.GetStrikes(strike_id), 1);
+
+  // 2. Add strikes to reach the block limit.
+  strike_db.AddStrikes(2, strike_id);
+  ASSERT_TRUE(strike_db.ShouldBlockFeature(strike_id));
+
+  // 3. Filling lowercase "mixedcase@example.com" is blocked by strikes.
+  {
+    base::HistogramTester histogram_tester;
+    EXPECT_CALL(email_verifier(), Verify).Times(0);
+    EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+    profile.SetRawInfo(EMAIL_ADDRESS, base::UTF8ToUTF16(normalized_email));
+    delegate().OnFillOrPreviewForm(
+        manager(), form->global_id(), form->field(0)->global_id(),
+        mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+        &profile);
+
+    histogram_tester.ExpectUniqueSample(
+        "Blink.Evp.Autofill.FlowResult",
+        EvpAutofillFlowResult::kStrikeDatabaseBlock, 1);
+    ExpectFlowResultLogged(
+        "Blocked because the user declined or dismissed the permission prompt "
+        "for this email address too many times.");
+  }
+
+  // 4. Filling uppercase "MIXEDCASE@EXAMPLE.COM" is also blocked by strikes.
+  {
+    base::HistogramTester histogram_tester;
+    EXPECT_CALL(email_verifier(), Verify).Times(0);
+    EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+    profile.SetRawInfo(EMAIL_ADDRESS, u"MIXEDCASE@EXAMPLE.COM");
+    delegate().OnFillOrPreviewForm(
+        manager(), form->global_id(), form->field(0)->global_id(),
+        mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+        &profile);
+
+    histogram_tester.ExpectUniqueSample(
+        "Blink.Evp.Autofill.FlowResult",
+        EvpAutofillFlowResult::kStrikeDatabaseBlock, 1);
+  }
+}
+
+// Verifies that if a lowercased email is already in
+// kAutofillEmailVerificationState, autofilling a mixed-case email bypasses the
+// permission prompt and directly triggers Verify.
+TEST_F(EmailVerifierDelegateTest,
+       MixedCaseEmailBypassesPromptIfAlreadyInPrefs) {
+  base::test::ScopedFeatureList feature_list{
+      ::features::kEmailVerificationProtocol};
+
+  FormStructure* form = SetUpValidForm();
+  std::string normalized_email = "mixedcase@example.com";
+  std::string raw_email = "MixedCase@Example.COM";
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set(normalized_email, std::move(email_dict));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(raw_email, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(raw_email),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+
+  // Prompt must NOT be shown.
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+  base::RunLoop verify_called_run_loop;
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(
+          DoAll(base::test::RunClosure(verify_called_run_loop.QuitClosure()),
+                RunOnceCallback<2>(
+                    std::optional<std::string>("test_token"),
+                    blink::mojom::EmailVerificationRequestResult::kSuccess,
+                    base::Milliseconds(200))));
+
+  EXPECT_CALL(driver(), SendEmailVerificationToken(form->field(0)->global_id(),
+                                                   raw_email, "test_token"));
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetRawInfo(EMAIL_ADDRESS, base::UTF8ToUTF16(raw_email));
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+
+  verify_called_run_loop.Run();
+}
+
+// Verifies that ShowEmailVerificationPopup receives the lowercased email
+// address, and on acceptance the lowercased email is saved to prefs.
+TEST_F(EmailVerifierDelegateTest,
+       MixedCaseEmail_ShowPopupReceivesLowercasedEmailAndSavesToPrefs) {
+  base::test::ScopedFeatureList feature_list{
+      ::features::kEmailVerificationProtocol};
+
+  FormStructure* form = SetUpValidForm();
+  std::string normalized_email = "mixedcase@example.com";
+  std::string raw_email = "MixedCase@Example.COM";
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(raw_email, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(raw_email),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+
+  EXPECT_CALL(client(), ShowEmailVerificationPopup(
+                            _, _, base::UTF8ToUTF16(normalized_email), _))
+      .WillOnce(RunOnceCallback<3>(
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
+
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(RunOnceCallback<2>(
+          std::optional<std::string>("test_token"),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(200)));
+
+  EXPECT_CALL(driver(), SendEmailVerificationToken(form->field(0)->global_id(),
+                                                   raw_email, "test_token"));
+
+  AutofillProfile profile = test::GetFullProfile();
+  profile.SetRawInfo(EMAIL_ADDRESS, base::UTF8ToUTF16(raw_email));
+
+  base::flat_set<FieldGlobalId> filled_field_ids = {
+      form->field(0)->global_id()};
+  delegate().OnFillOrPreviewForm(
+      manager(), form->global_id(), form->field(0)->global_id(),
+      mojom::ActionPersistence::kFill, filled_field_ids, /*skip_reasons=*/{},
+      &profile);
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  const base::DictValue& state =
+      prefs->GetDict(prefs::kAutofillEmailVerificationState);
+  EXPECT_TRUE(state.contains(normalized_email));
+  EXPECT_FALSE(state.contains(raw_email));
+}
+
+// Verifies that OnFieldLostFocus deduplicates email values case-insensitively.
+TEST_F(EmailVerifierDelegateTest,
+       OnFieldLostFocus_DeduplicatesCaseInsensitive) {
+  FormStructure* form = SetUpValidForm();
+  std::string normalized_email = "mixedcase@example.com";
+  std::string raw_email = "MixedCase@Example.COM";
+
+  // Expect exactly ONE verification trigger.
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(raw_email, _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(raw_email),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+
+  EXPECT_CALL(client(), ShowEmailVerificationPopup(
+                            _, _, base::UTF8ToUTF16(normalized_email), _))
+      .WillOnce(RunOnceCallback<3>(
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
+
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(RunOnceCallback<2>(
+          std::optional<std::string>("test_token"),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(200)));
+
+  EXPECT_CALL(driver(), SendEmailVerificationToken(form->field(0)->global_id(),
+                                                   raw_email, "test_token"));
+
+  // 1. Edit with mixed-case and lose focus -> triggers verification.
+  form->field(0)->set_value(base::UTF8ToUTF16(raw_email));
+  form->field(0)->AddFieldModifier(FieldModifier::kUser);
+
+  delegate().OnAfterFocusOnFormField(manager(), form->global_id(),
+                                     form->field(0)->global_id());
+  delegate().OnAfterFocusOnNonFormField(manager());
+
+  // 2. Change casing to UPPERCASE and lose focus -> deduplicated (no second
+  // trigger).
+  form->field(0)->set_value(u"MIXEDCASE@EXAMPLE.COM");
+  form->field(0)->AddFieldModifier(FieldModifier::kUser);
+
+  delegate().OnAfterFocusOnFormField(manager(), form->global_id(),
+                                     form->field(0)->global_id());
+  delegate().OnAfterFocusOnNonFormField(manager());
+}
+
+TEST_F(EmailVerifierDelegateTest, UkmMetricsRecorded) {
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  FormStructure* form = SetUpValidForm();
+
+  SetUpVerificationExpectations(*form);
+
+  TriggerDefaultFormFill(*form);
+
+  popup_shown_run_loop_.Run();
+
+  auto entries = ukm_recorder.GetEntriesByName(
+      ukm::builders::Blink_EmailVerificationProtocol::kEntryName);
+  ASSERT_EQ(1u, entries.size());
+  const ukm::mojom::UkmEntry* entry = entries[0];
+  ukm_recorder.ExpectEntryMetric(
+      entry,
+      ukm::builders::Blink_EmailVerificationProtocol::kAutofill_FlowResultName,
+      static_cast<int64_t>(EvpAutofillFlowResult::kTokenSentToRenderer));
+  ukm_recorder.ExpectEntryMetric(
+      entry,
+      ukm::builders::Blink_EmailVerificationProtocol::kPermissionUi_StatusName,
+      static_cast<int64_t>(
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
+  ukm_recorder.ExpectEntryMetric(
+      entry,
+      ukm::builders::Blink_EmailVerificationProtocol::kStatus_IsVerifiableName,
+      static_cast<int64_t>(
+          blink::mojom::EmailVerificationRequestResult::kSuccess));
+  ukm_recorder.ExpectEntryMetric(
+      entry,
+      ukm::builders::Blink_EmailVerificationProtocol::kTiming_IsVerifiableName,
+      ukm::GetExponentialBucketMinForUserTiming(100));
+  ukm_recorder.ExpectEntryMetric(
+      entry, ukm::builders::Blink_EmailVerificationProtocol::kStatus_VerifyName,
+      static_cast<int64_t>(
+          blink::mojom::EmailVerificationRequestResult::kSuccess));
+  ukm_recorder.ExpectEntryMetric(
+      entry, ukm::builders::Blink_EmailVerificationProtocol::kTiming_VerifyName,
+      ukm::GetExponentialBucketMinForUserTiming(200));
+}
+
+// Verifies that when a user has already allowed EVP (already_allowed == true),
+// the permission popup is skipped, the loading toast is shown, and the success
+// toast is displayed upon token receipt.
+TEST_F(EmailVerifierDelegateTest,
+       SubsequentRunShowsLoadingToastAndTransitionsToSuccess) {
+  FormStructure* form = SetUpValidForm();
+  FieldGlobalId field_id = form->field(0)->global_id();
+  std::string email = "johndoe@hades.com";
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set(email, std::move(email_dict));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+      .WillOnce([this](const std::string& email_arg,
+                       base::OnceClosure on_dns_resolved,
+                       EmailVerifier::IsVerifiableCallback callback) {
+        std::move(on_dns_resolved).Run();
+        std::move(callback).Run(
+            CreateVerifiableResult(email_arg),
+            blink::mojom::EmailVerificationRequestResult::kSuccess,
+            base::Milliseconds(100));
+      });
+
+  // Verify loading is shown and popup is not shown.
+  EXPECT_CALL(client(), ShowEmailVerificationLoadingToast);
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+  // Success toast and popup hide are called on token receipt.
+  EXPECT_CALL(client(), HideEmailVerificationPopup);
+  EXPECT_CALL(client(), ShowEmailVerifiedToast(GURL("https://example.com")));
+
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(RunOnceCallback<2>(
+          std::optional<std::string>("test_token"),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(200)));
+
+  EXPECT_CALL(driver(),
+              SendEmailVerificationToken(field_id, email, "test_token"));
+
+  TriggerDefaultFormFill(*form);
+}
+
+// Verifies that on subsequent runs, a loading toast is shown, and if token
+// retrieval fails, ShowEmailVerificationErrorToast is called.
+TEST_F(EmailVerifierDelegateTest,
+       SubsequentRunShowsLoadingToastAndTransitionsToError) {
+  FormStructure* form = SetUpValidForm();
+  FieldGlobalId field_id = form->field(0)->global_id();
+  std::string email = "johndoe@hades.com";
+
+  // Mark email as already allowed in prefs.
+  PrefService* prefs = client().GetPrefs();
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set(email, std::move(email_dict));
+
+  EXPECT_CALL(driver(), GetNonceForEmailVerification(field_id, _))
+      .WillOnce(RunOnceCallback<1>("test_nonce"));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable(email, _, _))
+      .WillOnce([this](const std::string& email_arg,
+                       base::OnceClosure on_dns_resolved,
+                       EmailVerifier::IsVerifiableCallback callback) {
+        std::move(on_dns_resolved).Run();
+        std::move(callback).Run(
+            CreateVerifiableResult(email_arg),
+            blink::mojom::EmailVerificationRequestResult::kSuccess,
+            base::Milliseconds(100));
+      });
+
+  // Verify loading is shown and popup is not shown.
+  EXPECT_CALL(client(), ShowEmailVerificationLoadingToast);
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+  // On error, popup hide and error toast are called.
+  EXPECT_CALL(client(), HideEmailVerificationPopup);
+  EXPECT_CALL(client(), ShowEmailVerificationErrorToast());
+  EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+
+  // Returning std::nullopt and kTokenNoResponse from Verify simulates token
+  // retrieval failure, verifying that the loading toast transitions to the
+  // error toast.
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(RunOnceCallback<2>(
+          std::nullopt,
+          blink::mojom::EmailVerificationRequestResult::kTokenNoResponse,
+          base::Milliseconds(200)));
+
+  EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
+
+  TriggerDefaultFormFill(*form);
+}
+
+// Verifies that HideEmailVerificationPopup is called on token arrival to
+// dismiss the first-run prompt (which was displaying an in-button loading
+// spinner) as soon as verification completes.
+TEST_F(EmailVerifierDelegateTest, HideEmailVerificationPopupOnTokenArrival) {
+  FormStructure* form = SetUpValidForm();
+  SetUpVerificationExpectations(*form);
+  TriggerDefaultFormFill(*form);
+  popup_shown_run_loop_.Run();
+}
+
+// Verifies that HideEmailVerificationPopup is called when token retrieval
+// fails so that the first-run prompt's loading spinner does not linger.
+TEST_F(EmailVerifierDelegateTest, HideEmailVerificationPopupOnTokenFailure) {
+  FormStructure* form = SetUpValidForm();
+  FieldGlobalId field_id = form->field(0)->global_id();
+
+  EXPECT_CALL(driver(), GetNonceForEmailVerification(field_id, _))
+      .WillOnce(RunOnceCallback<1>("test_nonce"));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce([this](const std::string& email_arg,
+                       base::OnceClosure on_dns_resolved,
+                       EmailVerifier::IsVerifiableCallback callback) {
+        std::move(on_dns_resolved).Run();
+        std::move(callback).Run(
+            CreateVerifiableResult(email_arg),
+            blink::mojom::EmailVerificationRequestResult::kSuccess,
+            base::Milliseconds(100));
+      });
+
+  EXPECT_CALL(client(), ShowEmailVerificationPopup)
+      .WillOnce(RunOnceCallback<3>(
+          AutofillClient::EmailVerificationPermissionUiStatus::kAllowed));
+  EXPECT_CALL(client(), HideEmailVerificationPopup);
+  EXPECT_CALL(client(), ShowEmailVerificationErrorToast);
+
+  // Verify returning std::nullopt simulates token retrieval failure, ensuring
+  // that the prompt popup is dismissed and the error toast is shown.
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce(RunOnceCallback<2>(
+          std::nullopt,
+          blink::mojom::EmailVerificationRequestResult::kTokenNoResponse,
+          base::Milliseconds(50)));
+
+  TriggerDefaultFormFill(*form);
+}
+
+// Verifies that if the form is submitted while the async nonce query is still
+// in-flight (before TriggerVerification runs), the pending callback is
+// invalidated and CheckIfVerifiable is never triggered.
+TEST_F(EmailVerifierDelegateTest, FormSubmittedDuringNonceQuery) {
+  FormStructure* form = SetUpValidForm();
+
+  base::OnceCallback<void(const std::optional<std::string>&)>
+      saved_nonce_callback;
+  EXPECT_CALL(driver(),
+              GetNonceForEmailVerification(form->field(0)->global_id(), _))
+      .WillOnce(
+          [&](FieldGlobalId,
+              base::OnceCallback<void(const std::optional<std::string>&)> cb) {
+            saved_nonce_callback = std::move(cb);
+          });
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable).Times(0);
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+
+  form->field(0)->set_value(u"user@example.com");
+  form->field(0)->AddFieldModifier(FieldModifier::kUser);
+  delegate().OnAfterFocusOnFormField(manager(), form->global_id(),
+                                     form->field(0)->global_id());
+  delegate().OnAfterFocusOnNonFormField(manager());
+  ASSERT_TRUE(saved_nonce_callback);
+
+  delegate().OnBeforeFormSubmitted(manager(), form->ToFormData());
+
+  // When the renderer replies with the nonce after form submission, it should
+  // be a no-op because weak pointers were invalidated.
+  std::move(saved_nonce_callback).Run("test_nonce");
+}
+
+// Verifies that if the form is submitted (e.g. clicking a "Continue" button
+// after manually entering an email address) while CheckIfVerifiable is
+// in-flight, the request is terminated and the permission UI is not shown.
+TEST_F(EmailVerifierDelegateTest, FormSubmittedDuringCheckIfVerifiable) {
+  base::HistogramTester histogram_tester;
+  FormStructure* form = SetUpValidForm();
+
+  EmailVerifier::IsVerifiableCallback saved_is_verifiable_callback;
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("user@example.com", _, _))
+      .WillOnce([&](const std::string&, base::OnceClosure,
+                    EmailVerifier::IsVerifiableCallback callback) {
+        saved_is_verifiable_callback = std::move(callback);
+      });
+
+  EXPECT_CALL(client(), ShowEmailVerificationPopup).Times(0);
+  EXPECT_CALL(email_verifier(), Verify).Times(0);
+
+  // Simulate manual typing into the email field, then clicking the submit
+  // button (which blurs the field and submits the form).
+  form->field(0)->set_value(u"user@example.com");
+  form->field(0)->AddFieldModifier(FieldModifier::kUser);
+  delegate().OnAfterFocusOnFormField(manager(), form->global_id(),
+                                     form->field(0)->global_id());
+  delegate().OnAfterFocusOnNonFormField(manager());
+  ASSERT_TRUE(saved_is_verifiable_callback);
+
+  delegate().OnBeforeFormSubmitted(manager(), form->ToFormData());
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kPageNavigatedDuringCheckIfVerifiable, 1);
+  ExpectFlowResultLogged(
+      "The page navigated or the form was submitted while checking whether the "
+      "email address is verifiable.");
+
+  std::move(saved_is_verifiable_callback)
+      .Run(CreateVerifiableResult("user@example.com"),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(100));
+
+  histogram_tester.ExpectTotalCount("Blink.Evp.Autofill.FlowResult", 1);
+}
+
+// Verifies that cancelling an in-flight verification notifies observers of
+// cancellation and drops any late-arriving token.
+TEST_F(EmailVerifierDelegateTest, CancelVerificationInFlight) {
+  base::HistogramTester histogram_tester;
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  FormStructure* form = SetUpValidForm();
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set("johndoe@hades.com", std::move(email_dict));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillOnce(RunOnceCallback<2>(
+          CreateVerifiableResult(),
+          blink::mojom::EmailVerificationRequestResult::kSuccess,
+          base::Milliseconds(100)));
+
+  base::OnceClosure cancel_cb;
+  EXPECT_CALL(client(), ShowEmailVerificationLoadingToast)
+      .WillOnce([&](base::OnceClosure cb) { cancel_cb = std::move(cb); });
+
+  // Capture the verification response callback and keep it in-flight.
+  EmailVerifier::OnEmailVerifiedCallback saved_response_callback;
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce([&](const EmailVerifier::Result&, const std::string&,
+                    EmailVerifier::OnEmailVerifiedCallback callback) {
+        saved_response_callback = std::move(callback);
+      });
+
+  TriggerDefaultFormFill(*form);
+
+  ASSERT_TRUE(cancel_cb);
+  ASSERT_TRUE(saved_response_callback);
+
+  NiceMock<MockEmailVerifierDelegateObserver> observer;
+  delegate().AddObserver(&observer);
+
+  EXPECT_CALL(observer,
+              OnFlowCompleted(testing::Field(
+                  &EmailVerifierDelegate::RequestMetrics::autofill_flow_result,
+                  testing::Optional(
+                      EvpAutofillFlowResult::kUserIgnoredPermissionPrompt))));
+
+  std::move(cancel_cb).Run();
+
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kUserIgnoredPermissionPrompt, 1);
+  ExpectFlowResultLogged(
+      "The permission prompt or loading UI was dismissed, ignored or could not "
+      "be shown.");
+
+  // Late response arrives after cancellation. It must be dropped:
+  // no token sent to driver, no toast shown.
+  EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
+  EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+
+  std::move(saved_response_callback)
+      .Run(std::optional<std::string>("late_token"),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(200));
+
+  delegate().RemoveObserver(&observer);
+}
+
+// Verifies that if a verification request is cancelled and a new verification
+// is triggered on the same field before the first Verify() callback returns,
+// the first request's late response is ignored and does not corrupt the new
+// request.
+TEST_F(EmailVerifierDelegateTest,
+       CancelVerificationIgnoresStaleResponseWhenRetriggeredOnSameField) {
+  base::HistogramTester histogram_tester;
+  FormStructure* form = SetUpValidForm();
+  FieldGlobalId field_id = form->field(0)->global_id();
+
+  PrefService* prefs = client().GetPrefs();
+  ASSERT_TRUE(prefs);
+  ScopedDictPrefUpdate update(prefs, prefs::kAutofillEmailVerificationState);
+  base::DictValue email_dict;
+  email_dict.Set("allowed", true);
+  email_dict.Set("issuer_site", "https://example.com");
+  email_dict.Set("timestamp", base::TimeToValue(base::Time::Now()));
+  update->Set("johndoe@hades.com", std::move(email_dict));
+
+  EXPECT_CALL(email_verifier(), CheckIfVerifiable("johndoe@hades.com", _, _))
+      .WillRepeatedly([this](const std::string& email_arg, base::OnceClosure,
+                             EmailVerifier::IsVerifiableCallback callback) {
+        std::move(callback).Run(
+            CreateVerifiableResult(email_arg),
+            blink::mojom::EmailVerificationRequestResult::kSuccess,
+            base::Milliseconds(100));
+      });
+
+  base::OnceClosure first_cancel_cb;
+  base::OnceClosure second_cancel_cb;
+  EXPECT_CALL(client(), ShowEmailVerificationLoadingToast)
+      .WillOnce([&](base::OnceClosure cb) { first_cancel_cb = std::move(cb); })
+      .WillOnce(
+          [&](base::OnceClosure cb) { second_cancel_cb = std::move(cb); });
+
+  EmailVerifier::OnEmailVerifiedCallback first_response_callback;
+  EmailVerifier::OnEmailVerifiedCallback second_response_callback;
+  EXPECT_CALL(email_verifier(), Verify(_, "test_nonce", _))
+      .WillOnce([&](const EmailVerifier::Result&, const std::string&,
+                    EmailVerifier::OnEmailVerifiedCallback callback) {
+        first_response_callback = std::move(callback);
+      })
+      .WillOnce([&](const EmailVerifier::Result&, const std::string&,
+                    EmailVerifier::OnEmailVerifiedCallback callback) {
+        second_response_callback = std::move(callback);
+      });
+
+  // 1. Trigger first verification and cancel it while Verify() is in flight.
+  TriggerDefaultFormFill(*form);
+  ASSERT_TRUE(first_cancel_cb);
+  ASSERT_TRUE(first_response_callback);
+  std::move(first_cancel_cb).Run();
+  histogram_tester.ExpectUniqueSample(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kUserIgnoredPermissionPrompt, 1);
+  ExpectFlowResultLogged(
+      "The permission prompt or loading UI was dismissed, ignored or could not "
+      "be shown.");
+
+  // 2. Retrigger verification on the same field before the first Verify()
+  // finishes.
+  TriggerDefaultFormFill(*form);
+  ASSERT_TRUE(second_response_callback);
+
+  // 3. The cancelled first request's response arrives late. It must be ignored.
+  EXPECT_CALL(driver(), SendEmailVerificationToken).Times(0);
+  EXPECT_CALL(client(), ShowEmailVerifiedToast).Times(0);
+  std::move(first_response_callback)
+      .Run(std::optional<std::string>("stale_token"),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(200));
+  testing::Mock::VerifyAndClearExpectations(&driver());
+
+  // 4. The second request's response arrives and completes normally.
+  EXPECT_CALL(client(), HideEmailVerificationPopup);
+  EXPECT_CALL(client(), ShowEmailVerifiedToast(GURL("https://example.com")));
+  EXPECT_CALL(driver(), SendEmailVerificationToken(
+                            field_id, "johndoe@hades.com", "fresh_token"));
+  std::move(second_response_callback)
+      .Run(std::optional<std::string>("fresh_token"),
+           blink::mojom::EmailVerificationRequestResult::kSuccess,
+           base::Milliseconds(150));
+  histogram_tester.ExpectBucketCount(
+      "Blink.Evp.Autofill.FlowResult",
+      EvpAutofillFlowResult::kTokenSentToRenderer, 1);
+  ExpectFlowResultLogged(
+      "Success: the email verification token was sent to the renderer.");
 }
 
 }  // namespace autofill

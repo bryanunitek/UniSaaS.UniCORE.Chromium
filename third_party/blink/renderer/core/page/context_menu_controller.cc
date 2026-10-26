@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/containers/to_vector.h"
@@ -39,7 +40,6 @@
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom-blink.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_plugin.h"
@@ -64,7 +64,6 @@
 #include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
 #include "third_party/blink/renderer/core/fragment_directive/text_fragment_handler.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/picture_in_picture_controller.h"
@@ -86,6 +85,7 @@
 #include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input/context_menu_allowed_scope.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
@@ -101,6 +101,7 @@
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "ui/base/mojom/menu_source_type.mojom-blink.h"
 
 namespace blink {
@@ -213,12 +214,6 @@ void ContextMenuController::Trace(Visitor* visitor) const {
 }
 
 void ContextMenuController::ClearContextMenu() {
-  if (auto* selected_web_frame =
-          WebLocalFrameImpl::FromFrame(hit_test_result_.InnerNodeFrame())) {
-    selected_web_frame->SendAttributionSrc(/*impression=*/std::nullopt,
-                                           /*did_navigate=*/false);
-  }
-
   if (menu_provider_)
     menu_provider_->ContextMenuCleared();
   menu_provider_ = nullptr;
@@ -379,17 +374,11 @@ void ContextMenuController::CustomContextMenuAction(uint32_t action) {
   CustomContextMenuItemSelected(action);
 }
 
-void ContextMenuController::ContextMenuClosed(
-    const KURL& link_followed,
-    const std::optional<Impression>& impression) {
+void ContextMenuController::ContextMenuClosed(const KURL& link_followed) {
   if (auto* selected_web_frame =
           WebLocalFrameImpl::FromFrame(hit_test_result_.InnerNodeFrame())) {
     if (link_followed.IsValid()) {
       selected_web_frame->SendPings(link_followed);
-    }
-    if (impression.has_value()) {
-      selected_web_frame->SendAttributionSrc(impression,
-                                             link_followed.IsValid());
     }
   }
   ClearContextMenu();
@@ -666,9 +655,47 @@ bool ContextMenuController::ShowContextMenu(
             data.edit_flags |= ContextMenuDataEditFlags::kCanUndo;
           if (plugin->CanRedo())
             data.edit_flags |= ContextMenuDataEditFlags::kCanRedo;
+
+          std::optional<base::i18n::TextDirection> text_direction =
+              plugin->GetFocusedFormTextDirection();
+          if (text_direction) {
+            data.writing_direction_default =
+                ContextMenuData::kCheckableMenuItemEnabled;
+            data.writing_direction_left_to_right =
+                ContextMenuData::kCheckableMenuItemEnabled;
+            data.writing_direction_right_to_left =
+                ContextMenuData::kCheckableMenuItemEnabled;
+            switch (*text_direction) {
+              case base::i18n::UNKNOWN_DIRECTION:
+                data.writing_direction_default |=
+                    ContextMenuData::kCheckableMenuItemChecked;
+                break;
+              case base::i18n::RIGHT_TO_LEFT:
+                data.writing_direction_right_to_left |=
+                    ContextMenuData::kCheckableMenuItemChecked;
+                break;
+              case base::i18n::LEFT_TO_RIGHT:
+                data.writing_direction_left_to_right |=
+                    ContextMenuData::kCheckableMenuItemChecked;
+                break;
+            }
+          } else {
+            data.writing_direction_default =
+                ContextMenuData::kCheckableMenuItemDisabled;
+            data.writing_direction_left_to_right =
+                ContextMenuData::kCheckableMenuItemDisabled;
+            data.writing_direction_right_to_left =
+                ContextMenuData::kCheckableMenuItemDisabled;
+          }
         }
-        // Disable translation for plugins.
-        data.edit_flags &= ~ContextMenuDataEditFlags::kCanTranslate;
+        // Disable translation for plugins, except for the PDF viewer.
+        const AtomicString& plugin_type =
+            plugin_element->FastGetAttribute(html_names::kTypeAttr);
+        if (!EqualIgnoringAsciiCase(plugin_type, "application/pdf") &&
+            !EqualIgnoringAsciiCase(plugin_type,
+                                    "application/x-google-chrome-pdf")) {
+          data.edit_flags &= ~ContextMenuDataEditFlags::kCanTranslate;
+        }
 
         // Figure out the media flags.
         data.media_flags |= ContextMenuData::kMediaCanSave;
@@ -694,14 +721,13 @@ bool ContextMenuController::ShowContextMenu(
     if (potential_image_node != nullptr &&
         IsA<HTMLCanvasElement>(potential_image_node)) {
       data.media_type = mojom::blink::ContextMenuDataMediaType::kCanvas;
+      const auto* canvas = To<HTMLCanvasElement>(potential_image_node);
+      data.has_image_contents = canvas->OriginClean();
 #if BUILDFLAG(IS_LINUX)
       // TODO(crbug.com/40902474): Support reading from the WebGPU front buffer
       // on Linux and remove the below code, which results in "Copy Image" and
       // "Save Image To" being grayed out in the context menu.
-      data.has_image_contents =
-          !To<HTMLCanvasElement>(potential_image_node)->IsWebGPU();
-#else
-      data.has_image_contents = true;
+      data.has_image_contents &= !canvas->IsWebGPU();
 #endif
     } else if (potential_image_node != nullptr &&
                !HitTestResult::AbsoluteImageURL(potential_image_node)
@@ -711,6 +737,11 @@ bool ContextMenuController::ShowContextMenu(
       data.media_type = mojom::blink::ContextMenuDataMediaType::kImage;
       data.media_flags |= ContextMenuData::kMediaCanPrint;
       data.has_image_contents = HitTestResult::GetImage(potential_image_node);
+      if (auto* image_element =
+              DynamicTo<HTMLImageElement>(potential_image_node)) {
+        data.image_replacement_frame_token =
+            image_element->ReplacementFrameToken();
+      }
     }
   }
   // If it's not a link, an image, a media element, or an image/media link,
@@ -835,14 +866,6 @@ bool ContextMenuController::ShowContextMenu(
                  DynamicTo<MathMLAnchorElement>(result.URLElement())) {
     PopulateAnchorContextMenuData(mathml_anchor, html_names::kDownloadAttr,
                                   selected_frame, data);
-  }
-
-  if (auto* anchor = DynamicTo<HTMLAnchorElementBase>(result.URLElement())) {
-    if (AttributionSrcLoader* attribution_src_loader =
-            selected_frame->GetAttributionSrcLoader()) {
-      data.impression = attribution_src_loader->PrepareContextMenuNavigation(
-          result.AbsoluteLinkURL(), anchor);
-    }
   }
 
   data.selection_rect = ComputeSelectionRect(selected_frame);

@@ -25,11 +25,10 @@ struct PasskeyExtensionData {
   ~PasskeyExtensionData();
 
   // Main PRF input data.
-  std::optional<passkey_model_utils::PRFInputData> prf_eval;
+  std::optional<device::PRFInput> prf_eval;
   // Per credential input data.
   // The map's keys (std::vector<uint8_t>) are credential IDs.
-  absl::flat_hash_map<std::vector<uint8_t>,
-                      std::optional<passkey_model_utils::PRFInputData>>
+  absl::flat_hash_map<std::vector<uint8_t>, std::optional<device::PRFInput>>
       prf_eval_by_credential;
 };
 
@@ -150,6 +149,27 @@ class RegistrationRequestParams : public PasskeyRequestParams {
   // then another passkey for the same RP ID can not be added to the same
   // credential provider.
   const std::vector<device::PublicKeyCredentialDescriptor> exclude_credentials_;
+};
+
+// Parameters for PublicKeyCredential.signalUnknownCredential.
+struct SignalUnknownCredentialParams {
+  std::string rp_id;
+  std::vector<uint8_t> credential_id;
+};
+
+// Parameters for PublicKeyCredential.signalCurrentUserDetails.
+struct SignalCurrentUserDetailsParams {
+  std::string rp_id;
+  std::vector<uint8_t> user_id;
+  std::string name;
+  std::string display_name;
+};
+
+// Parameters for PublicKeyCredential.signalAllAcceptedCredentials.
+struct SignalAllAcceptedCredentialsParams {
+  std::string rp_id;
+  std::vector<uint8_t> user_id;
+  std::vector<std::vector<uint8_t>> all_accepted_credential_ids;
 };
 
 }  // namespace webauthn

@@ -145,38 +145,49 @@ Accelerate Git operations in the massive Chromium repo by enabling fsmonitor and
 untrackedCache. This cuts time for `git status` and others significantly (e.g.,
 ~3.1s to 0.8s). Note that the first run requires time for indexing.
 
+ If the following command fails, install watchman via one of the recommended
+ methods listed on the installation page:
+ https://facebook.github.io/watchman/docs/install
 ```shell
-# If the following command fails, install watchman via one of the recommended
-# methods listed on the installation page:
-# https://facebook.github.io/watchman/docs/install
-$ which watchman
+which watchman
+```
 
-$ cd ~/chromium/src
+```
+cd ~/chromium/src
 
 # Copy executable
-$ cp .git/hooks/fsmonitor-watchman.sample ~/bin/query-watchman
+mkdir -p ~/bin
+cp .git/hooks/fsmonitor-watchman.sample ~/bin/query-watchman
 
 # Enable optimization
-$ git config core.untrackedCache true
-$ git config core.fsmonitor $HOME/bin/query-watchman
+git config core.untrackedCache true
+git config core.fsmonitor ~/bin/query-watchman
 
 # Let watchman ignore out. You should gitignore .watchmanconfig globally
-$ echo '{ "ignore_dirs": ["out"] }' > .watchmanconfig
+echo '{ "ignore_dirs": ["out"] }' > .watchmanconfig
+```
 
+```shell
 # Increase inotify parameters in case you hit the error like: `inotify:
 # inotify_init: The user limit on the total number of inotify instances
 # has been reached; increase the fs.inotify.max_user_instances sysctl`.
-$ sudo vim /etc/sysctl.d/99-inotify.conf
+sudo vim /etc/sysctl.d/99-inotify.conf
+```
 
-# Add the following.
+Add the following.
+```
 fs.inotify.max_user_instances = 8192
 fs.inotify.max_user_watches = 10485760
+```
 
+```shell
 # Then apply the change.
-$ sudo sysctl --system
+sudo sysctl --system
+```
 
-# (optional) `git add -A` is still slow, so create an alias that does the
-# same but faster. Update ~/.bashrc (or ~/.zshrc or whatever) and add:
+(optional) `git add -A` is still slow, so create an alias that does the
+same but faster. Update `~/.bashrc` (or `~/.zshrc` or whatever) and add:
+```
 alias gaa="git status --porcelain | awk '{print \$2}' | xargs -r git add"
 ```
 
@@ -376,8 +387,7 @@ use_remoteexec = true
 use_siso = true
 ```
 
-If `args.gn` contains `use_reclient=true`, drop it or replace it with
-`use_reclient=false`.
+If `args.gn` contains `use_reclient`, remove it.
 
 That's it. Remember to always use `autoninja` for building Chromium as described
 below, instead of directly invoking `siso` or `ninja`.
@@ -511,17 +521,16 @@ Once it is built, you can simply run the browser:
 $ out/Default/chrome
 ```
 
-If you're using a remote machine that supports Chrome Remote Desktop, you can
-add this to your .bashrc / .bash_profile.
+If you're SSH-ing into a remote machine that supports Chrome Remote Desktop
+(and is not connected to a physical display), you can add this to your .bashrc /
+.bash_profile.
 
 ```shell
-if [[ -z "${DISPLAY}" ]]; then
-  # In reality, Chrome Remote Desktop starts with 20 and increases until it
-  # finds an available ID [1]. So this isn't guaranteed to always work, but
-  # should work on the vast majoriy of cases.
-  #
-  # [1] https://source.chromium.org/chromium/chromium/src/+/main:remoting/host/linux/linux_me2me_host.py;l=112;drc=464a632e21bcec76c743930d4db8556613e21fd8
-  export DISPLAY=:20
+if [[ -n "${SSH_CLIENT}" || -n "${SSH_TTY}" ]]; then
+  eval "$(systemctl --user show-environment | \
+    sed -En '/^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR)=/{
+      s:^:export :;p
+    }')"
 fi
 ```
 
@@ -636,16 +645,10 @@ more information.
 Instead of running `install-build-deps.sh` to install build dependencies, run:
 
 ```shell
-$ sudo pacman -S --needed python perl gcc gcc-libs bison flex gperf pkgconfig \
+$ sudo pacman -S --needed base-devel python perl gperf \
 nss alsa-lib glib2 gtk3 nspr freetype2 cairo dbus xorg-server-xvfb \
 xorg-xdpyinfo
 ```
-
-For the optional packages on Arch Linux:
-
-* `php-cgi` is provided with `pacman`
-* `wdiff` is not in the main repository but `dwdiff` is. You can get `wdiff`
-    in AUR/`yaourt`
 
 ### Crostini (Debian based)
 

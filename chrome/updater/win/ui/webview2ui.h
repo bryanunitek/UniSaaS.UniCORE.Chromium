@@ -11,8 +11,9 @@
 
 #include <string>
 
-#include "base/functional/callback_forward.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/weak_ptr.h"
 #include "third_party/webview2/include/WebView2.h"
 
 namespace updater::ui {
@@ -22,10 +23,15 @@ class WebView2UI {
   WebView2UI();
   ~WebView2UI();
 
-  // Asynchronous creation.
+  // Starts creating the WebView2 asynchronously, as a child of `hwnd_parent`.
+  // Returns a failure `HRESULT` if creation could not be started, for
+  // example when the WebView2 runtime is not installed; `on_created` is not
+  // run in that case. Otherwise, `on_created` is run exactly once, on the
+  // calling thread, with the result of the asynchronous creation.
   HRESULT Create(HWND hwnd_parent,
                  const RECT& rect,
-                 base::OnceCallback<void(bool)> on_created);
+                 const base::FilePath& user_data_dir,
+                 base::OnceCallback<void(HRESULT)> on_created);
 
   // Navigates to the specified URL.
   HRESULT Navigate(const std::wstring& url);
@@ -52,14 +58,46 @@ class WebView2UI {
   ICoreWebView2* GetWebView() const { return webview_.Get(); }
 
  private:
+  HRESULT OnEnvironmentCreated(HRESULT result,
+                               ICoreWebView2Environment* env,
+                               const RECT& rect);
+  HRESULT OnControllerCreated(HRESULT result,
+                              ICoreWebView2Controller* controller,
+                              const RECT& rect);
+
+  HRESULT InitializeWebView();
+
+  void ReportCreationResult(HRESULT result);
+
+  HRESULT OnWebMessageReceived(ICoreWebView2* sender,
+                               ICoreWebView2WebMessageReceivedEventArgs* args);
+  HRESULT OnNavigationStarting(ICoreWebView2* sender,
+                               ICoreWebView2NavigationStartingEventArgs* args);
+  HRESULT OnNewWindowRequested(ICoreWebView2* sender,
+                               ICoreWebView2NewWindowRequestedEventArgs* args);
+  HRESULT OnDownloadStarting(ICoreWebView2* sender,
+                             ICoreWebView2DownloadStartingEventArgs* args);
+  HRESULT OnPermissionRequested(
+      ICoreWebView2* sender,
+      ICoreWebView2PermissionRequestedEventArgs* args);
+
   HWND hwnd_parent_ = nullptr;
 
   Microsoft::WRL::ComPtr<ICoreWebView2Environment> webview_env_;
   Microsoft::WRL::ComPtr<ICoreWebView2Controller> webview_controller_;
   Microsoft::WRL::ComPtr<ICoreWebView2> webview_;
 
+  base::OnceCallback<void(HRESULT)> on_created_;
+
   base::RepeatingCallback<void(const std::wstring&)> web_message_handler_;
   EventRegistrationToken web_message_token_ = {};
+  EventRegistrationToken navigation_starting_token_ = {};
+  EventRegistrationToken frame_navigation_starting_token_ = {};
+  EventRegistrationToken new_window_requested_token_ = {};
+  EventRegistrationToken download_starting_token_ = {};
+  EventRegistrationToken permission_requested_token_ = {};
+
+  base::WeakPtrFactory<WebView2UI> weak_ptr_factory_{this};
 
   WebView2UI(const WebView2UI&) = delete;
   WebView2UI& operator=(const WebView2UI&) = delete;

@@ -23,7 +23,6 @@ import './multidevice_permissions_setup_dialog.js';
 import './multidevice_forget_device_dialog.js';
 
 import {NearbyShareSettingsMixin} from '/shared/nearby_share_settings_mixin.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -38,7 +37,8 @@ import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Section} from '../mojom-webui/routes.mojom-webui.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import type {MultiDeviceBrowserProxy} from './multidevice_browser_proxy.js';
@@ -224,7 +224,7 @@ export class SettingsMultidevicePageElement extends
     };
   }
 
-  isSettingsRetreived: boolean;
+  declare isSettingsRetreived: boolean;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -235,23 +235,23 @@ export class SettingsMultidevicePageElement extends
     Setting.kNearbyShareOnOff,
   ]);
 
-  private authToken_: TokenInfo|undefined;
-  private authTokenReply_: RequestTokenReply|undefined|null;
+  declare private authToken_: TokenInfo|undefined;
+  declare private authTokenReply_: RequestTokenReply|undefined|null;
   private browserProxy_: MultiDeviceBrowserProxy;
-  private featureToBeEnabledOnceAuthenticated_: MultiDeviceFeature|null;
-  private isChromeosScreenLockEnabled_: boolean;
-  private readonly isNameEnabled_: boolean;
-  private isNearbyShareSupported_: boolean;
-  private isPasswordDialogShowing_: boolean;
-  private isPhoneScreenLockEnabled_: boolean;
-  private isPinNumberDialogShowing_: boolean;
-  private section_: Section;
-  private shouldEnableNearbyShareBackgroundScanningRevamp_: boolean;
-  private showPasswordPromptDialog_: boolean;
-  private shouldShowForgetDeviceDialog_: boolean;
-  private showPhonePermissionSetupDialog_: boolean;
-  private isAuthPanelInSessionEnabled_: boolean;
-  private fakeInSessionAuthForTesting_: InSessionAuthInterface;
+  declare private featureToBeEnabledOnceAuthenticated_: MultiDeviceFeature|null;
+  declare private isChromeosScreenLockEnabled_: boolean;
+  declare private readonly isNameEnabled_: boolean;
+  declare private isNearbyShareSupported_: boolean;
+  declare private isPasswordDialogShowing_: boolean;
+  declare private isPhoneScreenLockEnabled_: boolean;
+  declare private isPinNumberDialogShowing_: boolean;
+  declare private section_: Section;
+  declare private shouldEnableNearbyShareBackgroundScanningRevamp_: boolean;
+  declare private showPasswordPromptDialog_: boolean;
+  declare private shouldShowForgetDeviceDialog_: boolean;
+  declare private showPhonePermissionSetupDialog_: boolean;
+  declare private isAuthPanelInSessionEnabled_: boolean;
+  declare private fakeInSessionAuthForTesting_: InSessionAuthInterface;
 
 
   constructor() {

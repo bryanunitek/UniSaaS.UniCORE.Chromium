@@ -4,11 +4,11 @@
 
 #include "net/filter/filter_source_stream.h"
 
+#include <ranges>
 #include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
@@ -107,10 +107,7 @@ SourceStreamType FilterSourceStream::ParseEncodingType(
 }
 
 // static
-std::vector<SourceStreamType> FilterSourceStream::GetContentEncodingTypes(
-    const std::optional<base::flat_set<SourceStreamType>>&
-        accepted_stream_types,
-    const HttpResponseHeaders& headers) {
+std::vector<SourceStreamType> FilterSourceStream::GetContentEncodingTypes(const HttpResponseHeaders& headers) {
   std::vector<SourceStreamType> types;
   size_t iter = 0;
   while (std::optional<std::string_view> type =
@@ -121,12 +118,6 @@ std::vector<SourceStreamType> FilterSourceStream::GetContentEncodingTypes(
       case SourceStreamType::kDeflate:
       case SourceStreamType::kGzip:
       case SourceStreamType::kZstd:
-        if (accepted_stream_types &&
-            !accepted_stream_types->contains(source_type)) {
-          // If the source type is disabled, we treat it
-          // in the same way as SourceStreamType::kUnknown.
-          return std::vector<SourceStreamType>();
-        }
         types.push_back(source_type);
         break;
       case SourceStreamType::kNone:
@@ -148,7 +139,7 @@ std::vector<SourceStreamType> FilterSourceStream::GetContentEncodingTypes(
 std::unique_ptr<SourceStream> FilterSourceStream::CreateDecodingSourceStream(
     std::unique_ptr<SourceStream> upstream,
     const std::vector<SourceStreamType>& types) {
-  for (const auto& type : base::Reversed(types)) {
+  for (const auto& type : std::views::reverse(types)) {
     std::unique_ptr<FilterSourceStream> downstream;
     switch (type) {
       case SourceStreamType::kBrotli:

@@ -10,6 +10,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -21,7 +23,12 @@ import static org.mockito.Mockito.when;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
+import android.content.Context;
 import android.util.SizeF;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.accessibility.AccessibilityEvent;
+import android.widget.FrameLayout;
 
 import androidx.test.annotation.UiThreadTest;
 
@@ -30,58 +37,98 @@ import com.google.android.material.slider.Slider;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.media.immersive_playback.components.ImmersiveVideoControlAutoHideManager;
 import org.chromium.chrome.browser.media.immersive_playback.components.ImmersiveVideoControlCoordinator;
 import org.chromium.chrome.browser.media.immersive_playback.components.ImmersiveVideoControlView;
 import org.chromium.chrome.browser.media.immersive_playback.components.ImmersiveVideoPlayerCoordinator;
+import org.chromium.chrome.browser.xr.scenecore.XrModuleProviderImpl;
 import org.chromium.components.thinwebview.CompositorView;
 import org.chromium.content_public.browser.ImmersiveProjectionType;
 import org.chromium.content_public.browser.ImmersiveStereoMode;
+import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.xr.scenecore.XrCurvedSurfaceEntityHolder;
+import org.chromium.ui.xr.scenecore.XrEntityHolder;
 import org.chromium.ui.xr.scenecore.XrInteractableComponent;
 import org.chromium.ui.xr.scenecore.XrMovableComponent;
 import org.chromium.ui.xr.scenecore.XrPanelEntityHolder;
+import org.chromium.ui.xr.scenecore.XrPose;
+import org.chromium.ui.xr.scenecore.XrQuaternion;
 import org.chromium.ui.xr.scenecore.XrResizableComponent;
 import org.chromium.ui.xr.scenecore.XrSceneCoreSessionManager;
+import org.chromium.ui.xr.scenecore.XrSpace;
+import org.chromium.ui.xr.scenecore.XrSurfaceEntityHolder;
 import org.chromium.ui.xr.scenecore.XrSurfaceEntityShape;
 import org.chromium.ui.xr.scenecore.XrSurfaceEntityStereoMode;
 import org.chromium.ui.xr.scenecore.XrSurfaceEntityView;
+import org.chromium.ui.xr.scenecore.XrVector3;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /** Tests for {@link ImmersiveVideoPlaybackCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@SuppressWarnings("unchecked")
 public class ImmersiveVideoPlaybackCoordinatorTest {
+    /** {@link XrSurfaceEntityView} is abstract; this provides the holder to production code. */
+    private static class TestSurfaceEntityView extends XrSurfaceEntityView {
+        private final XrSurfaceEntityHolder mHolder;
+
+        TestSurfaceEntityView(Context context, XrSurfaceEntityHolder holder) {
+            super(context);
+            mHolder = holder;
+        }
+
+        @Override
+        public XrSurfaceEntityHolder getHolder() {
+            return mHolder;
+        }
+    }
+
+    static {
+        XrModuleProviderImpl.initialize();
+    }
+
+    private static final XrVector3 ANCHOR_TRANSLATION = XrVector3.create(1f, 2f, 3f);
+    private static final float ANCHOR_YAW_DEGREES = 90f;
+    private static final float ANCHOR_YAW_RADIANS = (float) Math.toRadians(ANCHOR_YAW_DEGREES);
+    private static final XrPose ANCHOR_POSE =
+            XrPose.create(ANCHOR_TRANSLATION, XrQuaternion.fromYaw(ANCHOR_YAW_RADIANS));
+    private static final float EPSILON = 1e-4f;
+
     @Mock private ImmersiveVideoControlCoordinator.Delegate mVideoControlDelegate;
     @Mock private WindowAndroid mWindowAndroid;
     @Mock private XrSceneCoreSessionManager mXrSceneCoreSessionManager;
     @Mock private CompositorView mCompositorView;
     @Mock private XrMovableComponent mControlPanelMovableComponent;
-    @Mock private XrSurfaceEntityView mSurfaceEntityView;
     @Mock private XrResizableComponent mResizableComponent;
     @Mock private XrMovableComponent mSurfaceMovableComponent;
     @Mock private XrCurvedSurfaceEntityHolder mSurfaceEntityHolder;
     @Mock private XrPanelEntityHolder mMainPanelEntity;
     @Mock private XrPanelEntityHolder mControlPanelHolder;
     @Mock private XrInteractableComponent mInteractableComponent;
+    @Mock private XrEntityHolder mActivitySpaceEntity;
+    private final SettableNullableObservableSupplier<XrPose> mHeadPoseSupplier =
+            ObservableSuppliers.createNullable();
 
     private ImmersiveVideoPlaybackCoordinator mCoordinator;
     private Activity mActivity;
 
     @Before
     public void setUp() throws Exception {
+        XrModuleProviderImpl.initialize();
         MockitoAnnotations.openMocks(this);
         mActivity = Robolectric.buildActivity(Activity.class).create().get();
         mActivity.setTheme(org.chromium.chrome.R.style.Theme_BrowserUI_Light);
@@ -92,11 +139,18 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
         when(mSurfaceEntityHolder.getEntitySize()).thenReturn(new SizeF(1f, 1f));
         when(mControlPanelHolder.getMovableComponent()).thenReturn(mControlPanelMovableComponent);
         when(mControlPanelHolder.getEntitySize()).thenReturn(new SizeF(1f, 1f));
+        when(mControlPanelHolder.getParent()).thenReturn(mActivitySpaceEntity);
         when(mXrSceneCoreSessionManager.getMainPanelEntity()).thenReturn(mMainPanelEntity);
+        when(mXrSceneCoreSessionManager.getActivitySpaceEntity()).thenReturn(mActivitySpaceEntity);
+        when(mXrSceneCoreSessionManager.getHeadPoseInActivitySpace())
+                .thenReturn(XrPose.getIdentity());
+        when(mXrSceneCoreSessionManager.getHeadPoseObservableSupplier())
+                .thenReturn(mHeadPoseSupplier);
+        when(mXrSceneCoreSessionManager.startHeadPoseTracking()).thenReturn(true);
         when(mXrSceneCoreSessionManager.createPanelEntity(any(), any()))
                 .thenReturn(mControlPanelHolder);
-        when(mCompositorView.getView()).thenReturn(mSurfaceEntityView);
-        when(mSurfaceEntityView.getHolder()).thenReturn(mSurfaceEntityHolder);
+        when(mCompositorView.getView())
+                .thenReturn(new TestSurfaceEntityView(mActivity, mSurfaceEntityHolder));
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -187,7 +241,6 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
         verify(mSurfaceEntityHolder).setSurfaceStereoMode(XrSurfaceEntityStereoMode.SIDE_BY_SIDE);
 
         verify(mSurfaceMovableComponent).setMovable(false, false);
-        verify(mControlPanelMovableComponent).setMovable(true, false);
 
         clearInvocations(mSurfaceMovableComponent);
         clearInvocations(mControlPanelMovableComponent);
@@ -198,7 +251,7 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
                 ImmersiveStereoMode.TOP_BOTTOM, ImmersiveProjectionType.SPHERE);
         ShadowLooper.idleMainLooper();
 
-        verify(mSurfaceEntityHolder).setSurfaceShape(XrSurfaceEntityShape.SPHERE);
+        verify(mSurfaceEntityHolder).setSurfaceShape(XrSurfaceEntityShape.SEAMLESS_SPHERE);
         verify(mSurfaceEntityHolder).setSurfaceStereoMode(XrSurfaceEntityStereoMode.TOP_BOTTOM);
 
         verify(mSurfaceMovableComponent).setMovable(false, false);
@@ -211,11 +264,11 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
         mCoordinator.onFormatSelected(ImmersiveStereoMode.MONO, ImmersiveProjectionType.QUAD);
         ShadowLooper.idleMainLooper();
 
-        verify(mSurfaceEntityHolder).setSurfaceShape(XrSurfaceEntityShape.QUAD);
+        verify(mSurfaceEntityHolder).setSurfaceShape(XrSurfaceEntityShape.ROUNDED_QUAD);
         verify(mSurfaceEntityHolder).setSurfaceStereoMode(XrSurfaceEntityStereoMode.MONO);
 
         verify(mSurfaceMovableComponent).setMovable(true, false);
-        verify(mControlPanelMovableComponent).setMovable(false, false);
+        verify(mControlPanelMovableComponent, never()).setMovable(anyBoolean(), anyBoolean());
     }
 
     /** Tests that the control panel is automatically hidden after a period of inactivity. */
@@ -223,13 +276,37 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
     @UiThreadTest
     public void testControlPanelAutoHide() {
         clearInvocations(mControlPanelHolder);
+        ImmersiveVideoControlView panel =
+                mCoordinator.getControlCoordinatorForTesting().getControlPanelForTesting();
+        mCoordinator.updateMediaPosition(
+                /* durationMs= */ 60_000, /* positionMs= */ 1_000, /* playbackRate= */ 1.0);
+        mCoordinator.updatePlaybackState(true);
 
-        // Warp time forward by 5 seconds (AUTO_HIDE_DELAY_MS)
         ShadowLooper.idleMainLooper(
                 ImmersiveVideoControlAutoHideManager.AUTO_HIDE_DELAY_MS, TimeUnit.MILLISECONDS);
 
-        // Verify control panel autohides
         verify(mControlPanelHolder).setEntityEnabled(false);
+        int hiddenProgress = (int) panel.getSeekBarForTesting().getValue();
+        ShadowLooper.idleMainLooper(1_000, TimeUnit.MILLISECONDS);
+        assertEquals(hiddenProgress, (int) panel.getSeekBarForTesting().getValue());
+    }
+
+    /** Tests that disposal stops an active seekbar loop. */
+    @Test
+    @UiThreadTest
+    public void testDisposeStopsSeekbarUpdates() {
+        ImmersiveVideoControlView panel =
+                mCoordinator.getControlCoordinatorForTesting().getControlPanelForTesting();
+        mCoordinator.updateMediaPosition(
+                /* durationMs= */ 60_000, /* positionMs= */ 1_000, /* playbackRate= */ 1.0);
+        mCoordinator.updatePlaybackState(true);
+        ShadowLooper.idleMainLooper(100, TimeUnit.MILLISECONDS);
+
+        mCoordinator.dispose();
+        int disposedProgress = (int) panel.getSeekBarForTesting().getValue();
+        ShadowLooper.idleMainLooper(1_000, TimeUnit.MILLISECONDS);
+
+        assertEquals(disposedProgress, (int) panel.getSeekBarForTesting().getValue());
     }
 
     /** Tests that hovering/pointing at the panel prevents the autohide timer from firing. */
@@ -288,6 +365,30 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
         verify(mControlPanelHolder).setEntityEnabled(false);
     }
 
+    /** Tests that moving or dragging the player panel resets/pauses the autohide timer. */
+    @Test
+    @UiThreadTest
+    public void testPlayerPanelMovingPreventsAutoHide() {
+        clearInvocations(mControlPanelHolder);
+        mCoordinator.updatePlaybackState(true);
+
+        // 1. Move start
+        mCoordinator.onPlayerPanelPoseChangeStart(XrPose.getIdentity());
+        ShadowLooper.idleMainLooper(
+                ImmersiveVideoControlAutoHideManager.AUTO_HIDE_DELAY_MS, TimeUnit.MILLISECONDS);
+        verify(mControlPanelHolder, never()).setEntityEnabled(false);
+
+        // 2. Move end - timer starts counting down again
+        mCoordinator.onPlayerPanelPoseChangeEnd(XrPose.getIdentity());
+        ShadowLooper.idleMainLooper(
+                ImmersiveVideoControlAutoHideManager.AUTO_HIDE_DELAY_MS - 100,
+                TimeUnit.MILLISECONDS);
+        verify(mControlPanelHolder, never()).setEntityEnabled(false);
+
+        ShadowLooper.idleMainLooper(100, TimeUnit.MILLISECONDS);
+        verify(mControlPanelHolder).setEntityEnabled(false);
+    }
+
     /** Tests that toggling the format selection panel updates format button selected state. */
     @Test
     @UiThreadTest
@@ -297,8 +398,6 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
                 assumeNonNull(
                         mCoordinator.getControlCoordinatorForTesting().getControlPanelForTesting());
 
-        // Toggle open format panel (stub getParent() to return non-null so isShowing() is true)
-        when(mControlPanelHolder.getParent()).thenReturn(mControlPanelHolder);
         mCoordinator.onFormatClicked();
         ShadowLooper.idleMainLooper(); // Flush binder updates
 
@@ -313,6 +412,25 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
 
         verify(mControlPanelHolder).setEntityEnabled(false);
         assertFalse(panel.isFormatButtonSelectedForTesting());
+    }
+
+    @Test
+    @UiThreadTest
+    public void testFormatPanelAccessibilityFocusLoss_DismissesPanel() {
+        XrPanelEntityHolder formatPanelHolder = mock(XrPanelEntityHolder.class);
+        when(formatPanelHolder.getEntitySize()).thenReturn(new SizeF(1f, 1f));
+        when(mControlPanelHolder.getParent()).thenReturn(mControlPanelHolder);
+        when(formatPanelHolder.getParent()).thenReturn(formatPanelHolder);
+        when(mXrSceneCoreSessionManager.createPanelEntity(any(), any()))
+                .thenReturn(formatPanelHolder);
+
+        mCoordinator.onFormatClicked();
+        assertTrue(mCoordinator.getFormatCoordinatorForTesting().isShowing());
+
+        mCoordinator.onFormatPanelAccessibilityFocusChanged(false);
+
+        verify(formatPanelHolder).setEntityEnabled(false);
+        verify(formatPanelHolder).setParent(null);
     }
 
     /**
@@ -390,6 +508,230 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
                 (int) formatCoordinator.getRecommendedProjectionTypeForTesting());
     }
 
+    /** Tests that seekBar accessibility events are blocked during programmatic updates. */
+    @Test
+    @UiThreadTest
+    public void testSeekBarAccessibilityEventsBlockedDuringPlayback() throws Exception {
+        // 1. Create a visible activity and coordinator to ensure view attachment.
+        Activity visibleActivity =
+                Robolectric.buildActivity(org.chromium.ui.base.TestActivity.class)
+                        .create()
+                        .start()
+                        .resume()
+                        .visible()
+                        .get();
+        visibleActivity.setTheme(org.chromium.chrome.R.style.Theme_BrowserUI_Light);
+
+        ImmersiveVideoPlaybackCoordinator visibleCoordinator =
+                new TestImmersiveVideoPlaybackCoordinator(
+                        visibleActivity,
+                        mWindowAndroid,
+                        mVideoControlDelegate,
+                        mXrSceneCoreSessionManager,
+                        mCompositorView);
+        visibleCoordinator.show();
+
+        ImmersiveVideoControlView panel =
+                assumeNonNull(
+                        visibleCoordinator
+                                .getControlCoordinatorForTesting()
+                                .getControlPanelForTesting());
+        Slider originalSlider = panel.getSeekBarForTesting();
+
+        // 2. Enable accessibility in Robolectric.
+        var shadowManager =
+                (org.robolectric.shadows.ShadowAccessibilityManager)
+                        org.robolectric.shadow.api.Shadow.extract(
+                                visibleActivity.getSystemService("accessibility"));
+        shadowManager.setEnabled(true);
+        android.accessibilityservice.AccessibilityServiceInfo serviceInfo =
+                new android.accessibilityservice.AccessibilityServiceInfo();
+        serviceInfo.eventTypes = AccessibilityEvent.TYPES_ALL_MASK;
+        shadowManager.setEnabledAccessibilityServiceList(List.of(serviceInfo));
+        assertTrue(AccessibilityState.isAccessibilityManagerEnabled());
+
+        // 3. Remove original slider from panel.
+        ViewGroup originalParent = (ViewGroup) originalSlider.getParent();
+        int index = originalParent.indexOfChild(originalSlider);
+        originalParent.removeView(originalSlider);
+
+        // 4. Create a TestSlider and replace the private field in panel.
+        TestSlider testSlider = new TestSlider(visibleActivity);
+        java.lang.reflect.Field seekBarField =
+                ImmersiveVideoControlView.class.getDeclaredField("mSeekBar");
+        seekBarField.setAccessible(true);
+        seekBarField.set(panel, testSlider);
+
+        // Add testSlider back to panel at the same index.
+        originalParent.addView(testSlider, index);
+
+        // 5. Add panel to a TestFrameLayout parent to monitor events.
+        if (panel.getParent() != null) {
+            ((ViewGroup) panel.getParent()).removeView(panel);
+        }
+        TestFrameLayout testParent = new TestFrameLayout(visibleActivity);
+        testParent.addView(panel);
+        visibleActivity.setContentView(testParent);
+
+        // Allow Robolectric to process layout and attach events so accessibility is initialized.
+        ShadowLooper.idleMainLooper();
+
+        // Verify attachment
+        assertTrue(testSlider.isAttachedToWindow());
+        assertTrue(panel.isAttachedToWindow());
+
+        // 6. Programmatic update during active playback (playing): setProgress and position label
+        // updates should block accessibility events.
+        panel.setPlaybackState(true);
+        panel.setProgress(50);
+        panel.getPositionLabelForTesting()
+                .sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+        ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        // Verify that parent did NOT receive any accessibility events.
+        assertTrue(testParent.getReceivedEvents().isEmpty());
+
+        // 6b. Programmatic update when paused: setProgress and position label updates should NOT
+        // block accessibility events.
+        panel.setPlaybackState(false);
+        testParent.clearEvents();
+        panel.setProgress(75);
+        panel.getPositionLabelForTesting()
+                .sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+        ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+        // Verify that parent DID receive the accessibility event because playback is paused.
+        assertFalse(testParent.getReceivedEvents().isEmpty());
+
+        // 7. Directly sending accessibility event (simulating user interaction or focus) should
+        // NOT be blocked.
+        testParent.clearEvents();
+        testSlider.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_SELECTED);
+        ShadowLooper.idleMainLooper();
+        // Verify that parent DID receive the accessibility event.
+        assertEquals(1, testParent.getReceivedEvents().size());
+        assertEquals(panel, testParent.getReceivedChild());
+    }
+
+    /** Tests that head tracking is enabled upon initialization and disabled upon disposal. */
+    @Test
+    @UiThreadTest
+    public void testHeadTrackingEnabled_Lifecycle() {
+        // Head tracking is enabled on construction and started on show()
+        verify(mXrSceneCoreSessionManager).setHeadTrackingEnabled(true);
+        verify(mXrSceneCoreSessionManager).startHeadPoseTracking();
+
+        // Disposing coordinator stops tracking and disables head tracking
+        mCoordinator.dispose();
+        verify(mXrSceneCoreSessionManager).stopHeadPoseTracking();
+        verify(mXrSceneCoreSessionManager).setHeadTrackingEnabled(false);
+    }
+
+    /** Tests that head pose updates automatically update player and control panel poses. */
+    @Test
+    @UiThreadTest
+    public void testHeadPoseUpdates_UpdatePoses() {
+        clearInvocations(mSurfaceEntityHolder);
+
+        mHeadPoseSupplier.set(ANCHOR_POSE);
+        ShadowLooper.idleMainLooper();
+
+        ArgumentCaptor<XrPose> playerPoseCaptor = ArgumentCaptor.forClass(XrPose.class);
+        verify(mSurfaceEntityHolder)
+                .setEntityPose(playerPoseCaptor.capture(), eq(XrSpace.ACTIVITY));
+        XrPose expectedPlayerPose =
+                XrPose.create(
+                        ANCHOR_POSE.transformPoint(XrVector3.create(0f, 0f, -1.5f)),
+                        ANCHOR_POSE.getRotation());
+        assertPoseEquals(expectedPlayerPose, playerPoseCaptor.getValue());
+    }
+
+    /** Tests that head pose tracking automatically times out and unregisters after 500ms. */
+    @Test
+    @UiThreadTest
+    public void testHeadPoseTracking_TimesOutAfterDelay() {
+        clearInvocations(mXrSceneCoreSessionManager);
+
+        // Advance looper past HEAD_POSE_TRACKING_DURATION_MS (500ms)
+        ShadowLooper.idleMainLooper(500, TimeUnit.MILLISECONDS);
+
+        verify(mXrSceneCoreSessionManager).stopHeadPoseTracking();
+
+        // Further head pose changes should not trigger pose updates
+        clearInvocations(mSurfaceEntityHolder);
+        mHeadPoseSupplier.set(ANCHOR_POSE);
+        ShadowLooper.idleMainLooper();
+        verify(mSurfaceEntityHolder, never()).setEntityPose(any(), anyInt());
+    }
+
+    /** Tests that changing projection type fetches current head pose and updates anchor. */
+    @Test
+    @UiThreadTest
+    public void testProjectionChange_UpdatesAnchorPoseFromHeadPose() {
+        when(mXrSceneCoreSessionManager.getHeadPoseInActivitySpace()).thenReturn(ANCHOR_POSE);
+
+        clearInvocations(mSurfaceEntityHolder);
+        mCoordinator.onFormatSelected(
+                ImmersiveStereoMode.MONO, ImmersiveProjectionType.SPHERE);
+        ShadowLooper.idleMainLooper();
+
+        verify(mXrSceneCoreSessionManager).getHeadPoseInActivitySpace();
+        ArgumentCaptor<XrPose> playerPoseCaptor = ArgumentCaptor.forClass(XrPose.class);
+        verify(mSurfaceEntityHolder)
+                .setEntityPose(playerPoseCaptor.capture(), eq(XrSpace.ACTIVITY));
+        assertEquals(ANCHOR_POSE.getTranslation(), playerPoseCaptor.getValue().getTranslation());
+    }
+
+    /** Tests that reshowing control panel in sphere mode fetches head pose to update anchor. */
+    @Test
+    @UiThreadTest
+    public void testShowControlPanel_UpdatesAnchorPoseInSphereMode() {
+        // Switch to Sphere mode
+        mCoordinator.onFormatSelected(ImmersiveStereoMode.MONO, ImmersiveProjectionType.SPHERE);
+        ShadowLooper.idleMainLooper();
+
+        // Dismiss the control panel first
+        mCoordinator.onPlayerPanelClicked();
+        ShadowLooper.idleMainLooper();
+
+        clearInvocations(mXrSceneCoreSessionManager);
+        clearInvocations(mControlPanelHolder);
+
+        when(mXrSceneCoreSessionManager.getHeadPoseInActivitySpace()).thenReturn(ANCHOR_POSE);
+
+        // Re-show control panel by clicking player panel
+        mCoordinator.onPlayerPanelClicked();
+        ShadowLooper.idleMainLooper();
+
+        verify(mXrSceneCoreSessionManager).getHeadPoseInActivitySpace();
+        verify(mControlPanelHolder).setEntityPose(any(XrPose.class), eq(XrSpace.PARENT));
+    }
+
+    /**
+     * Tests that reshowing control panel in hemisphere mode does not re-fetch head pose to update
+     * anchor, preserving the hemisphere's current yaw.
+     */
+    @Test
+    @UiThreadTest
+    public void testShowControlPanel_DoesNotUpdateAnchorPoseInHemisphereMode() {
+        // Switch to Hemisphere mode
+        mCoordinator.onFormatSelected(ImmersiveStereoMode.MONO, ImmersiveProjectionType.HEMISPHERE);
+        ShadowLooper.idleMainLooper();
+
+        // Dismiss the control panel first
+        mCoordinator.onPlayerPanelClicked();
+        ShadowLooper.idleMainLooper();
+
+        clearInvocations(mXrSceneCoreSessionManager);
+        clearInvocations(mControlPanelHolder);
+
+        // Re-show control panel by clicking player panel
+        mCoordinator.onPlayerPanelClicked();
+        ShadowLooper.idleMainLooper();
+
+        verify(mXrSceneCoreSessionManager, never()).getHeadPoseInActivitySpace();
+        verify(mControlPanelHolder).setEntityEnabled(true);
+        verify(mControlPanelHolder, never()).setEntityPose(any(XrPose.class), eq(XrSpace.PARENT));
+    }
+
     /** Test subclass that allows injecting mocked dependencies by overriding protected methods. */
     private static class TestImmersiveVideoPlaybackCoordinator
             extends ImmersiveVideoPlaybackCoordinator {
@@ -421,5 +763,56 @@ public class ImmersiveVideoPlaybackCoordinatorTest {
                 }
             };
         }
+    }
+
+    private static class TestSlider extends Slider {
+        public TestSlider(android.content.Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean isShown() {
+            return true;
+        }
+    }
+
+    private static class TestFrameLayout extends FrameLayout {
+        private final List<AccessibilityEvent> mReceivedEvents = new java.util.ArrayList<>();
+        private View mReceivedChild;
+
+        public TestFrameLayout(android.content.Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean requestSendAccessibilityEvent(View child, AccessibilityEvent event) {
+            mReceivedChild = child;
+            mReceivedEvents.add(AccessibilityEvent.obtain(event));
+            return super.requestSendAccessibilityEvent(child, event);
+        }
+
+        public List<AccessibilityEvent> getReceivedEvents() {
+            return mReceivedEvents;
+        }
+
+        public View getReceivedChild() {
+            return mReceivedChild;
+        }
+
+        public void clearEvents() {
+            mReceivedEvents.clear();
+            mReceivedChild = null;
+        }
+    }
+
+    private void assertVectorEquals(XrVector3 expected, XrVector3 actual) {
+        assertEquals(expected.getX(), actual.getX(), EPSILON);
+        assertEquals(expected.getY(), actual.getY(), EPSILON);
+        assertEquals(expected.getZ(), actual.getZ(), EPSILON);
+    }
+
+    private void assertPoseEquals(XrPose expected, XrPose actual) {
+        assertVectorEquals(expected.getTranslation(), actual.getTranslation());
+        assertEquals(expected.getRotation().getYaw(), actual.getRotation().getYaw(), EPSILON);
     }
 }

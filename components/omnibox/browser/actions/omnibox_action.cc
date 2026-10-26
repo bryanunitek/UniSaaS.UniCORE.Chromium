@@ -4,6 +4,7 @@
 
 #include "components/omnibox/browser/actions/omnibox_action.h"
 
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "build/build_config.h"
@@ -60,13 +61,6 @@ size_t EstimateMemoryUsage(const OmniboxAction::LabelStrings& self) {
 bool OmniboxAction::Client::OpenJourneys(const std::string& query) {
   return false;
 }
-
-bool OmniboxAction::Client::ShouldOpenCoBrowsePanel() const {
-  return false;
-}
-
-void OmniboxAction::Client::OpenCoBrowsePanel() {}
-
 // =============================================================================
 
 OmniboxAction::ExecutionContext::ExecutionContext(
@@ -77,8 +71,7 @@ OmniboxAction::ExecutionContext::ExecutionContext(
     : client_(client),
       open_url_callback_(std::move(callback)),
       match_selection_timestamp_(match_selection_timestamp),
-      disposition_(disposition),
-      enter_starter_pack_id_(0) {}
+      disposition_(disposition) {}
 
 OmniboxAction::ExecutionContext::~ExecutionContext() = default;
 
@@ -141,7 +134,10 @@ OmniboxActionId OmniboxAction::ActionId() const {
 #if BUILDFLAG(IS_ANDROID)
 base::android::ScopedJavaLocalRef<jobject> OmniboxAction::GetOrCreateJavaObject(
     JNIEnv* env) const {
-  NOTREACHED() << "This implementation does not have a java counterpart";
+  LOG(WARNING)
+      << "This implementation does not have a java counterpart. ActionId: "
+      << static_cast<int>(ActionId());
+  return nullptr;
 }
 #endif
 
@@ -154,7 +150,7 @@ void OmniboxAction::OpenURL(OmniboxAction::ExecutionContext& context,
   // destination URLs don't need a fallback so it's fine to pass false here.
   std::move(context.open_url_callback_)
       .Run(url, nullptr, context.disposition_, ui::PAGE_TRANSITION_GENERATED,
-           /*match_type=*/AutocompleteMatchType::URL_WHAT_YOU_TYPED,
+           /*match_type=*/omnibox::AutocompleteMatchType::kUrlWhatYouTyped,
            context.match_selection_timestamp_,
            /*destination_url_entered_without_scheme=*/false,
            /*destination_url_entered_with_http_scheme=*/false, u"",

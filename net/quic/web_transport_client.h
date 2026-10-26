@@ -5,21 +5,27 @@
 #ifndef NET_QUIC_WEB_TRANSPORT_CLIENT_H_
 #define NET_QUIC_WEB_TRANSPORT_CLIENT_H_
 
+#include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_handle.h"
+#include "net/http/http_request_headers.h"
 #include "net/log/net_log_with_source.h"
 #include "net/quic/web_transport_error.h"
+#include "net/quic/web_transport_send_stream_stats.h"
 #include "net/third_party/quiche/src/quiche/quic/core/crypto/web_transport_fingerprint_proof_verifier.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/third_party/quiche/src/quiche/quic/core/web_transport_interface.h"
-#include "url/gurl.h"
 #include "url/origin.h"
+
+class GURL;
 
 namespace net {
 
@@ -91,6 +97,8 @@ class NET_EXPORT WebTransportClientVisitor {
       scoped_refptr<HttpResponseHeaders> response_headers) = 0;
   // CONNECTING -> FAILED
   virtual void OnConnectionFailed(const WebTransportError& error) = 0;
+  // CONNECTING or CONNECTED -> draining notification
+  virtual void OnDraining() = 0;
   // CONNECTED -> CLOSED
   virtual void OnClosed(
       const std::optional<WebTransportCloseInfo>& close_info) = 0;
@@ -147,6 +155,9 @@ struct NET_EXPORT WebTransportParameters {
   std::optional<uint16_t>
       anticipated_concurrent_incoming_unidirectional_streams;
   std::optional<uint16_t> anticipated_concurrent_incoming_bidirectional_streams;
+  // Additional HTTP headers to include in the CONNECT request.
+  // https://w3c.github.io/webtransport/#dom-webtransportoptions-headers
+  std::vector<HttpRequestHeaders::HeaderKeyValuePair> additional_headers;
 };
 
 // An abstract base for a WebTransport client.  Most of the useful operations
@@ -168,8 +179,31 @@ class NET_EXPORT WebTransportClient {
 
   virtual void CloseIfNonceMatches(base::UnguessableToken nonce) = 0;
 
-  // session() can be nullptr in states other than CONNECTED.
+  // Exports exactly `result_length` bytes of keying material scoped to this
+  // WebTransport session and the application-provided `label` and `context`.
+  // Returns nullopt if the session cannot export the requested material.
+  // Callers must enforce the protocol's input and output length limits.
+  virtual std::optional<std::vector<uint8_t>> ExportKeyingMaterial(
+      base::span<const uint8_t> label,
+      base::span<const uint8_t> context,
+      size_t result_length) = 0;
+
+  // session() can be nullptr in states other than CONNECTED. Do not call
+  // session()->GetMaxDatagramSize() directly because malformed peer settings
+  // can violate its QUICHE-side preconditions. Use GetMaxDatagramSize().
   virtual quic::WebTransportSession* session() = 0;
+
+  // Returns nullopt when the maximum cannot be determined. Zero is a valid
+  // established-session value indicating no non-empty outgoing Datagram
+  // payload fits.
+  virtual std::optional<quic::QuicByteCount> GetMaxDatagramSize() const = 0;
+
+  // Registers a WebTransport stream with an outgoing direction. Stats are
+  // unavailable before registration and after unregistration.
+  virtual void RegisterSendStream(uint32_t stream_id) = 0;
+  virtual void UnregisterSendStream(uint32_t stream_id) = 0;
+  virtual std::optional<WebTransportSendStreamStats> GetSendStreamStats(
+      uint32_t stream_id) const = 0;
 };
 
 // Creates a WebTransport client for |url| accessed from |origin| with the

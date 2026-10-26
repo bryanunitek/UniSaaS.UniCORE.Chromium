@@ -19,6 +19,7 @@ import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.components.omnibox.OmniboxWordBoundary;
 import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.base.KeyNavigationUtil;
 
 import java.util.regex.Pattern;
 
@@ -106,10 +107,6 @@ public class SpannableAutocompleteEditTextModel
         mInputConnection = new AutocompleteInputConnection(this);
         mInputConnection.setTarget(inputConnection);
         return mInputConnection;
-    }
-
-    public void setInputConnectionForTesting(AutocompleteInputConnection connection) {
-        mInputConnection = connection;
     }
 
     private void sendAccessibilityEventForUserTextChange(
@@ -318,58 +315,75 @@ public class SpannableAutocompleteEditTextModel
         KeyEvent dispatchedEvent = translateKeyEvent(event);
 
         if (mInputConnection == null) {
+            // Hardware typing bypasses IME batch edits when mInputConnection is null. Mark
+            // mLastEditWasTyping so onTextChanged recognizes edits as user typing.
+            if (dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN
+                    && dispatchedEvent.isPrintingKey()) {
+                setLastEditWasTyping(true);
+            }
             return mDelegate.super_dispatchKeyEvent(dispatchedEvent);
         }
 
+        // Key events dispatched directly to the view (e.g. hardware keyboard or KeyUtils) are
+        // independent of any asynchronous IME batch edit (such as Gboard's multi-IPC
+        // IC_GET_SURROUNDING_TEXT on focus). Temporarily reset mBatchEditNestCount so that
+        // onEndImeCommand() synchronously notifies listeners of the text state change.
+        int savedBatchEditNestCount = mBatchEditNestCount;
+        mBatchEditNestCount = 0;
         boolean retVal;
-        mInputConnection.onBeginImeCommand();
-        if (hasAutocomplete() && dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN) {
-            if (dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL
-                    || dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_DEL) {
-                // The editor doesn't see the selected text so won't handle forward delete. Normal
-                // delete doesn't always work on the last character on hard keyboards, so handle it
-                // similarly.
-                clearAutocompleteText();
-                mLastEditWasTyping = false;
+        try {
+            mInputConnection.onBeginImeCommand();
+            if (hasAutocomplete() && dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN) {
+                if (dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL
+                        || dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_DEL) {
+                    // The editor doesn't see the selected text so won't handle forward delete.
+                    // Normal delete doesn't always work on the last character on hard keyboards,
+                    // so handle it similarly.
+                    clearAutocompleteText();
+                    mLastEditWasTyping = false;
 
-                retVal = true;
-            } else if (cursorMovementCommitsAutocomplete(dispatchedEvent)) {
-                // These commands treat the autocomplete suggestion as a selection and then apply
-                // the cursor movement.
-                int currentPos = mCurrentState.getSelection().from;
-                int totalLength = mCurrentState.getUserText().length();
-                String autocompleteText = mCurrentState.getAutocompleteText();
-                if (autocompleteText != null) {
-                    totalLength += autocompleteText.length();
+                    retVal = true;
+                } else if (cursorMovementCommitsAutocomplete(dispatchedEvent)) {
+                    // These commands treat the autocomplete suggestion as a selection and then
+                    // apply the cursor movement.
+                    int currentPos = mCurrentState.getSelection().from;
+                    int totalLength = mCurrentState.getUserText().length();
+                    String autocompleteText = mCurrentState.getAutocompleteText();
+                    if (autocompleteText != null) {
+                        totalLength += autocompleteText.length();
+                    }
+
+                    mInputConnection.commitAutocomplete();
+                    mDelegate.setSelection(currentPos, totalLength);
+                    retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
+                } else if (KeyNavigationUtil.isTabNavigation(dispatchedEvent)) {
+                    mInputConnection.commitAutocomplete();
+                    retVal = true;
+                } else {
+                    // It might make sense to commit the autocomplete text here but the
+                    // AutocompleteMediator queries us via getTextWithAutocomplete() so it's
+                    // included either way. Avoiding the extra commit eliminates a brief cursor
+                    // flash at the end of the autocomplete suggestion.
+                    retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
                 }
-
-                mInputConnection.commitAutocomplete();
-                mDelegate.setSelection(currentPos, totalLength);
-                retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
-            } else if (dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_TAB) {
-                mInputConnection.commitAutocomplete();
+            } else if (isDeleteByWord(dispatchedEvent)
+                    && deleteByWord(
+                            dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL)) {
                 retVal = true;
             } else {
-                // It might make sense to commit the autocomplete text here but the
-                // AutocompleteMediator queries us via getTextWithAutocomplete() so it's included
-                // either way. Avoiding the extra commit eliminates a brief cursor flash at the end
-                // of the autocomplete suggestion.
+                if (dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN
+                        && dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL) {
+                    // Delete key when there's no autocomplete suggestion. Use the normal behavior
+                    // but inhibit suggestions.
+                    mLastEditWasTyping = false;
+                }
                 retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
             }
-        } else if (isDeleteByWord(dispatchedEvent)
-                && deleteByWord(dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL)) {
-            retVal = true;
-        } else {
-            if (dispatchedEvent.getAction() == KeyEvent.ACTION_DOWN
-                    && dispatchedEvent.getKeyCode() == KeyEvent.KEYCODE_FORWARD_DEL) {
-                // Delete key when there's no autocomplete suggestion. Use the normal behavior but
-                // inhibit suggestions.
-                mLastEditWasTyping = false;
-            }
-            retVal = mDelegate.super_dispatchKeyEvent(dispatchedEvent);
-        }
 
-        mInputConnection.onEndImeCommand();
+            mInputConnection.onEndImeCommand();
+        } finally {
+            mBatchEditNestCount = savedBatchEditNestCount;
+        }
         return retVal;
     }
 
@@ -444,8 +458,10 @@ public class SpannableAutocompleteEditTextModel
         if (DEBUG) Log.i(TAG, "onTextChanged: " + text);
         mSpanCursorController.reflectTextUpdateInState(mCurrentState, text);
         if (mBatchEditNestCount > 0) return; // let endBatchEdit() handles changes from IME.
-        // An external change such as text paste occurred.
-        mLastEditWasTyping = false;
+        if (!mLastEditWasTyping && !mIgnoreTextChangeFromAutocomplete) {
+            // An external change such as text paste occurred.
+            mLastEditWasTyping = false;
+        }
         clearAutocompleteTextAndUpdateSpanCursor();
     }
 
@@ -585,17 +601,6 @@ public class SpannableAutocompleteEditTextModel
     }
 
     @Override
-    public void updateSelectionForTesting() {
-        int selStart = mDelegate.getSelectionStart();
-        int selEnd = mDelegate.getSelectionEnd();
-        if (selStart == mLastUpdateSelStart && selEnd == mLastUpdateSelEnd) return;
-
-        mLastUpdateSelStart = selStart;
-        mLastUpdateSelEnd = selEnd;
-        mDelegate.onUpdateSelectionForTesting(selStart, selEnd);
-    }
-
-    @Override
     public boolean shouldIgnoreAccessibilityEvent() {
         return mDelegateShouldIgnoreAccessibilityEvents;
     }
@@ -662,5 +667,20 @@ public class SpannableAutocompleteEditTextModel
     @Override
     public void setDeletePostfixOnNextBeginImeCommand(int postfix) {
         mDeletePostfixOnNextBeginImeCommand = postfix;
+    }
+
+    public void setInputConnectionForTesting(AutocompleteInputConnection connection) {
+        mInputConnection = connection;
+    }
+
+    @Override
+    public void updateSelectionForTesting() {
+        int selStart = mDelegate.getSelectionStart();
+        int selEnd = mDelegate.getSelectionEnd();
+        if (selStart == mLastUpdateSelStart && selEnd == mLastUpdateSelEnd) return;
+
+        mLastUpdateSelStart = selStart;
+        mLastUpdateSelEnd = selEnd;
+        mDelegate.onUpdateSelectionForTesting(selStart, selEnd);
     }
 }

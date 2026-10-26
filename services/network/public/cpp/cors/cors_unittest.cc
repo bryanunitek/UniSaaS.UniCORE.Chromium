@@ -12,6 +12,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "services/network/public/cpp/features.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -218,6 +219,52 @@ TEST_F(CorsTest, SafelistedHeader) {
   EXPECT_FALSE(IsCorsSafelistedHeader("user-agent", "foo"));
 }
 
+TEST_F(CorsTest, SafelistedInterventionWithFeatureEnabled) {
+  EXPECT_FALSE(IsCorsSafelistedHeader("intervention", "val"));
+  EXPECT_FALSE(IsCorsSafelistedHeader(
+      "Intervention", "<https://example.com>; level=\"warning\""));
+}
+
+TEST_F(CorsTest, SafelistedInterventionWithKillSwitch) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kDisallowInterventionInCorsSafelistedHeaders);
+
+  EXPECT_TRUE(IsCorsSafelistedHeader("intervention", "val"));
+  EXPECT_TRUE(IsCorsSafelistedHeader(
+      "Intervention", "<https://example.com>; level=\"warning\""));
+  // 128-byte length cap still applies.
+  EXPECT_TRUE(IsCorsSafelistedHeader("intervention", std::string(128, 'a')));
+  EXPECT_FALSE(IsCorsSafelistedHeader("intervention", std::string(129, 'a')));
+}
+
+TEST_F(CorsTest, SafelistedResponseHeaderName) {
+  // The seven CORS-safelisted response header names, in mixed case to exercise
+  // the case-insensitive match.
+  static constexpr std::string_view kSafelisted[] = {
+      "cache-control", "Content-Language", "CONTENT-LENGTH", "content-type",
+      "Expires",       "Last-Modified",    "pragma",
+  };
+  for (std::string_view name : kSafelisted) {
+    SCOPED_TRACE(name);
+    EXPECT_TRUE(IsCorsSafelistedResponseHeaderName(name));
+  }
+
+  // "content-range" is deliberately excluded: it is a media-only carve-out
+  // kept out of the JS-visible safelist. The rest are ordinary non-safelisted
+  // headers.
+  static constexpr std::string_view kNotSafelisted[] = {
+      "content-range",
+      "set-cookie",
+      "x-auth-token",
+      "sec-ch-ua",
+  };
+  for (std::string_view name : kNotSafelisted) {
+    SCOPED_TRACE(name);
+    EXPECT_FALSE(IsCorsSafelistedResponseHeaderName(name));
+  }
+}
+
 TEST_F(CorsTest, SafelistedAccept) {
   EXPECT_TRUE(IsCorsSafelistedHeader("accept", "text/html"));
   EXPECT_TRUE(IsCorsSafelistedHeader("AccepT", "text/html"));
@@ -359,13 +406,6 @@ TEST_F(CorsTest, SafelistedContentType) {
   EXPECT_TRUE(IsCorsSafelistedHeader("content-type",
                                      "application/x-www-form-urlencoded"));
   EXPECT_TRUE(IsCorsSafelistedHeader("content-type", "multipart/form-data"));
-
-  EXPECT_FALSE(IsCorsSafelistedHeader(
-      "content-type", "message/ad-auction-trusted-signals-request"));
-  EXPECT_TRUE(IsCorsSafelistedHeader(
-      "content-type", "message/ad-auction-trusted-signals-request",
-      /*is_ad_auction_trusted_signals_request=*/
-      true));
 
   EXPECT_TRUE(IsCorsSafelistedHeader("content-type", "Text/plain"));
   EXPECT_TRUE(IsCorsSafelistedHeader("content-type", "tEXT/PLAIN"));
@@ -537,16 +577,38 @@ TEST_F(CorsTest, CorsUnsafeRequestHeaderNames) {
       List({"content-type", "hoge"}));
 }
 
+TEST_F(CorsTest, CorsUnsafeRequestHeaderNamesInterventionWithFeatureEnabled) {
+  EXPECT_THAT(
+      CorsUnsafeRequestHeaderNames(
+          {{"Intervention", "<https://example.com>; level=\"warning\""}}),
+      testing::ElementsAre("intervention"));
+}
+
+TEST_F(CorsTest, CorsUnsafeRequestHeaderNamesInterventionWithKillSwitch) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kDisallowInterventionInCorsSafelistedHeaders);
+
+  EXPECT_THAT(
+      CorsUnsafeRequestHeaderNames(
+          {{"Intervention", "<https://example.com>; level=\"warning\""}}),
+      testing::IsEmpty());
+  EXPECT_THAT(
+      CorsUnsafeRequestHeaderNames({{"Intervention", std::string(129, 'a')}}),
+      testing::ElementsAre("intervention"));
+}
+
 TEST_F(CorsTest, CheckCorsRangeSafelist) {
   // Missing values
   EXPECT_FALSE(IsCorsSafelistedHeader("range", ""));
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "500"));
 
-  // Case
+  // Case of header name is insensitive, but value unit must be exact lowercase.
   EXPECT_TRUE(IsCorsSafelistedHeader("range", "bytes=100-200"));
   EXPECT_TRUE(IsCorsSafelistedHeader("Range", "bytes=100-200"));
   EXPECT_TRUE(IsCorsSafelistedHeader("RANGE", "bytes=100-200"));
-  EXPECT_TRUE(IsCorsSafelistedHeader("range", "BYTES=100-200"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "BYTES=100-200"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "Bytes=100-200"));
 
   // Valid values
   EXPECT_TRUE(IsCorsSafelistedHeader("range", "bytes=100-"));
@@ -558,12 +620,24 @@ TEST_F(CorsTest, CheckCorsRangeSafelist) {
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=100-200,400-"));
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=-50,100-"));
 
-  // Invalid ranges
+  // Invalid ranges and formatting variations
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=200-100"));
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=-200--100"));
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=-50-50"));
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=-200"));
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=100"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=+0-100"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=0-+100"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=+100-200"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=100-+200"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=+100-"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=+5-"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=100--1"));
+  EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes=0--1"));
+  EXPECT_FALSE(IsCorsSafelistedHeader(
+      "range", "bytes=999999999999999999999-999999999999999999999"));
+  EXPECT_FALSE(
+      IsCorsSafelistedHeader("range", "bytes=5-999999999999999999999"));
 
   // Invalid charset.
   EXPECT_FALSE(IsCorsSafelistedHeader("range", "bytes = 100-200"));

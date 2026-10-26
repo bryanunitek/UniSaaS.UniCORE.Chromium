@@ -4,12 +4,19 @@
 
 #include "chrome/browser/extensions/api/identity/identity_get_auth_token_function.h"
 
+#include <algorithm>
+#include <memory>
 #include <set>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
@@ -22,6 +29,7 @@
 #include "chrome/browser/extensions/api/identity/identity_api.h"
 #include "chrome/browser/extensions/api/identity/identity_get_auth_token_error.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/account_reconcilor_factory.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_ui_util_extensions.h"
@@ -41,9 +49,11 @@
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/ui_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/oauth2.h"
 #include "extensions/common/manifest_handlers/oauth2_manifest_handler.h"
 #include "extensions/common/utils/extension_utils.h"
+#include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -60,7 +70,6 @@
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
-#include "components/account_manager_core/account_manager_util.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
@@ -114,6 +123,28 @@ CoreAccountInfo GetSigninPrimaryAccount(Profile* profile) {
   return IdentityManagerFactory::GetForProfile(profile)->GetPrimaryAccountInfo(
       signin::ConsentLevel::kSignin);
 }
+
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+// Maximum time spent waiting for the account to become available in the cookie
+// jar before giving up on showing the remote consent dialog.
+constexpr base::TimeDelta kWaitForCookiesTimeout = base::Seconds(10);
+
+// Mutable copy of `kWaitForCookiesTimeout` so that tests can shorten it;
+// see `ScopedCookieWaiterTimeoutForTesting`.
+base::TimeDelta g_wait_for_cookies_timeout = kWaitForCookiesTimeout;
+
+bool IsAccountInCookieJar(const signin::AccountsInCookieJarInfo& cookie_info,
+                          const CoreAccountInfo& account_info) {
+  if (!cookie_info.AreAccountsFresh()) {
+    return false;
+  }
+  return std::ranges::any_of(cookie_info.GetValidSignedInAccounts(),
+                             [&account_info](const auto& cookie_account) {
+                               return cookie_account.id ==
+                                      account_info.account_id;
+                             });
+}
+#endif
 
 }  // namespace
 
@@ -225,7 +256,7 @@ ExtensionFunction::ResponseAction IdentityGetAuthTokenFunction::Run() {
       params->details &&
       params->details->enable_granular_permissions.value_or(false);
 
-  DCHECK(extension());
+  CHECK(extension(), base::NotFatalUntil::M161);
   const auto& oauth2_info = OAuth2ManifestHandler::GetOAuth2Info(*extension());
 
   // Check that the necessary information is present in the manifest.
@@ -277,7 +308,6 @@ ExtensionFunction::ResponseAction IdentityGetAuthTokenFunction::Run() {
   // From here on out, results must be returned asynchronously.
   StartAsyncRun();
 
-  // TODO(crbug.com/40614113): collapse the asynchronicity
   base::OnceCallback next_step =
       base::BindOnce(&IdentityGetAuthTokenFunction::GetAuthTokenForAccount,
                      weak_ptr_factory_.GetWeakPtr(), gaia_id);
@@ -308,19 +338,25 @@ void IdentityGetAuthTokenFunction::GetAuthTokenForAccount(
     const GaiaId& gaia_id) {
   refresh_tokens_loaded_waiter_.reset();
 
+  IdentityAPI& identity_api = CHECK_DEREF(
+      CHECK_DEREF(IdentityAPI::GetFactoryInstance()).Get(GetProfile()));
+
   selected_gaia_id_ = gaia_id;
   if (gaia_id.empty()) {
-    selected_gaia_id_ = IdentityAPI::GetFactoryInstance()
-                            ->Get(GetProfile())
-                            ->GetGaiaIdForExtension(token_key_.extension_id)
-                            .value_or(GaiaId());
+    selected_gaia_id_ =
+        identity_api.GetGaiaIdForExtension(token_key_.extension_id)
+            .value_or(GaiaId());
   }
 
   CoreAccountInfo selected_account;
   if (!selected_gaia_id_.empty()) {
-    // TODO(msalama): Check has access to accounts.
-    selected_account = IdentityManagerFactory::GetForProfile(GetProfile())
-                           ->FindExtendedAccountInfoByGaiaId(selected_gaia_id_);
+    const std::vector<CoreAccountInfo> accounts =
+        identity_api.GetAccountsWithRefreshTokensForExtensions();
+    auto it =
+        std::ranges::find(accounts, selected_gaia_id_, &CoreAccountInfo::gaia);
+    if (it != accounts.end()) {
+      selected_account = *it;
+    }
   } else {
     selected_account = GetSigninPrimaryAccount(GetProfile());
   }
@@ -353,6 +389,35 @@ void IdentityGetAuthTokenFunction::GetAuthTokenForAccount(
     StartMintTokenFlow(IdentityMintRequestQueue::MINT_TYPE_NONINTERACTIVE);
   }
 }
+
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+void IdentityGetAuthTokenFunction::StartWaitingForCookies() {
+  web_signin_tracker_ = std::make_unique<signin::WebSigninTracker>(
+      IdentityManagerFactory::GetForProfile(GetProfile()),
+      AccountReconcilorFactory::GetForProfile(GetProfile()),
+      token_key_.account_info.account_id,
+      base::BindOnce(&IdentityGetAuthTokenFunction::OnWebSigninTrackerResult,
+                     weak_ptr_factory_.GetWeakPtr()),
+      g_wait_for_cookies_timeout);
+  // The tracker may report its result synchronously, e.g. if the account
+  // reconcilor is already in an error state. Handling the result may finish
+  // the request and delete this `IdentityGetAuthTokenFunction`.
+  web_signin_tracker_->Start();
+}
+
+void IdentityGetAuthTokenFunction::OnWebSigninTrackerResult(
+    signin::WebSigninTracker::Result result) {
+  web_signin_tracker_.reset();
+
+  if (result != signin::WebSigninTracker::Result::kSuccess) {
+    CompleteMintTokenFlow();
+    SigninFailed();
+    return;
+  }
+
+  ShowRemoteConsentDialog();
+}
+#endif
 
 void IdentityGetAuthTokenFunction::StartAsyncRun() {
   // Balanced in CompleteAsyncRun
@@ -408,12 +473,12 @@ bool IdentityGetAuthTokenFunction::ShouldStartSigninFlow() {
 }
 
 void IdentityGetAuthTokenFunction::StartSigninFlow() {
-  DCHECK(ShouldStartSigninFlow());
+  CHECK(ShouldStartSigninFlow(), base::NotFatalUntil::M161);
 
   // All cached tokens are invalid because the user is not signed in.
   IdentityAPI* id_api =
       extensions::IdentityAPI::GetFactoryInstance()->Get(GetProfile());
-  id_api->token_cache()->EraseAllTokens();
+  id_api->token_cache().EraseAllTokens();
 
   // If the signin flow fails, don't display the login prompt again.
   interactivity_status_for_signin_ = InteractivityStatus::kNotRequested;
@@ -477,7 +542,7 @@ void IdentityGetAuthTokenFunction::StartMintTokenFlow(
       return;
     }
 
-    if (!id_api->mint_queue()->empty(
+    if (!id_api->mint_queue().empty(
             IdentityMintRequestQueue::MINT_TYPE_INTERACTIVE, token_key_)) {
       // Another call is going through a consent UI.
       CompleteFunctionWithError(
@@ -487,7 +552,7 @@ void IdentityGetAuthTokenFunction::StartMintTokenFlow(
     }
   }
 
-  id_api->mint_queue()->RequestStart(type, token_key_, this);
+  id_api->mint_queue().RequestStart(type, token_key_, this);
 }
 
 void IdentityGetAuthTokenFunction::CompleteMintTokenFlow() {
@@ -498,7 +563,7 @@ void IdentityGetAuthTokenFunction::CompleteMintTokenFlow() {
   extensions::IdentityAPI::GetFactoryInstance()
       ->Get(GetProfile())
       ->mint_queue()
-      ->RequestComplete(type, token_key_, this);
+      .RequestComplete(type, token_key_, this);
 }
 
 void IdentityGetAuthTokenFunction::StartMintToken(
@@ -507,11 +572,11 @@ void IdentityGetAuthTokenFunction::StartMintToken(
                       IdentityMintRequestQueue::GetRequestTrack(this), "type",
                       type);
 
-  DCHECK(extension());
+  CHECK(extension(), base::NotFatalUntil::M161);
   const auto& oauth2_info = OAuth2ManifestHandler::GetOAuth2Info(*extension());
   IdentityAPI* id_api = IdentityAPI::GetFactoryInstance()->Get(GetProfile());
   IdentityTokenCacheValue cache_entry =
-      id_api->token_cache()->GetToken(token_key_);
+      id_api->token_cache().GetToken(token_key_);
   IdentityTokenCacheValue::CacheValueStatus cache_status = cache_entry.status();
 
   if (type == IdentityMintRequestQueue::MINT_TYPE_NONINTERACTIVE) {
@@ -571,7 +636,8 @@ void IdentityGetAuthTokenFunction::StartMintToken(
         break;
     }
   } else {
-    DCHECK(type == IdentityMintRequestQueue::MINT_TYPE_INTERACTIVE);
+    CHECK(type == IdentityMintRequestQueue::MINT_TYPE_INTERACTIVE,
+          base::NotFatalUntil::M161);
 
     switch (cache_status) {
       case IdentityTokenCacheValue::CACHE_STATUS_TOKEN:
@@ -581,7 +647,7 @@ void IdentityGetAuthTokenFunction::StartMintToken(
         break;
       case IdentityTokenCacheValue::CACHE_STATUS_NOTFOUND:
       case IdentityTokenCacheValue::CACHE_STATUS_REMOTE_CONSENT:
-        ShowRemoteConsentDialog(resolution_data_);
+        StartRemoteConsentFlow();
         break;
       case IdentityTokenCacheValue::CACHE_STATUS_REMOTE_CONSENT_APPROVED:
         consent_result_ = cache_entry.consent_result();
@@ -600,10 +666,15 @@ void IdentityGetAuthTokenFunction::OnMintTokenSuccess(
 
   IdentityTokenCacheValue token = IdentityTokenCacheValue::CreateToken(
       result.access_token, result.granted_scopes, result.time_to_live);
-  IdentityAPI::GetFactoryInstance()
-      ->Get(GetProfile())
-      ->token_cache()
-      ->SetToken(token_key_, token);
+  IdentityAPI* id_api = IdentityAPI::GetFactoryInstance()->Get(GetProfile());
+
+  id_api->token_cache().SetToken(token_key_, token);
+  // Persist the account once the remote consent flow has been verified by a
+  // successful mint token response.
+  if (remote_consent_approved_) {
+    id_api->SetGaiaIdForExtension(token_key_.extension_id,
+                                  token_key_.account_info.gaia);
+  }
 
   CompleteMintTokenFlow();
   CompleteFunctionWithResult(result.access_token, result.granted_scopes);
@@ -640,8 +711,8 @@ void IdentityGetAuthTokenFunction::OnRemoteConsentSuccess(
   IdentityAPI::GetFactoryInstance()
       ->Get(GetProfile())
       ->token_cache()
-      ->SetToken(token_key_,
-                 IdentityTokenCacheValue::CreateRemoteConsent(resolution_data));
+      .SetToken(token_key_,
+                IdentityTokenCacheValue::CreateRemoteConsent(resolution_data));
   interactivity_status_for_signin_ = InteractivityStatus::kNotRequested;
   resolution_data_ = resolution_data;
   CompleteMintTokenFlow();
@@ -704,10 +775,11 @@ void IdentityGetAuthTokenFunction::OnPrimaryAccountChanged(
 
   const CoreAccountInfo& primary_account_info =
       event_details.GetCurrentState().primary_account;
-  DCHECK(token_key_.account_info.IsEmpty());
+  CHECK(token_key_.account_info.IsEmpty(), base::NotFatalUntil::M161);
   token_key_.account_info = primary_account_info;
 
-  DCHECK(!GetSigninPrimaryAccount(GetProfile()).IsEmpty());
+  CHECK(!GetSigninPrimaryAccount(GetProfile()).IsEmpty(),
+        base::NotFatalUntil::M161);
   waiting_on_account_ = false;
   scoped_identity_manager_observation_.Reset();
 
@@ -770,7 +842,7 @@ void IdentityGetAuthTokenFunction::OnGaiaRemoteConsentFlowApproved(
     const GaiaId& gaia_id) {
   TRACE_EVENT_INSTANT("identity", "OnGaiaRemoteConsentFlowApproved",
                       IdentityMintRequestQueue::GetRequestTrack(this));
-  DCHECK(!consent_result.empty());
+  CHECK(!consent_result.empty(), base::NotFatalUntil::M161);
   remote_consent_approved_ = true;
 
   AccountInfo account = IdentityManagerFactory::GetForProfile(GetProfile())
@@ -786,7 +858,7 @@ void IdentityGetAuthTokenFunction::OnGaiaRemoteConsentFlowApproved(
     CoreAccountId primary_account_id =
         IdentityManagerFactory::GetForProfile(GetProfile())
             ->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
-    if (primary_account_id != account.account_id) {
+    if (primary_account_id != account.GetAccountId()) {
       CompleteMintTokenFlow();
       CompleteFunctionWithError(IdentityGetAuthTokenError(
           IdentityGetAuthTokenError::State::kRemoteConsentUserNonPrimary));
@@ -794,16 +866,16 @@ void IdentityGetAuthTokenFunction::OnGaiaRemoteConsentFlowApproved(
     }
   }
 
-  IdentityAPI* id_api = IdentityAPI::GetFactoryInstance()->Get(GetProfile());
-  id_api->SetGaiaIdForExtension(token_key_.extension_id, gaia_id);
-
   // It's important to update the cache before calling CompleteMintTokenFlow()
   // as this call may start a new request synchronously and query the cache.
   ExtensionTokenKey new_token_key(token_key_);
-  new_token_key.account_info = account;
-  id_api->token_cache()->SetToken(
-      new_token_key,
-      IdentityTokenCacheValue::CreateRemoteConsentApproved(consent_result));
+  new_token_key.account_info = account.GetCoreAccountInfo();
+  IdentityAPI::GetFactoryInstance()
+      ->Get(GetProfile())
+      ->token_cache()
+      .SetToken(
+          new_token_key,
+          IdentityTokenCacheValue::CreateRemoteConsentApproved(consent_result));
   CompleteMintTokenFlow();
   token_key_ = new_token_key;
   consent_result_ = consent_result;
@@ -818,9 +890,9 @@ void IdentityGetAuthTokenFunction::OnGetAccessTokenComplete(
   // By the time we get here we should no longer have an outstanding access
   // token request.
 #if BUILDFLAG(IS_CHROMEOS)
-  DCHECK(!device_oauth2_token_fetcher_);
+  CHECK(!device_oauth2_token_fetcher_, base::NotFatalUntil::M161);
 #endif
-  DCHECK(!token_key_account_access_token_fetcher_);
+  CHECK(!token_key_account_access_token_fetcher_, base::NotFatalUntil::M161);
   if (access_token) {
     TRACE_EVENT_END("identity",
                     IdentityMintRequestQueue::GetRequestTrack(this));
@@ -861,10 +933,13 @@ void IdentityGetAuthTokenFunction::OnIdentityAPIShutdown() {
   token_key_account_access_token_fetcher_.reset();
   refresh_tokens_loaded_waiter_.reset();
   scoped_identity_manager_observation_.Reset();
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  web_signin_tracker_.reset();
+#endif
   extensions::IdentityAPI::GetFactoryInstance()
       ->Get(GetProfile())
       ->mint_queue()
-      ->RequestCancel(token_key_, this);
+      .RequestCancel(token_key_, this);
 
   CompleteFunctionWithError(IdentityGetAuthTokenError(
       IdentityGetAuthTokenError::State::kBrowserContextShutDown));
@@ -887,7 +962,7 @@ void IdentityGetAuthTokenFunction::StartTokenKeyAccountAccessTokenRequest() {
 
 void IdentityGetAuthTokenFunction::StartGaiaRequest(
     const std::string& login_access_token) {
-  DCHECK(!login_access_token.empty());
+  CHECK(!login_access_token.empty(), base::NotFatalUntil::M161);
   mint_token_flow_ = CreateMintTokenFlow();
   mint_token_flow_->Start(GetProfile()->GetURLLoaderFactory(),
                           login_access_token);
@@ -932,10 +1007,24 @@ void IdentityGetAuthTokenFunction::ShowExtensionLoginPrompt() {
 }
 #endif
 
-void IdentityGetAuthTokenFunction::ShowRemoteConsentDialog(
-    const RemoteConsentResolutionData& resolution_data) {
+void IdentityGetAuthTokenFunction::StartRemoteConsentFlow() {
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // On Android, Gaia session cookies are reconciled asynchronously after
+  // sign-in. Defer showing the remote consent dialog until cookies are
+  // ready in the cookie jar to prevent loading a blank consent page.
+  if (!IsAccountInCookieJar(IdentityManagerFactory::GetForProfile(GetProfile())
+                                ->GetAccountsInCookieJar(),
+                            token_key_.account_info)) {
+    StartWaitingForCookies();
+    return;
+  }
+#endif
+  ShowRemoteConsentDialog();
+}
+
+void IdentityGetAuthTokenFunction::ShowRemoteConsentDialog() {
   gaia_remote_consent_flow_ = std::make_unique<GaiaRemoteConsentFlow>(
-      this, GetProfile(), token_key_, resolution_data, user_gesture());
+      this, GetProfile(), token_key_, resolution_data_, user_gesture());
   gaia_remote_consent_flow_->Start();
 }
 
@@ -956,7 +1045,7 @@ IdentityGetAuthTokenFunction::CreateMintTokenFlow() {
 }
 
 std::string IdentityGetAuthTokenFunction::GetOAuth2ClientId() const {
-  DCHECK(extension());
+  CHECK(extension(), base::NotFatalUntil::M161);
   const auto& oauth2_info = OAuth2ManifestHandler::GetOAuth2Info(*extension());
 
   std::string client_id;
@@ -1041,7 +1130,7 @@ IdentityGetAuthTokenFunction::GetErrorFromInteractivityStatus(
       status = interactivity_status_for_consent_;
       break;
   }
-  DCHECK(!IsInteractionAllowed(status));
+  CHECK(!IsInteractionAllowed(status), base::NotFatalUntil::M161);
 
   IdentityGetAuthTokenError::State state =
       IdentityGetAuthTokenError::State::kNone;
@@ -1062,7 +1151,8 @@ IdentityGetAuthTokenFunction::GetErrorFromInteractivityStatus(
     case InteractivityStatus::kAllowedWithActivity:
       NOTREACHED();
   }
-  DCHECK_NE(state, IdentityGetAuthTokenError::State::kNone);
+  CHECK_NE(state, IdentityGetAuthTokenError::State::kNone,
+           base::NotFatalUntil::M161);
   return IdentityGetAuthTokenError(state);
 }
 
@@ -1081,5 +1171,19 @@ void IdentityGetAuthTokenFunction::RefreshTokensLoadedWaiter::
   identity_manager_observation_.Reset();
   std::move(callback_).Run();
 }
+
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+IdentityGetAuthTokenFunction::ScopedCookieWaiterTimeoutForTesting::
+    ScopedCookieWaiterTimeoutForTesting(base::TimeDelta timeout) {
+  // Nesting is not supported: the destructor restores the default.
+  CHECK_EQ(g_wait_for_cookies_timeout, kWaitForCookiesTimeout);
+  g_wait_for_cookies_timeout = timeout;
+}
+
+IdentityGetAuthTokenFunction::ScopedCookieWaiterTimeoutForTesting::
+    ~ScopedCookieWaiterTimeoutForTesting() {
+  g_wait_for_cookies_timeout = kWaitForCookiesTimeout;
+}
+#endif
 
 }  // namespace extensions

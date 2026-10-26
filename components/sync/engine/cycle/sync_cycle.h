@@ -5,14 +5,15 @@
 #ifndef COMPONENTS_SYNC_ENGINE_CYCLE_SYNC_CYCLE_H_
 #define COMPONENTS_SYNC_ENGINE_CYCLE_SYNC_CYCLE_H_
 
-#include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <utility>
 
+#include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/engine/cycle/status_controller.h"
 #include "components/sync/engine/cycle/sync_cycle_context.h"
@@ -63,7 +64,7 @@ class SyncCycle {
 
     // The client has been instructed to change a nudge delay.
     virtual void OnReceivedCustomNudgeDelays(
-        const std::map<DataType, base::TimeDelta>& nudge_delays) = 0;
+        const base::flat_map<DataType, base::TimeDelta>& nudge_delays) = 0;
 
     // Called for the syncer to respond to the error sent by the server.
     virtual void OnSyncProtocolError(
@@ -84,7 +85,9 @@ class SyncCycle {
     virtual ~Delegate() = default;
   };
 
-  SyncCycle(SyncCycleContext* context, Delegate* delegate);
+  SyncCycle(SyncCycleContext* context,
+            Delegate* delegate,
+            signin::AccessTokenInfo access_token_info);
 
   SyncCycle(const SyncCycle&) = delete;
   SyncCycle& operator=(const SyncCycle&) = delete;
@@ -113,12 +116,19 @@ class SyncCycle {
     return status_controller_.get();
   }
 
+  const signin::AccessTokenInfo& access_token_info() const {
+    return access_token_info_;
+  }
+
  private:
   // The context for this cycle, guaranteed to outlive `this`.
   const raw_ptr<SyncCycleContext, DanglingUntriaged> context_;
 
   // The delegate for this cycle, must never be null.
   const raw_ptr<Delegate> delegate_;
+
+  // The access token info for this cycle.
+  const signin::AccessTokenInfo access_token_info_;
 
   // Our controller for various status and error counters.
   std::unique_ptr<StatusController> status_controller_;

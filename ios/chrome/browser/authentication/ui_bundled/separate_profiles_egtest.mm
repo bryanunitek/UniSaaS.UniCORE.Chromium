@@ -16,7 +16,6 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/settings/manage_accounts/public/manage_accounts_table_view_controller_constants.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -50,7 +49,7 @@ id<GREYMatcher> ManagedProfileCreationSubtitleMergeByDefaultMatcher() {
 
 id<GREYMatcher> ManagedProfileCreationSubtitleMatcher() {
   return grey_accessibilityLabel(
-          l10n_util::GetNSString(IDS_IOS_ENTERPRISE_PROFILE_CREATION_SUBTITLE));
+      l10n_util::GetNSString(IDS_IOS_ENTERPRISE_PROFILE_CREATION_SUBTITLE));
 }
 
 id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
@@ -88,8 +87,6 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-
-  config.features_enabled.push_back(kSeparateProfilesForManagedAccounts);
 
   config.relaunch_policy = ForceRelaunchByCleanShutdown;
 
@@ -201,8 +198,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
       performAction:grey_tap()];
 
   // Wait for the profile to finish loading again.
-  // TODO(crbug.com/399033938): Find a better way to wait for this.
-  GREYWaitForAppToIdle(@"App failed to idle");
+  [ChromeEarlGrey waitForCurrentProfileName:newProfileName];
 
   // The user should be signed in without having to see the managed profile
   // onboarding a second time.
@@ -300,8 +296,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
       performAction:grey_tap()];
 
   // Wait for the profile to finish loading again.
-  // TODO(crbug.com/399033938): Find a better way to wait for this.
-  GREYWaitForAppToIdle(@"App failed to idle");
+  [ChromeEarlGrey waitForCurrentProfileName:newProfileName];
 
   // The user should be signed in without having to see the managed profile
   // onboarding a second time.
@@ -467,7 +462,8 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
   WaitForEnterpriseOnboardingScreen();
 
   // Verifies that the subtitle is the right one.
-  [[EarlGrey selectElementWithMatcher:ManagedProfileCreationSubtitleMergeByDefaultMatcher()]
+  [[EarlGrey selectElementWithMatcher:
+                 ManagedProfileCreationSubtitleMergeByDefaultMatcher()]
       assertWithMatcher:grey_sufficientlyVisible()];
 
   // Open the browsing data management screen.
@@ -664,8 +660,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
       performAction:grey_tap()];
 
   // Wait for the profile to finish loading again.
-  // TODO(crbug.com/399033938): Find a better way to wait for this.
-  GREYWaitForAppToIdle(@"App failed to idle");
+  [ChromeEarlGrey waitForCurrentProfileName:personalProfileName];
 
   [SigninEarlGrey verifySignedInWithFakeIdentity:personalIdentity];
 
@@ -868,8 +863,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
                      IDS_IOS_REMOVE_ACCOUNT_LABEL)] performAction:grey_tap()];
 
   // Wait for the profile switch to complete.
-  // TODO(crbug.com/399033938): Find a better way to wait for this.
-  GREYWaitForAppToIdle(@"App failed to idle");
+  [ChromeEarlGrey waitForCurrentProfileName:personalProfileName];
 
   // Verify that the profile was actually switched back to personal.
   GREYAssert(
@@ -963,7 +957,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
   // Relaunch the browser without the managed account. This simulates the
   // situation where the managed account was removed in another Google app.
   [self relaunchWithIdentities:@[ personalIdentity ]
-               enabledFeatures:{kSeparateProfilesForManagedAccounts}
+               enabledFeatures:{}
               disabledFeatures:{}];
 
   // Verify that the profile was switched back to personal.
@@ -1130,7 +1124,6 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
 
-  config.features_enabled.push_back(kSeparateProfilesForManagedAccounts);
   // Note: Can't use the actual feature definition, because its build target
   // depends on a bunch of stuff that mustn't make it into the EG test target.
   config.additional_args.push_back(

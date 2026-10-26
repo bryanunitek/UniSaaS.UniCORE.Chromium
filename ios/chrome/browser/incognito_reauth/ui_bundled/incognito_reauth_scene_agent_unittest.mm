@@ -4,19 +4,28 @@
 
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_scene_agent.h"
 
+#import "base/apple/foundation_util.h"
 #import "base/feature_list.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/test/scoped_mock_clock_override.h"
+#import "base/test/test_future.h"
 #import "base/time/time.h"
 #import "components/prefs/testing_pref_service.h"
+#import "ios/chrome/app/profile/profile_state.h"
+#import "ios/chrome/browser/device_reauth/model/fake_reauthentication_service_util.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_activation_level.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/incognito_lock_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
-#import "ios/chrome/browser/shared/coordinator/scene/test/stub_browser_provider_interface.h"
+#import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
-#import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
@@ -25,6 +34,7 @@
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_grid_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/common/ui/reauthentication/fake_reauthentication_module.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -32,48 +42,33 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 
-#pragma mark - StubReauthenticationModule
-
-@interface StubReauthenticationModule : NSObject <ReauthenticationProtocol>
-
-@property(nonatomic, assign) BOOL canAttemptReauthWithBiometrics;
-@property(nonatomic, assign) BOOL canAttemptReauth;
-@property(nonatomic, assign) ReauthenticationResult returnedResult;
-
-@end
-
-@implementation StubReauthenticationModule
-
-- (void)attemptReauthWithLocalizedReason:(NSString*)localizedReason
-                    canReusePreviousAuth:(BOOL)canReusePreviousAuth
-                                 handler:(ReauthenticationResultBlock)handler {
-  handler(self.returnedResult);
-}
-
-- (void)clearAuthValidity {
-}
-
-@end
-
 namespace {
 
 #pragma mark - IncognitoReauthSceneAgentTest
 
 class IncognitoReauthSceneAgentTest : public PlatformTest {
  public:
-  IncognitoReauthSceneAgentTest()
-      : profile_(TestProfileIOS::Builder().Build()),
-        scene_state_([[SceneState alloc] initWithAppState:nil]),
-        scene_state_mock_(OCMPartialMock(scene_state_)),
-        scene_controller_(
-            [[SceneController alloc] initWithSceneState:scene_state_]),
-        scene_controller_mock_(OCMPartialMock(scene_controller_)),
-        stub_reauth_module_([[StubReauthenticationModule alloc] init]),
-        scene_handler_mock_(OCMProtocolMock(@protocol(SceneCommands))),
-        tab_grid_commands_handler_mock_(
-            OCMProtocolMock(@protocol(TabGridCommands))),
-        agent_([[IncognitoReauthSceneAgent alloc]
-            initWithReauthModule:stub_reauth_module_]) {
+  IncognitoReauthSceneAgentTest() {
+    TestProfileIOS::Builder builder;
+    builder.AddTestingFactory(ReauthenticationServiceFactory::GetInstance(),
+                              base::BindOnce(&CreateFakeReauthService));
+    profile_ = std::move(builder).Build();
+    profile_state_ = [[ProfileState alloc] initWithAppState:nil];
+    profile_state_.profile = profile_.get();
+    fake_reauth_module_ =
+        base::apple::ObjCCastStrict<FakeReauthenticationModule>(
+            ReauthenticationServiceFactory::GetForProfile(profile_.get())
+                ->GetReauthModule());
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
+    scene_state_.profileState = profile_state_;
+    scene_controller_ =
+        [[SceneController alloc] initWithSceneState:scene_state_];
+    scene_controller_mock_ = OCMPartialMock(scene_controller_);
+    scene_handler_mock_ = OCMProtocolMock(@protocol(SceneCommands));
+    tab_grid_commands_handler_mock_ =
+        OCMProtocolMock(@protocol(TabGridCommands));
+    agent_ = [[IncognitoReauthSceneAgent alloc] init];
+
     scene_state_.controller = scene_controller_;
     [IncognitoReauthSceneAgent registerLocalState:pref_service_.registry()];
     agent_.localState = &pref_service_;
@@ -83,7 +78,6 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
   }
 
   ~IncognitoReauthSceneAgentTest() override {
-    EXPECT_OCMOCK_VERIFY(scene_state_mock_);
     EXPECT_OCMOCK_VERIFY(scene_controller_mock_);
     EXPECT_OCMOCK_VERIFY(scene_handler_mock_);
     EXPECT_OCMOCK_VERIFY(tab_grid_commands_handler_mock_);
@@ -94,26 +88,14 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
                         bool reauth_enabled,
                         bool soft_lock_feature_enabled,
                         bool soft_lock_pref_enabled) {
-    // Stub all calls to be able to mock the following:
-    // 1. sceneState.browserProviderInterface.incognitoBrowserProvider
-    //            .browser->GetWebStateList()->count()
-    // 2. sceneState.browserProviderInterface.hasIncognitoBrowserProvider
-    test_browser_ = std::make_unique<TestBrowser>(profile_.get());
+    Browser* browser = incognito_browser();
     for (int i = 0; i < tab_count; ++i) {
-      test_browser_->GetWebStateList()->InsertWebState(
+      browser->GetWebStateList()->InsertWebState(
           std::make_unique<web::FakeWebState>(),
           WebStateList::InsertionParams::AtIndex(i));
     }
 
-    stub_browser_interface_provider_ =
-        [[StubBrowserProviderInterface alloc] init];
-    stub_browser_interface_provider_.incognitoBrowserProvider.browser =
-        test_browser_.get();
-
-    OCMStub([scene_state_mock_ browserProviderInterface])
-        .andReturn(stub_browser_interface_provider_);
-
-    CommandDispatcher* dispatcher = test_browser_->GetCommandDispatcher();
+    CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
     [dispatcher startDispatchingToTarget:tab_grid_commands_handler_mock_
                              forProtocol:@protocol(TabGridCommands)];
     [dispatcher startDispatchingToTarget:scene_handler_mock_
@@ -133,38 +115,45 @@ class IncognitoReauthSceneAgentTest : public PlatformTest {
   }
 
   void SetUp() override {
-    // Set up default stub reauth module behavior.
-    stub_reauth_module_.canAttemptReauthWithBiometrics = YES;
-    stub_reauth_module_.canAttemptReauth = YES;
-    stub_reauth_module_.returnedResult = ReauthenticationResult::kSuccess;
+    // Set up default fake reauth module behavior.
+    fake_reauth_module_.canAttemptWithBiometrics = YES;
+    fake_reauth_module_.canAttempt = YES;
+    fake_reauth_module_.expectedResult = ReauthenticationResult::kSuccess;
   }
 
-  void TearDown() override { scene_state_.UIEnabled = NO; }
-
-  void AdvanceClock(const base::TimeDelta& delay) {
-    scoped_clock_.Advance(delay);
+  void TearDown() override {
+    @autoreleasepool {
+      scene_state_.UIEnabled = NO;
+      [scene_state_ shutdown];
+      scene_state_ = nil;
+      profile_state_ = nil;
+    }
   }
+
+  void AdvanceClock(base::TimeDelta delay) { scoped_clock_.Advance(delay); }
 
   void RecordCurrentTimeInPref() {
     pref_service_.SetTime(prefs::kLastBackgroundedTime, scoped_clock_.Now());
+  }
+
+  Browser* incognito_browser() {
+    return scene_state_.browserProviderInterface.incognitoBrowserProvider
+        .browser;
   }
 
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
 
   // The scene state that the agent works with.
-  SceneState* scene_state_;
-  // Partial mock for stubbing scene_state_'s methods
-  id scene_state_mock_;
+  FakeSceneState* scene_state_;
+  ProfileState* profile_state_;
   SceneController* scene_controller_;
   id scene_controller_mock_;
-  StubReauthenticationModule* stub_reauth_module_;
+  FakeReauthenticationModule* fake_reauth_module_;
   id scene_handler_mock_;
   id tab_grid_commands_handler_mock_;
   // The tested agent
   IncognitoReauthSceneAgent* agent_;
-  StubBrowserProviderInterface* stub_browser_interface_provider_;
-  std::unique_ptr<TestBrowser> test_browser_;
   TestingPrefServiceSimple pref_service_;
   base::test::ScopedFeatureList feature_list_;
   base::ScopedMockClockOverride scoped_clock_;
@@ -202,7 +191,10 @@ TEST_F(IncognitoReauthSceneAgentTest, SuccessfulAuth) {
 
   EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
-  [agent_ authenticateIncognitoContent];
+  base::test::TestFuture<BOOL> future;
+  [agent_ authenticateIncognitoContentWithCompletionBlock:
+              base::CallbackToBlock(future.GetRepeatingCallback())];
+  EXPECT_TRUE(future.Get());
 
   // Auth not required
   EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
@@ -222,14 +214,20 @@ TEST_F(IncognitoReauthSceneAgentTest, FailedSkippedAuth) {
 
   EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
-  stub_reauth_module_.returnedResult = ReauthenticationResult::kFailure;
+  fake_reauth_module_.expectedResult = ReauthenticationResult::kFailure;
 
-  [agent_ authenticateIncognitoContent];
+  base::test::TestFuture<BOOL> failure_future;
+  [agent_ authenticateIncognitoContentWithCompletionBlock:
+              base::CallbackToBlock(failure_future.GetRepeatingCallback())];
+  EXPECT_FALSE(failure_future.Get());
   // Auth still required
   EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
-  stub_reauth_module_.returnedResult = ReauthenticationResult::kSkipped;
-  [agent_ authenticateIncognitoContent];
+  fake_reauth_module_.expectedResult = ReauthenticationResult::kSkipped;
+  base::test::TestFuture<BOOL> skipped_future;
+  [agent_ authenticateIncognitoContentWithCompletionBlock:
+              base::CallbackToBlock(skipped_future.GetRepeatingCallback())];
+  EXPECT_FALSE(skipped_future.Get());
   // Auth still required
   EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 }
@@ -257,7 +255,7 @@ TEST_F(IncognitoReauthSceneAgentTest,
   EXPECT_TRUE(scene_state_.incognitoState.authenticationRequired);
 
   // Open another tab.
-  test_browser_->GetWebStateList()->InsertWebState(
+  incognito_browser()->GetWebStateList()->InsertWebState(
       std::make_unique<web::FakeWebState>(),
       WebStateList::InsertionParams::AtIndex(0));
 
@@ -366,7 +364,7 @@ TEST_F(IncognitoReauthSceneAgentTest,
   EXPECT_FALSE(scene_state_.incognitoState.authenticationRequired);
 
   // Open another tab.
-  test_browser_->GetWebStateList()->InsertWebState(
+  incognito_browser()->GetWebStateList()->InsertWebState(
       std::make_unique<web::FakeWebState>(),
       WebStateList::InsertionParams::AtIndex(0));
 
@@ -611,7 +609,10 @@ TEST_F(IncognitoReauthSceneAgentTest, TestScreenTransitionToTab) {
   OCMExpect([scene_controller_mock_ isTabGridVisible]).andReturn(YES);
   OCMExpect([tab_grid_commands_handler_mock_ exitTabGrid]);
 
-  [agent_ authenticateIncognitoContent];
+  base::test::TestFuture<BOOL> future;
+  [agent_ authenticateIncognitoContentWithCompletionBlock:
+              base::CallbackToBlock(future.GetRepeatingCallback())];
+  EXPECT_TRUE(future.Get());
 }
 
 // Test that, if the conditions are not met, the screen does not transition to
@@ -635,7 +636,10 @@ TEST_F(IncognitoReauthSceneAgentTest, TestNoScreenTransitionToTab) {
   // Test reverse transition, tab grid to tab.
   OCMReject([tab_grid_commands_handler_mock_ exitTabGrid]);
 
-  [agent_ authenticateIncognitoContent];
+  base::test::TestFuture<BOOL> future;
+  [agent_ authenticateIncognitoContentWithCompletionBlock:
+              base::CallbackToBlock(future.GetRepeatingCallback())];
+  EXPECT_TRUE(future.Get());
 }
 
 // Test that soft lock is not required when Chrome was launched via an external

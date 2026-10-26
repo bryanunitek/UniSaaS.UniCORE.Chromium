@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "chrome/browser/extensions/tab_helper.h"
-#include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/core/session_id.h"
 #include "components/tab_groups/tab_group_id.h"
 
 TestTabStripModelDelegate::TestTabStripModelDelegate() = default;
@@ -22,7 +24,7 @@ void TestTabStripModelDelegate::AddTabAt(
     std::optional<tab_groups::TabGroupId> group,
     bool pinned) {}
 
-Browser* TestTabStripModelDelegate::CreateNewStripWithTabs(
+BrowserWindowInterface* TestTabStripModelDelegate::CreateNewStripWithTabs(
     std::vector<NewStripContents> tabs,
     const gfx::Rect& window_bounds,
     bool maximize) {
@@ -31,8 +33,6 @@ Browser* TestTabStripModelDelegate::CreateNewStripWithTabs(
 
 void TestTabStripModelDelegate::WillAddWebContents(
     content::WebContents* contents) {
-  // Required to determine reloadability of tabs.
-  CoreTabHelper::CreateForWebContents(contents);
   // Required to determine if tabs are app tabs.
   extensions::TabHelper::CreateForWebContents(contents);
 }
@@ -161,3 +161,8 @@ void TestTabStripModelDelegate::OnRemovingAllTabsFromGroups(
 
 void TestTabStripModelDelegate::GlicUnpinTabsFromAllConversations(
     base::span<const tabs::TabHandle> tab_handles) {}
+
+void TestTabStripModelDelegate::CloseTab(
+    const tabs::TabInterface* tab,
+    CloseTabSource source,
+    base::OnceCallback<void(CloseTabSource)> on_approved) {}

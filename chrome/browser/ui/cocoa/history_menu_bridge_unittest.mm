@@ -24,14 +24,15 @@
 #include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/favicon_base/favicon_types.h"
 #include "components/os_crypt/async/browser/test_utils.h"
 #include "components/sessions/content/content_test_helper.h"
 #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
 #include "components/tab_groups/tab_group_visual_data.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
@@ -132,33 +133,36 @@ class MockBridge : public HistoryMenuBridge {
   NSMenu* __strong menu_;
 };
 
-class HistoryMenuBridgeTest : public BrowserWithTestWindowTest {
+class HistoryMenuBridgeTest : public CocoaTest {
  public:
   bool ShouldMenuItemBeVisible(NSMenuItem* item) {
     return bridge_->ShouldMenuItemBeVisible(item);
   }
 
+  TestingProfile* profile() { return profile_.get(); }
+
  protected:
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
-    [AppController.sharedController setLastProfileForTesting:profile()];
+    CocoaTest::SetUp();
+    TestingProfile::Builder profile_builder;
+    profile_builder.AddTestingFactory(
+        FaviconServiceFactory::GetInstance(),
+        FaviconServiceFactory::GetDefaultFactory());
+    profile_builder.AddTestingFactory(
+        HistoryServiceFactory::GetInstance(),
+        HistoryServiceFactory::GetDefaultFactory());
+    profile_ = profile_builder.Build();
+    [AppController.sharedController setLastProfileForTesting:profile_.get()];
 
-    bridge_ = std::make_unique<MockBridge>(profile());
+    bridge_ = std::make_unique<MockBridge>(profile_.get());
     os_crypt_async_ = os_crypt_async::GetTestOSCryptAsyncForTesting(true);
   }
 
   void TearDown() override {
     bridge_.reset();
-    BrowserWithTestWindowTest::TearDown();
-  }
-
-  TestingProfile::TestingFactories GetTestingFactories() override {
-    return {TestingProfile::TestingFactory{
-                FaviconServiceFactory::GetInstance(),
-                FaviconServiceFactory::GetDefaultFactory()},
-            TestingProfile::TestingFactory{
-                HistoryServiceFactory::GetInstance(),
-                HistoryServiceFactory::GetDefaultFactory()}};
+    [AppController.sharedController setLastProfileForTesting:nullptr];
+    profile_.reset();
+    CocoaTest::TearDown();
   }
 
   // We are a friend of HistoryMenuBridge (and have access to
@@ -209,14 +213,13 @@ class HistoryMenuBridgeTest : public BrowserWithTestWindowTest {
     return bridge_->menu_item_map_;
   }
 
- private:
-  CocoaTestHelper cocoa_test_helper_;
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kShowTabGroupsMacSystemMenu};
-
  protected:
   std::unique_ptr<MockBridge> bridge_;
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
+
+ private:
+  content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfile> profile_;
 };
 
 class HistoryMenuBridgeLifetimeTest : public testing::Test {
@@ -788,39 +791,5 @@ TEST_F(HistoryMenuBridgeLifetimeTest, EmptyTabRestoreService) {
   bridge.reset();
 }
 
-TEST_F(HistoryMenuBridgeTest, RecentlyClosedTabsInGroup) {
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile(), os_crypt_async_.get()));
-
-  tab_groups::TabGroupVisualData visual_data(
-      std::u16string(), tab_groups::TabGroupColorId::kGrey);
-  auto entries{CreateSessionEntries({
-      CreateSessionTab(24, "http://google.com", "Google"),
-      CreateSessionTab(42, "http://apple.com", "Apple", visual_data),
-  })};
-
-  using ::testing::ReturnRef;
-  EXPECT_CALL(*trs.get(), entries()).WillOnce(ReturnRef(entries));
-
-  bridge_->TabRestoreServiceChanged(trs.get());
-
-  NSMenu* menu = bridge_->HistoryMenu();
-  ASSERT_EQ(2U, [[menu itemArray] count]);
-
-  // Verify tab1 doesn't have a group indicator.
-  NSMenuItem* item1 = [menu itemAtIndex:0];
-  MockBridge::HistoryItem* hist1 = bridge_->HistoryItemForMenuItem(item1);
-  EXPECT_TRUE(hist1);
-  EXPECT_EQ(24, hist1->session_id.id());
-  EXPECT_EQ(std::nullopt, hist1->tab_group_color_id);
-  EXPECT_EQ(nil, item1.attributedTitle);
-
-  // Verify tab2 has a grey group indicator.
-  NSMenuItem* item2 = [menu itemAtIndex:1];
-  MockBridge::HistoryItem* hist2 = bridge_->HistoryItemForMenuItem(item2);
-  EXPECT_TRUE(hist2);
-  EXPECT_EQ(42, hist2->session_id.id());
-  EXPECT_EQ(tab_groups::TabGroupColorId::kGrey, hist2->tab_group_color_id);
-  EXPECT_NE(nil, item2.attributedTitle);
-}
 
 }  // namespace

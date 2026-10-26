@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/css/css_grid_integer_repeat_value.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_image_set_value.h"
+#include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_repeat_style_value.h"
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
@@ -21,6 +22,8 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
+#include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/inspector/console_message_storage.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
@@ -53,6 +56,61 @@ static bool IsValidPropertyValueForStyleRule(CSSPropertyID property_id,
       property_id, /*allow_important_annotation=*/false, stream,
       StrictCSSParserContext(SecureContextMode::kSecureContext),
       parsed_properties, StyleRule::RuleType::kStyle);
+}
+
+TEST(CSSPropertyParserTest, BorderRadiusSideShorthands) {
+  struct Side {
+    CSSPropertyID shorthand;
+    CSSPropertyID first;
+    CSSPropertyID second;
+  };
+  constexpr Side sides[] = {
+      {CSSPropertyID::kBorderTopRadius, CSSPropertyID::kBorderTopLeftRadius,
+       CSSPropertyID::kBorderTopRightRadius},
+      {CSSPropertyID::kBorderRightRadius, CSSPropertyID::kBorderTopRightRadius,
+       CSSPropertyID::kBorderBottomRightRadius},
+      {CSSPropertyID::kBorderBottomRadius,
+       CSSPropertyID::kBorderBottomLeftRadius,
+       CSSPropertyID::kBorderBottomRightRadius},
+      {CSSPropertyID::kBorderLeftRadius, CSSPropertyID::kBorderTopLeftRadius,
+       CSSPropertyID::kBorderBottomLeftRadius},
+      {CSSPropertyID::kBorderBlockStartRadius,
+       CSSPropertyID::kBorderStartStartRadius,
+       CSSPropertyID::kBorderStartEndRadius},
+      {CSSPropertyID::kBorderBlockEndRadius,
+       CSSPropertyID::kBorderEndStartRadius,
+       CSSPropertyID::kBorderEndEndRadius},
+      {CSSPropertyID::kBorderInlineStartRadius,
+       CSSPropertyID::kBorderStartStartRadius,
+       CSSPropertyID::kBorderEndStartRadius},
+      {CSSPropertyID::kBorderInlineEndRadius,
+       CSSPropertyID::kBorderStartEndRadius,
+       CSSPropertyID::kBorderEndEndRadius},
+  };
+  {
+    ScopedCSSBorderRadiusSideShorthandsForTest disabled(false);
+    for (const Side& side : sides) {
+      EXPECT_FALSE(CSSProperty::Get(side.shorthand).IsWebExposed());
+    }
+  }
+  ScopedCSSBorderRadiusSideShorthandsForTest enabled(true);
+  for (const Side& side : sides) {
+    EXPECT_TRUE(CSSProperty::Get(side.shorthand).IsWebExposed());
+    auto* style =
+        MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLStandardMode);
+    EXPECT_TRUE(CSSParser::ParseValue(style, side.shorthand,
+                                      "1px 4px / 2px 3px", false));
+    EXPECT_EQ("1px 2px", style->GetPropertyValue(side.first));
+    EXPECT_EQ("4px 3px", style->GetPropertyValue(side.second));
+    EXPECT_EQ("1px 4px / 2px 3px", style->GetPropertyValue(side.shorthand));
+    EXPECT_TRUE(CSSParser::ParseValue(style, side.shorthand, "5px", false));
+    EXPECT_EQ("5px", style->GetPropertyValue(side.shorthand));
+    for (const char* invalid :
+         {"auto", "-1px", "1px 2px 3px", "1px /", "1px / 2px 3px 4px"}) {
+      EXPECT_FALSE(
+          CSSParser::ParseValue(style, side.shorthand, invalid, false));
+    }
+  }
 }
 
 TEST(CSSPropertyParserTest, CSSPaint_Functions) {
@@ -263,6 +321,44 @@ TEST(CSSPropertyParserTest, ClipPathEllipse) {
   EXPECT_TRUE(doc->IsUseCounted(WebFeature::kBasicShapeEllipseNoRadius));
 }
 
+TEST(CSSPropertyParserTest, ListStyleTypeSymbolsFunctionUseCounter) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  test::TaskEnvironment task_environment;
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  Document* doc = &dummy_holder->GetDocument();
+  Page::InsertOrdinaryPageForTesting(&dummy_holder->GetPage());
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kSecureContext, doc);
+
+  // A non-symbols() list-style-type value does not trigger the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kListStyleType, "disc", context);
+  EXPECT_FALSE(doc->IsWebDXFeatureCounted(WebDXFeature::kSymbolsFunction));
+
+  // Parsing a symbols() value triggers the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kListStyleType, "symbols(\"a\")",
+                              context);
+  EXPECT_TRUE(doc->IsWebDXFeatureCounted(WebDXFeature::kSymbolsFunction));
+}
+
+TEST(CSSPropertyParserTest, CounterWithSymbolsFunctionUseCounter) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  test::TaskEnvironment task_environment;
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  Document* doc = &dummy_holder->GetDocument();
+  Page::InsertOrdinaryPageForTesting(&dummy_holder->GetPage());
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kSecureContext, doc);
+
+  // A counter() without symbols() does not trigger the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kContent, "counter(c)", context);
+  EXPECT_FALSE(doc->IsWebDXFeatureCounted(WebDXFeature::kSymbolsFunction));
+
+  // A counter() using symbols() as its counter style triggers the use counter.
+  CSSParser::ParseSingleValue(CSSPropertyID::kContent,
+                              "counter(c, symbols(\"a\"))", context);
+  EXPECT_TRUE(doc->IsWebDXFeatureCounted(WebDXFeature::kSymbolsFunction));
+}
+
 TEST(CSSPropertyParserTest, GradientUseCount) {
   test::TaskEnvironment task_environment;
   auto dummy_page_holder =
@@ -441,6 +537,7 @@ class CSSPropertyUseCounterTest : public ::testing::Test {
   }
 
   Document& GetDocument() { return dummy_page_holder_->GetDocument(); }
+  Page& GetPage() { return dummy_page_holder_->GetPage(); }
 
  private:
   test::TaskEnvironment task_environment_;
@@ -579,6 +676,33 @@ TEST_F(CSSPropertyUseCounterTest, CSSLightDark) {
 
   ParseProperty(CSSPropertyID::kBackgroundColor, "light-dark(green, lime)");
   EXPECT_TRUE(IsCounted(feature));
+}
+
+TEST_F(CSSPropertyUseCounterTest,
+       PositionVisibilityAnchorsVisibleDeprecationWarning) {
+  ConsoleMessageStorage& storage = GetPage().GetConsoleMessageStorage();
+  EXPECT_EQ(storage.size(), 0u);
+
+  ParseProperty(CSSPropertyID::kPositionVisibility, "anchor-visible");
+  EXPECT_TRUE(IsCounted(WebFeature::kCSSValuePositionVisibilityAnchorVisible));
+  EXPECT_FALSE(
+      IsCounted(WebFeature::kCSSValuePositionVisibilityAnchorsVisible));
+  EXPECT_EQ(storage.size(), 0u);
+
+  ParseProperty(CSSPropertyID::kPositionVisibility, "anchors-visible");
+  EXPECT_TRUE(IsCounted(WebFeature::kCSSValuePositionVisibilityAnchorsVisible));
+  ASSERT_EQ(storage.size(), 1u);
+  EXPECT_EQ(storage.at(0)->Message(),
+            "The `position-visibility: anchors-visible` value has been "
+            "deprecated. Please use the singular `anchor-visible` instead. See "
+            "https://chromestatus.com/feature/5136123851571200 for more "
+            "information.");
+
+  // Subsequent uses should not emit additional console warnings.
+  ParseProperty(CSSPropertyID::kPositionVisibility, "anchors-visible");
+  ParseProperty(CSSPropertyID::kPositionVisibility,
+                "anchors-visible no-overflow");
+  EXPECT_EQ(storage.size(), 1u);
 }
 
 void TestImageSetParsing(const String& testValue,
@@ -1212,6 +1336,107 @@ TEST(CSSPropertyParserTest, MaskSizeFromMaskNone) {
 
 TEST(CSSPropertyParserTest, MaskFromMaskNoneRepeatY) {
   TestMaskParsing("none repeat-y", CSSPropertyID::kMask, "repeat-y");
+}
+
+TEST(CSSPropertyParserTest, ScrollMarkerGroupModesParsing) {
+  const CSSParserContext* context =
+      StrictCSSParserContext(SecureContextMode::kSecureContext);
+  {
+    ScopedCSSScrollMarkerGroupModesForTest scoped_feature(false);
+    EXPECT_TRUE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                            "none", context));
+    EXPECT_TRUE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                            "before", context));
+    EXPECT_TRUE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                            "after", context));
+    EXPECT_FALSE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                             "before tabs", context));
+    EXPECT_FALSE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                             "after links", context));
+  }
+  {
+    ScopedCSSScrollMarkerGroupModesForTest scoped_feature(true);
+    EXPECT_TRUE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                            "before tabs", context));
+    EXPECT_TRUE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                            "after links", context));
+    EXPECT_FALSE(CSSParser::ParseSingleValue(CSSPropertyID::kScrollMarkerGroup,
+                                             "none tabs", context));
+  }
+}
+
+// Property and keyword lookups lowercase and narrow their input before the
+// hash lookup, with separate code for 8-bit and 16-bit strings; both must
+// agree, and characters outside ASCII must never match (e.g. U+0130, whose
+// lowercase is "i", or U+212A KELVIN SIGN).
+TEST(CSSPropertyParserTest, PropertyAndKeywordLookup16Bit) {
+  struct {
+    const char* name;
+    CSSPropertyID property;
+  } properties[] = {
+      {"color", CSSPropertyID::kColor},
+      {"COLOR", CSSPropertyID::kColor},
+      {"Background-Color", CSSPropertyID::kBackgroundColor},
+      {"-webkit-Box-ORIENT", CSSPropertyID::kWebkitBoxOrient},
+      {"z-index", CSSPropertyID::kZIndex},
+      {"--x", CSSPropertyID::kVariable},
+      {"colour", CSSPropertyID::kInvalid},
+      {"col_or", CSSPropertyID::kInvalid},
+      {"col@or", CSSPropertyID::kInvalid},
+  };
+  for (const auto& test : properties) {
+    String name(test.name);
+    SCOPED_TRACE(test.name);
+    EXPECT_EQ(UnresolvedCSSPropertyID(/*execution_context=*/nullptr, name),
+              test.property);
+    name.Ensure16Bit();
+    EXPECT_EQ(UnresolvedCSSPropertyID(/*execution_context=*/nullptr, name),
+              test.property);
+  }
+  // Non-ASCII look-alikes, DEL and NUL, both within a block of four
+  // characters (handled by the four-at-a-time loop) and in the trailing
+  // characters after the last full block (handled one at a time).
+  const UChar kDottedI[] = {'w', 0x0130, 'd', 't', 'h', 0};    // "wİdth"
+  const UChar kKelvin[] = {'m', 'a', 's', 0x212A, 0};          // "masK"
+  const UChar kLatin1[] = {'c', 'o', 'l', 'o', 0xF6, 'r', 0};  // "coloör"
+  const UChar kDelInBlock[] = {'c', 0x7F, 'l', 'o', 'r', 0};
+  const UChar kDelTrailing[] = {'c', 'o', 'l', 'o', 'r', 0x7F, 0};
+  const UChar kNulInBlock[] = {'t', 'o', 'p', 0, 'x'};
+  const UChar kNulTrailing[] = {'l', 'e', 'f', 't', 0};
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(kDottedI)),
+            CSSPropertyID::kInvalid);
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(kKelvin)),
+            CSSPropertyID::kInvalid);
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(kLatin1)),
+            CSSPropertyID::kInvalid);
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(kDelInBlock)),
+            CSSPropertyID::kInvalid);
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(kDelTrailing)),
+            CSSPropertyID::kInvalid);
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(base::span(kNulInBlock))),
+            CSSPropertyID::kInvalid);
+  EXPECT_EQ(UnresolvedCSSPropertyID(nullptr, String(base::span(kNulTrailing))),
+            CSSPropertyID::kInvalid);
+
+  struct {
+    const char* name;
+    CSSValueID value;
+  } keywords[] = {
+      {"block", CSSValueID::kBlock},
+      {"BLOCK", CSSValueID::kBlock},
+      {"Inline-Block", CSSValueID::kInlineBlock},
+      {"-webkit-box", CSSValueID::kWebkitBox},
+      {"blok", CSSValueID::kInvalid},
+  };
+  for (const auto& test : keywords) {
+    String name(test.name);
+    SCOPED_TRACE(test.name);
+    EXPECT_EQ(CssValueKeywordID(name), test.value);
+    name.Ensure16Bit();
+    EXPECT_EQ(CssValueKeywordID(name), test.value);
+  }
+  const UChar kBlockKelvin[] = {'b', 'l', 'o', 'c', 0x212A, 0};
+  EXPECT_EQ(CssValueKeywordID(String(kBlockKelvin)), CSSValueID::kInvalid);
 }
 
 }  // namespace blink

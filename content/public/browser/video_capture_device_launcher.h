@@ -18,7 +18,6 @@
 #include "media/capture/video/video_frame_receiver.h"
 #include "media/capture/video_capture_types.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
-#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 
@@ -78,10 +77,7 @@ class CONTENT_EXPORT LaunchedVideoCaptureDevice
       base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
           callback) = 0;
   virtual void RequestRefreshFrame() = 0;
-
-  // Methods for specific types of devices.
-  virtual void SetDesktopCaptureWindowIdAsync(gfx::NativeViewId window_id,
-                                              base::OnceClosure done_cb) = 0;
+  virtual void InvalidateBuffers() = 0;
 };
 
 }  // namespace content

@@ -191,7 +191,7 @@ void ExtensionUpdater::InitAndEnable(
   extension_prefs_ = extension_prefs;
   prefs_ = prefs;
   extension_cache_ = cache;
-  DCHECK_LE(frequency_, kMaxUpdateFrequency);
+  CHECK_LE(frequency_, kMaxUpdateFrequency, base::NotFatalUntil::M161);
 #if defined(NDEBUG)
   // In Release mode we enforce that update checks don't happen too often.
   frequency_ = std::max(frequency_, kMinUpdateFrequency);
@@ -221,14 +221,14 @@ void ExtensionUpdater::EnsureDownloaderCreated() {
 
 void ExtensionUpdater::Start() {
   CHECK(enabled_);
-  DCHECK(!alive_);
+  CHECK(!alive_, base::NotFatalUntil::M161);
   // If these are NULL, then that means we've been called after Stop()
   // has been called.
-  DCHECK(extension_prefs_);
-  DCHECK(prefs_);
-  DCHECK(profile_);
-  DCHECK(!weak_ptr_factory_.HasWeakPtrs());
-  DCHECK(registry_);
+  CHECK(extension_prefs_, base::NotFatalUntil::M161);
+  CHECK(prefs_, base::NotFatalUntil::M161);
+  CHECK(profile_, base::NotFatalUntil::M161);
+  CHECK(!weak_ptr_factory_.HasWeakPtrs(), base::NotFatalUntil::M161);
+  CHECK(registry_, base::NotFatalUntil::M161);
   alive_ = true;
   // Check soon, and set up the first delayed check.
   if (!g_skip_scheduled_checks_for_tests) {
@@ -253,10 +253,11 @@ void ExtensionUpdater::Stop() {
   external_install_manager_ = nullptr;
   extension_cache_ = nullptr;
   corrupted_extension_reinstaller_ = nullptr;
+  requests_in_progress_.clear();
 }
 
 void ExtensionUpdater::ScheduleNextCheck() {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   // Jitter the frequency by +/- 20%.
   const double jitter_factor = RandDouble() * 0.4 + 0.8;
   base::TimeDelta delay = base::Milliseconds(
@@ -277,7 +278,7 @@ void ExtensionUpdater::NextCheck() {
 }
 
 void ExtensionUpdater::CheckSoon() {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   if (will_check_soon_) {
     return;
   }
@@ -293,6 +294,13 @@ void ExtensionUpdater::CheckSoon() {
 
 bool ExtensionUpdater::WillCheckSoon() const {
   return will_check_soon_;
+}
+
+bool ExtensionUpdater::HasFullCheckInProgress() const {
+  return alive_ &&
+         std::ranges::any_of(requests_in_progress_, [](const auto& pair) {
+           return pair.second.is_full_check;
+         });
 }
 
 void ExtensionUpdater::AddObserver(UpdateObserver* observer) {
@@ -352,6 +360,7 @@ void ExtensionUpdater::DoCheckSoon() {
     // check.
     return;
   }
+  will_check_soon_ = false;
   CheckNow(CheckParams());
 }
 
@@ -444,9 +453,11 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
 
   EnsureDownloaderCreated();
 
+  const bool is_full_check = params.ids.empty();
+
   // Gather the set of extension IDs to update.
   std::set<ExtensionId> ids_to_update;
-  if (!params.ids.empty()) {
+  if (!is_full_check) {
     // Check just the provided set of extensions.
     ids_to_update.insert(params.ids.begin(), params.ids.end());
   } else {
@@ -487,6 +498,7 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
   update_check_params.install_immediately = params.install_immediately;
 
   InProgressCheck& request = requests_in_progress_[request_id];
+  request.is_full_check = is_full_check;
   request.update_found_callback = params.update_found_callback;
   request.callback = std::move(params.callback);
   request.install_immediately = params.install_immediately;
@@ -596,7 +608,7 @@ void ExtensionUpdater::OnExtensionDownloadFailed(
     const PingResult& ping,
     const std::set<int>& request_ids,
     const FailureData& data) {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   InstallStageTracker* install_stage_tracker =
       InstallStageTrackerFactory::GetForBrowserContext(profile_);
 
@@ -606,7 +618,7 @@ void ExtensionUpdater::OnExtensionDownloadFailed(
           id, InstallStageTracker::FailureReason::CRX_FETCH_FAILED, data);
       break;
     case Error::CRX_FETCH_URL_EMPTY:
-      DCHECK(data.additional_info);
+      CHECK(data.additional_info, base::NotFatalUntil::M161);
       install_stage_tracker->ReportInfoOnNoUpdatesFailure(
           id, data.additional_info.value());
       install_stage_tracker->ReportFailure(
@@ -621,7 +633,7 @@ void ExtensionUpdater::OnExtensionDownloadFailed(
           id, InstallStageTracker::FailureReason::MANIFEST_FETCH_FAILED, data);
       break;
     case Error::MANIFEST_INVALID:
-      DCHECK(data.manifest_invalid_error);
+      CHECK(data.manifest_invalid_error, base::NotFatalUntil::M161);
       install_stage_tracker->ReportManifestInvalidFailure(id, data);
       break;
     case Error::NO_UPDATE_AVAILABLE:
@@ -670,7 +682,7 @@ void ExtensionUpdater::OnExtensionDownloadFinished(
     const PingResult& ping,
     const std::set<int>& request_ids,
     InstallCallback callback) {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   InstallStageTrackerFactory::GetForBrowserContext(profile_)
       ->ReportInstallationStage(file.extension_id,
                                 InstallStageTracker::Stage::INSTALLING);
@@ -687,7 +699,7 @@ void ExtensionUpdater::OnExtensionDownloadFinished(
 
 bool ExtensionUpdater::GetPingDataForExtension(const ExtensionId& id,
                                                DownloadPingData* ping_data) {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   ping_data->rollcall_days =
       CalculatePingDaysForExtension(extension_prefs_->LastPingDay(id));
   ping_data->is_enabled = registrar_->IsExtensionEnabled(id);
@@ -701,13 +713,13 @@ bool ExtensionUpdater::GetPingDataForExtension(const ExtensionId& id,
 }
 
 bool ExtensionUpdater::IsExtensionPending(const ExtensionId& id) {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   return PendingExtensionManager::Get(profile_)->IsIdPending(id);
 }
 
 bool ExtensionUpdater::GetExtensionExistingVersion(const ExtensionId& id,
                                                    std::string* version) {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   const Extension* extension =
       registry_->GetExtensionById(id, ExtensionRegistry::EVERYTHING);
   if (!extension) {
@@ -739,7 +751,7 @@ ExtensionUpdateData ExtensionUpdater::GetExtensionUpdateData(
 
 void ExtensionUpdater::UpdatePingData(const ExtensionId& id,
                                       const PingResult& ping_result) {
-  DCHECK(alive_);
+  CHECK(alive_, base::NotFatalUntil::M161);
   if (ping_result.did_ping) {
     extension_prefs_->SetLastPingDay(id, ping_result.day_start);
   }
@@ -755,7 +767,7 @@ void ExtensionUpdater::PutExtensionInCache(const CRXFileInfo& crx_info) {
     const base::Version& expected_version = crx_info.expected_version;
     const std::string& expected_hash = crx_info.expected_hash;
     const base::FilePath& crx_path = crx_info.path;
-    DCHECK(expected_version.IsValid());
+    CHECK(expected_version.IsValid(), base::NotFatalUntil::M161);
     extension_cache_->PutExtension(
         extension_id, expected_hash, crx_path, expected_version.GetString(),
         base::BindRepeating(&ExtensionUpdater::CleanUpCrxFileIfNeeded,
@@ -996,15 +1008,15 @@ void ExtensionUpdater::NotifyStarted() {
 }
 
 void ExtensionUpdater::OnUpdateServiceFinished(int request_id) {
-  DCHECK(requests_in_progress_.contains(request_id));
+  CHECK(requests_in_progress_.contains(request_id), base::NotFatalUntil::M161);
   InProgressCheck& request = requests_in_progress_[request_id];
-  DCHECK(request.awaiting_update_service);
+  CHECK(request.awaiting_update_service, base::NotFatalUntil::M161);
   request.awaiting_update_service = false;
   NotifyIfFinished(request_id);
 }
 
 void ExtensionUpdater::NotifyIfFinished(int request_id) {
-  DCHECK(requests_in_progress_.contains(request_id));
+  CHECK(requests_in_progress_.contains(request_id), base::NotFatalUntil::M161);
   InProgressCheck& request = requests_in_progress_[request_id];
   if (!request.in_progress_ids.empty() || request.awaiting_update_service) {
     return;  // This request is not done yet.
@@ -1038,7 +1050,7 @@ GURL ExtensionUpdater::GetEffectiveUpdateURL(const Extension& extension) const {
 
 ExtensionUpdater::ScopedSkipScheduledCheckForTest::
     ScopedSkipScheduledCheckForTest() {
-  DCHECK(!g_skip_scheduled_checks_for_tests);
+  CHECK(!g_skip_scheduled_checks_for_tests, base::NotFatalUntil::M161);
   g_skip_scheduled_checks_for_tests = true;
 }
 

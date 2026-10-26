@@ -12,10 +12,11 @@
 #include "build/build_config.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -77,10 +78,20 @@ bool IsExitUiEnabled() {
 
 }  // namespace
 
+DEFINE_USER_DATA(FullscreenControlHost);
+
+// static
+FullscreenControlHost* FullscreenControlHost::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
 FullscreenControlHost::FullscreenControlHost(
     BrowserView* browser_view,
-    ExclusiveAccessManager* exclusive_access_manager)
-    : browser_view_(browser_view),
+    ExclusiveAccessManager* exclusive_access_manager,
+    ui::UnownedUserDataHost& host)
+    : scoped_unowned_user_data_(host, *this),
+      browser_view_(browser_view),
       exclusive_access_manager_(CHECK_DEREF(exclusive_access_manager)) {}
 
 FullscreenControlHost::~FullscreenControlHost() = default;
@@ -180,6 +191,8 @@ void FullscreenControlHost::OnMouseEvent(const ui::MouseEvent& event) {
         Hide(true);
       }
     } else {
+      // TODO(crbug.com/576705322): CHECK-exclusion: Convert to a CHECK once we
+      // are confident it won't be triggered.
       DCHECK_EQ(InputEntryMethod::NOT_ACTIVE, input_entry_method_);
       if (!in_mouse_cooldown_mode_ &&
           event.y() <= kShowFullscreenExitControlHeight) {
@@ -207,7 +220,7 @@ void FullscreenControlHost::OnTouchEvent(const ui::TouchEvent& event) {
     return;
   }
 
-  DCHECK(IsVisible());
+  CHECK(IsVisible(), base::NotFatalUntil::M162);
 
   // Hide the popup if it is showing and the user touches outside of the popup.
   if (event.type() == ui::EventType::kTouchPressed && !IsAnimating()) {

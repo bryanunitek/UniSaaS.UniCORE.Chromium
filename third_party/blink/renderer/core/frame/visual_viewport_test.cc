@@ -19,6 +19,7 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/widget/device_emulation_params.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-shared.h"
 #include "third_party/blink/public/web/web_ax_context.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
@@ -693,7 +694,7 @@ TEST_P(VisualViewportTest, TestOffsetClampingWithResizeAndScale) {
   UpdateAllLifecyclePhases();
   EXPECT_EQ(WebView()->MainFrameViewWidget()->Size(), visual_viewport.Size());
   EXPECT_EQ(WebView()->MainFrameViewWidget()->Size(),
-            GetFrame()->View()->FrameRect().size());
+            GetFrame()->View()->Size());
   visual_viewport.SetLocation(gfx::PointF(1000, 1000));
   EXPECT_POINTF_EQ(gfx::PointF(320, 240),
                    visual_viewport.VisibleRect().origin());
@@ -723,7 +724,7 @@ TEST_P(VisualViewportTest, TestFrameViewSizedToContent) {
   // Note: the size is ceiled and should match the behavior in CC's
   // LayerImpl::bounds().
   EXPECT_EQ(gfx::Size(200, 267),
-            WebView()->MainFrameImpl()->GetFrameView()->FrameRect().size());
+            WebView()->MainFrameImpl()->GetFrameView()->Size());
 }
 
 // The main LocalFrameView's size should be set such that its the size of the
@@ -740,7 +741,7 @@ TEST_P(VisualViewportTest, TestFrameViewSizedToMinimumScale) {
   UpdateAllLifecyclePhases();
 
   EXPECT_EQ(gfx::Size(100, 160),
-            WebView()->MainFrameImpl()->GetFrameView()->FrameRect().size());
+            WebView()->MainFrameImpl()->GetFrameView()->Size());
 }
 
 // Test that attaching a new frame view resets the size of the inner viewport
@@ -792,7 +793,7 @@ TEST_P(VisualViewportTest, TestFrameViewSizedToViewportMetaMinimumScale) {
   UpdateAllLifecyclePhases();
 
   EXPECT_EQ(gfx::Size(50, 80),
-            WebView()->MainFrameImpl()->GetFrameView()->FrameRect().size());
+            WebView()->MainFrameImpl()->GetFrameView()->Size());
 }
 
 // Test that the visual viewport still gets sized in AutoSize/AutoResize mode.
@@ -951,7 +952,7 @@ TEST_P(VisualViewportTest,
       ScrollOffset(0, 1000), mojom::blink::ScrollType::kProgrammatic,
       cc::ScrollSourceType::kNone);
 
-  EXPECT_EQ(gfx::Size(1000, 1000), frame_view->FrameRect().size());
+  EXPECT_EQ(gfx::Size(1000, 1000), frame_view->Size());
 
   VisualViewport& visual_viewport = GetFrame()->GetPage()->GetVisualViewport();
   visual_viewport.SetScale(2);
@@ -977,7 +978,7 @@ TEST_P(VisualViewportTest,
                            ->Loader()
                            .GetDocumentLoader()
                            ->GetHistoryItem());
-  EXPECT_LT(frame_view->FrameRect().size().width(), 1000);
+  EXPECT_LT(frame_view->Width(), 1000);
   EXPECT_EQ(ScrollOffset(0, 1000), firstItem->GetViewState()->scroll_offset_);
 }
 
@@ -1038,7 +1039,7 @@ class VisualViewportMockWebFrameClient
  public:
   MOCK_METHOD2(UpdateContextMenuDataForTesting,
                void(const ContextMenuData&, const std::optional<gfx::Point>&));
-  MOCK_METHOD0(DidChangeScrollOffset, void());
+  MOCK_METHOD1(DidChangeScrollOffset, void(blink::mojom::ScrollType));
 };
 
 MATCHER_P2(ContextMenuAtLocation,
@@ -1095,7 +1096,8 @@ TEST_P(VisualViewportTest, TestContextMenuShownInCorrectLocation) {
   // should still appear at the location of the event, relative to the WebView.
   VisualViewport& visual_viewport = GetFrame()->GetPage()->GetVisualViewport();
   WebView()->SetPageScaleFactor(2);
-  EXPECT_CALL(mock_web_frame_client, DidChangeScrollOffset());
+  EXPECT_CALL(mock_web_frame_client,
+              DidChangeScrollOffset(blink::mojom::ScrollType::kProgrammatic));
   visual_viewport.SetLocation(gfx::PointF(60, 80));
   EXPECT_CALL(
       mock_web_frame_client,
@@ -1129,18 +1131,29 @@ TEST_P(VisualViewportTest, TestClientNotifiedOfScrollEvents) {
   WebView()->SetPageScaleFactor(2);
   VisualViewport& visual_viewport = GetFrame()->GetPage()->GetVisualViewport();
 
-  EXPECT_CALL(mock_web_frame_client, DidChangeScrollOffset());
+  EXPECT_CALL(mock_web_frame_client,
+              DidChangeScrollOffset(blink::mojom::ScrollType::kProgrammatic));
   visual_viewport.SetLocation(gfx::PointF(60, 80));
   Mock::VerifyAndClearExpectations(&mock_web_frame_client);
 
   // Scroll vertically.
-  EXPECT_CALL(mock_web_frame_client, DidChangeScrollOffset());
+  EXPECT_CALL(mock_web_frame_client,
+              DidChangeScrollOffset(blink::mojom::ScrollType::kProgrammatic));
   visual_viewport.SetLocation(gfx::PointF(60, 90));
   Mock::VerifyAndClearExpectations(&mock_web_frame_client);
 
   // Scroll horizontally.
-  EXPECT_CALL(mock_web_frame_client, DidChangeScrollOffset());
+  EXPECT_CALL(mock_web_frame_client,
+              DidChangeScrollOffset(blink::mojom::ScrollType::kProgrammatic));
   visual_viewport.SetLocation(gfx::PointF(70, 90));
+  Mock::VerifyAndClearExpectations(&mock_web_frame_client);
+
+  // Clamping scroll when visual viewport size increases, shrinking scroll
+  // bounds.
+  EXPECT_CALL(mock_web_frame_client,
+              DidChangeScrollOffset(blink::mojom::ScrollType::kClamping));
+  visual_viewport.SetSize(gfx::Size(300, 500));
+  visual_viewport.ClampToBoundaries();
 
   // Reset the old client so destruction can occur naturally.
   WebView()->MainFrameImpl()->SetClient(old_client);
@@ -1251,9 +1264,9 @@ static ScrollOffset expectedMaxLayoutViewportScrollOffset(
     LocalFrameView& frame_view) {
   float aspect_ratio = visual_viewport.VisibleRect().width() /
                        visual_viewport.VisibleRect().height();
-  float new_height = frame_view.FrameRect().width() / aspect_ratio;
+  float new_height = frame_view.Width() / aspect_ratio;
   gfx::Size contents_size = frame_view.LayoutViewport()->ContentsSize();
-  return ScrollOffset(contents_size.width() - frame_view.FrameRect().width(),
+  return ScrollOffset(contents_size.width() - frame_view.Width(),
                       contents_size.height() - new_height);
 }
 
@@ -1271,7 +1284,7 @@ TEST_P(VisualViewportTest, TestBrowserControlsAdjustment) {
 
   visual_viewport.SetScale(1);
   EXPECT_EQ(gfx::SizeF(500, 450), visual_viewport.VisibleRect().size());
-  EXPECT_EQ(gfx::Size(1000, 900), frame_view.FrameRect().size());
+  EXPECT_EQ(gfx::Size(1000, 900), frame_view.Size());
 
   // Simulate bringing down the browser controls by 20px.
   WebView()->MainFrameViewWidget()->ApplyViewportChangesForTesting(
@@ -1325,7 +1338,7 @@ TEST_P(VisualViewportTest, TestBrowserControlsAdjustmentWithScale) {
 
   visual_viewport.SetScale(2);
   EXPECT_EQ(gfx::SizeF(250, 225), visual_viewport.VisibleRect().size());
-  EXPECT_EQ(gfx::Size(1000, 900), frame_view.FrameRect().size());
+  EXPECT_EQ(gfx::Size(1000, 900), frame_view.Size());
 
   // Simulate bringing down the browser controls by 20px. Since we're zoomed in,
   // the browser controls take up half as much space (in document-space) than
@@ -1384,6 +1397,45 @@ TEST_P(VisualViewportTest, TestBrowserControlsAdjustmentWithScale) {
             frame_view.LayoutViewport()->GetScrollOffset());
 }
 
+// Tests that bottom browser controls extend the transient scroll bounds like
+// the compositor does, without affecting the visible rect.
+TEST_P(VisualViewportTest, TestBottomBrowserControlsAdjustmentWithScale) {
+  InitializeWithAndroidSettings();
+  WebView()->ResizeWithBrowserControls(gfx::Size(500, 450), 0, 20, true);
+  UpdateAllLifecyclePhases();
+
+  RegisterMockedHttpURLLoad("content-width-1000.html");
+  NavigateTo(base_url_ + "content-width-1000.html");
+  UpdateAllLifecyclePhases();
+
+  VisualViewport& visual_viewport = GetFrame()->GetPage()->GetVisualViewport();
+  LocalFrameView& frame_view = *WebView()->MainFrameImpl()->GetFrameView();
+
+  visual_viewport.SetScale(2);
+  EXPECT_EQ(gfx::Size(1000, 900), frame_view.Size());
+
+  // Fully show the bottom controls. Since the controls shrink the layout,
+  // fully shown controls need no scroll bounds adjustment.
+  WebView()->MainFrameViewWidget()->ApplyViewportChangesForTesting(
+      {gfx::Vector2dF(), gfx::Vector2dF(), 1, false, 0, 1,
+       cc::BrowserControlsState::kBoth});
+  EXPECT_EQ(gfx::SizeF(250, 225), visual_viewport.VisibleRect().size());
+
+  visual_viewport.Move(ScrollOffset(10000, 10000));
+  EXPECT_EQ(ScrollOffset(750, 675), visual_viewport.GetScrollOffset());
+
+  // Simulate hiding the bottom controls. The visible rect must not change,
+  // but the 20px given back must extend the scroll bounds: the maximum
+  // offset grows by 20 / min_scale - 20 / scale = 40 - 10 = 30.
+  WebView()->MainFrameViewWidget()->ApplyViewportChangesForTesting(
+      {gfx::Vector2dF(), gfx::Vector2dF(), 1, false, 0, -1,
+       cc::BrowserControlsState::kBoth});
+  EXPECT_EQ(gfx::SizeF(250, 225), visual_viewport.VisibleRect().size());
+
+  visual_viewport.Move(ScrollOffset(10000, 10000));
+  EXPECT_EQ(ScrollOffset(750, 705), visual_viewport.GetScrollOffset());
+}
+
 // Tests that a scroll all the way to the bottom of the page, while hiding the
 // browser controls doesn't cause a clamp in the viewport scroll offset when the
 // top controls initiated resize occurs.
@@ -1423,7 +1475,7 @@ TEST_P(VisualViewportTest, TestBrowserControlsAdjustmentAndResize) {
             visual_viewport.VisibleRect().size());
   EXPECT_EQ(gfx::Size(1000, layout_viewport_height -
                                 browser_controls_height / min_page_scale),
-            frame_view.FrameRect().size());
+            frame_view.Size());
   EXPECT_EQ(gfx::Size(500, visual_viewport_height - browser_controls_height),
             visual_viewport.Size());
 
@@ -1460,8 +1512,7 @@ TEST_P(VisualViewportTest, TestBrowserControlsAdjustmentAndResize) {
   EXPECT_EQ(gfx::Size(500, visual_viewport_height), visual_viewport.Size());
   EXPECT_EQ(gfx::SizeF(250, visual_viewport_height / page_scale),
             visual_viewport.VisibleRect().size());
-  EXPECT_EQ(gfx::Size(1000, layout_viewport_height),
-            frame_view.FrameRect().size());
+  EXPECT_EQ(gfx::Size(1000, layout_viewport_height), frame_view.Size());
 
   EXPECT_EQ(total_expected, visual_viewport.GetScrollOffset() +
                                 frame_view.LayoutViewport()->GetScrollOffset());
@@ -1500,8 +1551,7 @@ TEST_P(VisualViewportTest, TestBrowserControlsShrinkAdjustmentAndResize) {
   visual_viewport.SetScale(page_scale);
   EXPECT_EQ(gfx::SizeF(250, visual_viewport_height / page_scale),
             visual_viewport.VisibleRect().size());
-  EXPECT_EQ(gfx::Size(1000, layout_viewport_height),
-            frame_view.FrameRect().size());
+  EXPECT_EQ(gfx::Size(1000, layout_viewport_height), frame_view.Size());
   EXPECT_EQ(gfx::Size(500, visual_viewport_height), visual_viewport.Size());
 
   // Scroll all the way to the bottom, showing the the browser controls in the
@@ -1544,7 +1594,7 @@ TEST_P(VisualViewportTest, TestBrowserControlsShrinkAdjustmentAndResize) {
             visual_viewport.VisibleRect().size());
   EXPECT_EQ(gfx::Size(1000, layout_viewport_height -
                                 browser_controls_height / min_page_scale),
-            frame_view.FrameRect().size());
+            frame_view.Size());
   EXPECT_EQ(total_expected, visual_viewport.GetScrollOffset() +
                                 frame_view.LayoutViewport()->GetScrollOffset());
 }
@@ -1790,7 +1840,7 @@ TEST_P(VisualViewportTest, TestMainFrameInitializationSizing) {
   local_frame->CreateFrameView();
 
   LocalFrameView& frame_view = *local_frame->GetFrameView();
-  EXPECT_EQ(gfx::Size(200, 400), frame_view.FrameRect().size());
+  EXPECT_EQ(gfx::Size(200, 400), frame_view.Size());
   frame_view.Dispose();
 }
 
@@ -2455,9 +2505,7 @@ TEST_F(VisualViewportScrollIntoViewTest, ScrollingToFixed) {
 TEST_F(VisualViewportScrollIntoViewTest, ScrollingToFixedFromJavascript) {
   VisualViewport& visual_viewport = WebView().GetPage()->GetVisualViewport();
   EXPECT_EQ(0.f, visual_viewport.GetScrollOffset().y());
-  GetDocument()
-      .getElementById(AtomicString("bottom"))
-      ->scrollIntoViewForTesting();
+  GetElementById("bottom")->scrollIntoViewForTesting();
   EXPECT_EQ(100.f, visual_viewport.GetScrollOffset().y());
 }
 

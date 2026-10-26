@@ -19,7 +19,6 @@ The logic is referenced from `tast-tests`:
 
 import argparse
 import logging
-import os
 from pathlib import Path
 from typing import Dict, List, Optional
 import subprocess
@@ -69,8 +68,12 @@ DAEMONS = [
 
 
 def _read_release_file(path: Path) -> Dict[str, str]:
-    return dict([(x.strip() for x in line.split("=", 1))
-                 for line in path.read_text(encoding="utf-8").splitlines()])
+    return dict(
+        [
+            (x.strip() for x in line.split("=", 1))
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+    )
 
 
 def _is_chromeos() -> bool:
@@ -80,10 +83,9 @@ def _is_chromeos() -> bool:
 
 def _run_cmd(args: List[str], shell=False):
     logging.info("Run: %s", args)
-    process = subprocess.run(args,
-                             shell=shell,
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT)
+    process = subprocess.run(
+        args, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
     logging.info("Output: %s", process.stdout[:80])
 
 
@@ -113,10 +115,18 @@ def reset_system_state_files():
     _run_cmd(["lvremove -ff /dev/*/cryptohome*"], shell=True)
 
     logging.info("Run tmpfiles to restore the removed folders and permissions.")
-    _run_cmd([
-        "/usr/bin/systemd-tmpfiles", "--create", "--remove", "--boot",
-        "--prefix", "/home", "--prefix", "/var/lib"
-    ])
+    _run_cmd(
+        [
+            "/usr/bin/systemd-tmpfiles",
+            "--create",
+            "--remove",
+            "--boot",
+            "--prefix",
+            "/home",
+            "--prefix",
+            "/var/lib",
+        ]
+    )
 
     for d in DAEMONS:
         logging.info("Starting %s.", d)
@@ -128,7 +138,7 @@ def main(argv: Optional[List[str]] = None) -> Optional[int]:
     assert _is_chromeos(), "This script only runs on ChromeOS DUT."
 
     parser = argparse.ArgumentParser(description=__doc__)
-    opts = parser.parse_args(argv)
+    opts = parser.parse_args(argv)  # noqa: F841
 
     logging.basicConfig(level=logging.INFO)
     return reset_system_state_files()

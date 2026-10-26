@@ -80,11 +80,33 @@ SubmenuView::~SubmenuView() {
 }
 
 std::vector<MenuItemView*> SubmenuView::GetMenuItems() {
-  return GetMenuItemsFromChildren<MenuItemView, View>(children());
+  std::vector<MenuItemView*> menu_items;
+  if (scroll_view_container_) {
+    const auto headers = scroll_view_container_->pinned_header_region();
+    menu_items.insert(menu_items.end(), headers.begin(), headers.end());
+  }
+  auto middle_items = GetMenuItemsFromChildren<MenuItemView, View>(children());
+  menu_items.insert(menu_items.end(), middle_items.begin(), middle_items.end());
+  if (scroll_view_container_) {
+    const auto footers = scroll_view_container_->pinned_footer_region();
+    menu_items.insert(menu_items.end(), footers.begin(), footers.end());
+  }
+  return menu_items;
 }
 
 std::vector<const MenuItemView*> SubmenuView::GetMenuItems() const {
-  return GetMenuItemsFromChildren<const MenuItemView, const View>(children());
+  std::vector<const MenuItemView*> menu_items;
+  if (scroll_view_container_) {
+    const auto headers = scroll_view_container_->pinned_header_region();
+    menu_items.insert(menu_items.end(), headers.begin(), headers.end());
+  }
+  auto middle_items = GetMenuItemsFromChildren<MenuItemView, View>(children());
+  menu_items.insert(menu_items.end(), middle_items.begin(), middle_items.end());
+  if (scroll_view_container_) {
+    const auto footers = scroll_view_container_->pinned_footer_region();
+    menu_items.insert(menu_items.end(), footers.begin(), footers.end());
+  }
+  return menu_items;
 }
 
 MenuItemView* SubmenuView::GetMenuItemAt(size_t index) {
@@ -101,7 +123,6 @@ const MenuItemView* SubmenuView::GetMenuItemAt(size_t index) const {
 
 int SubmenuView::GetPreferredItemHeight() const {
   EmptyMenuMenuItem menu_item(parent_menu_item_);
-  menu_item.set_controller(parent_menu_item_->GetMenuController());
   return menu_item.GetPreferredSize({}).height();
 }
 
@@ -113,12 +134,12 @@ void SubmenuView::UpdateMenuPartSizes() {
   const MenuConfig& config = MenuConfig::instance();
 
   const auto get_metrics = [&] {
-    return std::tie(icon_area_width_, label_start_, trailing_padding_);
+    return std::tie(icon_area_width_, label_start_, trailing_padding_,
+                    content_start_);
   };
   const auto old_metrics = get_metrics();
 
-  trailing_padding_ = config.item_horizontal_padding +
-                      parent_menu_item_->GetItemHorizontalBorder();
+  trailing_padding_ = parent_menu_item_->GetTrailingPadding();
   const auto& menu_items = GetMenuItems();
   if (config.reserve_dedicated_arrow_column &&
       std::ranges::any_of(menu_items, &MenuItemView::HasSubmenu)) {
@@ -163,7 +184,8 @@ void SubmenuView::UpdateMenuPartSizes() {
     icon_area_width_ = std::max(icon_area_width_, max_icon_width);
   }
 
-  label_start_ = parent_menu_item_->GetContentStart() + icon_area_width_;
+  content_start_ = parent_menu_item_->GetContentStart();
+  label_start_ = content_start_ + icon_area_width_;
   if (icon_area_width_) {
     const auto* const controller = parent_menu_item_->GetMenuController();
     label_start_ += (controller && controller->use_ash_system_ui_layout())
@@ -205,6 +227,8 @@ void SubmenuView::ViewHierarchyChanged(
   }
 }
 
+// TODO(https://crbug.com/537701460): SubmenuView should use a
+// DelegatingLayoutManager instead of overriding layout.
 void SubmenuView::Layout(PassKey) {
   // We're in a ScrollView, and need to set our width/height ourselves.
   if (!parent()) {
@@ -226,11 +250,16 @@ void SubmenuView::Layout(PassKey) {
   const int between_item_vertical_padding =
       MenuConfig::instance().between_item_vertical_padding;
   bool previous_child_was_lower_separator = false;
+  bool previous_child_was_menu_item_separator = false;
   for (View* child : children()) {
     if (child->GetVisible()) {
       const auto* separator = AsViewClass<MenuSeparator>(child);
+      const bool is_menu_item_separator =
+          separator && separator->GetType() == ui::MENU_ITEM_SEPARATOR;
       if (y != insets.top() && !previous_child_was_lower_separator &&
-          (!separator || separator->GetType() != ui::UPPER_SEPARATOR)) {
+          !previous_child_was_menu_item_separator &&
+          (!separator || (separator->GetType() != ui::UPPER_SEPARATOR &&
+                          separator->GetType() != ui::MENU_ITEM_SEPARATOR))) {
         y += between_item_vertical_padding;
       }
       child->SetBounds(x, y, menu_item_width,
@@ -238,6 +267,7 @@ void SubmenuView::Layout(PassKey) {
       y = child->bounds().bottom();
       previous_child_was_lower_separator =
           separator && separator->GetType() == ui::LOWER_SEPARATOR;
+      previous_child_was_menu_item_separator = is_menu_item_separator;
     }
   }
 }
@@ -299,17 +329,23 @@ gfx::Size SubmenuView::CalculatePreferredSize(
   // Then, the height for that width.
   const int menu_item_width = width - insets.width();
   bool previous_child_was_lower_separator = false;
+  bool previous_child_was_menu_item_separator = false;
   const auto get_height = [&](int height, const View* child) {
     if (!child->GetVisible()) {
       return height;
     }
     const auto* separator = AsViewClass<MenuSeparator>(child);
+    const bool is_menu_item_separator =
+        separator && separator->GetType() == ui::MENU_ITEM_SEPARATOR;
     if (height && !previous_child_was_lower_separator &&
-        (!separator || separator->GetType() != ui::UPPER_SEPARATOR)) {
+        !previous_child_was_menu_item_separator &&
+        (!separator || (separator->GetType() != ui::UPPER_SEPARATOR &&
+                        separator->GetType() != ui::MENU_ITEM_SEPARATOR))) {
       height += config.between_item_vertical_padding;
     }
     previous_child_was_lower_separator =
         separator && separator->GetType() == ui::LOWER_SEPARATOR;
+    previous_child_was_menu_item_separator = is_menu_item_separator;
     return height + child->GetHeightForWidth(menu_item_width);
   };
   const int height =
@@ -390,6 +426,9 @@ bool SubmenuView::OnMouseWheel(const ui::MouseWheelEvent& e) {
   if (vis_bounds.height() == height() || menu_items.empty()) {
     // All menu items are visible, nothing to scroll.
     return true;
+  }
+  if (use_scroll_bar_) {
+    return OnScroll(0, e.y_offset());
   }
 
   auto i = std::ranges::lower_bound(menu_items, vis_bounds.y(), {},
@@ -507,7 +546,10 @@ void SubmenuView::ShowAt(const MenuHost::InitParams& init_params) {
   if (host_) {
     host_->SetMenuHostBounds(init_params.bounds);
     host_->ShowMenuHost(init_params.do_capture);
-    if (!weak_this) {
+    // Showing the menu host can synchronously trigger teardown (e.g. via focus
+    // change). SubmenuView may outlive MenuHost, in which case we should just
+    // early exit.
+    if (!weak_this || !host_) {
       return;
     }
   } else {
@@ -521,7 +563,10 @@ void SubmenuView::ShowAt(const MenuHost::InitParams& init_params) {
     MenuHost::InitParams new_init_params = init_params;
     new_init_params.contents_view = detached_scroll_view_container_.release();
     host_->InitMenuHost(new_init_params);
-    if (!weak_this) {
+    // Showing the menu host can synchronously trigger teardown (e.g. via focus
+    // change). SubmenuView may outlive MenuHost, in which case we should just
+    // early exit.
+    if (!weak_this || !host_) {
       return;
     }
   }

@@ -7,7 +7,6 @@
 
 #include "components/google/core/common/google_util.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
-#include "components/page_load_metrics/google/browser/prerender_prewarm_navigation_data.h"
 #include "content/public/browser/navigation_handle_timing.h"
 #include "net/http/http_connection_info.h"
 
@@ -31,6 +30,11 @@ extern const char kHistogramGWSNavigationStartToOnComplete[];
 extern const char kHistogramGWSAcceptCHFrameReceived[];
 extern const char kHistogramGWSOnConnectedCalled[];
 extern const char kHistogramGWSMaxStreamLimitPendingDelay[];
+extern const char kHistogramGWSFastFetchOpportunityTimeLoaderStart[];
+extern const char kHistogramGWSFastFetchOpportunityTimeFetchStart[];
+extern const char kHistogramGWSQuicSessionEstablishmentReason[];
+extern const char kHistogramGWSQuicSessionNonReuseReason[];
+extern const char kHistogramGWSSessionCreationInitiator[];
 
 extern const char kHistogramGWSConnectTimingFirstRequestDomainLookupDelay[];
 extern const char
@@ -80,6 +84,7 @@ extern const char kHistogramGWSConnectStart[];
 extern const char kHistogramGWSDomainLookupStart[];
 extern const char kHistogramGWSDomainLookupEnd[];
 extern const char kHistogramGWSBeforeUnloadExecutionMode[];
+extern const char kHistogramGWSDeviceBoundSessionsNavigationWasDeferred[];
 
 extern const char kHistogramServiceWorkerParseStartSearch[];
 extern const char kHistogramServiceWorkerFirstContentfulPaintSearch[];
@@ -99,14 +104,19 @@ extern const char kNonRestoreNavigation[];
 extern const char kStartedFromContextMenu[];
 
 extern const char kHistogramPrerenderHostReused[];
-extern const char kHistogramPrerenderPrewarmNavigationStatus[];
 extern const char kHistogramGWSPrerenderNavigationToActivation[];
 extern const char kHistogramGWSActivationToFirstContentfulPaint[];
 extern const char kHistogramGWSActivationToLargestContentfulPaint[];
+extern const char kHistogramGWSPrewarmPrerenderCoverageStatus2[];
 
+extern const char kHistogramBrowserInitiatedSuffix[];
+extern const char kHistogramRendererInitiatedSuffix[];
 extern const char kHistogramPrerenderSuffix[];
 extern const char kHistogramNonPrerenderSuffix[];
 extern const char kHistogramDuplicateIgnoredSuffix[];
+extern const char kConnectionReuseSuffix[];
+extern const char kDNSReuseSuffix[];
+extern const char kNonConnectionReuseSuffix[];
 
 }  // namespace internal
 
@@ -244,6 +254,7 @@ class GWSPageLoadMetricsObserver
       content::NavigationHandle* navigation_handle) = 0;
   virtual bool IsBrowserStartupComplete() = 0;
   virtual bool IsIncognitoProfile() const = 0;
+  virtual bool IsIsolatedProfile() const = 0;
   virtual bool IsSignedIn(content::BrowserContext* browser_context) const = 0;
   virtual content::BrowserContext* GetOriginalBrowserContext() = 0;
   std::string AddHistogramSuffix(const std::string& histogram_name);
@@ -273,6 +284,7 @@ class GWSPageLoadMetricsObserver
   NavigationSourceType source_type_ = kUnknown;
   net::HttpConnectionInfoCoarse http_connection_info_ =
       net::HttpConnectionInfoCoarse::kOTHER;
+  std::optional<ConnectionReuseStatus> connection_reuse_status_;
 
   std::optional<base::TimeDelta> aft_start_time_;
   std::optional<base::TimeDelta> aft_end_time_;

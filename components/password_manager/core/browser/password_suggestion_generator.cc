@@ -4,6 +4,7 @@
 
 #include "components/password_manager/core/browser/password_suggestion_generator.h"
 
+#include <algorithm>
 #include <functional>
 #include <set>
 #include <string>
@@ -17,7 +18,7 @@
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/integrators/identity_credential/identity_credential_delegate.h"
-#include "components/autofill/core/browser/suggestions/identity_credential_suggestion_utils.h"
+#include "components/autofill/core/browser/suggestions/identity_credential_suggestion_util.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/common/password_form_fill_data.h"
@@ -254,7 +255,7 @@ Suggestion CreateFillPasswordChildSuggestion(
           IDS_PASSWORD_MANAGER_MANUAL_FALLBACK_FILL_PASSWORD_ENTRY),
       SuggestionType::kFillPassword);
   fill_password.payload = Suggestion::PasswordSuggestionDetails(
-      credential.username, credential.password,
+      credential.username, credential.password.value(),
       credential.GetFirstSignonRealm(),
       password_manager_util::GetHumanReadableRealm(
           credential.GetFirstSignonRealm()),
@@ -273,11 +274,25 @@ Suggestion CreateViewPasswordDetailsChildSuggestion(
   return view_password_details;
 }
 
+Suggestion CreateSectionTitle(int string_id) {
+  Suggestion title(l10n_util::GetStringUTF16(string_id),
+                   SuggestionType::kTitle);
+  title.filtration_policy =
+      Suggestion::FiltrationPolicy::kPresentOnlyWithoutFilter;
+  return title;
+}
+
+// Only plain-HTTP web credentials may be offered on a non-cryptographic page.
+bool IsHttpRealm(const std::string& signon_realm) {
+  return GURL(signon_realm).SchemeIs(url::kHttpScheme);
+}
+
 void AppendManualFallbackSuggestions(
     const CredentialUIEntry& credential,
     IsTriggeredOnPasswordForm on_password_form,
     IsCrossDomain is_cross_origin,
     bool favicon_can_be_requested_from_google,
+    bool is_current_url_cryptographic,
     std::vector<Suggestion>* suggestions,
     Suggestion::FiltrationPolicy filtration_policy) {
   // A separate suggestion with the same (username, password) pair is displayed
@@ -286,6 +301,12 @@ void AppendManualFallbackSuggestions(
   // websites.
   for (const CredentialUIEntry::DomainInfo& domain_info :
        credential.GetAffiliatedDomains()) {
+    if (base::FeatureList::IsEnabled(
+            features::kPreventNonHttpSuggestionsInHttpManualFallbackFlows) &&
+        !is_current_url_cryptographic &&
+        !IsHttpRealm(domain_info.signon_realm)) {
+      continue;
+    }
     Suggestion suggestion(base::UTF8ToUTF16(domain_info.name), /*label=*/u"",
                           Suggestion::Icon::kGlobe,
                           SuggestionType::kPasswordEntry);
@@ -294,13 +315,15 @@ void AppendManualFallbackSuggestions(
         ReplaceEmptyUsername(credential.username, &replaced);
     suggestion.labels = {{autofill::Suggestion::Text(maybe_username)}};
     Suggestion::PasswordSuggestionDetails payload(
-        credential.username, credential.password, domain_info.signon_realm,
+        credential.username, credential.password.value(),
+        domain_info.signon_realm,
         /*display_signon_realm=*/base::UTF8ToUTF16(domain_info.name),
         is_cross_origin.value());
     suggestion.payload = payload;
-    suggestion.acceptability = on_password_form.value()
-                                   ? Suggestion::Acceptability::kAcceptable
-                                   : Suggestion::Acceptability::kUnacceptable;
+    suggestion.acceptability =
+        on_password_form.value()
+            ? Suggestion::Acceptability::kSelectableAndAcceptable
+            : Suggestion::Acceptability::kSelectableButUnacceptable;
     if (FacetURI::FromPotentiallyInvalidSpec(domain_info.signon_realm)
             .IsValidWebFacetURI() &&
         domain_info.url.SchemeIs(url::kHttpsScheme)) {
@@ -380,7 +403,6 @@ PasswordSuggestionGenerator::PasswordSuggestionGenerator(
       autofill_client_(autofill_client) {}
 
 void PasswordSuggestionGenerator::AppendOptionalFooterSection(
-    bool is_manual_fallback,
     std::vector<autofill::Suggestion>* suggestions) const {
   bool has_webauthn_credential = std::ranges::any_of(
       *suggestions,
@@ -399,10 +421,13 @@ void PasswordSuggestionGenerator::AppendOptionalFooterSection(
       },
       &Suggestion::type);
 
+  std::optional<autofill::Suggestion> inline_qr_suggestion =
+      GetWebauthnInlineQrCodeSuggestion();
   std::optional<autofill::Suggestion> hybrid_suggestion =
-      GetWebauthnSignInWithAnotherDeviceSuggestion(is_manual_fallback);
+      GetWebauthnSignInWithAnotherDeviceSuggestion();
 
-  if (has_no_fillable_suggestions && !hybrid_suggestion) {
+  if (has_no_fillable_suggestions && !inline_qr_suggestion &&
+      !hybrid_suggestion) {
     return;
   }
 
@@ -414,9 +439,16 @@ void PasswordSuggestionGenerator::AppendOptionalFooterSection(
     suggestions->push_back(std::move(separator));
   }
 
+  if (inline_qr_suggestion) {
+    suggestions->push_back(std::move(*inline_qr_suggestion));
+    Suggestion separator(SuggestionType::kSeparator);
+    separator.filtration_policy = Suggestion::FiltrationPolicy::kStatic;
+    suggestions->push_back(std::move(separator));
+  }
+
   // Add "Use a passkey" or "Use a different passkey" button.
   if (hybrid_suggestion) {
-    suggestions->push_back(std::move(hybrid_suggestion.value()));
+    suggestions->push_back(std::move(*hybrid_suggestion));
   }
 
   Suggestion suggestion(
@@ -536,7 +568,7 @@ std::vector<Suggestion> PasswordSuggestionGenerator::GetSuggestionsForDomain(
 #endif
 
   // Add "Manage all passwords" link to settings.
-  AppendOptionalFooterSection(/*is_manual_fallback=*/false, &suggestions);
+  AppendOptionalFooterSection(&suggestions);
 
   return suggestions;
 }
@@ -576,10 +608,16 @@ PasswordSuggestionGenerator::GetProactiveRecoverySuggestions(
   Suggestion footer(footer_text, SuggestionType::kFreeformFooter);
   footer.filtration_policy = Suggestion::FiltrationPolicy::kStatic;
   footer.acceptability =
-      autofill::Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle;
+      autofill::Suggestion::Acceptability::kUnselectableAndUnacceptable;
   suggestions.emplace_back(std::move(footer));
 
   return suggestions;
+}
+
+bool PasswordSuggestionGenerator::IsLastCommittedUrlCryptographic() const {
+  return password_manager_driver_ &&
+         password_manager_driver_->GetLastCommittedURL()
+             .SchemeIsCryptographic();
 }
 
 std::vector<Suggestion>
@@ -587,19 +625,6 @@ PasswordSuggestionGenerator::GetManualFallbackSuggestions(
     base::span<const PasswordForm> suggested_credentials,
     base::span<const CredentialUIEntry> credentials,
     IsTriggeredOnPasswordForm on_password_form) const {
-  std::vector<Suggestion> suggestions;
-  const bool generate_sections =
-      !suggested_credentials.empty() && !credentials.empty();
-  if (generate_sections) {
-    Suggestion title(
-        l10n_util::GetStringUTF16(
-            IDS_PASSWORD_MANAGER_MANUAL_FALLBACK_SUGGESTED_PASSWORDS_SECTION_TITLE),
-        SuggestionType::kTitle);
-    title.filtration_policy =
-        Suggestion::FiltrationPolicy::kPresentOnlyWithoutFilter;
-    suggestions.push_back(std::move(title));
-  }
-
   auto* sync_service = password_client_->GetSyncService();
   const bool is_sync_passwords_enabled =
       sync_service &&
@@ -608,6 +633,8 @@ PasswordSuggestionGenerator::GetManualFallbackSuggestions(
   const bool is_passphrase_user =
       sync_service &&
       sync_service->GetUserSettings()->IsUsingExplicitPassphrase();
+
+  std::vector<Suggestion> suggested_suggestions;
   std::set<std::string> suggested_signon_realms;
   for (const auto& form : suggested_credentials) {
     const CredentialUIEntry ui_entry = CredentialUIEntry(form);
@@ -615,38 +642,24 @@ PasswordSuggestionGenerator::GetManualFallbackSuggestions(
         ui_entry.stored_in.contains(PasswordForm::Store::kAccountStore);
     const bool favicon_can_be_requested_from_google =
         (is_sync_passwords_enabled || is_from_account) && !is_passphrase_user;
-    bool is_cross_domain = false;
-    if (base::FeatureList::IsEnabled(
-            password_manager::features::
-                kShowConfirmationForGroupedCredentials)) {
-      is_cross_domain = form.match_type.has_value() &&
-                        password_manager_util::GetMatchType(form) ==
-                            password_manager_util::GetLoginMatchType::kGrouped;
-    }
+    const bool is_cross_domain =
+        form.match_type.has_value() &&
+        password_manager_util::GetMatchType(form) ==
+            password_manager_util::GetLoginMatchType::kGrouped;
     if (!is_cross_domain) {
       // Insert only same site or affiliated signon realms.
       suggested_signon_realms.insert(form.signon_realm);
     }
     AppendManualFallbackSuggestions(
         ui_entry, on_password_form, IsCrossDomain(is_cross_domain),
-        favicon_can_be_requested_from_google, &suggestions,
+        favicon_can_be_requested_from_google, IsLastCommittedUrlCryptographic(),
+        &suggested_suggestions,
         Suggestion::FiltrationPolicy::kPresentOnlyWithoutFilter);
   }
 
-  if (generate_sections) {
-    suggestions.emplace_back(
-        l10n_util::GetStringUTF16(
-            IDS_PASSWORD_MANAGER_MANUAL_FALLBACK_ALL_PASSWORDS_SECTION_TITLE),
-        SuggestionType::kTitle);
-    suggestions.back().filtration_policy =
-        Suggestion::FiltrationPolicy::kPresentOnlyWithoutFilter;
-  }
-
-  // Only the "All passwords" section should be sorted alphabetically.
-  const size_t relevant_section_offset = suggestions.size();
-
+  std::vector<Suggestion> all_suggestions;
   for (const CredentialUIEntry& credential : credentials) {
-    // Check if any credential in the "Suggested" section has the same singon
+    // Check if any credential in the "Suggested" section has the same signon
     // realm as this `CredentialUIEntry`.
     const bool has_suggested_realm = std::ranges::any_of(
         credential.facets,
@@ -660,30 +673,42 @@ PasswordSuggestionGenerator::GetManualFallbackSuggestions(
         (is_sync_passwords_enabled || is_from_account) && !is_passphrase_user;
     AppendManualFallbackSuggestions(
         credential, on_password_form, IsCrossDomain(!has_suggested_realm),
-        favicon_can_be_requested_from_google, &suggestions,
-        Suggestion::FiltrationPolicy::kFilterable);
+        favicon_can_be_requested_from_google, IsLastCommittedUrlCryptographic(),
+        &all_suggestions, Suggestion::FiltrationPolicy::kFilterable);
   }
 
   std::ranges::sort(
-      suggestions.begin() + relevant_section_offset, suggestions.end(),
-      std::ranges::less(),
+      all_suggestions, std::ranges::less(),
       [](const Suggestion& suggestion) { return suggestion.main_text.value; });
 
+  if (suggested_suggestions.empty() && all_suggestions.empty()) {
+    return {};
+  }
+
+  if (!suggested_suggestions.empty() && !all_suggestions.empty()) {
+    suggested_suggestions.insert(
+        suggested_suggestions.begin(),
+        CreateSectionTitle(
+            IDS_PASSWORD_MANAGER_MANUAL_FALLBACK_SUGGESTED_PASSWORDS_SECTION_TITLE));
+    all_suggestions.insert(
+        all_suggestions.begin(),
+        CreateSectionTitle(
+            IDS_PASSWORD_MANAGER_MANUAL_FALLBACK_ALL_PASSWORDS_SECTION_TITLE));
+  }
+
+  std::vector<Suggestion> suggestions;
+  base::Extend(suggestions, std::move(suggested_suggestions));
+  base::Extend(suggestions, std::move(all_suggestions));
+
   // Add "Manage all passwords" link to settings.
-  AppendOptionalFooterSection(/*is_manual_fallback=*/true, &suggestions);
+  AppendOptionalFooterSection(&suggestions);
 
   return suggestions;
 }
 
 std::optional<autofill::Suggestion>
-PasswordSuggestionGenerator::GetWebauthnSignInWithAnotherDeviceSuggestion(
-    bool is_manual_fallback) const {
-  if (is_manual_fallback &&
-      !base::FeatureList::IsEnabled(
-          password_manager::features::
-              kWebAuthnUsePasskeyFromAnotherDeviceInManualFallback)) {
-    return std::nullopt;
-  }
+PasswordSuggestionGenerator::GetWebauthnSignInWithAnotherDeviceSuggestion()
+    const {
 #if BUILDFLAG(IS_ANDROID)
   return std::nullopt;
 #else   // BUILDFLAG(IS_ANDROID)
@@ -693,24 +718,6 @@ PasswordSuggestionGenerator::GetWebauthnSignInWithAnotherDeviceSuggestion(
   if (!delegate) {
     return std::nullopt;
   }
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  if (password_client_->IsChromeSigninPage() &&
-      switches::IsMagiChromePasskeyAutofillEnabled()) {
-    std::optional<std::string> qr_string = delegate->GetCableQrString();
-    if (qr_string.has_value()) {
-      autofill::Suggestion suggestion(
-          l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_PASSKEY_QR_CODE_TITLE),
-          autofill::SuggestionType::kWebauthnPasskeyQrCode);
-      suggestion.payload = autofill::Suggestion::Guid(*qr_string);
-      // Use static filtration policy so that this suggestion is not filtered
-      // out when the user types in the username field. This ensures the QR
-      // code remains visible as the user interacts with the form.
-      suggestion.filtration_policy =
-          autofill::Suggestion::FiltrationPolicy::kStatic;
-      return suggestion;
-    }
-  }
-#endif
   if (!delegate->GetPasskeys().has_value() ||
       !delegate->IsSecurityKeyOrHybridFlowAvailable()) {
     return std::nullopt;
@@ -718,6 +725,33 @@ PasswordSuggestionGenerator::GetWebauthnSignInWithAnotherDeviceSuggestion(
   return CreatePasskeyFromAnotherDeviceEntry(
       /*listed_passkeys=*/delegate->GetPasskeys().value()->size() > 0);
 #endif  // BUILDFLAG(IS_ANDROID)
+}
+
+std::optional<autofill::Suggestion>
+PasswordSuggestionGenerator::GetWebauthnInlineQrCodeSuggestion() const {
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  if (!password_client_->IsChromeSigninPage() ||
+      !switches::IsMagiChromePasskeyAutofillEnabled()) {
+    return std::nullopt;
+  }
+  WebAuthnCredentialsDelegate* delegate =
+      password_client_->GetWebAuthnCredentialsDelegateForDriver(
+          password_manager_driver_);
+  if (!delegate) {
+    return std::nullopt;
+  }
+  std::optional<std::string> qr_string = delegate->GetCableQrString();
+  if (qr_string.has_value()) {
+    autofill::Suggestion suggestion(
+        l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_PASSKEY_QR_CODE_TITLE),
+        autofill::SuggestionType::kWebauthnPasskeyQrCode);
+    suggestion.payload = autofill::Suggestion::Guid(*qr_string);
+    suggestion.filtration_policy =
+        autofill::Suggestion::FiltrationPolicy::kStatic;
+    return suggestion;
+  }
+#endif
+  return std::nullopt;
 }
 
 }  // namespace password_manager

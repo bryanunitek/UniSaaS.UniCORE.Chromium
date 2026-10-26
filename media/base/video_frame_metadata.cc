@@ -5,39 +5,74 @@
 #include "media/base/video_frame_metadata.h"
 
 #include <stdint.h>
+
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/no_destructor.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace media {
 
+namespace {
+
+const VideoFrameMetadata& GetDefaultMetadata() {
+  static const base::NoDestructor<VideoFrameMetadata> kDefaultMetadata;
+  return *kDefaultMetadata;
+}
+
+}  // namespace
+
+CaptureMetadata::CaptureMetadata() = default;
+CaptureMetadata::~CaptureMetadata() = default;
+
+CaptureMetadata::CaptureMetadata(const CaptureMetadata& other) = default;
+CaptureMetadata::CaptureMetadata(CaptureMetadata&& other) = default;
+CaptureMetadata& CaptureMetadata::operator=(const CaptureMetadata& other) =
+    default;
+CaptureMetadata& CaptureMetadata::operator=(CaptureMetadata&& other) = default;
+
+#define MERGE_OPTIONAL_FIELD(a, source) \
+  if (source.a) {                       \
+    this->a = source.a;                 \
+  }
+
+#define MERGE_VALUE_FIELD(a, source)    \
+  if (source.a != kDefaultMetadata.a) { \
+    this->a = source.a;                 \
+  }
+
+void CaptureMetadata::MergeMetadataFrom(
+    const CaptureMetadata& metadata_source) {
+  const CaptureMetadata& kDefaultMetadata = GetDefaultMetadata().capture;
+
+  MERGE_OPTIONAL_FIELD(counter, metadata_source);
+  MERGE_OPTIONAL_FIELD(update_rect, metadata_source);
+  MERGE_OPTIONAL_FIELD(source_size, metadata_source);
+  MERGE_OPTIONAL_FIELD(region_capture_rect, metadata_source);
+  MERGE_VALUE_FIELD(region_capture_bounds, metadata_source);
+  MERGE_VALUE_FIELD(version, metadata_source);
+}
+
 VideoFrameMetadata::VideoFrameMetadata() = default;
+VideoFrameMetadata::~VideoFrameMetadata() = default;
 
 VideoFrameMetadata::VideoFrameMetadata(const VideoFrameMetadata& other) =
+    default;
+VideoFrameMetadata::VideoFrameMetadata(VideoFrameMetadata&& other) = default;
+VideoFrameMetadata& VideoFrameMetadata::operator=(
+    const VideoFrameMetadata& other) = default;
+VideoFrameMetadata& VideoFrameMetadata::operator=(VideoFrameMetadata&& other) =
     default;
 
 void VideoFrameMetadata::MergeMetadataFrom(
     const VideoFrameMetadata& metadata_source) {
-  static const VideoFrameMetadata kDefaultMetadata;
+  const VideoFrameMetadata& kDefaultMetadata = GetDefaultMetadata();
 
-#define MERGE_OPTIONAL_FIELD(a, source) \
-  if (source.a)                         \
-  this->a = source.a
-
-#define MERGE_VALUE_FIELD(a, source)  \
-  if (source.a != kDefaultMetadata.a) \
-  this->a = source.a
-
-  MERGE_VALUE_FIELD(allow_overlay, metadata_source);
   MERGE_OPTIONAL_FIELD(capture_begin_time, metadata_source);
   MERGE_OPTIONAL_FIELD(capture_end_time, metadata_source);
-  MERGE_OPTIONAL_FIELD(capture_counter, metadata_source);
-  MERGE_OPTIONAL_FIELD(capture_update_rect, metadata_source);
-  MERGE_OPTIONAL_FIELD(source_size, metadata_source);
-  MERGE_OPTIONAL_FIELD(region_capture_rect, metadata_source);
-  MERGE_VALUE_FIELD(capture_version, metadata_source);
+  capture.MergeMetadataFrom(metadata_source.capture);
   MERGE_OPTIONAL_FIELD(copy_required, metadata_source);
   MERGE_VALUE_FIELD(end_of_stream, metadata_source);
   MERGE_OPTIONAL_FIELD(frame_duration, metadata_source);
@@ -52,7 +87,6 @@ void VideoFrameMetadata::MergeMetadataFrom(
   MERGE_VALUE_FIELD(protected_video, metadata_source);
   MERGE_VALUE_FIELD(hw_protected, metadata_source);
   MERGE_VALUE_FIELD(needs_detiling, metadata_source);
-  MERGE_VALUE_FIELD(is_webgpu_compatible, metadata_source);
 #if BUILDFLAG(USE_VAAPI)
   MERGE_OPTIONAL_FIELD(hw_va_protected_session_id, metadata_source);
 #endif
@@ -76,13 +110,12 @@ void VideoFrameMetadata::MergeMetadataFrom(
 #if BUILDFLAG(IS_ANDROID)
   MERGE_OPTIONAL_FIELD(ycbcr_info, metadata_source);
 #endif
+}
 
 #undef MERGE_VALUE_FIELD
 #undef MERGE_OPTIONAL_FIELD
-}
 
 void VideoFrameMetadata::ClearTextureFrameMetadata() {
-  is_webgpu_compatible = false;
   read_lock_fences_enabled = false;
 }
 

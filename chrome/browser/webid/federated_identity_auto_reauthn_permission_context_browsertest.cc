@@ -13,7 +13,7 @@
 #include "chrome/browser/actor/ui/test_support/mock_event_dispatcher.h"
 #include "chrome/browser/password_manager/factories/password_manager_settings_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webid/federated_identity_auto_reauthn_permission_context_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/common/content_features.h"
@@ -38,11 +38,11 @@ class FederatedIdentityAutoReauthnPermissionContextTest
 IN_PROC_BROWSER_TEST_F(FederatedIdentityAutoReauthnPermissionContextTest,
                        AutoReauthnSettingEnabledByDefault) {
   // Force PasswordManagerSettingsService instantiation.
-  PasswordManagerSettingsServiceFactory::GetForProfile(browser()->profile());
+  PasswordManagerSettingsServiceFactory::GetForProfile(browser()->GetProfile());
 
   EXPECT_TRUE(
       FederatedIdentityAutoReauthnPermissionContextFactory::GetForProfile(
-          browser()->profile())
+          browser()->GetProfile())
           ->IsAutoReauthnSettingEnabled());
 }
 
@@ -54,7 +54,7 @@ IN_PROC_BROWSER_TEST_F(FederatedIdentityAutoReauthnPermissionContextTest,
       browser()->tab_strip_model()->GetActiveWebContents();
 
   // Create actor task and attach it to the current tab.
-  auto* actor_service = actor::ActorKeyedService::Get(browser()->profile());
+  auto* actor_service = actor::ActorKeyedService::Get(browser()->GetProfile());
   actor::TaskId task_id = actor_service->CreateTask(
       actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker());
 
@@ -71,7 +71,7 @@ IN_PROC_BROWSER_TEST_F(FederatedIdentityAutoReauthnPermissionContextTest,
 
   EXPECT_TRUE(
       FederatedIdentityAutoReauthnPermissionContextFactory::GetForProfile(
-          browser()->profile())
+          browser()->GetProfile())
           ->IsAutoReauthnDisabledByEmbedder(web_contents));
 }
 

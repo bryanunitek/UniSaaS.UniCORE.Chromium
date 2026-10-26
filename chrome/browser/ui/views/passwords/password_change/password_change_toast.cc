@@ -5,10 +5,8 @@
 #include "chrome/browser/ui/views/passwords/password_change/password_change_toast.h"
 
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
-#include "chrome/browser/ui/views/controls/page_switcher_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
@@ -32,7 +30,6 @@
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/window/dialog_client_view.h"
-#include "ui/views/window/dialog_delegate.h"
 
 namespace {
 
@@ -168,14 +165,13 @@ PasswordChangeToast::~PasswordChangeToast() = default;
 
 void PasswordChangeToast::UpdateLayout(ToastOptions configuration) {
   ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
-  icon_ = configuration.icon;
-  icon_view_->SetVisible(icon_.has_value());
-  if (icon_.has_value() && GetColorProvider()) {
+  icon_view_->SetVisible(configuration.icon.has_value());
+  if (configuration.icon.has_value()) {
     icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        *icon_.value(), GetColorProvider()->GetColor(ui::kColorToastForeground),
+        *configuration.icon.value(), ui::kColorToastForeground,
         layout_provider->GetDistanceMetric(DISTANCE_TOAST_BUBBLE_ICON_SIZE)));
   }
-  throbber_->SetVisible(!icon_.has_value());
+  throbber_->SetVisible(!configuration.icon.has_value());
 
   label_->SetText(configuration.text);
 
@@ -219,18 +215,6 @@ gfx::Insets PasswordChangeToast::CalculateInteriorMargin() {
       layout_provider->GetDistanceMetric(DISTANCE_TOAST_BUBBLE_MARGIN_LEFT),
       total_vertical_margins / 2,
       layout_provider->GetDistanceMetric(right_margin_token));
-}
-
-void PasswordChangeToast::OnThemeChanged() {
-  views::View::OnThemeChanged();
-
-  CHECK(GetColorProvider());
-  if (icon_.has_value()) {
-    icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        *icon_.value(), GetColorProvider()->GetColor(ui::kColorToastForeground),
-        ChromeLayoutProvider::Get()->GetDistanceMetric(
-            DISTANCE_TOAST_BUBBLE_ICON_SIZE)));
-  }
 }
 
 void PasswordChangeToast::OnActionButtonClicked() {

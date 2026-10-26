@@ -60,6 +60,8 @@ class CWVPreferencesTest : public PlatformTest {
     pref_registry->RegisterBooleanPref(
         ios_web_view::kCWVPasswordAffiliationEnabled, false);
     pref_registry->RegisterBooleanPref(
+        ios_web_view::kCWVAutofillScopedFormActivityEnabled, false);
+    pref_registry->RegisterBooleanPref(
         ios_web_view::kCWVAutofillVCNUsageEnabled, false);
 
     base::FilePath temp_dir_path;
@@ -149,6 +151,38 @@ TEST_F(CWVPreferencesTest, PasswordAffiliationEnabled) {
   EXPECT_FALSE(preferences.passwordAffiliationEnabled);
   preferences.passwordAffiliationEnabled = YES;
   EXPECT_TRUE(preferences.passwordAffiliationEnabled);
+}
+
+// Tests that deprecated `autofillSafeLifecycleEnabled` is a no-op and always
+// returns YES.
+TEST_F(CWVPreferencesTest, AutofillSafeLifecycleEnabled) {
+  std::unique_ptr<PrefService> pref_service = CreateTestPrefService();
+  CWVPreferences* preferences =
+      [[CWVPreferences alloc] initWithPrefService:pref_service.get()];
+  EXPECT_TRUE(preferences.autofillSafeLifecycleEnabled);
+  preferences.autofillSafeLifecycleEnabled = NO;
+  EXPECT_TRUE(preferences.autofillSafeLifecycleEnabled);
+}
+
+// Tests CWVPreferences `autofillScopedFormActivityEnabled`.
+TEST_F(CWVPreferencesTest, AutofillScopedFormActivityEnabled) {
+  std::unique_ptr<PrefService> pref_service = CreateTestPrefService();
+  CWVPreferences* preferences =
+      [[CWVPreferences alloc] initWithPrefService:pref_service.get()];
+  EXPECT_FALSE(preferences.autofillScopedFormActivityEnabled);
+  preferences.autofillScopedFormActivityEnabled = YES;
+  EXPECT_TRUE(preferences.autofillScopedFormActivityEnabled);
+}
+
+// Tests that deprecated `passwordManagerSafeLifecycleEnabled` is a no-op and
+// always returns YES.
+TEST_F(CWVPreferencesTest, PasswordManagerSafeLifecycleEnabled) {
+  std::unique_ptr<PrefService> pref_service = CreateTestPrefService();
+  CWVPreferences* preferences =
+      [[CWVPreferences alloc] initWithPrefService:pref_service.get()];
+  EXPECT_TRUE(preferences.passwordManagerSafeLifecycleEnabled);
+  preferences.passwordManagerSafeLifecycleEnabled = NO;
+  EXPECT_TRUE(preferences.passwordManagerSafeLifecycleEnabled);
 }
 
 // Tests safe browsing setting.

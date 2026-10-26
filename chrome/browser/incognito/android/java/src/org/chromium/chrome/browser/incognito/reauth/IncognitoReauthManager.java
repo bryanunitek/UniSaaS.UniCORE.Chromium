@@ -10,11 +10,14 @@ import android.os.Build;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.device_reauth.BiometricStatus;
+import org.chromium.chrome.browser.device_reauth.DeviceAuthAvailabilityCheckerBridge;
 import org.chromium.chrome.browser.device_reauth.DeviceAuthSource;
 import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -22,7 +25,7 @@ import org.chromium.components.user_prefs.UserPrefs;
 /** This class is responsible for managing the Incognito re-authentication flow. */
 @NullMarked
 public class IncognitoReauthManager {
-    private static @Nullable Boolean sIsIncognitoReauthFeatureAvailableForTesting;
+    private static @TriState int sIsIncognitoReauthFeatureAvailableForTesting;
     private final ReauthenticatorBridge mReauthenticatorBridge;
 
     /**
@@ -42,6 +45,8 @@ public class IncognitoReauthManager {
     }
 
     public IncognitoReauthManager(Activity activity, Profile profile) {
+        // TODO(crbug.com/574398039): Instantiate the reauthenticator bridge only if biometric
+        // authentication is available/required.
         this(ReauthenticatorBridge.create(activity, profile, DeviceAuthSource.INCOGNITO));
     }
 
@@ -58,8 +63,13 @@ public class IncognitoReauthManager {
      *     once the authentication is executed.
      */
     public void startReauthenticationFlow(IncognitoReauthCallback incognitoReauthCallback) {
-        if (mReauthenticatorBridge.getBiometricAvailabilityStatus() == BiometricStatus.UNAVAILABLE
-                || !isIncognitoReauthFeatureAvailable()) {
+        boolean isBiometricUnavailable =
+                ChromeFeatureList.isEnabled(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
+                        ? DeviceAuthAvailabilityCheckerBridge.getBiometricAvailabilityStatus()
+                                == BiometricStatus.UNAVAILABLE
+                        : mReauthenticatorBridge.getBiometricAvailabilityStatus()
+                                == BiometricStatus.UNAVAILABLE;
+        if (isBiometricUnavailable || !isIncognitoReauthFeatureAvailable()) {
             incognitoReauthCallback.onIncognitoReauthNotPossible();
             return;
         }
@@ -89,8 +99,8 @@ public class IncognitoReauthManager {
      *     IncognitoReauthManager#isIncognitoReauthEnabled(Profile)} instead.
      */
     public static boolean isIncognitoReauthFeatureAvailable() {
-        if (sIsIncognitoReauthFeatureAvailableForTesting != null) {
-            return sIsIncognitoReauthFeatureAvailableForTesting;
+        if (sIsIncognitoReauthFeatureAvailableForTesting != TriState.NOT_SET) {
+            return sIsIncognitoReauthFeatureAvailableForTesting == TriState.TRUE;
         }
         // The implementation relies on {@link BiometricManager} which was introduced in API
         // level 29. Android Q is not supported due to a potential bug in BiometricPrompt.
@@ -108,9 +118,10 @@ public class IncognitoReauthManager {
                 && isIncognitoReauthSettingEnabled(profile);
     }
 
-    public static void setIsIncognitoReauthFeatureAvailableForTesting(Boolean isAvailable) {
-        sIsIncognitoReauthFeatureAvailableForTesting = isAvailable;
-        ResettersForTesting.register(() -> sIsIncognitoReauthFeatureAvailableForTesting = null);
+    public static void setIsIncognitoReauthFeatureAvailableForTesting(boolean isAvailable) {
+        sIsIncognitoReauthFeatureAvailableForTesting = TriStateUtils.from(isAvailable);
+        ResettersForTesting.register(
+                () -> sIsIncognitoReauthFeatureAvailableForTesting = TriState.NOT_SET);
     }
 
     private static boolean isIncognitoReauthSettingEnabled(Profile profile) {

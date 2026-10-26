@@ -26,10 +26,11 @@
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_pedal_implementations.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.h"
 #include "chrome/browser/ui/webui/searchbox/searchbox_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -45,7 +46,6 @@
 #include "components/omnibox/browser/mock_autocomplete_provider_client.h"
 #include "components/omnibox/browser/omnibox_metrics_provider.h"
 #include "components/omnibox/browser/search_provider.h"
-#include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/omnibox/composebox/composebox_query.mojom.h"
@@ -60,8 +60,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
-#include "third_party/omnibox_proto/answer_type.pb.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "url/gurl.h"
 
@@ -75,6 +75,10 @@ class RealboxSearchBrowserTestPage : public searchbox::mojom::Page {
       searchbox::mojom::OmniboxPopupSelectionPtr old_selection,
       searchbox::mojom::OmniboxPopupSelectionPtr selection) override {}
   void SetInputText(const std::string& input_text) override {}
+  void SetKeywordSpaceTriggeringEnabled(bool enabled) override {}
+  void SetAvailableKeywordModels(
+      std::vector<searchbox::mojom::InputKeywordModelPtr> models,
+      const std::string& default_search_provider_keyword) override {}
   void SetThumbnail(const std::string& thumbnail_url,
                     bool is_deletable) override {}
   void OnContextualInputStatusChanged(
@@ -88,10 +92,11 @@ class RealboxSearchBrowserTestPage : public searchbox::mojom::Page {
       const base::UnguessableToken& token,
       searchbox::mojom::SelectedFileInfoPtr file_info) override {}
   void UpdateAutoSuggestedTabContext(
-      searchbox::mojom::TabInfoPtr tab_info) override {}
+      searchbox::mojom::TabInfoPtr tab_info,
+      const std::optional<std::string>& invocation_source) override {}
   void OnPermissionPromptChanged(bool is_showing,
                                  const gfx::Size& prompt_size) override {}
-  MOCK_METHOD(void, SetKeywordSelected, (bool is_keyword_selected), (override));
+  void SetFreState(searchbox::mojom::FreStatePtr state) override {}
   MOCK_METHOD(void, UpdateContentSharingPolicy, (bool enabled), (override));
   MOCK_METHOD(void, UpdateLensSearchEligibility, (bool eligible), (override));
   MOCK_METHOD(void, UpdateAimPopupEligibility, (bool eligible), (override));
@@ -113,6 +118,15 @@ class RealboxSearchBrowserTestPage : public searchbox::mojom::Page {
               (override));
   MOCK_METHOD(void, OpenCurrentSelection, (WindowOpenDisposition), (override));
   MOCK_METHOD(void, SetAimButtonVisible, (bool visible), (override));
+  MOCK_METHOD(
+      void,
+      SetAimButtonConfig,
+      (const std::string&, const std::string&, const std::string&, const GURL&),
+      (override));
+  MOCK_METHOD(void, OnScreenshotMenuClosed, (), (override));
+  void UpdateProfileInfo(const GURL& avatar_url,
+                         const std::string& name,
+                         const std::string& email) override {}
 
   mojo::PendingRemote<searchbox::mojom::Page> GetRemotePage() {
     return receiver_.BindNewPipeAndPassRemote();
@@ -143,7 +157,7 @@ class RealboxSearchPreloadBrowserTest : public SearchPrefetchBaseBrowserTest {
     RealboxSearchBrowserTestPage page;
     RealboxHandler realbox_handler = RealboxHandler(
         remote_page_handler.BindNewPipeAndPassReceiver(), page.GetRemotePage(),
-        browser()->profile(), GetWebContents(),
+        browser()->GetProfile(), GetWebContents(),
         base::BindLambdaForTesting(
             []() -> contextual_search::ContextualSearchSessionHandle* {
               return nullptr;
@@ -158,8 +172,11 @@ class RealboxSearchPreloadBrowserTest : public SearchPrefetchBaseBrowserTest {
     auto [search_url, prefetch] = GetSearchPrefetchAndNonPrefetch(search_terms);
     // Fake a WebUI input.
     remote_page_handler->QueryAutocomplete(
-        0, base::ASCIIToUTF16(input_query),
-        /*prevent_inline_autocomplete=*/false, 0);
+        0, /*tab_id=*/std::nullopt, base::ASCIIToUTF16(input_query),
+        /*prevent_inline_autocomplete=*/false, 0,
+        omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT,
+        /*is_on_focus=*/false, /*keyword=*/"",
+        searchbox::mojom::InputMethod::kKeyboard);
     remote_page_handler.FlushForTesting();
 
     // Prefetch should be triggered.
@@ -234,7 +251,7 @@ IN_PROC_BROWSER_TEST_F(RealboxSearchPreloadWithSearchStatsBrowserTest,
 
   // The prefetch should match the prerender.
   EXPECT_TRUE(IsSearchDestinationMatch(GetCanonicalSearchURL(prefetch_url),
-                                       browser()->profile(), prerender_url));
+                                       browser()->GetProfile(), prerender_url));
 }
 
 IN_PROC_BROWSER_TEST_F(RealboxSearchPreloadWithoutSearchStatsBrowserTest,
@@ -253,8 +270,19 @@ IN_PROC_BROWSER_TEST_F(RealboxSearchPreloadWithoutSearchStatsBrowserTest,
 
   // The prefetch should match the prerender.
   EXPECT_TRUE(IsSearchDestinationMatch(GetCanonicalSearchURL(prefetch_url),
-                                       browser()->profile(), prerender_url));
+                                       browser()->GetProfile(), prerender_url));
 }
+
+namespace {
+class RealboxHandlerPublic : public RealboxHandler {
+ public:
+  using RealboxHandler::RealboxHandler;
+  using SearchboxHandler::autocomplete_controller_observation_;
+  using SearchboxHandler::client;
+  using SearchboxHandler::omnibox_controller;
+  using SearchboxHandler::SetAutocompleteControllerForTesting;
+};
+}  // namespace
 
 class RealboxHandlerTest : public InProcessBrowserTest,
                            public testing::WithParamInterface<bool> {
@@ -272,14 +300,14 @@ class RealboxHandlerTest : public InProcessBrowserTest,
 
  protected:
   testing::NiceMock<MockSearchboxPage> page_;
-  std::unique_ptr<RealboxHandler> handler_;
+  std::unique_ptr<RealboxHandlerPublic> handler_;
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
-    handler_ = std::make_unique<RealboxHandler>(
+    handler_ = std::make_unique<RealboxHandlerPublic>(
         mojo::PendingReceiver<searchbox::mojom::PageHandler>(),
-        page_.BindAndGetRemote(), browser()->profile(),
-        /*web_contents=*/browser()->tab_strip_model()->GetActiveWebContents(),
+        page_.BindAndGetRemote(), browser()->GetProfile(),
+        /*web_contents=*/browser()->GetTabStripModel()->GetActiveWebContents(),
         base::BindLambdaForTesting(
             []() -> contextual_search::ContextualSearchSessionHandle* {
               return nullptr;
@@ -296,7 +324,7 @@ IN_PROC_BROWSER_TEST_F(RealboxHandlerTest, RealboxUpdatesEditModelInput) {
   handler_->autocomplete_controller_observation_.Reset();
 
   TemplateURLService* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   auto client = std::make_unique<MockAutocompleteProviderClient>();
   client->set_template_url_service(template_url_service);
   // Set a mock AutocompleteController.
@@ -319,7 +347,7 @@ IN_PROC_BROWSER_TEST_F(RealboxHandlerTest, RealboxUpdatesEditModelInput) {
   ACMatches matches;
   for (size_t i = 0; i < 4; ++i) {
     AutocompleteMatch match(nullptr, 1000, false,
-                            AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                            omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
     match.keyword = u"match";
     match.allowed_to_be_default_match = true;
     matches.push_back(match);
@@ -339,19 +367,30 @@ IN_PROC_BROWSER_TEST_F(RealboxHandlerTest, RealboxUpdatesEditModelInput) {
       .Times(2)
       .WillRepeatedly(SaveArg<0>(&input));
 
-  handler_->QueryAutocomplete(0, u"", /*prevent_inline_autocomplete=*/false, 0);
+  handler_->QueryAutocomplete(
+      0, /*tab_id=*/std::nullopt, u"", /*prevent_inline_autocomplete=*/false, 0,
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT,
+      /*is_on_focus=*/true, /*keyword=*/"",
+      searchbox::mojom::InputMethod::kKeyboard);
 
   EXPECT_EQ(input.focus_type(), metrics::OmniboxFocusType::INTERACTION_FOCUS);
 
-  handler_->OpenAutocompleteMatch(2, url, true, 1, false, false, false, false,
-                                  /*via_keyboard=*/false);
+  auto modifiers = searchbox::mojom::ActionModifiers::New();
+  handler_->OpenAutocompleteMatch(
+      autocomplete_controller_->result().sequence_id(), 2, url,
+      /*are_matches_showing=*/true, /*mouse_button=*/1, std::move(modifiers),
+      /*via_keyboard=*/false);
 
   // Assert that the input gets correctly updated for the realbox.
   EXPECT_TRUE(omnibox_edit_model_->GetInputForTesting().IsZeroSuggest());
   EXPECT_EQ(u"", omnibox_edit_model_->GetInputForTesting().text());
 
-  handler_->QueryAutocomplete(0, u"match",
-                              /*prevent_inline_autocomplete=*/false, 0);
+  handler_->QueryAutocomplete(
+      0, /*tab_id=*/std::nullopt, u"match",
+      /*prevent_inline_autocomplete=*/false, 0,
+      omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT,
+      /*is_on_focus=*/false, /*keyword=*/"",
+      searchbox::mojom::InputMethod::kKeyboard);
 
   // Assert that the input text gets correctly updated for the realbox.
   EXPECT_EQ(u"match", omnibox_edit_model_->GetInputForTesting().text());
@@ -366,7 +405,8 @@ INSTANTIATE_TEST_SUITE_P(All, RealboxHandlerTest, testing::Bool());
 // the NTP Realbox.
 IN_PROC_BROWSER_TEST_P(RealboxHandlerTest, PedalVectorIcons) {
   std::unordered_map<OmniboxPedalId, scoped_refptr<OmniboxPedal>> pedals =
-      GetPedalImplementations(/*incognito=*/true, /*guest=*/false,
+      GetPedalImplementations(OmniboxPedalProfileType::kOtrWithRegularParent,
+                              OmniboxPedalOtrType::kIncognito,
                               /*testing=*/true);
   for (auto const& it : pedals) {
     const scoped_refptr<OmniboxPedal> pedal = it.second;
@@ -396,11 +436,13 @@ IN_PROC_BROWSER_TEST_P(RealboxHandlerTest, ActionVectorIcons) {
 // Tests that all Omnibox match vector icons map to an equivalent SVG for use in
 // the NTP Realbox.
 IN_PROC_BROWSER_TEST_P(RealboxHandlerTest, MatchVectorIcons) {
-  for (int type = AutocompleteMatchType::URL_WHAT_YOU_TYPED;
-       type != AutocompleteMatchType::NUM_TYPES; type++) {
+  for (int type =
+           static_cast<int>(omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
+       type <= static_cast<int>(omnibox::AutocompleteMatchType::kMaxValue);
+       type++) {
     AutocompleteMatch match;
-    match.type = static_cast<AutocompleteMatchType::Type>(type);
-    if (match.type == AutocompleteMatchType::STARTER_PACK) {
+    match.type = static_cast<omnibox::AutocompleteMatchType>(type);
+    if (match.type == omnibox::AutocompleteMatchType::kStarterPack) {
       // All STARTER_PACK suggestions should have non-empty vector icons.
       for (int starter_pack_id = static_cast<int>(
                template_url_starter_pack_data::StarterPackId::kBookmarks);
@@ -426,8 +468,12 @@ IN_PROC_BROWSER_TEST_P(RealboxHandlerTest, MatchVectorIcons) {
         // An empty resource name is effectively a blank icon.
         EXPECT_TRUE(svg_name.empty());
       } else if (is_bookmark) {
-        EXPECT_EQ("//resources/cr_components/searchbox/icons/bookmark_cr23.svg",
-                  svg_name);
+        EXPECT_EQ(
+            features::IsWebUIRoundedIconsEnabled()
+                ? "//resources/cr_components/searchbox/icons/bookmark_cr23.svg"
+                : "//resources/cr_components/searchbox/icons/"
+                  "bookmark_cr23_old.svg",
+            svg_name);
       } else {
         EXPECT_FALSE(svg_name.empty());
       }
@@ -435,23 +481,3 @@ IN_PROC_BROWSER_TEST_P(RealboxHandlerTest, MatchVectorIcons) {
   }
 }
 
-// Tests that all Omnibox Answer vector icons map to an equivalent SVG for use
-// in the NTP Realbox.
-IN_PROC_BROWSER_TEST_P(RealboxHandlerTest, AnswerVectorIcons) {
-  for (int answer_type = omnibox::ANSWER_TYPE_DICTIONARY;
-       answer_type != omnibox::AnswerType_ARRAYSIZE; answer_type++) {
-    AutocompleteMatch match;
-    match.answer_type = static_cast<omnibox::AnswerType>(answer_type);
-    const bool is_bookmark = RealboxHandlerTest::GetParam();
-    const gfx::VectorIcon& vector_icon = match.GetVectorIcon(is_bookmark);
-    const std::string& svg_name =
-        handler_->AutocompleteIconToResourceName(vector_icon);
-    if (is_bookmark) {
-      EXPECT_EQ("//resources/cr_components/searchbox/icons/bookmark_cr23.svg",
-                svg_name);
-    } else {
-      EXPECT_FALSE(svg_name.empty());
-      EXPECT_NE("search.svg", svg_name);
-    }
-  }
-}

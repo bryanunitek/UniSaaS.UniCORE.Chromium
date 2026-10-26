@@ -14,8 +14,8 @@
 #include "build/build_config.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #include "ui/gfx/geometry/rect.h"
@@ -38,7 +38,6 @@ class Canvas;
 
 namespace ui {
 class EventTarget;
-class Layer;
 }  // namespace ui
 
 namespace image_editor {
@@ -249,7 +248,7 @@ class ScreenshotFlow : public content::WebContentsObserver,
 
   // Our top-level layer that is superimposed over the browser window's root
   // layer while screen capture mode is active.
-  std::unique_ptr<ui::Layer> screen_capture_layer_;
+  std::unique_ptr<ui::LayerTextured> screen_capture_layer_;
 
   base::WeakPtrFactory<ScreenshotFlow> weak_factory_{this};
 };

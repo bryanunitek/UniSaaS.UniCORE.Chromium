@@ -40,7 +40,7 @@ import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {Constructor} from '../common/types.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
 import {routes} from '../router.js';
 
 import {getTemplate} from './internet_known_networks_subpage.html.js';
@@ -130,7 +130,7 @@ export class SettingsInternetKnownNetworksPageElement extends
     };
   }
 
-  networkType: NetworkType|undefined;
+  declare networkType: NetworkType|undefined;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -138,17 +138,17 @@ export class SettingsInternetKnownNetworksPageElement extends
     Setting.kForgetWifiNetwork,
   ]);
 
-  private enableForget_: boolean;
+  declare private enableForget_: boolean;
   private networkConfig_: CrosNetworkConfigInterface;
-  private networkStateList_: OncMojo.NetworkStateProperties[];
+  declare private networkStateList_: OncMojo.NetworkStateProperties[];
   private passpointService_: PasspointServiceInterface;
-  private passpointSubscriptionsList_: PasspointSubscription[];
-  private pendingSettingId_: Setting|null;
+  declare private passpointSubscriptionsList_: PasspointSubscription[];
+  declare private pendingSettingId_: Setting|null;
   private selectedGuid_: string;
   private selectedSubscriptionId_: string;
   private selectedManagedProperties_: ManagedProperties|null = null;
-  private showAddPreferred_: boolean;
-  private showRemovePreferred_: boolean;
+  declare private showAddPreferred_: boolean;
+  declare private showRemovePreferred_: boolean;
 
   constructor() {
     super();

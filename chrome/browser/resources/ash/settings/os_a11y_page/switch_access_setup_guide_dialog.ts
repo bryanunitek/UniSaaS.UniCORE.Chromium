@@ -14,7 +14,6 @@ import '../controls/settings_slider.js';
 import '../os_settings_icons.html.js';
 import './switch_access_action_assignment_pane.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import type {CrRadioGroupElement} from 'chrome://resources/ash/common/cr_elements/cr_radio_group/cr_radio_group.js';
 import type {SliderTick} from 'chrome://resources/ash/common/cr_elements/cr_slider/cr_slider.js';
@@ -22,6 +21,7 @@ import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import type {SettingsSwitchAccessActionAssignmentPaneElement} from './switch_access_action_assignment_pane.js';
@@ -229,15 +229,15 @@ export class SettingsSwitchAccessSetupGuideDialogElement extends
     ];
   }
 
-  private autoScanSpeedRangeMs_: SliderTick[];
-  private currentPageId_: number;
-  private formatter_: Intl.NumberFormat;
-  private maxScanSpeedLabelSec_: string;
-  private maxScanSpeedMs_: number;
-  private minScanSpeedLabelSec_: string;
-  private minScanSpeedMs_: number;
-  private switchCount_: number;
-  private switchToAssign_: SwitchAccessCommand|null;
+  declare private autoScanSpeedRangeMs_: SliderTick[];
+  declare private currentPageId_: number;
+  declare private formatter_: Intl.NumberFormat;
+  declare private maxScanSpeedLabelSec_: string;
+  declare private maxScanSpeedMs_: number;
+  declare private minScanSpeedLabelSec_: string;
+  declare private minScanSpeedMs_: number;
+  declare private switchCount_: number;
+  declare private switchToAssign_: SwitchAccessCommand|null;
 
   constructor() {
     super();

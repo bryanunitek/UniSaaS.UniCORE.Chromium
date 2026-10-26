@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
+import {KeywordType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
 import type {SearchboxMatchElement} from './searchbox_match.js';
 
@@ -24,20 +25,23 @@ export function getHtml(this: SearchboxMatchElement) {
           ellipsis prepended to the suggestion. -->
       <span id="ellipsis" ?hidden="${!this.showEllipsis}">...&nbsp;</span>
       <span id="suggestion">
-        <span id="contents" .innerHTML="${this.contentsHtml_}"></span>
-        <span id="separator" class="dim">${this.separatorText_}</span>
-        <span id="description" .innerHTML="${this.descriptionHtml_}"></span>
+        <span id="primaryText" .innerHTML="${this.primaryTextHtml_}"></span>
+        <span id="separator" class="color-on-surface-subtle">${this.separatorText_}</span>
+        <span id="secondaryText" .innerHTML="${this.secondaryTextHtml_}"
+            ?has-icon="${!!this.match.descriptionIconPath}"
+            style="--description-icon: url(${this.match.descriptionIconPath})">
+        </span>
       </span>
     </div>
   </div>
 
-  ${this.match.keywordChipHint ? html`
+  ${this.match.keywordModel?.type === KeywordType.kChip ? html`
     <div id="actions-focus-border">
       <cr-searchbox-action id="keyword"
           class="${this.getKeywordCssClass_()}"
-          hint="${this.match.keywordChipHint}"
+          hint="${this.match.keywordModel.chipHint}"
           icon-path="//resources/images/icon_search.svg"
-          aria-label="${this.match.keywordChipA11y}"
+          aria-label="${this.match.keywordModel.chipA11y}"
           @execute-action="${this.onKeywordExecuteAction_}"
           tabindex="${this.virtualFocusEnabled ? -1 : 1}">
       </cr-searchbox-action>

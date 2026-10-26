@@ -44,9 +44,10 @@ use crate::helpers::*;
 // //mojo/public/cpp/bindings/tests/validation_test_input_parser.h
 fn validate_parsing<T>(value: T, data: &str) -> anyhow::Result<()>
 where
-    T: MojomParse<()> + PartialEq + std::fmt::Debug,
+    T: MojomParse + PartialEq + std::fmt::Debug,
 {
-    // We have to compute this eagerly since `value ` will get consumed by the test
+    // We have to compute this eagerly since `value ` will get consumed by the
+    // test
     let err_str = format!("\nRust value: {value:?}\nWire Data: {data}");
 
     // Helper function so we can use the question mark operator, but also
@@ -57,8 +58,9 @@ where
             // We currently don't do anything with handles, so only look at the data field
             .data;
 
-        // TODO(crbug.com/456214728):: It would be nice to use the `verify_` macros from
-        // googletest that return a result, if we get access to them.
+        // TODO(crbug.com/456214728):: It would be nice to use the `verify_`
+        // macros from googletest that return a result, if we get access
+        // to them.
         expect_eq!(
             &value,
             &try_from_mojom_value(parse_single_value_for_testing(
@@ -74,8 +76,8 @@ where
         Ok(())
     };
 
-    // We could also use anyhow's Context trait, but that overwrites the old context
-    // since we can't control the printing format gtest uses.
+    // We could also use anyhow's Context trait, but that overwrites the old
+    // context since we can't control the printing format gtest uses.
     validate_parsing_internal().map_err(|err| anyhow::anyhow!("{err}{err_str}"))
 }
 
@@ -85,9 +87,10 @@ where
 // after parsing (comparing the parsed `MojomValue` instead of the parsed `T`).
 fn validate_parsing_with_handles<T>(value: T, data: &str, num_handles: usize) -> anyhow::Result<()>
 where
-    T: MojomParse<()> + PartialEq + std::fmt::Debug,
+    T: MojomParse + PartialEq + std::fmt::Debug,
 {
-    // We have to compute this eagerly since `value ` will get consumed by the test
+    // We have to compute this eagerly since `value ` will get consumed by the
+    // test
     let err_str = format!("\nRust value: {value:?}\nWire Data: {data}");
 
     // Helper function so we can use the question mark operator, but also
@@ -101,8 +104,9 @@ where
         let mojom_value = into_mojom_value(value);
         let mut handles = (0..num_handles).map(|_| Some(dummy_handle())).collect::<Vec<_>>();
 
-        // TODO(crbug.com/456214728): It would be nice to use the `verify_` macros from
-        // googletest that return a result, if we get access to them.
+        // TODO(crbug.com/456214728): It would be nice to use the `verify_`
+        // macros from googletest that return a result, if we get access
+        // to them.
         expect_true!(equivalent_value(
             &mojom_value,
             &parse_single_value_for_testing(wire_data.as_ref(), &mut handles, T::wire_type())?
@@ -116,15 +120,15 @@ where
         Ok(())
     };
 
-    // We could also use anyhow's Context trait, but that overwrites the old context
-    // since we can't control the printing format gtest uses.
+    // We could also use anyhow's Context trait, but that overwrites the old
+    // context since we can't control the printing format gtest uses.
     validate_parsing_internal().map_err(|err| anyhow::anyhow!("{err}{err_str}"))
 }
 
 /// Check that we correctly fail to parse mismatching data.
 fn validate_parsing_failure<T>(data: &str) -> anyhow::Result<()>
 where
-    T: MojomParse<()> + PartialEq + std::fmt::Debug,
+    T: MojomParse + PartialEq + std::fmt::Debug,
 {
     validate_parsing_failure_with_handles::<T>(data, 0)
 }
@@ -132,7 +136,7 @@ where
 /// Check that we correctly fail to parse mismatching data...with handles!
 fn validate_parsing_failure_with_handles<T>(data: &str, num_handles: usize) -> anyhow::Result<()>
 where
-    T: MojomParse<()> + PartialEq + std::fmt::Debug,
+    T: MojomParse + PartialEq + std::fmt::Debug,
 {
     let wire_data = validation_parser::parse(data).map_err(anyhow::Error::msg)?.data;
     let mut handles = (0..num_handles).map(|_| Some(dummy_handle())).collect::<Vec<_>>();
@@ -150,14 +154,14 @@ fn validate_parsing_with_associated<T>(
     data: &str,
 ) -> anyhow::Result<()>
 where
-    T: MojomParse<DummyRegistrarForTesting> + PartialEq + std::fmt::Debug,
+    T: MojomParse<T, DummyRegistrarForTesting> + PartialEq + std::fmt::Debug,
 {
     let err_str = format!("\nRust value: {value:?}\nWire Data: {data}");
 
     let validate_parsing_internal = || -> anyhow::Result<()> {
         let wire_data = validation_parser::parse(data).map_err(anyhow::Error::msg)?.data;
 
-        let parsing_registrar = DummyRegistrarForTesting::new(false);
+        let parsing_registrar = DummyRegistrarForTesting::new(true);
         let deparsing_registrar = DummyRegistrarForTesting::new(false);
 
         let (deparsed_bytes, _deparsed_handles, interface_ids_ptr) =
@@ -222,8 +226,8 @@ fn test_primitives() -> anyhow::Result<()> {
     validate_parsing(-123.456f64, "[d]-123.456")?;
 
     // Also make sure we correctly fail to parse things.
-    // Since all bit patterns are valid, the only way for this to happen is if we
-    // don't have enough data.
+    // Since all bit patterns are valid, the only way for this to happen is if
+    // we don't have enough data.
     validate_parsing_failure::<u16>("[u1]8")?;
     validate_parsing_failure::<i64>("[s4]1006")?;
     validate_parsing_failure::<f64>("[s4]1006")?;
@@ -485,7 +489,7 @@ fn test_unions() -> anyhow::Result<()> {
             "[anchr]f1_ptr [u4]24 [u4]0 [s1]5 [u1]0 [s2]6 [s4]7 [s8]8", // FourInts
         ),
     )?;
-    validate_parsing(BaseUnion::fl(3.14f32), "[u4]16 [u4]7 [f]3.14 [u4]0")?;
+    validate_parsing(BaseUnion::fl(OrderedFloat(3.14f32)), "[u4]16 [u4]7 [f]3.14 [u4]0")?;
 
     validate_parsing_failure::<BaseUnion>("[u4]16 [u4]99 [u8]0")?;
     validate_parsing_failure::<BaseUnion>("[u4]16 [u4]6 [u8]0")?;
@@ -573,7 +577,7 @@ fn test_unions() -> anyhow::Result<()> {
             u1: NestedUnion::n(50),
             i1: 11,
             u2: NestederUnion::b(false),
-            d1: 3.14159,
+            d1: OrderedFloat(3.14159),
             u3: BaseUnion::n1(55),
             u4: NestederUnion::n(12),
             i2: 33,
@@ -597,7 +601,7 @@ fn test_unions() -> anyhow::Result<()> {
             u1: NestedUnion::u(BaseUnion::b1(true)),
             i1: -1,
             u2: NestederUnion::u(NestedUnion::u(BaseUnion::e1(TestEnum::Seven))),
-            d1: 2.71828,
+            d1: OrderedFloat(2.71828),
             u3: BaseUnion::b2(false),
             u4: NestederUnion::w(WithNestedUnion {
                 n1: 2000,
@@ -966,11 +970,11 @@ fn test_string_parsing() -> anyhow::Result<()> {
             "[u4]32 [u4]3 ",
             "[dist8]life_ptr [dist8]universe_ptr [dist8]everything_ptr",
             "[anchr]life_ptr",
-            &str_wire_format("life"),
+            str_wire_format("life"),
             "[anchr]universe_ptr",
-            &str_wire_format("universe"),
+            str_wire_format("universe"),
             "[anchr]everything_ptr",
-            &str_wire_format("everything"),
+            str_wire_format("everything"),
         ),
     )?;
 
@@ -984,9 +988,9 @@ fn test_string_parsing() -> anyhow::Result<()> {
             "[anchr]values_ptr ",
             "[u4]24 [u4]2 [dist8]ten_ptr [dist8]twenty_ptr ",
             "[anchr]ten_ptr ",
-            &str_wire_format("ten"),
+            str_wire_format("ten"),
             "[anchr]twenty_ptr ",
-            &str_wire_format("twenty"),
+            str_wire_format("twenty"),
         ),
     )?;
 
@@ -998,9 +1002,9 @@ fn test_string_parsing() -> anyhow::Result<()> {
             "[anchr]keys_ptr ",
             "[u4]24 [u4]2 [dist8]four_ptr [dist8]three_ptr ",
             "[anchr]four_ptr ",
-            &str_wire_format("four"),
+            str_wire_format("four"),
             "[anchr]three_ptr ",
-            &str_wire_format("three"),
+            str_wire_format("three"),
             "[anchr]values_ptr ",
             "[u4]12 [u4]2 [s2]4 [s2]3 [u4]0 ",
         ),
@@ -1022,7 +1026,7 @@ fn test_complex_union_parsing() -> anyhow::Result<()> {
         HoldsComplexTypes::str("union_string".to_string()),
         &format!(
             "[u4]16 [u4]0 [dist8]union_str_ptr [anchr]union_str_ptr {}",
-            &str_wire_format("union_string")
+            str_wire_format("union_string")
         ),
     )?;
 
@@ -1030,7 +1034,7 @@ fn test_complex_union_parsing() -> anyhow::Result<()> {
         ComplexUnionHolder { u: HoldsComplexTypes::str("union_string".to_string()) },
         &format!(
             "[u4]24 [u4]0 [u4]16 [u4]0 [dist8]union_str_ptr [anchr]union_str_ptr {}",
-            &str_wire_format("union_string")
+            str_wire_format("union_string")
         ),
     )?;
 
@@ -1079,9 +1083,9 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             n2: Some(12),
             empty: None,
             e: None,
-            fourints: Some(FourInts { a: 1, b: 2, c: 3, d: 4 }),
+            fourints: Some(Box::new(FourInts { a: 1, b: 2, c: 3, d: 4 })),
             f1: None,
-            f2: Some(2.71828),
+            f2: Some(OrderedFloat(2.71828)),
         },
         concat!(
             "[u4]48 [u4]0 [b]01001011 [u1]12 [u2]0 [u4]0 [u8]0 [dist8]fourints_ptr [f]0 [u4]0 [d]2.71828 ",
@@ -1094,10 +1098,10 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             b: None,
             n1: Some(33),
             n2: None,
-            empty: Some(Empty {}),
+            empty: Some(Box::new(Empty {})),
             e: Some(TestEnum::Four),
             fourints: None,
-            f1: Some(3.14),
+            f1: Some(OrderedFloat(3.14)),
             f2: None,
         },
         concat!(
@@ -1111,11 +1115,11 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             b: Some(false),
             n1: Some(44),
             n2: Some(22),
-            empty: Some(Empty {}),
+            empty: Some(Box::new(Empty {})),
             e: Some(TestEnum::Zero),
-            fourints: Some(FourInts { a: 1, b: 2, c: 3, d: 4 }),
-            f1: Some(1.23),
-            f2: Some(4.56),
+            fourints: Some(Box::new(FourInts { a: 1, b: 2, c: 3, d: 4 })),
+            f1: Some(OrderedFloat(1.23)),
+            f2: Some(OrderedFloat(4.56)),
         },
         concat!(
             "[u4]48 [u4]0 [b]01111101 [u1]22 [u2]44 [u4]0 [dist8]empty_ptr [dist8]fourints_ptr [f]1.23 [u4]0 [d]4.56 ",
@@ -1140,9 +1144,13 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
                 None,
                 Some(false),
             ],
-            empties: vec![None, Some(Empty {}), None, Some(Empty {})],
+            empties: vec![None, Some(Box::new(Empty {})), None, Some(Box::new(Empty {}))],
             enums: vec![Some(TestEnum::Seven), None, Some(TestEnum::Zero), Some(TestEnum::Seven)],
-            unions: vec![Some(BaseUnion::n1(5)), None, Some(BaseUnion::b1(true))],
+            unions: vec![
+                Some(Box::new(BaseUnion::n1(5))),
+                None,
+                Some(Box::new(BaseUnion::b1(true))),
+            ],
         },
         concat!(
             "[u4]40 [u4]0 [dist8]bools_ptr [dist8]empties_ptr [dist8]enums_ptr [dist8]unions_ptr ",
@@ -1180,18 +1188,18 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
     validate_parsing::<UnionWithNullables>(UnionWithNullables::u(None), "[u4]16 [u4]2 [u8]0")?;
 
     validate_parsing::<UnionWithNullables>(
-        UnionWithNullables::e(Some(Empty {})),
+        UnionWithNullables::e(Some(Box::new(Empty {}))),
         "[u4]16 [u4]0 [dist8]empty_ptr [anchr]empty_ptr [u4]8 [u4]0",
     )?;
     validate_parsing::<UnionWithNullables>(
         UnionWithNullables::str(Some("union_string".to_string())),
         &format!(
             "[u4]16 [u4]1 [dist8]union_str_ptr [anchr]union_str_ptr {}",
-            &str_wire_format("union_string")
+            str_wire_format("union_string")
         ),
     )?;
     validate_parsing::<UnionWithNullables>(
-        UnionWithNullables::u(Some(BaseUnion::n1(123))),
+        UnionWithNullables::u(Some(Box::new(BaseUnion::n1(123)))),
         "[u4]16 [u4]2 [dist8]u_ptr [anchr]u_ptr [u4]16 [u4]0 [u8]123",
     )?;
 
@@ -1201,7 +1209,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
     )?;
     validate_parsing::<NullableOthers>(
         NullableOthers {
-            u: Some(UnionWithNullables::u(None)),
+            u: Some(Box::new(UnionWithNullables::u(None))),
             m: None,
             str: Some("holla".to_string()),
         },
@@ -1209,17 +1217,17 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             "{} {} {}",
             "[u4]40 [u4]0 [u4]16 [u4]2 [u8]0 [u8]0 [dist8]str_ptr ",
             "[anchr]str_ptr ",
-            &str_wire_format("holla")
+            str_wire_format("holla")
         ),
     )?;
     validate_parsing::<NullableOthers>(
         NullableOthers {
-            u: Some(UnionWithNullables::u(Some(BaseUnion::f1(FourInts {
+            u: Some(Box::new(UnionWithNullables::u(Some(Box::new(BaseUnion::f1(FourInts {
                 a: 1,
                 b: 2,
                 c: 3,
                 d: 4,
-            })))),
+            })))))),
             m: None,
             str: None,
         },
@@ -1231,7 +1239,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
     )?;
     validate_parsing::<NullableOthers>(
         NullableOthers {
-            u: Some(UnionWithNullables::u(Some(BaseUnion::n1(42)))),
+            u: Some(Box::new(UnionWithNullables::u(Some(Box::new(BaseUnion::n1(42)))))),
             m: Some([(1, 2), (3, 4)].into()),
             str: Some("hello".to_string()),
         },
@@ -1243,7 +1251,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             "[anchr]keys_ptr [u4]10 [u4]2 [u1]1 [u1]3 [u2]0 [u4]0 ",
             "[anchr]values_ptr [u4]10 [u4]2 [u1]2 [u1]4 [u2]0 [u4]0 ",
             "[anchr]str_ptr ",
-            &str_wire_format("hello")
+            str_wire_format("hello")
         ),
     )?;
 
@@ -1340,7 +1348,8 @@ fn test_handle_parsing() -> anyhow::Result<()> {
         3,
     )?;
 
-    // Fails because remote needs 8 bytes but we only provide 4 after the receiver
+    // Fails because remote needs 8 bytes but we only provide 4 after the
+    // receiver
     validate_parsing_failure_with_handles::<WithPendingTypes>("[u4]20 [u4]0 [u4]0 [u4]1", 2)?;
 
     Ok(())

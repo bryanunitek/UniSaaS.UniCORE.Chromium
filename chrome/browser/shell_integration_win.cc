@@ -9,12 +9,13 @@
 #include <shobjidl.h>
 #include <windows.h>
 
-#include <propkey.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -24,12 +25,11 @@
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/user_metrics.h"
-#include "base/metrics/user_metrics_action.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
@@ -41,9 +41,9 @@
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/win/com_init_util.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
-#include "base/win/scoped_propvariant.h"
 #include "base/win/shlwapi.h"
 #include "base/win/shortcut.h"
 #include "chrome/browser/policy/policy_path_parser.h"
@@ -51,17 +51,20 @@
 #include "chrome/browser/shortcuts/platform_util_win.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/win/registry_watcher.h"
-#include "chrome/browser/win/settings_app_monitor.h"
 #include "chrome/browser/win/util_win_service.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
+#include "chrome/installer/util/taskbar_util.h"
+#include "chrome/installer/util/util_constants.h"
 #include "chrome/services/util_win/public/mojom/util_win.mojom.h"
 #include "components/variations/variations_associated_data.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace shell_integration {
 
@@ -127,7 +130,7 @@ std::wstring GetExpectedAppId(const base::CommandLine& command_line,
   policy::path_parser::CheckUserDataDirPolicy(&user_data_dir);
   if (user_data_dir.empty())
     chrome::GetDefaultUserDataDirectory(&user_data_dir);
-  DCHECK(!user_data_dir.empty());
+  CHECK(!user_data_dir.empty(), base::NotFatalUntil::M162);
 
   base::FilePath profile_subdir;
   if (command_line.HasSwitch(switches::kProfileDirectory)) {
@@ -136,7 +139,7 @@ std::wstring GetExpectedAppId(const base::CommandLine& command_line,
   } else {
     profile_subdir = base::FilePath(base::ASCIIToWide(chrome::kInitialProfile));
   }
-  DCHECK(!profile_subdir.empty());
+  CHECK(!profile_subdir.empty(), base::NotFatalUntil::M162);
 
   base::FilePath profile_path = user_data_dir.Append(profile_subdir);
   std::wstring prefix;
@@ -152,7 +155,7 @@ std::wstring GetExpectedAppId(const base::CommandLine& command_line,
   } else {
     app_name = ShellUtil::GetBrowserModelId(is_per_user_install);
   }
-  DCHECK(!app_name.empty());
+  CHECK(!app_name.empty(), base::NotFatalUntil::M162);
 
   return GetAppUserModelIdImpl(prefix, app_name, profile_path);
 }
@@ -185,7 +188,7 @@ std::u16string GetForSchemeUsingAssocQuery(const GURL& url,
   if (FAILED(hr)) {
     return std::u16string();
   }
-  return base::AsString16(std::wstring(out_buffer));
+  return base::AsString16(out_buffer);
 }
 
 std::u16string GetAppForSchemeUsingRegistry(const GURL& url) {
@@ -232,88 +235,11 @@ DefaultWebClientState GetDefaultWebClientStateFromShellUtilDefaultState(
   NOTREACHED();
 }
 
-// A recorder of user actions in the Windows Settings app.
-class DefaultBrowserActionRecorder : public SettingsAppMonitor::Delegate {
- public:
-  // Creates the recorder and the monitor that drives it. |continuation| will be
-  // run once the monitor's initialization completes (regardless of success or
-  // failure).
-  explicit DefaultBrowserActionRecorder(base::OnceClosure continuation)
-      : continuation_(std::move(continuation)), settings_app_monitor_(this) {}
-
-  DefaultBrowserActionRecorder(const DefaultBrowserActionRecorder&) = delete;
-  DefaultBrowserActionRecorder& operator=(const DefaultBrowserActionRecorder&) =
-      delete;
-
- private:
-  // win::SettingsAppMonitor::Delegate:
-  void OnInitialized(HRESULT result) override {
-    // UMA indicates that this succeeds > 99.98% of the time.
-    if (SUCCEEDED(result)) {
-      base::RecordAction(
-          base::UserMetricsAction("SettingsAppMonitor.Initialized"));
-    }
-    std::move(continuation_).Run();
-  }
-
-  void OnAppFocused() override {
-    base::RecordAction(
-        base::UserMetricsAction("SettingsAppMonitor.AppFocused"));
-  }
-
-  void OnChooserInvoked() override {
-    base::RecordAction(
-        base::UserMetricsAction("SettingsAppMonitor.ChooserInvoked"));
-  }
-
-  void OnBrowserChosen(const std::wstring& browser_name) override {
-    if (browser_name == InstallUtil::GetDisplayName()) {
-      base::RecordAction(
-          base::UserMetricsAction("SettingsAppMonitor.ChromeBrowserChosen"));
-    } else {
-      base::RecordAction(
-          base::UserMetricsAction("SettingsAppMonitor.OtherBrowserChosen"));
-    }
-  }
-
-  void OnPromoFocused() override {
-    base::RecordAction(
-        base::UserMetricsAction("SettingsAppMonitor.PromoFocused"));
-  }
-
-  void OnPromoChoiceMade(bool accept_promo) override {
-    if (accept_promo) {
-      base::RecordAction(
-          base::UserMetricsAction("SettingsAppMonitor.CheckItOut"));
-    } else {
-      base::RecordAction(
-          base::UserMetricsAction("SettingsAppMonitor.SwitchAnyway"));
-    }
-  }
-
-  // A closure to be run once initialization completes.
-  base::OnceClosure continuation_;
-
-  // Monitors user interaction with the Windows Settings app for the sake of
-  // reporting user actions.
-  SettingsAppMonitor settings_app_monitor_;
-};
-
-// A function bound up in a callback with a DefaultBrowserActionRecorder and
-// a closure to keep the former alive until the time comes to run the latter.
-void OnSettingsAppFinished(
-    std::unique_ptr<DefaultBrowserActionRecorder> recorder,
-    base::OnceClosure on_finished_callback) {
-  recorder.reset();
-  std::move(on_finished_callback).Run();
-}
-
 // There is no way to make sure the user is done with the system settings, but a
-// signal that the interaction is finished is needed for UMA. A timer of 2
-// minutes is used as a substitute. The registry keys for the scheme
-// association with an app are also monitored to signal the end of the
-// interaction early when it is clear that the user made a choice (e.g. http
-// and https for default browser).
+// signal that the interaction is finished is needed. A timer of 2 minutes is
+// used as a substitute. The registry keys for the scheme association with an
+// app are also monitored to signal the end of the interaction early when it is
+// clear that the user made a choice (e.g. http and https for default browser).
 //
 // This helper class manages both the timer and the registry watchers and makes
 // sure the callback for the end of the settings interaction is only run once.
@@ -363,12 +289,7 @@ class OpenSystemSettingsHelper {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     // Make sure all the registry watchers have fired.
     if (--registry_watcher_count_ == 0) {
-      // Give the ui automation events time to get processed, before finishing
-      // the system settings interaction.
-      timer_.Start(
-          FROM_HERE, base::Seconds(5),
-          base::BindOnce(&OpenSystemSettingsHelper::ConcludeInteraction,
-                         weak_ptr_factory_.GetWeakPtr()));
+      ConcludeInteraction();
     }
   }
 
@@ -467,7 +388,7 @@ void IsPinnedToTaskbarHelper::GetState(ResultCallback result_callback) {
 IsPinnedToTaskbarHelper::IsPinnedToTaskbarHelper(ResultCallback result_callback)
     : remote_util_win_(LaunchUtilWinServiceInstance()),
       result_callback_(std::move(result_callback)) {
-  DCHECK(result_callback_);
+  CHECK(result_callback_, base::NotFatalUntil::M162);
 
   // |remote_util_win_| owns the callbacks and is guaranteed to be destroyed
   // before |this|, therefore making base::Unretained() safe to use.
@@ -528,7 +449,7 @@ UnpinShortcutsHelper::UnpinShortcutsHelper(
     base::OnceClosure completion_callback)
     : remote_util_win_(LaunchUtilWinServiceInstance()),
       completion_callback_(std::move(completion_callback)) {
-  DCHECK(completion_callback_);
+  CHECK(completion_callback_, base::NotFatalUntil::M162);
 
   // |remote_util_win_| owns the callbacks and is guaranteed to be destroyed
   // before |this|, therefore making base::Unretained() safe to use.
@@ -601,7 +522,7 @@ CreateOrUpdateShortcutsHelper::CreateOrUpdateShortcutsHelper(
     win::CreateOrUpdateShortcutsResultCallback completion_callback)
     : remote_util_win_(LaunchUtilWinServiceInstance()),
       completion_callback_(std::move(completion_callback)) {
-  DCHECK(completion_callback_);
+  CHECK(completion_callback_, base::NotFatalUntil::M162);
 
   // |remote_util_win_| owns the callbacks and is guaranteed to be destroyed
   // before |this|, therefore making base::Unretained() safe to use.
@@ -628,14 +549,17 @@ void CreateOrUpdateShortcutsHelper::OnCreateOrUpdateShortcutResult(
   delete this;
 }
 
-void MigrateChromeAndChromeProxyShortcuts(
+int MigrateChromeAndChromeProxyShortcuts(
     const base::FilePath& chrome_exe,
     const base::FilePath& chrome_proxy_path,
     const base::FilePath& shortcut_path) {
-  win::MigrateShortcutsInPathInternal(chrome_exe, shortcut_path);
+  int shortcuts_migrated =
+      win::MigrateShortcutsInPathInternal(chrome_exe, shortcut_path);
 
   // Migrate any pinned PWA shortcuts in taskbar directory.
-  win::MigrateShortcutsInPathInternal(chrome_proxy_path, shortcut_path);
+  shortcuts_migrated +=
+      win::MigrateShortcutsInPathInternal(chrome_proxy_path, shortcut_path);
+  return shortcuts_migrated;
 }
 
 std::wstring GetHttpSchemeUserChoiceProgId() {
@@ -652,6 +576,188 @@ std::wstring GetHttpSchemeUserChoiceProgId() {
     return std::wstring();
   }
   return prog_id.get();
+}
+
+// Checks if any shortcut in `directory` points to `chrome_exe` and is confirmed
+// pinned by IPinnedList3. Returns true immediately if a pinned shortcut is
+// found. Sets `had_com_error` to true if any IPinnedList3 query fails.
+bool CheckShortcutDirectoryForPin(const base::FilePath& directory,
+                                  const base::FilePath& chrome_exe,
+                                  bool& had_com_error) {
+  CHECK(!directory.empty());
+
+  base::FileEnumerator shortcuts_enum(directory, /*recursive=*/false,
+                                      base::FileEnumerator::FILES,
+                                      FILE_PATH_LITERAL("*.lnk"));
+  base::FilePath target_path;
+  for (base::FilePath shortcut = shortcuts_enum.Next(); !shortcut.empty();
+       shortcut = shortcuts_enum.Next()) {
+    if (base::win::ResolveShortcut(shortcut, &target_path, nullptr) &&
+        base::FilePath::CompareEqualIgnoreCase(chrome_exe.value(),
+                                               target_path.value())) {
+      std::optional<bool> pinned = IsShortcutPinnedToTaskbar(shortcut);
+      if (!pinned.has_value()) {
+        had_com_error = true;
+      } else if (*pinned) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// Checks subdirectories under `implicit_apps_path` for pinned Chrome shortcuts.
+// Sets `had_com_error` to true if any IPinnedList3 query fails.
+bool CheckImplicitAppShortcutsForPin(const base::FilePath& implicit_apps_path,
+                                     const base::FilePath& chrome_exe,
+                                     bool& had_com_error) {
+  CHECK(!implicit_apps_path.empty());
+
+  base::FileEnumerator directory_enum(implicit_apps_path, /*recursive=*/false,
+                                      base::FileEnumerator::DIRECTORIES);
+  for (base::FilePath sub_dir = directory_enum.Next(); !sub_dir.empty();
+       sub_dir = directory_enum.Next()) {
+    if (CheckShortcutDirectoryForPin(sub_dir, chrome_exe, had_com_error)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Returns true if `filename` matches the canonical naming pattern used by
+// ProfileShortcutManagerWin for profile-specific shortcuts:
+// `<profile_name> - <product_name>.lnk` or
+// `<profile_name> - <product_name> (<digits>).lnk`.
+bool IsCanonicalProfileShortcutFilename(std::wstring_view filename,
+                                        std::wstring_view product_name) {
+  if (!base::EndsWith(filename, installer::kLnkExt,
+                      base::CompareCase::INSENSITIVE_ASCII)) {
+    return false;
+  }
+  filename.remove_suffix(std::wstring_view(installer::kLnkExt).size());
+
+  // Strip an optional " (<digits>)" uniquifier suffix appended by
+  // GetUniqueShortcutFilenameForProfile().
+  if (filename.ends_with(L')')) {
+    const size_t open_paren = filename.rfind(L" (");
+    if (open_paren != std::wstring_view::npos) {
+      const std::wstring_view digits =
+          filename.substr(open_paren + 2, filename.size() - open_paren - 3);
+      if (!digits.empty() &&
+          std::ranges::all_of(digits, base::IsAsciiDigit<wchar_t>)) {
+        filename.remove_suffix(filename.size() - open_paren);
+      }
+    }
+  }
+
+  // Require a non-empty profile name prefix before " - <product_name>".
+  if (!filename.ends_with(product_name)) {
+    return false;
+  }
+  filename.remove_suffix(product_name.size());
+  static constexpr std::wstring_view kProfileProductSeparator = L" - ";
+  return filename.size() > kProfileProductSeparator.size() &&
+         filename.ends_with(kProfileProductSeparator);
+}
+
+int MigrateShortcutsInPath(const base::FilePath& chrome_exe,
+                           const base::FilePath& path,
+                           std::string_view target_location,
+                           bool only_profile_shortcuts) {
+  // This function may load DLL's so ensure it is running in a foreground
+  // thread.
+  CHECK_GT(base::PlatformThread::GetCurrentThreadType(),
+           base::ThreadType::kBackground, base::NotFatalUntil::M162);
+
+  const std::wstring product_name =
+      only_profile_shortcuts
+          ? base::AsWString(l10n_util::GetStringUTF16(IDS_SHORT_PRODUCT_NAME))
+          : std::wstring();
+  const std::wstring filter_pattern =
+      only_profile_shortcuts
+          ? base::StrCat({L"* - ", product_name, L"*", installer::kLnkExt})
+          : base::StrCat({L"*", installer::kLnkExt});
+
+  // Enumerate matching shortcuts in the given path directly. When
+  // `only_profile_shortcuts` is true, `filter_pattern` filters by
+  // "* - <product_name>*.lnk" at the OS FindFirstFileEx level so non-profile
+  // shortcuts in the Start Menu are skipped without opening any files.
+  base::FileEnumerator shortcuts_enum(path, /*recursive=*/false,
+                                      base::FileEnumerator::FILES,
+                                      filter_pattern);
+
+  const bool is_per_user_install = InstallUtil::IsPerUserInstall();
+  const bool migrate_shortcut_location =
+      base::FeatureList::IsEnabled(win::kMigrateTaskbarShortcutLocation);
+
+  int shortcuts_migrated = 0;
+  for (base::FilePath shortcut = shortcuts_enum.Next(); !shortcut.empty();
+       shortcut = shortcuts_enum.Next()) {
+    if (only_profile_shortcuts &&
+        !IsCanonicalProfileShortcutFilename(shortcut.BaseName().value(),
+                                            product_name)) {
+      continue;
+    }
+
+    constexpr uint32_t kResolveOptions =
+        base::win::ShortcutProperties::PROPERTIES_TARGET |
+        base::win::ShortcutProperties::PROPERTIES_ARGUMENTS |
+        base::win::ShortcutProperties::PROPERTIES_APP_ID;
+    base::win::ShortcutProperties shortcut_properties;
+    if (!base::win::ResolveShortcutProperties(shortcut, kResolveOptions,
+                                              &shortcut_properties) ||
+        !base::FilePath::CompareEqualIgnoreCase(
+            chrome_exe.value(), shortcut_properties.target.value())) {
+      continue;
+    }
+    base::CommandLine command_line(base::CommandLine::FromString(
+        base::StrCat({L"\"", shortcut_properties.target.value(), L"\" ",
+                      shortcut_properties.arguments})));
+    if (only_profile_shortcuts &&
+        !command_line.HasSwitch(switches::kProfileDirectory)) {
+      continue;
+    }
+
+    // Get the expected AppId for this Chrome shortcut.
+    std::wstring expected_app_id(
+        GetExpectedAppId(command_line, is_per_user_install));
+    if (expected_app_id.empty()) {
+      continue;
+    }
+
+    // Any properties that need to be updated on the shortcut will be stored in
+    // `updated_properties`.
+    base::win::ShortcutProperties updated_properties;
+
+    // Validate the existing app id for the shortcut.
+    if (shortcut_properties.app_id != expected_app_id) {
+      updated_properties.set_app_id(expected_app_id);
+    }
+
+    // Ensure shortcuts are tagged with
+    // `--source-shortcut-location=<target_location>`. Remove any existing
+    // switch first in case the shortcut was pinned from another location (e.g.,
+    // Desktop or Start Menu).
+    if (migrate_shortcut_location &&
+        command_line.GetSwitchValueASCII(switches::kSourceShortcutLocation) !=
+            target_location) {
+      command_line.RemoveSwitch(switches::kSourceShortcutLocation);
+      command_line.AppendSwitchASCII(switches::kSourceShortcutLocation,
+                                     target_location);
+      updated_properties.set_arguments(command_line.GetArgumentsString());
+    }
+
+    // Update the shortcut if some of its properties need to be updated.
+    if (updated_properties.options &&
+        base::win::CreateOrUpdateShortcutLink(
+            shortcut, updated_properties,
+            base::win::ShortcutOperation::kUpdateExisting)) {
+      ++shortcuts_migrated;
+    }
+  }
+  return shortcuts_migrated;
 }
 
 }  // namespace
@@ -742,6 +848,15 @@ DefaultWebClientSetPermission GetPlatformSpecificDefaultWebClientSetPermission(
 
 namespace win {
 
+BASE_FEATURE(kMigrateTaskbarShortcutLocation,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kTaskbarShortcutMigrationInterval,
+                   &kMigrateTaskbarShortcutLocation,
+                   "migration_interval",
+                   base::Days(30));
+
 void SetAsDefaultBrowserUsingSystemSettings(
     base::OnceClosure on_finished_callback) {
   base::FilePath chrome_exe;
@@ -749,20 +864,11 @@ void SetAsDefaultBrowserUsingSystemSettings(
     NOTREACHED() << "Error getting app exe path";
   }
 
-  // Create an action recorder that will open the settings app once it has
-  // initialized.
-  std::unique_ptr<DefaultBrowserActionRecorder> recorder =
-          std::make_unique<DefaultBrowserActionRecorder>(base::BindOnce(
-          base::IgnoreResult(&ShellUtil::ShowMakeChromeDefaultSystemUI),
-          chrome_exe));
-
-  // The helper manages its own lifetime. Bind the action recorder
-  // into the finished callback to keep it alive throughout the
-  // interaction.
+  // The helper manages its own lifetime.
   static constexpr std::wstring_view kSchemes[] = {L"http", L"https"};
-  OpenSystemSettingsHelper::Begin(
-      kSchemes, base::BindOnce(&OnSettingsAppFinished, std::move(recorder),
-                               std::move(on_finished_callback)));
+  OpenSystemSettingsHelper::Begin(kSchemes, std::move(on_finished_callback));
+
+  ShellUtil::ShowMakeChromeDefaultSystemUI(chrome_exe);
 }
 
 void SetAsDefaultClientForSchemeUsingSystemSettings(
@@ -829,129 +935,96 @@ void MigrateTaskbarPins(base::OnceClosure completion_callback) {
           FROM_HERE, base::BindOnce([]() {
             base::FilePath taskbar_path;
             base::FilePath implicit_apps_path;
+            base::FilePath start_menu_path;
             base::PathService::Get(base::DIR_TASKBAR_PINS, &taskbar_path);
             base::PathService::Get(base::DIR_IMPLICIT_APP_SHORTCUTS,
                                    &implicit_apps_path);
-            MigrateTaskbarPinsCallback(taskbar_path, implicit_apps_path);
+            if (base::FeatureList::IsEnabled(kMigrateTaskbarShortcutLocation)) {
+              base::PathService::Get(base::DIR_START_MENU, &start_menu_path);
+            }
+            MigrateTaskbarPinsCallback(taskbar_path, implicit_apps_path,
+                                       start_menu_path);
           }),
           std::move(completion_callback));
 }
 
 void MigrateTaskbarPinsCallback(const base::FilePath& taskbar_path,
-                                const base::FilePath& implicit_apps_path) {
+                                const base::FilePath& implicit_apps_path,
+                                const base::FilePath& start_menu_path) {
   // Get full path of chrome.
   base::FilePath chrome_exe;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_exe))
     return;
   base::FilePath chrome_proxy_path(shortcuts::GetChromeProxyPath());
 
+  int shortcuts_migrated = 0;
   if (!taskbar_path.empty()) {
-    MigrateChromeAndChromeProxyShortcuts(chrome_exe, chrome_proxy_path,
-                                         taskbar_path);
+    shortcuts_migrated += MigrateChromeAndChromeProxyShortcuts(
+        chrome_exe, chrome_proxy_path, taskbar_path);
   }
-  if (implicit_apps_path.empty())
-    return;
-  base::FileEnumerator directory_enum(implicit_apps_path, /*recursive=*/false,
-                                      base::FileEnumerator::DIRECTORIES);
-  for (base::FilePath implicit_app_sub_directory = directory_enum.Next();
-       !implicit_app_sub_directory.empty();
-       implicit_app_sub_directory = directory_enum.Next()) {
-    MigrateChromeAndChromeProxyShortcuts(chrome_exe, chrome_proxy_path,
-                                         implicit_app_sub_directory);
+  if (!implicit_apps_path.empty()) {
+    base::FileEnumerator directory_enum(implicit_apps_path, /*recursive=*/false,
+                                        base::FileEnumerator::DIRECTORIES);
+    for (base::FilePath implicit_app_sub_directory = directory_enum.Next();
+         !implicit_app_sub_directory.empty();
+         implicit_app_sub_directory = directory_enum.Next()) {
+      shortcuts_migrated += MigrateChromeAndChromeProxyShortcuts(
+          chrome_exe, chrome_proxy_path, implicit_app_sub_directory);
+    }
   }
+  if (!start_menu_path.empty() &&
+      base::FeatureList::IsEnabled(kMigrateTaskbarShortcutLocation)) {
+    shortcuts_migrated += MigrateShortcutsInPath(
+        chrome_exe, start_menu_path,
+        switches::kSourceShortcutLocationStartMenu,
+        /*only_profile_shortcuts=*/true);
+  }
+  base::UmaHistogramCounts100("Windows.TaskbarShortcutMigrationCount",
+                              shortcuts_migrated);
 }
 
 void GetIsPinnedToTaskbarState(IsPinnedToTaskbarCallback result_callback) {
   IsPinnedToTaskbarHelper::GetState(std::move(result_callback));
 }
 
+IsPinnedToTaskbarResult GetIsPinnedToTaskbar3State() {
+  base::win::AssertComApartmentType(base::win::ComApartmentType::STA);
+
+  const base::FilePath chrome_exe =
+      base::PathService::CheckedGet(base::FILE_EXE);
+
+  bool had_com_error = false;
+  base::FilePath taskbar_path;
+  const bool got_taskbar =
+      base::PathService::Get(base::DIR_TASKBAR_PINS, &taskbar_path) &&
+      !taskbar_path.empty();
+  if (got_taskbar &&
+      CheckShortcutDirectoryForPin(taskbar_path, chrome_exe, had_com_error)) {
+    return IsPinnedToTaskbarResult::kPinned;
+  }
+
+  base::FilePath implicit_apps_path;
+  const bool got_implicit =
+      base::PathService::Get(base::DIR_IMPLICIT_APP_SHORTCUTS,
+                             &implicit_apps_path) &&
+      !implicit_apps_path.empty();
+  if (got_implicit && CheckImplicitAppShortcutsForPin(
+                          implicit_apps_path, chrome_exe, had_com_error)) {
+    return IsPinnedToTaskbarResult::kPinned;
+  }
+
+  if ((!got_taskbar && !got_implicit) || had_com_error) {
+    return IsPinnedToTaskbarResult::kFailure;
+  }
+
+  return IsPinnedToTaskbarResult::kNotPinned;
+}
+
 int MigrateShortcutsInPathInternal(const base::FilePath& chrome_exe,
                                    const base::FilePath& path) {
-  // This function may load DLL's so ensure it is running in a foreground
-  // thread.
-  DCHECK_GT(base::PlatformThread::GetCurrentThreadType(),
-            base::ThreadType::kBackground);
-
-  // Enumerate all pinned shortcuts in the given path directly.
-  base::FileEnumerator shortcuts_enum(
-      path, false,  // not recursive
-      base::FileEnumerator::FILES, FILE_PATH_LITERAL("*.lnk"));
-
-  bool is_per_user_install = InstallUtil::IsPerUserInstall();
-
-  int shortcuts_migrated = 0;
-  base::FilePath target_path;
-  std::wstring arguments;
-  base::win::ScopedPropVariant propvariant;
-  for (base::FilePath shortcut = shortcuts_enum.Next(); !shortcut.empty();
-       shortcut = shortcuts_enum.Next()) {
-    // TODO(gab): Use ProgramCompare instead of comparing FilePaths below once
-    // it is fixed to work with FilePaths with spaces.
-    if (!base::win::ResolveShortcut(shortcut, &target_path, &arguments) ||
-        !base::FilePath::CompareEqualIgnoreCase(chrome_exe.value(),
-                                                target_path.value())) {
-      continue;
-    }
-    base::CommandLine command_line(base::CommandLine::FromString(
-        base::StrCat({L"\"", target_path.value(), L"\" ", arguments})));
-
-    // Get the expected AppId for this Chrome shortcut.
-    std::wstring expected_app_id(
-        GetExpectedAppId(command_line, is_per_user_install));
-    if (expected_app_id.empty())
-      continue;
-
-    // Load the shortcut.
-    Microsoft::WRL::ComPtr<IShellLink> shell_link;
-    Microsoft::WRL::ComPtr<IPersistFile> persist_file;
-    if (FAILED(::CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER,
-                                  IID_PPV_ARGS(&shell_link))) ||
-        FAILED(shell_link.As(&persist_file)) ||
-        FAILED(persist_file->Load(shortcut.value().c_str(), STGM_READ))) {
-      DLOG(WARNING) << "Failed loading shortcut at " << shortcut.value();
-      continue;
-    }
-
-    // Any properties that need to be updated on the shortcut will be stored in
-    // |updated_properties|.
-    base::win::ShortcutProperties updated_properties;
-
-    // Validate the existing app id for the shortcut.
-    Microsoft::WRL::ComPtr<IPropertyStore> property_store;
-    propvariant.Reset();
-    if (FAILED(shell_link.As(&property_store)) ||
-        property_store->GetValue(PKEY_AppUserModel_ID, propvariant.Receive()) !=
-            S_OK) {
-      // When in doubt, prefer not updating the shortcut.
-      NOTREACHED();
-    } else {
-      switch (propvariant.get().vt) {
-        case VT_EMPTY:
-          // If there is no app_id set, set our app_id if one is expected.
-          if (!expected_app_id.empty())
-            updated_properties.set_app_id(expected_app_id);
-          break;
-        case VT_LPWSTR:
-          if (expected_app_id != std::wstring(propvariant.get().pwszVal))
-            updated_properties.set_app_id(expected_app_id);
-          break;
-        default:
-          NOTREACHED();
-      }
-    }
-
-    persist_file.Reset();
-    shell_link.Reset();
-
-    // Update the shortcut if some of its properties need to be updated.
-    if (updated_properties.options &&
-        base::win::CreateOrUpdateShortcutLink(
-            shortcut, updated_properties,
-            base::win::ShortcutOperation::kUpdateExisting)) {
-      ++shortcuts_migrated;
-    }
-  }
-  return shortcuts_migrated;
+  return MigrateShortcutsInPath(chrome_exe, path,
+                                switches::kSourceShortcutLocationTaskbar,
+                                /*only_profile_shortcuts=*/false);
 }
 
 }  // namespace win

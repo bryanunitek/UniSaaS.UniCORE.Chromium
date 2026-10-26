@@ -14,6 +14,7 @@
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -73,26 +74,6 @@ enum class DriveMountStatus {
   kMaxValue = kTimeout,
 };
 
-// Notifications/Errors coming from DriveFs side which we need to persist in
-// the Chrome side.
-struct PersistedMessage {
-  // Where does the message come from in DriveFs.
-  enum Source {
-    kNotification = 0,
-    kError = 1,
-  };
-  Source source;
-
-  // DriveFs Notification/Error types which require persistence.
-  using Type = std::variant<drivefs::mojom::DriveFsNotification::Tag,
-                            drivefs::mojom::MirrorSyncError::Type>;
-  Type type;
-
-  base::FilePath path;
-
-  int64_t stable_id;
-};
-
 // DriveIntegrationService is used to integrate Drive to Chrome. This class
 // exposes the file system representation built on top of Drive and some
 // other Drive related objects to the file manager, and some other sub
@@ -120,10 +101,12 @@ class DriveIntegrationService : public KeyedService,
   // test_drivefs_mojo_listener_factory are used by tests to inject customized
   // instances.
   // Pass NULL or the empty value when not interested.
-  // `local_state` must be non-null and must outlive `this`.
+  // `local_state` and `identity_manager` must be non-null and must outlive
+  // `this`.
   DriveIntegrationService(
       PrefService* local_state,
       Profile* profile,
+      signin::IdentityManager* identity_manager,
       const std::string& test_mount_point_name,
       const base::FilePath& test_cache_root,
       DriveFsMojoListenerFactory test_drivefs_mojo_listener_factory = {});
@@ -182,12 +165,6 @@ class DriveIntegrationService : public KeyedService,
     // Triggered when mounting the filesystem has failed in a fashion that will
     // not be automatically retried.
     virtual void OnFileSystemMountFailed() {}
-
-    // Triggered when the mirroring functionality is enabled.
-    virtual void OnMirroringEnabled() {}
-
-    // Triggered when the mirroring functionality is disabled.
-    virtual void OnMirroringDisabled() {}
 
     // Triggered when the bulk pinning manager reports progress.
     virtual void OnBulkPinProgress(const drivefs::pinning::Progress& progress) {
@@ -310,27 +287,8 @@ class DriveIntegrationService : public KeyedService,
                     bool crop_to_square,
                     GetThumbnailCallback callback);
 
-  // Toggle mirroring on or off defined by |enabled|.
-  void ToggleMirroring(
-      bool enabled,
-      drivefs::mojom::DriveFs::ToggleMirroringCallback callback);
-
-  // Toggle syncing for a specific path. Should only be called once mirroring
-  // has been enabled via |ToggleMirroring|.
-  void ToggleSyncForPath(
-      const base::FilePath& path,
-      drivefs::mojom::MirrorPathStatus status,
-      drivefs::mojom::DriveFs::ToggleSyncForPathCallback callback);
-
-  // Retrieves a list of paths being synced.
-  void GetSyncingPaths(
-      drivefs::mojom::DriveFs::GetSyncingPathsCallback callback);
-
   // Tells DriveFS to update its cached pin states of hosted files (once).
   void PollHostedFilePinStates();
-
-  // Returns whether mirroring is enabled.
-  bool IsMirroringEnabled();
 
   // Requests Drive to resync the office file at |local_path| from the cloud.
   void ForceReSyncFile(const base::FilePath& local_path,
@@ -359,17 +317,6 @@ class DriveIntegrationService : public KeyedService,
   // Gets counts of files in docs offline extension.
   void GetDocsOfflineStats(
       drivefs::mojom::DriveFs::GetDocsOfflineStatsCallback callback);
-
-  // Gets the mirror sync status for a specific file.
-  void GetMirrorSyncStatusForFile(
-      const base::FilePath& path,
-      drivefs::mojom::DriveFs::GetMirrorSyncStatusForFileCallback callback);
-
-  // Gets the mirror sync status for a specific directory.
-  void GetMirrorSyncStatusForDirectory(
-      const base::FilePath& path,
-      drivefs::mojom::DriveFs::GetMirrorSyncStatusForDirectoryCallback
-          callback);
 
   void OnNetworkChanged();
 
@@ -472,25 +419,6 @@ class DriveIntegrationService : public KeyedService,
       FileError error,
       std::optional<std::vector<drivefs::mojom::QueryItemPtr>> items);
 
-  void OnEnableMirroringStatusUpdate(drivefs::mojom::MirrorSyncStatus status);
-  void OnMyFilesSyncPathAdded(drive::FileError status);
-
-  void OnDisableMirroringStatusUpdate(drivefs::mojom::MirrorSyncStatus status);
-
-  // Before adding a new root, get all existing roots first to see if it exists
-  // or not. If it exists, do nothing.
-  void OnGetSyncPathsForAddingPath(
-      const base::FilePath& path_to_add,
-      drivefs::mojom::DriveFs::ToggleSyncForPathCallback callback,
-      drive::FileError status,
-      const std::vector<base::FilePath>& paths);
-
-  // Toggle syncing for |path| if the directory exists.
-  void ToggleSyncForPathIfDirectoryExists(
-      const base::FilePath& path,
-      drivefs::mojom::DriveFs::ToggleSyncForPathCallback callback,
-      bool exists);
-
   void OnUpdateFromPairedDocComplete(const base::FilePath& drive_path,
                                      base::OnceClosure callback,
                                      FileError error);
@@ -501,7 +429,6 @@ class DriveIntegrationService : public KeyedService,
 
   void RegisterPrefs();
   void OnDrivePrefChanged();
-  void OnMirroringPrefChanged();
 
   // NetworkStateHandler::Observer implementation.
   void PortalStateChanged(const ash::NetworkState*,
@@ -512,6 +439,7 @@ class DriveIntegrationService : public KeyedService,
   friend class DriveIntegrationServiceFactory;
 
   const raw_ptr<Profile> profile_;
+  const raw_ref<signin::IdentityManager> identity_manager_;
 
   State state_ = State::kNone;
   bool enabled_ = false;
@@ -520,7 +448,6 @@ class DriveIntegrationService : public KeyedService,
 
   // Is the bulk-pinning preference sampling task currently scheduled?
   bool bulk_pinning_pref_sampling_ = false;
-  bool mirroring_enabled_ = false;
   bool is_online_ = true;
   bool remount_when_online_ = false;
 

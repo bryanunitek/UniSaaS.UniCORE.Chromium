@@ -4,37 +4,33 @@
 
 package org.chromium.chrome.browser.magic_stack;
 
+import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.robolectric.Shadows.shadowOf;
 
 import static org.chromium.chrome.browser.magic_stack.CirclePagerIndicatorDecoration.getItemPerScreen;
 
 import android.app.Activity;
-import android.content.pm.ApplicationInfo;
-import android.content.res.Configuration;
-import android.content.res.Resources;
 import android.graphics.Color;
-import android.util.DisplayMetrics;
-import android.view.ContextMenu;
 import android.view.View;
 import android.view.View.OnCreateContextMenuListener;
-import android.view.View.OnLongClickListener;
 import android.view.ViewGroup;
-import android.view.ViewGroup.LayoutParams;
+import android.view.ViewGroup.MarginLayoutParams;
+import android.widget.FrameLayout;
 
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -44,9 +40,9 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
@@ -55,10 +51,10 @@ import org.chromium.base.FeatureOverrides;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.segmentation_platform.client_util.HomeModulesRankingHelper;
@@ -70,7 +66,6 @@ import org.chromium.components.browser_ui.widget.displaystyle.UiConfig;
 import org.chromium.components.browser_ui.widget.displaystyle.UiConfig.DisplayStyle;
 import org.chromium.components.browser_ui.widget.displaystyle.VerticalDisplayStyle;
 import org.chromium.components.segmentation_platform.ClassificationResult;
-import org.chromium.components.segmentation_platform.SegmentationPlatformService;
 import org.chromium.components.segmentation_platform.prediction_status.PredictionStatus;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
@@ -80,23 +75,42 @@ import java.util.HashSet;
 import java.util.Set;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class HomeModulesCoordinatorUnitTest {
+    /** An adapter with a fixed number of plain items of the given width. */
+    private static class FixedItemsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        private final int mItemCount;
+        private final int mItemWidth;
+
+        FixedItemsAdapter(int itemCount, int itemWidth) {
+            mItemCount = itemCount;
+            mItemWidth = itemWidth;
+        }
+
+        @Override
+        public int getItemCount() {
+            return mItemCount;
+        }
+
+        @Override
+        public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            View view = new View(parent.getContext());
+            view.setLayoutParams(new RecyclerView.LayoutParams(mItemWidth, MATCH_PARENT));
+            return new RecyclerView.ViewHolder(view) {};
+        }
+
+        @Override
+        public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {}
+    }
+
+    // Sentinel value that differs from any real top margin.
+    private static final int INITIAL_TOP_MARGIN = 1234;
+
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private Activity mActivity;
-    @Mock private Resources mResources;
     @Mock private ModuleDelegateHost mModuleDelegateHost;
-    @Mock private ViewGroup mView;
-    @Mock private LayoutParams mLayoutParams;
-    @Mock private HomeModulesRecyclerView mRecyclerView;
     @Mock private UiConfig mUiConfig;
-    @Mock private Configuration mConfiguration;
-    @Mock private ApplicationInfo mApplicationInfo;
-    @Mock private DisplayMetrics mDisplayMetrics;
     @Mock private HomeModulesConfigManager mHomeModulesConfigManager;
     @Mock private Profile mProfile;
-    @Mock SegmentationPlatformService mSegmentationPlatformService;
     @Mock private ModuleRegistry mModuleRegistry;
     @Mock private HomeModulesMediator mMediator;
     @Mock private ModelList mModel;
@@ -104,31 +118,28 @@ public class HomeModulesCoordinatorUnitTest {
     @Mock private HomeModulesRankingHelper.Natives mHomeModulesRankingHelperJniMock;
 
     @Captor private ArgumentCaptor<DisplayStyleObserver> mDisplayStyleObserver;
-    @Captor private ArgumentCaptor<Callback<Profile>> mProfileObserver;
-    @Captor private ArgumentCaptor<RecyclerView.OnScrollListener> mOnScrollListener;
     @Captor private ArgumentCaptor<Callback<ClassificationResult>> mClassificationResultCaptor;
-    @Captor private ArgumentCaptor<OnLongClickListener> mLongClickListenerCaptor;
 
     @Captor
     private ArgumentCaptor<HomeModulesConfigManager.HomeModulesStateListener>
             mHomeModulesStateListener;
 
-    @Captor private ArgumentCaptor<OnCreateContextMenuListener> mOnCreateContextMenuListenerCaptor;
-
     private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
             ObservableSuppliers.createMonotonic();
+    private Activity mActivity;
+    private FrameLayout mView;
+    private HomeModulesRecyclerView mRecyclerView;
     private HomeModulesCoordinator mCoordinator;
 
     @Before
     public void setUp() {
         SemanticColorUtils.setDefaultIconColorSecondaryForTesting(Color.LTGRAY);
         when(mModuleDelegateHost.getUiConfig()).thenReturn(mUiConfig);
-        when(mActivity.getResources()).thenReturn(mResources);
-        when(mResources.getConfiguration()).thenReturn(mConfiguration);
-        when(mResources.getDisplayMetrics()).thenReturn(mDisplayMetrics);
-        when(mActivity.getApplicationInfo()).thenReturn(mApplicationInfo);
-        when(mView.findViewById(R.id.home_modules_recycler_view)).thenReturn(mRecyclerView);
-        when(mRecyclerView.getContext()).thenReturn(mActivity);
+        mActivity = Robolectric.buildActivity(Activity.class).setup().get();
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
+        mView = new FrameLayout(mActivity);
+        mActivity.getLayoutInflater().inflate(R.layout.home_modules_recycler_view_layout, mView);
+        mRecyclerView = mView.findViewById(R.id.home_modules_recycler_view);
         Set<Integer> enabledModules = Set.of(ModuleType.PRICE_CHANGE, ModuleType.SINGLE_TAB);
         when(mModuleRegistry.getEnabledModuleSet()).thenReturn(new HashSet<>(enabledModules));
 
@@ -155,7 +166,6 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testCreate_phones() {
         assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
@@ -166,9 +176,8 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
+    @Config(qualifiers = "sw600dp")
     public void testCreate_tablets() {
-        setupAndVerifyTablets();
         assertTrue(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
 
         DisplayStyle displayStyle =
@@ -195,22 +204,20 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testHide() {
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
-        verify(mRecyclerView).setAdapter(notNull());
+        assertNotNull(mRecyclerView.getAdapter());
 
         mCoordinator.hide();
-        verify(mRecyclerView).setAdapter(eq(null));
+        assertNull(mRecyclerView.getAdapter());
 
         showWithSegmentation((isVisible) -> {});
-        verify(mRecyclerView, times(2)).setAdapter(notNull());
+        assertNotNull(mRecyclerView.getAdapter());
     }
 
     @Test
-    @SmallTest
+    @Config(qualifiers = "sw600dp")
     public void testDestroy() {
-        setupAndVerifyTablets();
         assertTrue(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
 
         DisplayStyle displayStyle =
@@ -229,7 +236,6 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnModuleConfigChanged() {
         assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
@@ -258,7 +264,6 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER})
     public void testOnModuleConfigChangedForEducationalTipModules() {
         assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
@@ -276,9 +281,6 @@ public class HomeModulesCoordinatorUnitTest {
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
-                        ModuleType.SIGN_IN_PROMO,
-                        ModuleType.SAVE_PASSWORDS_PROMO,
-                        ModuleType.PASSWORD_CHECKUP_PROMO,
                         ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
                         ModuleType.NTP_THEME_PROMO);
         when(mModuleRegistry.getEnabledModuleSet())
@@ -361,7 +363,6 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRemoveModuleAndDisable() {
         assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
@@ -372,7 +373,6 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testProfileNotReady() {
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
         Callback<Boolean> callback = MockitoHelper.mockCallback();
@@ -384,24 +384,22 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testRecordMagicStackScroll_Scrolled() {
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
         mCoordinator.setMediatorForTesting(mMediator);
 
         mCoordinator.prepareBuildAndShow();
 
-        // Besides the onScrollListener added in {@link HomeModulesCoordinator}, there is another
-        // one added in {@link SnapHelper}.
-        verify(mRecyclerView, times(2)).addOnScrollListener(mOnScrollListener.capture());
-        mOnScrollListener.getAllValues().get(0).onScrolled(mRecyclerView, 1, 0);
-        mOnScrollListener.getAllValues().get(1).onScrolled(mRecyclerView, 1, 0);
+        // Populate the RecyclerView with items wider than itself so that it can actually scroll.
+        mRecyclerView.setVisibility(View.VISIBLE);
+        mRecyclerView.setAdapter(new FixedItemsAdapter(/* itemCount= */ 2, /* itemWidth= */ 200));
+        layoutRecyclerView(/* width= */ 100);
+        mRecyclerView.scrollBy(1, 0);
 
         verify(mMediator).recordMagicStackScroll(/* hasHomeModulesBeenScrolled= */ true);
     }
 
     @Test
-    @SmallTest
     public void testRecordMagicStackScroll_NotScrolled() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
@@ -414,7 +412,6 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnModuleChangedCallback() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
@@ -424,11 +421,13 @@ public class HomeModulesCoordinatorUnitTest {
 
         Runnable onHomeModulesChangedCallback =
                 mCoordinator.createOnModuleChangedCallback(onHomeModulesShownCallback);
-        Mockito.clearInvocations(mRecyclerView);
+        layoutRecyclerView(/* width= */ 100);
+        assertFalse(mRecyclerView.isLayoutRequested());
 
         when(mModel.size()).thenReturn(2);
         onHomeModulesChangedCallback.run();
-        verify(mRecyclerView).invalidateItemDecorations();
+        // invalidateItemDecorations() requests a layout.
+        assertTrue(mRecyclerView.isLayoutRequested());
 
         when(mModel.size()).thenReturn(1);
         onHomeModulesChangedCallback.run();
@@ -440,21 +439,20 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnViewCreated() {
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
         mCoordinator.setMediatorForTesting(mMediator);
         when(mMediator.getModuleProvider(ModuleType.SINGLE_TAB)).thenReturn(mModuleProvider);
-        when(mView.getLayoutParams()).thenReturn(mLayoutParams);
+        FrameLayout moduleView = new FrameLayout(mActivity);
+        assertFalse(moduleView.isFocusable());
 
-        mCoordinator.onViewCreated(ModuleType.SINGLE_TAB, mView);
+        mCoordinator.onViewCreated(ModuleType.SINGLE_TAB, moduleView);
         verify(mModuleProvider).onViewCreated();
         verify(mMediator).onModuleViewCreated(eq(ModuleType.SINGLE_TAB));
-        verify(mView).setFocusable(eq(true));
+        assertTrue(moduleView.isFocusable());
     }
 
     @Test
-    @SmallTest
     public void testOnModuleClicked() {
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
         mCoordinator.setMediatorForTesting(mMediator);
@@ -465,67 +463,75 @@ public class HomeModulesCoordinatorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testOnLongClick() {
         HomeModulesContextMenuManager homeModulesContextMenuManager = mock();
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
         mCoordinator.setMediatorForTesting(mMediator);
         mCoordinator.setHomeModulesContextMenuManagerForTesting(homeModulesContextMenuManager);
         when(mMediator.getModuleProvider(ModuleType.SINGLE_TAB)).thenReturn(mModuleProvider);
-        when(mView.getLayoutParams()).thenReturn(mLayoutParams);
+        FrameLayout moduleView = new FrameLayout(mActivity);
 
-        mCoordinator.onViewCreated(ModuleType.SINGLE_TAB, mView);
-        verify(mView).setOnLongClickListener(mLongClickListenerCaptor.capture());
-        mLongClickListenerCaptor.getValue().onLongClick(mView);
-        verify(homeModulesContextMenuManager).displayMenu(eq(mView), eq(mModuleProvider));
+        mCoordinator.onViewCreated(ModuleType.SINGLE_TAB, moduleView);
+        assertTrue(moduleView.performLongClick());
+        verify(homeModulesContextMenuManager).displayMenu(eq(moduleView), eq(mModuleProvider));
 
         reset(homeModulesContextMenuManager);
-        verify(mView).setOnCreateContextMenuListener(mOnCreateContextMenuListenerCaptor.capture());
-        mOnCreateContextMenuListenerCaptor
-                .getValue()
-                .onCreateContextMenu(
-                        mock(ContextMenu.class), mView, mock(ContextMenu.ContextMenuInfo.class));
-        verify(homeModulesContextMenuManager).displayMenu(eq(mView), eq(mModuleProvider));
+        OnCreateContextMenuListener contextMenuListener =
+                shadowOf(moduleView).getOnCreateContextMenuListener();
+        assertNotNull(contextMenuListener);
+        contextMenuListener.onCreateContextMenu(/* menu= */ null, moduleView, /* menuInfo= */ null);
+        verify(homeModulesContextMenuManager).displayMenu(eq(moduleView), eq(mModuleProvider));
     }
 
     @Test
-    @SmallTest
-    @EnableFeatures({ChromeFeatureList.HOME_MODULE_PREF_REFACTOR})
-    public void testAllCardsConfigChanged_FeatureEnabled() {
+    public void testAllCardsConfigChanged() {
         assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
 
         verify(mHomeModulesConfigManager).addListener(mHomeModulesStateListener.capture());
 
+        mRecyclerView.setVisibility(View.VISIBLE);
         mHomeModulesStateListener.getValue().allCardsConfigChanged(false);
-        verify(mRecyclerView).setVisibility(eq(View.GONE));
+        assertEquals(View.GONE, mRecyclerView.getVisibility());
 
         mHomeModulesStateListener.getValue().allCardsConfigChanged(true);
-        verify(mRecyclerView).setVisibility(eq(View.VISIBLE));
+        assertEquals(View.VISIBLE, mRecyclerView.getVisibility());
     }
 
     @Test
-    @SmallTest
-    @DisableFeatures({ChromeFeatureList.HOME_MODULE_PREF_REFACTOR})
-    public void testAllCardsConfigChanged_FeatureDisabled() {
-        assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
-        when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
-        mCoordinator = createCoordinator(/* skipInitProfile= */ false);
-
-        verify(mHomeModulesConfigManager).addListener(mHomeModulesStateListener.capture());
-
-        mHomeModulesStateListener.getValue().allCardsConfigChanged(false);
-        verify(mRecyclerView, never()).setVisibility(eq(View.GONE));
-
-        mHomeModulesStateListener.getValue().allCardsConfigChanged(true);
-        verify(mRecyclerView, never()).setVisibility(eq(View.VISIBLE));
+    public void testAuroraPaddingStyle_Default() {
+        testAuroraPaddingStyleImpl(PaddingStyle.DEFAULT, INITIAL_TOP_MARGIN);
     }
 
-    private void setupAndVerifyTablets() {
-        when(mResources.getInteger(org.chromium.ui.R.integer.min_screen_width_bucket))
-                .thenReturn(DeviceFormFactor.SCREEN_BUCKET_TABLET);
-        assertTrue(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
+    @Test
+    public void testAuroraPaddingStyle_NonDefault() {
+        testAuroraPaddingStyleImpl(
+                PaddingStyle.SMALL,
+                mActivity
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.ntp_section_top_margin_small));
+    }
+
+    private void testAuroraPaddingStyleImpl(int paddingStyle, int expectedTopMargin) {
+        MarginLayoutParams marginLayoutParams =
+                (MarginLayoutParams) mRecyclerView.getLayoutParams();
+        marginLayoutParams.topMargin = INITIAL_TOP_MARGIN;
+
+        FeatureOverrides.overrideParam(ChromeFeatureList.NTP_AURORA, "padding_style", paddingStyle);
+
+        mCoordinator = createCoordinator(/* skipInitProfile= */ false);
+
+        assertEquals(
+                expectedTopMargin,
+                ((MarginLayoutParams) mRecyclerView.getLayoutParams()).topMargin);
+    }
+
+    private void layoutRecyclerView(int width) {
+        mRecyclerView.measure(
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY));
+        mRecyclerView.layout(0, 0, width, 100);
     }
 
     private HomeModulesCoordinator createCoordinator(boolean skipInitProfile) {

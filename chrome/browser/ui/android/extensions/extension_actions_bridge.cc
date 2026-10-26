@@ -8,7 +8,6 @@
 #include <variant>
 
 #include "base/android/jni_string.h"
-#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "ui/events/android/key_event_android.h"
@@ -28,25 +27,12 @@ ExtensionActionsBridge::ExtensionActionsBridge(
 
 ExtensionActionsBridge::~ExtensionActionsBridge() = default;
 
-void ExtensionActionsBridge::Destroy(JNIEnv* env) {
-  delete this;
-}
-
-static int64_t JNI_ExtensionActionsBridge_Init(
+static jni_zero::JniUniquePtr<ExtensionActionsBridge>
+JNI_ExtensionActionsBridge_Init(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& java_object,
-    int64_t j_browser_window_interface) {
-  BrowserWindowInterface* browser =
-      reinterpret_cast<BrowserWindowInterface*>(j_browser_window_interface);
-  return reinterpret_cast<int64_t>(
-      new ExtensionActionsBridge(browser, java_object));
-}
-
-static bool JNI_ExtensionActionsBridge_ExtensionsEnabled(JNIEnv* env,
-                                                         Profile* profile) {
-  ExtensionManagement* extension_management =
-      ExtensionManagementFactory::GetForBrowserContext(profile);
-  return extension_management->ExtensionsEnabledForDesktopAndroid();
+    BrowserWindowInterface* browser) {
+  return jni_zero::MakeUnique<ExtensionActionsBridge>(browser, java_object);
 }
 
 }  // namespace extensions

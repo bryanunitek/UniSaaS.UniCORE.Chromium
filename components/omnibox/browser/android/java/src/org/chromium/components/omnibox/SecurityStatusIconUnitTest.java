@@ -8,7 +8,6 @@ import static org.junit.Assert.assertEquals;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
@@ -16,7 +15,6 @@ import org.chromium.components.security_state.ConnectionSecurityLevel;
 
 /** Unit tests for {@link SecurityStatusIcon}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SecurityStatusIconUnitTest {
 
     @Test
@@ -112,6 +110,14 @@ public class SecurityStatusIconUnitTest {
                 R.drawable.omnibox_not_secure_warning,
                 ConnectionSecurityLevel.DANGEROUS,
                 ConnectionMaliciousContentStatus.BILLING);
+    }
+
+    @Test
+    public void testGetSecurityIconResource_Dangerous_WarnableSuspiciousSite() {
+        assertIconResourceIs(
+                R.drawable.gpp_maybe,
+                ConnectionSecurityLevel.DANGEROUS,
+                ConnectionMaliciousContentStatus.WARNABLE_SUSPICIOUS_SITE);
     }
 
     private static void assertIconResourceIs(

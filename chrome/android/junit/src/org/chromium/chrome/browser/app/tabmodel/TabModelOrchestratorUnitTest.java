@@ -12,8 +12,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -23,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.TriState;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -71,7 +70,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"TabStripPerformance"})
     public void testTabModelStartupInfo() {
         // Send test tab model info.
@@ -99,7 +97,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"TabStripPerformance"})
     public void testTabModelStartupInfo_FromMerge() {
         // Send test tab model info.
@@ -127,7 +124,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"TabStripPerformance"})
     public void testTabModelStartupInfo_IgnoreRegular() {
         mTabModelOrchestrator.loadState(
@@ -162,7 +158,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"TabStripPerformance"})
     public void testTabModelStartupInfo_NoIgnoreRegular() {
         mTabModelOrchestrator.loadState(
@@ -193,7 +188,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     @Feature({"TabStripPerformance"})
     public void testTabModelStartupInfo_IgnoreIncognito() {
         mTabModelOrchestrator.loadState(true, false, null);
@@ -223,7 +217,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testSaveState() {
         mTabModelOrchestrator.saveState();
         verify(mMockTabPersistentStore).saveState();
@@ -231,7 +224,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testMergeState() {
         mTabModelOrchestrator.mergeState();
         verify(mMockTabPersistentStore).mergeState();
@@ -239,7 +231,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testClearState() {
         when(mMockTabModel.getProfile()).thenReturn(mock());
         TabStateStorageServiceFactory.setForTesting(mock());
@@ -253,7 +244,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testTryToRestoreTabStateForUrl() {
         when(mMockTabModelSelectorBase.isTabStateInitialized()).thenReturn(false);
 
@@ -265,7 +255,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testTryToRestoreTabStateForId() {
         when(mMockTabModelSelectorBase.isTabStateInitialized()).thenReturn(false);
 
@@ -277,7 +266,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroy() {
         mTabModelOrchestrator.destroy();
         verify(mMockTabPersistentStore).destroy();
@@ -286,7 +274,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroyTabPersistentStore() {
         mTabModelOrchestrator.destroyTabPersistentStore();
         verify(mMockTabPersistentStore).destroy();
@@ -294,7 +281,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testDestroyAfterDestroyTabPersistentStore() {
         mTabModelOrchestrator.destroyTabPersistentStore();
         verify(mMockTabPersistentStore).destroy();
@@ -307,7 +293,6 @@ public class TabModelOrchestratorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testMethodsNotCalledAfterEarlyDestroy() {
         mTabModelOrchestrator.destroyTabPersistentStore();
         verify(mMockTabPersistentStore).destroy();
@@ -337,13 +322,25 @@ public class TabModelOrchestratorUnitTest {
 
         for (int i = 0; i < numIncognitoTabs; i++) {
             observer.onDetailsRead(
-                    index, index, "Tab " + index, false, i == incognitoIndex, true, fromMerge);
+                    index,
+                    index,
+                    "Tab " + index,
+                    false,
+                    i == incognitoIndex,
+                    TriState.TRUE,
+                    fromMerge);
             index++;
         }
 
         for (int i = 0; i < numStandardTabs; i++) {
             observer.onDetailsRead(
-                    index, index, "Tab " + index, i == standardIndex, false, false, fromMerge);
+                    index,
+                    index,
+                    "Tab " + index,
+                    i == standardIndex,
+                    false,
+                    TriState.FALSE,
+                    fromMerge);
             index++;
         }
 

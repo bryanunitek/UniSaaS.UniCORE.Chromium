@@ -7,11 +7,14 @@
 #include <stdint.h>
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
+#include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_keep_alive_request_tracker.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "net/http/http_response_headers.h"
@@ -19,7 +22,6 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/mojom/attribution.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace {
@@ -33,17 +35,6 @@ constexpr size_t kMaxNonBucketedNumRetries = 10;
 
 ChromeKeepAliveRequestTracker::RequestType ComputeRequestType(
     const network::ResourceRequest& request) {
-  switch (request.attribution_reporting_eligibility) {
-    case network::mojom::AttributionReportingEligibility::kUnset:
-    case network::mojom::AttributionReportingEligibility::kEmpty:
-      break;
-    case network::mojom::AttributionReportingEligibility::kEventSource:
-    case network::mojom::AttributionReportingEligibility::kNavigationSource:
-    case network::mojom::AttributionReportingEligibility::kTrigger:
-    case network::mojom::AttributionReportingEligibility::kEventSourceOrTrigger:
-      return ChromeKeepAliveRequestTracker::RequestType::kAttribution;
-  }
-
   if (request.is_fetch_later_api) {
     return ChromeKeepAliveRequestTracker::RequestType::kFetchLater;
   }
@@ -54,33 +45,38 @@ ChromeKeepAliveRequestTracker::RequestType ComputeRequestType(
 }  // namespace
 
 // static
-std::unique_ptr<ChromeKeepAliveRequestTracker>
-ChromeKeepAliveRequestTracker::MaybeCreateKeepAliveRequestTracker(
+std::vector<std::unique_ptr<content::KeepAliveRequestTracker>>
+ChromeKeepAliveRequestTracker::MaybeCreateTrackers(
     const network::ResourceRequest& request,
     std::optional<ukm::SourceId> ukm_source_id,
+    content::BrowserContext* browser_context,
     IsContextDetachedCallback is_context_detached_callback) {
-  CHECK(request.keepalive && request.keepalive_token.has_value());
-
-  if (!ukm_source_id.has_value()) {
-    return nullptr;
+  // Do not need to track non-keepalive requests.
+  if (!request.keepalive || !request.keepalive_token.has_value()) {
+    return {};
   }
 
-  if (!base::FeatureList::IsEnabled(
+  std::vector<std::unique_ptr<content::KeepAliveRequestTracker>> trackers;
+  if (ukm_source_id.has_value() &&
+      base::FeatureList::IsEnabled(
           page_load_metrics::features::kBeaconLeakageLogging)) {
-    return nullptr;
+    auto category_id = page_load_metrics::GetCategoryIdFromUrl(request.url);
+    if (category_id.has_value()) {
+      RequestType request_type = ComputeRequestType(request);
+      trackers.push_back(base::WrapUnique(new ChromeKeepAliveRequestTracker(
+          request_type, category_id.value(), ukm_source_id.value(),
+          std::move(is_context_detached_callback),
+          request.keepalive_token.value())));
+    }
   }
 
-  auto category_id = page_load_metrics::GetCategoryIdFromUrl(request.url);
-  if (!category_id.has_value()) {
-    return nullptr;
+  std::unique_ptr<SearchPrefetchKeepAliveRequestTracker> search_tracker =
+      SearchPrefetchKeepAliveRequestTracker::MaybeCreateKeepAliveRequestTracker(
+          request, browser_context);
+  if (search_tracker) {
+    trackers.push_back(std::move(search_tracker));
   }
-
-  ChromeKeepAliveRequestTracker::RequestType request_type =
-      ComputeRequestType(request);
-
-  return base::WrapUnique(new ChromeKeepAliveRequestTracker(
-      request_type, *category_id, *ukm_source_id,
-      std::move(is_context_detached_callback), *request.keepalive_token));
+  return trackers;
 }
 
 ChromeKeepAliveRequestTracker::ChromeKeepAliveRequestTracker(

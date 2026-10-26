@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "components/webapps/common/web_app_id.h"
@@ -33,6 +34,7 @@ class LaunchParams {
   const GURL& target_url() const { return target_url_; }
   const base::FilePath& dir() const { return dir_; }
   const std::vector<base::FilePath>& paths() const { return paths_; }
+  const std::vector<bool>& can_write() const { return can_write_; }
   base::TimeTicks time_navigation_started_for_enqueue() const {
     return time_navigation_started_for_enqueue_;
   }
@@ -41,11 +43,28 @@ class LaunchParams {
   void set_started_new_navigation(bool started_new_navigation) {
     started_new_navigation_ = started_new_navigation;
   }
-  void set_app_id(webapps::AppId app_id) { app_id_ = std::move(app_id); }
+  // Setting a different `app_id` after one was already populated clears any
+  // file or directory handles (`paths_`, `can_write_`, `dir_`), which are
+  // capabilities scoped to the original app. (`scope_` is Android-only scope
+  // validation metadata, not a capability.)
+  void set_app_id(webapps::AppId app_id) {
+    if (!app_id_.empty() && app_id_ != app_id) {
+      clear_paths();
+      clear_dir();
+    }
+    app_id_ = std::move(app_id);
+  }
   void set_target_url(GURL target_url) { target_url_ = std::move(target_url); }
   void set_dir(base::FilePath dir) { dir_ = std::move(dir); }
   void set_paths(std::vector<base::FilePath> paths) {
     paths_ = std::move(paths);
+    can_write_.assign(paths_.size(), false);
+  }
+  void set_paths_with_permissions(std::vector<base::FilePath> paths,
+                                  std::vector<bool> can_write) {
+    CHECK_EQ(paths.size(), can_write.size());
+    paths_ = std::move(paths);
+    can_write_ = std::move(can_write);
   }
   void set_time_navigation_started_for_enqueue(
       base::TimeTicks time_navigation_started_for_enqueue) {
@@ -53,9 +72,14 @@ class LaunchParams {
   }
 
   // Mutation Helpers
-  void clear_paths() { paths_.clear(); }
-  void add_path(base::FilePath path) { paths_.push_back(std::move(path)); }
+  void clear_paths() {
+    paths_.clear();
+    can_write_.clear();
+  }
   void clear_dir() { dir_.clear(); }
+
+  const GURL& scope() const { return scope_; }
+  void set_scope(GURL scope) { scope_ = std::move(scope); }
 
  private:
   // Whether this launch triggered a navigation that needs to be awaited before
@@ -70,11 +94,19 @@ class LaunchParams {
   // in the launch params.
   GURL target_url_;
 
+  // The scope of the web app being launched, used for scope validation on
+  // Android.
+  GURL scope_;
+
   // The directory to launch with (may be empty).
   base::FilePath dir_;
 
   // The files to launch with (may be empty).
   std::vector<base::FilePath> paths_;
+
+  // Whether the web app is granted initial write permission for the file.
+  // By default, files sent through the launch queue will only have read access.
+  std::vector<bool> can_write_;
 
   // Stores the time when the browser process receives the navigation that
   // causes the `LaunchParams` to be created.

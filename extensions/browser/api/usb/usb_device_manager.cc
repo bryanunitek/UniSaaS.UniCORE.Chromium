@@ -20,6 +20,7 @@
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/common/api/usb.h"
+#include "extensions/common/event_args.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/mojom/event_dispatcher.mojom-forward.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -203,9 +204,9 @@ void UsbDeviceManager::GetDevice(
     const std::string& guid,
     mojo::PendingReceiver<device::mojom::UsbDevice> device_receiver) {
   EnsureConnectionWithDeviceManager();
-  device_manager_->GetDevice(guid, /*blocked_interface_classes=*/{},
-                             std::move(device_receiver),
-                             /*device_client=*/mojo::NullRemote());
+  device_manager_->GetUnrestrictedDevice(guid, /*blocked_interface_classes=*/{},
+                                         std::move(device_receiver),
+                                         /*device_client=*/mojo::NullRemote());
 }
 
 const device::mojom::UsbDeviceInfo* UsbDeviceManager::GetDeviceInfo(
@@ -378,14 +379,18 @@ void UsbDeviceManager::DispatchEvent(
 
     std::unique_ptr<Event> event;
     if (event_name == usb::OnDeviceAdded::kEventName) {
+      auto event_args = base::MakeRefCounted<EventArgs>(
+          usb::OnDeviceAdded::Create(device_obj));
       event = std::make_unique<Event>(events::USB_ON_DEVICE_ADDED,
                                       usb::OnDeviceAdded::kEventName,
-                                      usb::OnDeviceAdded::Create(device_obj));
+                                      std::move(event_args));
     } else {
       DCHECK(event_name == usb::OnDeviceRemoved::kEventName);
+      auto event_args = base::MakeRefCounted<EventArgs>(
+          usb::OnDeviceRemoved::Create(device_obj));
       event = std::make_unique<Event>(events::USB_ON_DEVICE_REMOVED,
                                       usb::OnDeviceRemoved::kEventName,
-                                      usb::OnDeviceRemoved::Create(device_obj));
+                                      std::move(event_args));
     }
 
     event->will_dispatch_callback =

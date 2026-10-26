@@ -20,6 +20,12 @@
 
 namespace autofill {
 
+// static
+std::unique_ptr<TouchToFillAutofillController>
+TouchToFillAutofillController::Create(ContentAutofillClient* autofill_client) {
+  return std::make_unique<TouchToFillAutofillControllerImpl>(autofill_client);
+}
+
 namespace {
 TouchToFillAutofillDelegate* GetDelegate(AutofillManager& manager) {
   auto* bam = static_cast<BrowserAutofillManager*>(&manager);
@@ -75,6 +81,32 @@ bool TouchToFillAutofillControllerImpl::ShowPersonalContextNotice(
   view_ = std::move(view);
   delegate_ = delegate;
   return view_->ShowPersonalContextNotice(this);
+}
+
+bool TouchToFillAutofillControllerImpl::ShowPrivateInferenceNotice(
+    std::unique_ptr<TouchToFillAutofillView> view,
+    base::WeakPtr<TouchToFillAutofillDelegate> delegate) {
+  view_ = std::move(view);
+  delegate_ = delegate;
+  return view_->ShowPrivateInferenceNotice(this);
+}
+
+void TouchToFillAutofillControllerImpl::OnNoticeAcknowledged() {
+  if (delegate_) {
+    delegate_->OnNoticeAcknowledged();
+  }
+}
+
+void TouchToFillAutofillControllerImpl::OnSettingsLinkClicked() {
+  if (delegate_) {
+    delegate_->OnSettingsLinkClicked();
+  }
+}
+
+void TouchToFillAutofillControllerImpl::OnDismissed() {
+  if (delegate_) {
+    delegate_->OnDismissed();
+  }
 }
 
 }  // namespace autofill

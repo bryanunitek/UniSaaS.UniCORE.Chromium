@@ -86,7 +86,7 @@ make_trie_helpers_files =
 if (host_os == "win") {
   # TODO: crbug.com/431264806 - Switch to CIPD package.
   gperf_exe = "//third_party/gperf/bin/gperf.exe"
-} else if (is_ios) {
+} else if (is_ios && host_os == "mac") {
   # $ios_toolchains_path is a source absolute path under $root_build_dir.
   # GN complains since there is no target that generates it.
   # This is a workaround to get a system absolute path for the SDK binary dir.
@@ -296,6 +296,7 @@ template("make_names") {
                                     "$output_dir/{{source_name_part}}.cc",
                                     "$output_dir/{{source_name_part}}.h",
                                   ])
+
   process_json5_files(target_name) {
     script = "//third_party/blink/renderer/build/scripts/make_names.py"
     other_inputs = make_names_files

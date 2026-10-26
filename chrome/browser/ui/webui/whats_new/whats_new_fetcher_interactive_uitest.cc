@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/run_loop.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new_fetcher.h"
+
+#include "base/run_loop.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -29,7 +31,8 @@ class WhatsNewFetcherActiveStateTest : public InProcessBrowserTest {
   // On linux, the activation is asynchronous, which makes it impossible to
   // reliably wait for the posted task after activation change. Use mocked
   // activation logic which is synchronous.
-  views::test::MockActivationController activation_controller_;
+  views::test::MockActivationController activation_controller_{
+      /*allow_in_interactive_ui_tests=*/true};
 #endif
 };
 
@@ -42,11 +45,11 @@ IN_PROC_BROWSER_TEST_F(WhatsNewFetcherActiveStateTest,
   }
 #endif
 
-  Browser* new_browser = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* new_browser = CreateBrowser(browser()->GetProfile());
   ui_test_utils::BrowserActivationWaiter(new_browser).WaitForActivation();
   EXPECT_TRUE(new_browser->IsActive());
 
-  int initial_tab_count = new_browser->tab_strip_model()->count();
+  int initial_tab_count = new_browser->GetTabStripModel()->count();
 
   // Start the fetch. It posts a task to open the tab.
   whats_new::StartWhatsNewFetch(new_browser);
@@ -66,5 +69,5 @@ IN_PROC_BROWSER_TEST_F(WhatsNewFetcherActiveStateTest,
 
   // Because the new browser was made inactive, the fetcher should NOT
   // open the What's New tab.
-  EXPECT_EQ(initial_tab_count, new_browser->tab_strip_model()->count());
+  EXPECT_EQ(initial_tab_count, new_browser->GetTabStripModel()->count());
 }

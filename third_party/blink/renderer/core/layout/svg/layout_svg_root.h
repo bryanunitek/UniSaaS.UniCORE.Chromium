@@ -24,16 +24,17 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_ROOT_H_
 
 #include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_replaced.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_content_container.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
 namespace blink {
 
-class LayoutSVGText;
 class SVGElement;
 class SVGRect;
 enum class SVGTransformChange;
@@ -102,15 +103,7 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   // preserveAspectRatio="none" is used in an SVG image container).
   // This is set by SVGImage before layout so that
   // vector-effect:non-scaling-stroke can account for the full CTM.
-  void SetContainerScale(const gfx::Vector2dF& container_scale) {
-    NOT_DESTROYED();
-    if (container_scale_ != container_scale) {
-      container_scale_changed_ = true;
-      SetNeedsLayoutAndFullPaintInvalidation(
-          layout_invalidation_reason::kSvgChanged);
-    }
-    container_scale_ = container_scale;
-  }
+  void SetContainerScale(const gfx::Vector2dF& container_scale);
 
   const gfx::Vector2dF& GetContainerScale() const {
     NOT_DESTROYED();
@@ -123,15 +116,13 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
     NOT_DESTROYED();
     return local_to_border_box_transform_;
   }
+  // Like LocalToBorderBoxTransform(), but also includes the root's
+  // perspective (under SvgCss3dTransforms).
+  gfx::Transform LocalToBorderBoxTransform3D() const;
   gfx::RectF ViewBoxRect() const;
   gfx::SizeF ViewportSize() const;
 
-  void RecalcVisualOverflow() override;
-
   bool HasNonIsolatedBlendingDescendants() const final;
-
-  void AddSvgTextDescendant(LayoutSVGText& svg_text);
-  void RemoveSvgTextDescendant(LayoutSVGText& svg_text);
 
   void IntersectChildren(HitTestResult&, const HitTestLocation&) const;
 
@@ -142,7 +133,7 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
 
  private:
   OverflowClipAxes ComputeOverflowClipAxes() const override;
-  PhysicalRect ComputeContentsVisualOverflow() const;
+  PhysicalRect ComputeContentsVisualOverflow() const override;
 
   LayoutObjectChildList* VirtualChildren() override {
     NOT_DESTROYED();
@@ -173,9 +164,10 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
 
-  void WillBeDestroyed() override;
+  void WillBeDestroyed(const ComputedStyle*) override;
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
   bool IsChildAllowed(LayoutObject*, const ComputedStyle&) const override;
   void AddChild(LayoutObject* child,
@@ -232,17 +224,22 @@ class CORE_EXPORT LayoutSVGRoot final : public LayoutReplaced {
   // The scale factors applied by the container (e.g. when
   // preserveAspectRatio="none" is used in an SVG image container).
   gfx::Vector2dF container_scale_{1.f, 1.f};
-  HeapHashSet<Member<LayoutSVGText>> text_set_;
 
   // The new content size for SVG roots. This is set during layout, and cleared
   // afterwards. Always nullptr when this object isn't in the process of being
   // laid out.
-  const PhysicalSize* new_content_size_ = nullptr;
+  raw_ptr<const PhysicalSize, UnprotectedInRelease | DanglingUntriaged>
+      new_content_size_ = nullptr;
 
-  bool needs_transform_update_ : 1;
-  bool container_scale_changed_ : 1;
-  mutable bool has_non_isolated_blending_descendants_ : 1;
-  mutable bool has_non_isolated_blending_descendants_dirty_ : 1;
+  // True if the local transform of this object is not up-to-date.
+  bool needs_transform_update_ : 1 = true;
+  // True if the `container_scale_` field has changed.
+  bool container_scale_changed_ : 1 = false;
+  // True if any descendants that are not isolated uses a non-default
+  // blend-mode (not source-over/"normal").
+  mutable bool has_non_isolated_blending_descendants_ : 1 = false;
+  // True if the above flag is not up-to-date.
+  mutable bool has_non_isolated_blending_descendants_dirty_ : 1 = false;
 };
 
 template <>

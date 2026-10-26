@@ -4,6 +4,8 @@
 
 #include "components/update_client/component.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <memory>
 #include <optional>
@@ -24,7 +26,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -372,7 +373,7 @@ void Component::StateChecking::DoHandle() {
     return;
   }
 
-  if (component.update_context_->is_cancelled) {
+  if (component.update_context_->is_cancelled || component.is_cancelled_) {
     TransitionState(std::make_unique<StateUpdateError>(&component));
     component.error_category_ = ErrorCategory::kService;
     component.error_code_ = static_cast<int>(ServiceError::CANCELLED);
@@ -442,7 +443,7 @@ void Component::StateCanUpdate::DoHandle() {
     return;
   }
 
-  if (component.update_context_->is_cancelled) {
+  if (component.update_context_->is_cancelled || component.is_cancelled_) {
     TransitionState(std::make_unique<StateUpdateError>(&component));
     component.error_category_ = ErrorCategory::kService;
     component.error_code_ = static_cast<int>(ServiceError::CANCELLED);

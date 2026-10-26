@@ -24,6 +24,7 @@
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_manager.h"
 #include "chrome/browser/ui/views/zoom/zoom_view_controller.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/vector_icons/vector_icons.h"
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
 #include "extensions/browser/extension_zoom_request_client.h"
@@ -37,6 +38,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/favicon_size.h"
@@ -120,7 +122,7 @@ class ZoomValue : public views::Label {
     const int border_width = GetInsets().width();
     int max_w = 0;
     auto* zoom_controller = zoom::ZoomController::FromWebContents(web_contents);
-    DCHECK(zoom_controller);
+    CHECK(zoom_controller, base::NotFatalUntil::M162);
     // Enumerate all zoom factors that can be used in PageZoom::Zoom.
     std::vector<double> zoom_factors =
         zoom::PageZoom::PresetZoomFactors(zoom_controller->GetZoomPercent());
@@ -297,7 +299,7 @@ void ZoomBubbleView::Init() {
   // Add Zoom In ("+") button.
   zoom_in_button_ = AddChildView(CreateZoomButton(
       zoom_callback(content::PAGE_ZOOM_IN),
-      features::IsRoundedIconsEnabled() ? kAdd2Icon : kAddOldIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kAdd2Icon : kAddOldIcon,
       IDS_ACCNAME_ZOOM_PLUS2));
   zoom_in_button_->SetProperty(views::kMarginsKey,
                                gfx::Insets(vector_button_margin));
@@ -324,7 +326,7 @@ void ZoomBubbleView::OnExtensionIconImageChanged(
 }
 
 void ZoomBubbleView::SetExtensionInfo(const extensions::Extension* extension) {
-  DCHECK(extension);
+  CHECK(extension, base::NotFatalUntil::M162);
   extension_info_.id = extension->id();
   extension_info_.name = extension->name();
 

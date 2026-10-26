@@ -13,6 +13,7 @@
 
 #include "base/check_op.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "pdf/page_orientation.h"
 #include "pdf/pdf_ink_constants.h"
@@ -164,7 +165,8 @@ std::optional<ink::PartitionedMesh> ReadV2InkModeledShapeFromPath(
 std::vector<FPDF_PAGEOBJECTMARK> FindInkTextAnnotationMarks(
     FPDF_PAGEOBJECT page_object) {
   std::vector<FPDF_PAGEOBJECTMARK> marks;
-  if (FPDFPageObj_GetType(page_object) != FPDF_PAGEOBJ_TEXT) {
+  const int type = FPDFPageObj_GetType(page_object);
+  if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_PATH) {
     return marks;
   }
 
@@ -181,14 +183,14 @@ std::vector<FPDF_PAGEOBJECTMARK> FindInkTextAnnotationMarks(
 
 bool IsValidTypeface(std::optional<int> typeface) {
   return typeface.has_value() &&
-         typeface.value() >= static_cast<int>(TextTypeface::kFirst) &&
-         typeface.value() <= static_cast<int>(TextTypeface::kLast);
+         typeface.value() >= static_cast<int>(TextTypeface::kMinValue) &&
+         typeface.value() <= static_cast<int>(TextTypeface::kMaxValue);
 }
 
 bool IsValidAlignment(std::optional<int> alignment) {
   return alignment.has_value() &&
-         alignment.value() >= static_cast<int>(TextAlignment::kFirst) &&
-         alignment.value() <= static_cast<int>(TextAlignment::kLast);
+         alignment.value() >= static_cast<int>(TextAlignment::kMinValue) &&
+         alignment.value() <= static_cast<int>(TextAlignment::kMaxValue);
 }
 
 bool IsValidOrientation(std::optional<int> orientation) {
@@ -201,9 +203,14 @@ bool IsValidOrientation(std::optional<int> orientation) {
 std::optional<InkTextBoxAttributes> ExtractAttributesFromMark(
     FPDF_PAGEOBJECT page_object,
     FPDF_PAGEOBJECTMARK mark) {
+  if (FPDFPageObj_GetType(page_object) != FPDF_PAGEOBJ_TEXT) {
+    return std::nullopt;
+  }
+
   // Read the metadata in `mark`.
   std::optional<int> version = GetPageObjectMarkIntParam(mark, "Version");
-  if (!version.has_value() || version.value() != kInkTextAnnotationVersion) {
+  if (!version.has_value() || version.value() <= 0 ||
+      version.value() > kInkTextAnnotationVersion) {
     return std::nullopt;
   }
 
@@ -227,6 +234,14 @@ std::optional<InkTextBoxAttributes> ExtractAttributesFromMark(
   std::optional<int> bold = GetPageObjectMarkIntParam(mark, "IsBold");
   std::optional<int> italic = GetPageObjectMarkIntParam(mark, "IsItalic");
   if (!bold.has_value() || !italic.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<int> strikethrough =
+      GetPageObjectMarkIntParam(mark, "IsStrikethrough");
+  std::optional<int> underline = GetPageObjectMarkIntParam(mark, "IsUnderline");
+  if (version.value() >= 2 &&
+      (!strikethrough.has_value() || !underline.has_value())) {
     return std::nullopt;
   }
 
@@ -263,12 +278,22 @@ std::optional<InkTextBoxAttributes> ExtractAttributesFromMark(
 
   const bool is_bold = bold.value() != 0;
   const bool is_italic = italic.value() != 0;
-  return InkTextBoxAttributes(bounds, SkColorSetRGB(r, g, b), css_font_size,
-                              static_cast<TextTypeface>(typeface.value()),
-                              static_cast<TextAlignment>(alignment.value()),
-                              orientation.value(), PageOrientation::kOriginal,
-                              is_bold, is_italic,
-                              base::UTF16ToUTF8(text.value()));
+  const bool is_strikethrough = strikethrough.value_or(0) != 0;
+  const bool is_underline = underline.value_or(0) != 0;
+  return InkTextBoxAttributes{
+      .rect = bounds,
+      .color = SkColorSetRGB(r, g, b),
+      .css_font_size = css_font_size,
+      .typeface = static_cast<TextTypeface>(typeface.value()),
+      .alignment = static_cast<TextAlignment>(alignment.value()),
+      .orientation = orientation.value(),
+      .viewport_orientation = PageOrientation::kOriginal,
+      .is_bold = is_bold,
+      .is_italic = is_italic,
+      .is_strikethrough = is_strikethrough,
+      .is_underline = is_underline,
+      .text = base::UTF16ToUTF8(text.value()),
+  };
 }
 
 }  // namespace
@@ -318,8 +343,10 @@ std::optional<ink::Mesh> CreateInkMeshFromPolylineForTesting(  // IN-TEST
   return CreateInkMeshFromPolyline(polyline);
 }
 
-ReadInkTextResult::ReadInkTextResult(InkTextBox textbox,
-                                     std::vector<FPDF_PAGEOBJECT> text_objects)
+ReadInkTextResult::ReadInkTextResult(
+    InkTextBox textbox,
+    std::vector<base::RawPtrIfPtrT<FPDF_PAGEOBJECT, DanglingUntriaged>>
+        text_objects)
     : textbox(std::move(textbox)), text_objects(std::move(text_objects)) {}
 
 ReadInkTextResult::ReadInkTextResult(ReadInkTextResult&&) noexcept = default;
@@ -346,7 +373,8 @@ bool PageContainsInkTextAnnotation(FPDF_PAGE page) {
 std::vector<ReadInkTextResult> ReadInkTextAnnotationsFromPage(FPDF_PAGE page) {
   struct TextboxData {
     std::optional<InkTextBoxAttributes> attributes;
-    std::vector<FPDF_PAGEOBJECT> page_objects;
+    std::vector<base::RawPtrIfPtrT<FPDF_PAGEOBJECT, DanglingUntriaged>>
+        page_objects;
     FPDF_PAGEOBJECTMARK mark = nullptr;
   };
 

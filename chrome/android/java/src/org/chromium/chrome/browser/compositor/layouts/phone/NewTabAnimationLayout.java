@@ -56,6 +56,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabContextMenuData;
 import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabLaunchTypeUtils;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.OverridableTabCount;
@@ -66,6 +67,7 @@ import org.chromium.chrome.browser.toolbar.ToolbarPositionController;
 import org.chromium.chrome.browser.toolbar.top.ToggleTabStackButton;
 import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherButtonView;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
@@ -101,10 +103,12 @@ public class NewTabAnimationLayout extends Layout {
     private final NonNullObservableSupplier<Boolean> mScrimVisibilitySupplier;
     private final NonNullObservableSupplier<Float> mNtpSearchBoxTransitionPercentageSupplier;
     private final OverridableTabCount mOverridableTabCount;
+    private final BrowserControlsManager mBrowserControlsManager;
     private final BrowserStateBrowserControlsVisibilityDelegate mBrowserVisibilityDelegate;
     private final TopInsetProvider mTopInsetProvider;
     private final TopInsetProvider.Observer mTopInsetProviderObserver;
     private final NewBackgroundTabAnimationData mNewBackgroundTabAnimationData;
+    private final boolean mIsBottomBarEnabled;
 
     private @Nullable StaticTabSceneLayer mSceneLayer;
     private @Nullable NewBackgroundTabAnimationHostView mBackgroundHostView;
@@ -164,6 +168,7 @@ public class NewTabAnimationLayout extends Layout {
         mNtpSearchBoxTransitionPercentageSupplier =
                 toolbarManager.getNtpSearchBoxTransitionPercentageSupplier();
         mOverridableTabCount = mToolbarManager.getOverridableTabCount();
+        mBrowserControlsManager = browserControlsManager;
         mBrowserVisibilityDelegate = browserControlsManager.getBrowserVisibilityDelegate();
         mTopInsetProvider = topInsetProvider;
         mNewBackgroundTabAnimationData =
@@ -172,6 +177,7 @@ public class NewTabAnimationLayout extends Layout {
         // Set up observer to handle edge-to-edge changes.
         mTopInsetProviderObserver = this::onToEdgeChange;
         mTopInsetProvider.addObserver(mTopInsetProviderObserver);
+        mIsBottomBarEnabled = BottomBarConfigUtils.isBottomBarEnabled(context);
     }
 
     @Override
@@ -288,8 +294,7 @@ public class NewTabAnimationLayout extends Layout {
         mTopPadding = 0;
         Tab newTab = mTabModelSelector.getModel(newIsIncognito).getTabById(id);
         if (newTab != null
-                && (newTab.getLaunchType() == TabLaunchType.FROM_COLLABORATION_BACKGROUND_IN_GROUP
-                        || newTab.getLaunchType() == TabLaunchType.FROM_TIPS_NOTIFICATIONS)) {
+                && TabLaunchTypeUtils.shouldKeepCurrentTabOnAnimation(newTab.getLaunchType())) {
             // Tab selection will no-op for Tab.INVALID_TAB_ID. This operation should not change
             // the current tab. If for some reason this is the last tab it will be automatically
             // selected.
@@ -463,13 +468,11 @@ public class NewTabAnimationLayout extends Layout {
      */
     private @RectStart int getForegroundRectStart(@Nullable Tab oldTab, Tab newTab) {
         @TabLaunchType int tabLaunchType = newTab.getLaunchType();
-        if (oldTab == null
-                || tabLaunchType == TabLaunchType.FROM_LONGPRESS_FOREGROUND
-                || tabLaunchType == TabLaunchType.FROM_LONGPRESS_FOREGROUND_IN_GROUP) {
+        if (oldTab == null || TabLaunchTypeUtils.isLongpressForegroundLaunch(tabLaunchType)) {
             return RectStart.CENTER;
         }
 
-        if (BottomBarConfigUtils.isBottomBarEnabled(getContext())) {
+        if (mIsBottomBarEnabled) {
             return RectStart.BOTTOM_CENTER;
         }
 
@@ -493,35 +496,24 @@ public class NewTabAnimationLayout extends Layout {
             return 0;
         }
 
-        boolean isNtp = UrlUtilities.isNtpUrl(tab.getUrl()) && !tab.isIncognitoBranded();
-
+        Context context = getContext();
         int height = 0;
-        boolean hasBottomBar = false;
-        if (BottomBarConfigUtils.isBottomBarEnabled(getContext())) {
-            // On NTP, bottom bar is only disabled if shouldDisableOnNtp() is true.
-            boolean disabledOnNtp = isNtp && BottomBarConfigUtils.shouldDisableOnNtp();
-            if (!disabledOnNtp) {
-                height +=
-                        getContext()
-                                .getResources()
-                                .getDimensionPixelSize(R.dimen.bottom_bar_height);
-                hasBottomBar = true;
-            }
-        }
-        // Bottom toolbar is always relocated to the top on NTP.
         boolean hasBottomToolbar = false;
-        if (!isNtp && !ToolbarPositionController.shouldShowToolbarOnTop(tab)) {
+        if (!ToolbarPositionController.shouldShowToolbarOnTop(tab)) {
             height +=
-                    getContext()
-                            .getResources()
+                    context.getResources()
                             .getDimensionPixelSize(R.dimen.control_container_height);
             hasBottomToolbar = true;
         }
 
+        if (mIsBottomBarEnabled) {
+            height += BottomBarUtils.getBottomBarHeight(context, hasBottomToolbar);
+        }
+
         // Edge-to-Edge Bottom Chin Height
         if (edgeToEdgeController != null && edgeToEdgeController.isDrawingToEdge()) {
-            boolean isTabOptedIn = EdgeToEdgeUtils.isPageOptedIntoEdgeToEdge(tab);
-            boolean othersAreVisible = hasBottomBar || hasBottomToolbar;
+            boolean isTabOptedIn = EdgeToEdgeUtils.isPageOptedIntoBottomEdgeToEdge(tab);
+            boolean othersAreVisible = mIsBottomBarEnabled || hasBottomToolbar;
             // Stacker shows the chin if the page is not opted in, OR if other layers are visible
             // (VISIBLE_IF_OTHERS_VISIBLE resolves to true when othersAreVisible is true).
             if (!isTabOptedIn || othersAreVisible) {
@@ -745,8 +737,18 @@ public class NewTabAnimationLayout extends Layout {
         mSkipForceAnimationToFinish = true;
         forceHidingImmediatelyIfNeeded(isRegularNtp);
 
-        if (!isRegularNtp && mBrowserControlsVisibilityToken == TokenHolder.INVALID_TOKEN) {
+        // Acquire a persistent controls token for non-regular NTPs or when the bottom bar is
+        // enabled. This forces BrowserControlsState.SHOWN so NtpScrollListener pauses
+        // scroll-to-hide behavior and locks controls in place during the background tab animation.
+        if ((!isRegularNtp || mIsBottomBarEnabled)
+                && mBrowserControlsVisibilityToken == TokenHolder.INVALID_TOKEN) {
             mBrowserControlsVisibilityToken = mBrowserVisibilityDelegate.showControlsPersistent();
+        }
+        // Immediately snap controls to offset 0 (fully visible) on a regular NTP when the bottom
+        // bar is enabled, ensuring mNewBackgroundTabAnimationData.captureState() measures the
+        // target tab switcher button in its resting visible position.
+        if (isRegularNtp && mIsBottomBarEnabled) {
+            mBrowserControlsManager.showAndroidControls(/* animate= */ false);
         }
 
         Rect compositorViewRect = new Rect();
@@ -826,7 +828,7 @@ public class NewTabAnimationLayout extends Layout {
                     boolean shouldObserveNtp =
                             isRegularNtp
                                     && animationType == AnimationType.DEFAULT
-                                    && !mNewBackgroundTabAnimationData.isBottomBarVisible();
+                                    && !mNewBackgroundTabAnimationData.isBottomBarEnabled();
                     AnimationInterruptor interruptor =
                             new AnimationInterruptor(
                                     mLayoutStateProvider,

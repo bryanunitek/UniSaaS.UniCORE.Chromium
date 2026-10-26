@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "components/signin/core/browser/account_preview_data_fetcher.h"
 #include "net/base/net_errors.h"
 
 namespace network {
@@ -16,13 +17,11 @@ class TestURLLoaderFactory;
 
 namespace signin {
 
-// These url matches the non-Stable/Beta urls for testing.
-inline constexpr char kTestStatsUrl[] =
-    "https://alpha-chromesyncpreview-googleapis.pa.sandbox.google.com/v1/"
-    "dataTypes/-/dataTypesStatistics";
-inline constexpr char kTestPreviewsUrl[] =
-    "https://alpha-chromesyncpreview-googleapis.pa.sandbox.google.com/v1/"
-    "dataTypes/154522/entitiesPreviews";
+struct DevicePreview;
+
+// In tests, we dynamically build the URL to represent the same appended params.
+std::string GetTestStatsUrl();
+std::string GetTestPreviewsUrl();
 
 // Subset of all data types for testing purposes.
 struct DataTypeCounts {
@@ -39,12 +38,12 @@ void MockSuccessfulStatsFetch(
 // Mocks a successful response from the previews endpoint.
 void MockSuccessfulPreviewsFetch(
     network::TestURLLoaderFactory* test_url_loader_factory,
-    const std::vector<std::string>& domains = {});
+    const std::vector<DevicePreview>& devices = {});
 
 // Mocks successful responses for both stats and previews endpoints.
 void MockSuccessfulFetch(network::TestURLLoaderFactory* test_url_loader_factory,
                          const DataTypeCounts& counts = {},
-                         const std::vector<std::string>& domains = {});
+                         const std::vector<DevicePreview>& devices = {});
 
 // Mocks a failed response from the stats endpoint.
 void MockFailedStatsFetch(
@@ -56,12 +55,22 @@ void MockFailedPreviewsFetch(
     network::TestURLLoaderFactory* test_url_loader_factory,
     net::Error error_code);
 
+// Mocks a 429 Too Many Requests response from the stats endpoint.
+void Mock429StatsFetch(network::TestURLLoaderFactory* test_url_loader_factory);
+
+// Mocks a 429 Too Many Requests response from the previews endpoint.
+void Mock429PreviewsFetch(
+    network::TestURLLoaderFactory* test_url_loader_factory);
+
+// Mocks 429 Too Many Requests responses for both stats and previews endpoints.
+void Mock429Fetch(network::TestURLLoaderFactory* test_url_loader_factory);
+
 // Simulates successful responses for the oldest matching pending stats and
 // previews fetches.
 void SimulateSuccessfulFetch(
     network::TestURLLoaderFactory* test_url_loader_factory,
     const DataTypeCounts& counts = {},
-    const std::vector<std::string>& domains = {});
+    const std::vector<DevicePreview>& devices = {});
 
 }  // namespace signin
 

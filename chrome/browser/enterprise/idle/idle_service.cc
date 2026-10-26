@@ -20,8 +20,8 @@
 #include "ui/base/idle/idle_polling_service.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/idle_bubble.h"
@@ -112,7 +112,7 @@ IdleService::IdleService(Profile* profile)
           std::make_unique<ActionRunner>(profile_,
                                          ActionFactory::GetInstance())) {
   browser_observer_ = std::make_unique<BrowserObserver>(profile);
-  DCHECK_EQ(profile_->GetOriginalProfile(), profile_);
+  CHECK_EQ(profile_->GetOriginalProfile(), profile_, base::NotFatalUntil::M161);
   pref_change_registrar_.Init(profile->GetPrefs());
   pref_change_registrar_.Add(
       prefs::kIdleTimeout,

@@ -10,6 +10,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "ui/base/window_open_disposition.h"
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/webui_url_constants.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
@@ -21,9 +22,9 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/debug_info_printer.h"
@@ -158,7 +159,7 @@ class WebAppNavigationCapturingIphUiTest : public InteractiveFeaturePromoTest {
                 provider->scheduler().LaunchAppWithCustomParams(
                     apps::AppLaunchParams(
                         app_id, apps::LaunchContainer::kLaunchContainerWindow,
-                        WindowOpenDisposition::CURRENT_TAB,
+                        WindowOpenDisposition::kCurrentTab,
                         apps::LaunchSource::kFromTest),
                     base::DoNothing());
               }),

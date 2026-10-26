@@ -15,7 +15,6 @@
 #include "build/config/cuttlefish/buildflags.h"  // PLATFORM_CUTTLEFISH
 #include "build/config/squid/buildflags.h"       // PLATFORM_SQUID
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/attestation/attestation_features.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/dbus/anomaly_detector/anomaly_detector_client.h"
@@ -25,7 +24,6 @@
 #include "chromeos/ash/components/dbus/arc/arc_keymint_client.h"
 #include "chromeos/ash/components/dbus/arc/arc_midis_client.h"
 #include "chromeos/ash/components/dbus/arc/arc_obb_mounter_client.h"
-#include "chromeos/ash/components/dbus/arc/arcvm_data_migrator_client.h"
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/audio/cras_audio_client.h"
 #include "chromeos/ash/components/dbus/audio/floss_media_client.h"
@@ -77,7 +75,6 @@
 #include "chromeos/ash/components/dbus/userdataauth/cryptohome_pkcs11_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/dbus/virtual_file_provider/virtual_file_provider_client.h"
-#include "chromeos/ash/components/dbus/vm_plugin_dispatcher/vm_plugin_dispatcher_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/language_packs/language_pack_manager.h"
 #include "chromeos/dbus/constants/dbus_paths.h"
@@ -114,7 +111,7 @@ namespace {
 void OverrideStubPathsIfNeeded() {
   base::FilePath user_data_dir;
   if (!base::SysInfo::IsRunningOnChromeOS() &&
-      base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
+      base::PathService::Get(ash::DIR_USER_DATA, &user_data_dir)) {
     RegisterStubPathOverrides(user_data_dir);
     chromeos::dbus_paths::RegisterStubPathOverrides(user_data_dir);
   }
@@ -129,7 +126,7 @@ DBusHelperObserverForTest::~DBusHelperObserverForTest() = default;  // IN-TEST
 // static
 void DBusHelperObserverForTest::Set(DBusHelperObserverForTest* observer) {
   // Only allow set `g_dbus_helper_observer` when it is null or resets it.
-  DCHECK(!g_dbus_helper_observer || !observer);
+  CHECK(!g_dbus_helper_observer || !observer, base::NotFatalUntil::M160);
 
   g_dbus_helper_observer = observer;
 }
@@ -158,7 +155,6 @@ void InitializeDBus() {
   InitializeDBusClient<ArcKeyMintClient>(bus);
   InitializeDBusClient<ArcMidisClient>(bus);
   InitializeDBusClient<ArcObbMounterClient>(bus);
-  InitializeDBusClient<ArcVmDataMigratorClient>(bus);
   InitializeDBusClient<AttestationClient>(bus);
   InitializeDBusClient<BiodClient>(bus);  // For device::Fingerprint.
   InitializeDBusClient<CdmFactoryDaemonClient>(bus);
@@ -210,7 +206,6 @@ void InitializeDBus() {
   InitializeDBusClient<UserDataAuthClient>(bus);
   InitializeDBusClient<UpstartClient>(bus);
   InitializeDBusClient<VirtualFileProviderClient>(bus);
-  InitializeDBusClient<VmPluginDispatcherClient>(bus);
   InitializeDBusClient<chromeos::RegmonClient>(bus);
 
   attestation::AttestationFeatures::Initialize();
@@ -315,7 +310,6 @@ void ShutdownDBus() {
 
   // Other D-Bus clients are shut down, also in reverse order of initialization.
   chromeos::RegmonClient::Shutdown();
-  VmPluginDispatcherClient::Shutdown();
   VirtualFileProviderClient::Shutdown();
   UpstartClient::Shutdown();
   UserDataAuthClient::Shutdown();
@@ -372,7 +366,6 @@ void ShutdownDBus() {
   CdmFactoryDaemonClient::Shutdown();
   BiodClient::Shutdown();
   AttestationClient::Shutdown();
-  ArcVmDataMigratorClient::Shutdown();
   ArcObbMounterClient::Shutdown();
   ArcMidisClient::Shutdown();
   ArcKeyMintClient::Shutdown();

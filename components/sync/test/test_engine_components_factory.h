@@ -24,8 +24,7 @@ class TestEngineComponentsFactory : public EngineComponentsFactory {
   std::unique_ptr<SyncScheduler> BuildScheduler(
       const std::string& name,
       SyncCycleContext* context,
-      CancelationSignal* cancelation_signal,
-      bool ignore_auth_credentials) override;
+      CancelationSignal* cancelation_signal) override;
 
   std::unique_ptr<SyncCycleContext> BuildContext(
       ServerConnectionManager* connection_manager,
@@ -36,7 +35,13 @@ class TestEngineComponentsFactory : public EngineComponentsFactory {
       const std::string& cache_guid,
       const std::string& store_birthday,
       const std::string& bag_of_chips,
-      base::TimeDelta poll_interval) override;
+      base::TimeDelta poll_interval,
+      const std::string& account_email,
+      SyncAccessTokenFetcher* sync_access_token_fetcher) override;
+
+  std::unique_ptr<ServerConnectionManager> BuildConnectionManager(
+      const std::string& cache_guid,
+      CancelationSignal* cancelation_signal) override;
 };
 
 }  // namespace syncer

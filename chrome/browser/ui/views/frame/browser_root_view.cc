@@ -6,12 +6,12 @@
 
 #include <cmath>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -21,15 +21,15 @@
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
-#include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
-#include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_match.h"
@@ -47,7 +47,9 @@
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/compositor/paint_recorder.h"
@@ -257,7 +259,7 @@ void BrowserRootView::OnDragEntered(const ui::DropTargetEvent& event) {
 
   // Avoid crashing while the tab strip is being initialized or is empty.
   content::WebContents* web_contents =
-      browser_view_->browser()->tab_strip_model()->GetActiveWebContents();
+      browser_view_->browser()->GetTabStripModel()->GetActiveWebContents();
   if (!web_contents) {
     return;
   }
@@ -267,7 +269,7 @@ void BrowserRootView::OnDragEntered(const ui::DropTargetEvent& event) {
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&GetURLMimeTypes, urls),
       base::BindOnce(&FilterURLsForDropability, urls,
-                     browser_view_->browser()->profile(),
+                     browser_view_->browser()->GetProfile(),
                      base::BindOnce(&BrowserRootView::OnFilteringComplete,
                                     weak_ptr_factory_.GetWeakPtr(),
                                     drop_info_->sequence)));
@@ -352,8 +354,8 @@ bool BrowserRootView::OnMouseWheel(const ui::MouseWheelEvent& event) {
       // Count a scroll in either axis - summing the axes works for this.
       int whole_scroll_offset = whole_scroll_amount_x + whole_scroll_amount_y;
 
-      Browser* browser = browser_view_->browser();
-      TabStripModel* model = browser->tab_strip_model();
+      BrowserWindowInterface* browser = browser_view_->browser();
+      TabStripModel* model = browser->GetTabStripModel();
 
       auto has_tab_in_direction = [model](int delta) {
         for (int index = model->active_index() + delta;
@@ -444,12 +446,11 @@ void BrowserRootView::PaintChildren(const views::PaintInfo& paint_info) {
   const int x = std::round(browser_bounds.x() * scale);
   const int width = std::round(browser_bounds.width() * scale);
 
-  TabStripModel* model = browser_view_->browser()->tab_strip_model();
+  TabStripModel* model = browser_view_->browser()->GetTabStripModel();
   std::vector<tabs::TabInterface*> active_tabs = model->GetForegroundTabs();
   for (tabs::TabInterface* active_tab : active_tabs) {
-    int index = model->GetIndexOfTab(active_tab);
-    views::View* tab_view =
-        browser_view_->tab_strip_view()->GetTabAnchorViewAt(index);
+    views::View* tab_view = browser_view_->tab_strip_view()->GetTabAnchorView(
+        active_tab->GetHandle());
 
     if (tab_view && tab_view->GetVisible()) {
       gfx::RectF bounds(tab_view->GetMirroredBounds());
@@ -458,8 +459,15 @@ void BrowserRootView::PaintChildren(const views::PaintInfo& paint_info) {
       // Except in Mac Immersive Fullscreen where the tabstrip is hosted in
       // `overlay_widget` or `tab_overlay_widget`, each have their own root
       // view.
-      ConvertRectToTarget(tab_strip_view,
+      ConvertRectToTarget(tab_view->parent(),
                           tab_strip_view->GetWidget()->GetRootView(), &bounds);
+
+      // If `tab_strip_view` paints to its own layer, there is no need to clip
+      // under the active tab.
+      if (tab_strip_view->layer()) {
+        bounds.set_y(bounds.bottom());
+        bounds.set_height(0);
+      }
 
       // Extend the bounds to cover the curve at the end of the toolbar.
       bounds.set_height(
@@ -472,7 +480,7 @@ void BrowserRootView::PaintChildren(const views::PaintInfo& paint_info) {
   canvas->UndoDeviceScaleFactor();
 
   const auto* widget = GetWidget();
-  DCHECK(widget);
+  CHECK(widget, base::NotFatalUntil::M162);
 
   const SkColor toolbar_top_separator_color =
       widget->GetColorProvider()->GetColor(
@@ -567,7 +575,7 @@ std::optional<GURL> BrowserRootView::GetPasteAndGoURL(
 
   AutocompleteMatch match;
   AutocompleteClassifierFactory::GetForProfile(
-      browser_view_->browser()->profile())
+      browser_view_->browser()->GetProfile())
       ->Classify(text, false, false, metrics::OmniboxEventProto::INVALID_SPEC,
                  &match, nullptr);
   if (!match.destination_url.is_valid()) {
@@ -593,10 +601,10 @@ void BrowserRootView::NavigateToDroppedUrls(
     const ui::DropTargetEvent& event,
     ui::mojom::DragOperation& output_drag_op,
     std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
-  DCHECK(drop_info);
+  CHECK(drop_info, base::NotFatalUntil::M162);
 
-  Browser* const browser = browser_view_->browser();
-  TabStripModel* const model = browser->tab_strip_model();
+  BrowserWindowInterface* const browser = browser_view_->browser();
+  TabStripModel* const model = browser->GetTabStripModel();
 
   // If the browser window is not visible, it's about to be destroyed.
   if (!browser->GetWindow()->IsVisible() || model->empty()) {
@@ -634,7 +642,7 @@ void BrowserRootView::NavigateToDroppedUrls(
                           ui::PAGE_TRANSITION_LINK);
     params.tabstrip_index = insertion_index;
     base::RecordAction(base::UserMetricsAction("Tab_DropURLOnTab"));
-    params.disposition = WindowOpenDisposition::CURRENT_TAB;
+    params.disposition = WindowOpenDisposition::kCurrentTab;
     params.initiator_origin = event.data().GetRendererTaintedOrigin();
     params.source_contents = model->GetWebContentsAt(insertion_index);
     params.window_action = NavigateParams::WindowAction::kShowWindow;
@@ -644,12 +652,12 @@ void BrowserRootView::NavigateToDroppedUrls(
     ++insertion_index;  // Additional URLs inserted to the right.
   }
 
-  for (const GURL& url : base::Reversed(urls)) {
+  for (const GURL& url : std::views::reverse(urls)) {
     NavigateParams params(browser_view_->browser(), url,
                           ui::PAGE_TRANSITION_LINK);
     params.tabstrip_index = insertion_index;
     base::RecordAction(base::UserMetricsAction("Tab_DropURLBetweenTabs"));
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.disposition = WindowOpenDisposition::kNewForegroundTab;
     if (drop_info->index->group_inclusion ==
             DropIndex::GroupInclusion::kIncludeInGroup &&
         insertion_index < model->count()) {

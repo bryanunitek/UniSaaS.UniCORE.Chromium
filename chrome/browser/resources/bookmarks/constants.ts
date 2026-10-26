@@ -13,6 +13,7 @@ export enum DropPosition {
   BELOW = 4,
 }
 
+// LINT.IfChange(Command)
 /**
  * Commands which can be handled by the CommandManager. This enum is also used
  * for metrics and should be kept in sync with BookmarkManagerCommand in
@@ -50,9 +51,12 @@ export enum Command {
 
   OPEN_NEW_GROUP = 24,
 
+  OPEN_ISOLATED = 25,
+
   // Append new values to the end of the enum.
-  MAX_VALUE = 25,
+  MAX_VALUE = 26,
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/bookmarks/enums.xml:BookmarkManagerCommand)
 
 /**
  * Where the menu was opened from. Values must never be renumbered or reused.
@@ -76,6 +80,17 @@ export enum IncognitoAvailability {
   DISABLED = 1,
   FORCED = 2,
 }
+
+// LINT.IfChange(BookmarkPromoType)
+/**
+ * Mirrors the C++ BookmarkPromoType enum.
+ */
+export enum BookmarkPromoType {
+  NONE = 0,
+  BATCH_UPLOAD = 1,
+  ACCOUNT_AWARE_SIGNIN = 2,
+}
+// LINT.ThenChange(//chrome/browser/ui/webui/bookmarks/bookmark_promo_delegate.h:BookmarkPromoType)
 
 export const LOCAL_STORAGE_FOLDER_STATE_KEY: string = 'folderOpenState';
 

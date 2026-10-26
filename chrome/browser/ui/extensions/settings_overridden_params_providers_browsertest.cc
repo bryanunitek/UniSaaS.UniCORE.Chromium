@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
+#include <string_view>
+#include <tuple>
 
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
@@ -13,18 +16,27 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/threading/thread_restrictions.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/settings_api_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/controlled_home_dialog_controller.h"
+#include "chrome/browser/ui/extensions/search_override_stack.h"
 #include "chrome/test/base/search_test_utils.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
+#include "components/enterprise/isolated_mode/prefs.h"
+#include "components/prefs/pref_service.h"
 #include "components/search_engines/search_engines_test_util.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
+#include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/ui_util.h"
 #include "extensions/common/extension_builder.h"
@@ -35,6 +47,33 @@ namespace {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 constexpr char16_t kSearchOverrideExtensionName[] =
     u"Search Override Extension";
+
+// Returns the manifest of an extension that makes itself the default search
+// engine, searching `search_host` under `keyword`. `name` is used both as the
+// extension name and as the search engine name, since the two are never
+// distinguished in the tests below.
+std::string CreateSearchOverrideManifest(std::string_view name,
+                                         std::string_view keyword,
+                                         std::string_view search_host) {
+  static constexpr char kManifestTemplate[] =
+      R"({
+           "name": "%s",
+           "version": "0.1",
+           "manifest_version": 3,
+           "chrome_settings_overrides": {
+             "search_provider": {
+               "search_url": "https://%s/?q={searchTerms}",
+               "name": "%s",
+               "keyword": "%s",
+               "encoding": "UTF-8",
+               "favicon_url": "https://%s/favicon.ico",
+               "is_default": true
+             }
+           }
+         })";
+  return base::StringPrintf(kManifestTemplate, name, search_host, name, keyword,
+                            search_host);
+}
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 }  // namespace
 
@@ -70,7 +109,7 @@ class SettingsOverriddenParamsProvidersBrowserTest
 #endif
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetActiveTabInterface()->GetContents();
   }
 
   // Installs a new extension that controls the default search engine.
@@ -108,7 +147,8 @@ class SettingsOverriddenParamsProvidersBrowserTest
     auto iter = std::ranges::find_if(
         template_urls, [template_url_service, new_search_shows_in_default_list](
                            const TemplateURL* turl) {
-          return !turl->HasGoogleBaseURLs(
+          return template_url_service->CanMakeDefault(turl) &&
+                 !turl->HasGoogleBaseURLs(
                      template_url_service->search_terms_data()) &&
                  template_url_service->ShowInDefaultList(turl) ==
                      new_search_shows_in_default_list;
@@ -167,7 +207,6 @@ IN_PROC_BROWSER_TEST_P(SearchOverriddenParamsProvidersBrowserTest,
       GetSearchOverriddenParamsSync(web_contents());
   ASSERT_TRUE(params);
   EXPECT_EQ(search_extension->id(), params->controlling_extension_id);
-
   if (IsExplicitChoiceDialog()) {
     EXPECT_TRUE(params->content.dialog_title.contains(u"Confirm"));
     EXPECT_TRUE(params->content.message.contains(u"Search Override Extension"));
@@ -190,6 +229,13 @@ IN_PROC_BROWSER_TEST_P(SearchOverriddenParamsProvidersBrowserTest,
         "example.com",
         params->content.message);
   }
+
+  // Verify the reported extension stack: this is the only extension overriding
+  // search.
+  ASSERT_TRUE(params->search_override_stack);
+  EXPECT_EQ(extensions::SearchOverrideStackState::kSingleOverride,
+            params->search_override_stack->state);
+  EXPECT_EQ(0, params->search_override_stack->unacknowledged_chain_length);
 }
 
 IN_PROC_BROWSER_TEST_P(SearchOverriddenParamsProvidersBrowserTest,
@@ -259,7 +305,7 @@ IN_PROC_BROWSER_TEST_P(SearchOverriddenParamsProvidersBrowserTest,
   ASSERT_TRUE(params);
   if (IsExplicitChoiceDialog()) {
     ASSERT_TRUE(params->content.previous_setting);
-    EXPECT_EQ(u"Bookmarks", params->content.previous_setting->text);
+    EXPECT_EQ(u"testfoo", params->content.previous_setting->text);
   } else {
     EXPECT_EQ("Did you mean to change your search provider?",
               base::UTF16ToUTF8(params->content.dialog_title));
@@ -274,22 +320,8 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(first_extension);
 
   extensions::TestExtensionDir second_extension_dir;
-  second_extension_dir.WriteManifest(
-      R"({
-             "name": "Simple Search Override",
-             "version": "0.1",
-             "manifest_version": 3,
-             "chrome_settings_overrides": {
-               "search_provider": {
-                 "search_url": "https://example.com/?q={searchTerms}",
-                 "name": "New Search",
-                 "keyword": "word",
-                 "encoding": "UTF-8",
-                 "favicon_url": "https://example.com/favicon.ico",
-                 "is_default": true
-               }
-             }
-          })");
+  second_extension_dir.WriteManifest(CreateSearchOverrideManifest(
+      "Simple Search Override", "word", "example.com"));
   const extensions::Extension* second_extension =
       InstallExtensionWithPermissionsGranted(
           second_extension_dir.UnpackedPath(), 1);
@@ -298,6 +330,7 @@ IN_PROC_BROWSER_TEST_P(
   std::optional<ExtensionSettingsOverriddenDialog::Params> params =
       GetSearchOverriddenParamsSync(web_contents());
   ASSERT_TRUE(params);
+  EXPECT_EQ(second_extension->id(), params->controlling_extension_id);
   if (IsExplicitChoiceDialog()) {
     ASSERT_TRUE(params->content.previous_setting);
     EXPECT_EQ(u"example.com", params->content.previous_setting->text);
@@ -308,6 +341,49 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_EQ(u"Did you mean to change your search provider?",
               params->content.dialog_title);
   }
+
+  // Verify the reported extension stack: the previous choice is the first
+  // extension, which the user never acknowledged, and the original default is
+  // buried beneath it.
+  ASSERT_TRUE(params->search_override_stack);
+  EXPECT_EQ(extensions::SearchOverrideStackState::
+                kUnacknowledgedChainOverNonExtensionDefault,
+            params->search_override_stack->state);
+  EXPECT_EQ(1, params->search_override_stack->unacknowledged_chain_length);
+}
+
+// Tests the stack of overriding extensions when the user acknowledged the
+// extension beneath the controlling one.
+IN_PROC_BROWSER_TEST_P(
+    SearchOverriddenParamsProvidersBrowserTest,
+    GetExtensionControllingSearch_AcknowledgedExtensionBeneath) {
+  const extensions::Extension* first_extension =
+      AddExtensionControllingSearch();
+  ASSERT_TRUE(first_extension);
+  extensions::ExtensionPrefs::Get(profile())->UpdateExtensionPref(
+      first_extension->id(),
+      ControlledHomeDialogController::kAcknowledgedPreference,
+      base::Value(true));
+
+  extensions::TestExtensionDir second_extension_dir;
+  second_extension_dir.WriteManifest(CreateSearchOverrideManifest(
+      "Another Search Override", "other", "other.example"));
+  const extensions::Extension* second_extension =
+      InstallExtensionWithPermissionsGranted(
+          second_extension_dir.UnpackedPath(), 1);
+  ASSERT_TRUE(second_extension);
+
+  std::optional<ExtensionSettingsOverriddenDialog::Params> params =
+      GetSearchOverriddenParamsSync(web_contents());
+  ASSERT_TRUE(params);
+  EXPECT_EQ(second_extension->id(), params->controlling_extension_id);
+
+  // Verify the reported extension stack: reverting stops at the acknowledged
+  // extension beneath the controlling one.
+  ASSERT_TRUE(params->search_override_stack);
+  EXPECT_EQ(extensions::SearchOverrideStackState::kAcknowledgedExtensionNext,
+            params->search_override_stack->state);
+  EXPECT_EQ(0, params->search_override_stack->unacknowledged_chain_length);
 }
 
 // Tests that null params are returned (indicating no dialog should be shown)
@@ -572,6 +648,20 @@ IN_PROC_BROWSER_TEST_P(
     EXPECT_FALSE(params) << "Unexpected params: "
                          << params->content.dialog_title;
   }
+
+  // Verify the reported extension stack: no dialog is shown here, but the
+  // per-profile sample still sees the stack of overriding extensions.
+  base::HistogramTester histogram_tester;
+  extensions::RecordDseExtensionStackStateOnce(*profile());
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.SettingsOverridden.DseExtensionStackState",
+      extensions::SearchOverrideStackState::
+          kUnacknowledgedChainOverNonExtensionDefault,
+      1);
+  // Once per session.
+  extensions::RecordDseExtensionStackStateOnce(*profile());
+  histogram_tester.ExpectTotalCount(
+      "Extensions.SettingsOverridden.DseExtensionStackState", 1);
 }
 
 // Param true means Explicit Choice dialog.
@@ -581,6 +671,95 @@ INSTANTIATE_TEST_SUITE_P(All,
                          [](const testing::TestParamInfo<bool>& info) {
                            return info.param ? "ExplicitChoice" : "KeepOrBack";
                          });
+
+class SearchOverriddenParamsProvidersOffTheRecordBrowserTest
+    : public SettingsOverriddenParamsProvidersBrowserTest,
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
+ protected:
+  SearchOverriddenParamsProvidersOffTheRecordBrowserTest() {
+    feature_list_.InitWithFeatureStates(
+        {{extensions_features::kSearchEngineExplicitChoiceDialog,
+          IsExplicitChoiceDialog()},
+         {enterprise_isolated_mode::kEnableEnterpriseIsolatedMode,
+          IsIsolatedMode()}});
+  }
+
+  void SetUpBrowserContextKeyedServices(
+      content::BrowserContext* context) override {
+    SettingsOverriddenParamsProvidersBrowserTest::
+        SetUpBrowserContextKeyedServices(context);
+    if (IsIsolatedMode()) {
+      Profile::FromBrowserContext(context)->GetPrefs()->SetInteger(
+          enterprise_isolated_mode::kEnterpriseIsolatedModeSettings,
+          static_cast<int>(
+              enterprise_isolated_mode::IsolatedModeSetting::kEnabled));
+    }
+  }
+
+  bool IsExplicitChoiceDialog() const { return std::get<0>(GetParam()); }
+  bool IsIsolatedMode() const { return std::get<1>(GetParam()); }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(
+    SearchOverriddenParamsProvidersOffTheRecordBrowserTest,
+    GetExtensionControllingSearch_MultipleSearchProvidingExtensions) {
+  // Installed first (older), so it becomes the backup ("secondary") extension
+  // once `primary_extension` is installed after it.
+  const extensions::Extension* secondary_extension =
+      AddExtensionControllingSearch();
+  ASSERT_TRUE(secondary_extension);
+
+  // Installed second (newer), so it becomes the active ("primary") extension
+  // controlling search.
+  extensions::TestExtensionDir primary_extension_dir;
+  primary_extension_dir.WriteManifest(CreateSearchOverrideManifest(
+      "Another Search Override", "other", "other.example"));
+  const extensions::Extension* primary_extension =
+      InstallExtensionWithPermissionsGranted(
+          primary_extension_dir.UnpackedPath(), 1);
+  ASSERT_TRUE(primary_extension);
+
+  content::WebContents* off_the_record_web_contents =
+      PlatformOpenURLOffTheRecord(profile(), GURL("about:blank"));
+  ASSERT_TRUE(off_the_record_web_contents);
+  Profile* off_the_record_profile = Profile::FromBrowserContext(
+      off_the_record_web_contents->GetBrowserContext());
+  EXPECT_EQ(IsIsolatedMode(),
+            off_the_record_profile->IsEnterpriseIsolatedModeProfile());
+  EXPECT_EQ(!IsIsolatedMode(), off_the_record_profile->IsIncognitoProfile());
+
+  // Even though neither extension is enabled in Incognito/OTR, search
+  // overrides apply from the regular profile (TemplateURLService is redirected
+  // to the original profile in OTR profiles), so `secondary_extension` is
+  // still used as the backup search provider in the OTR profile.
+  std::optional<ExtensionSettingsOverriddenDialog::Params> params =
+      GetSearchOverriddenParamsSync(off_the_record_web_contents);
+  ASSERT_TRUE(params);
+  EXPECT_EQ(primary_extension->id(), params->controlling_extension_id);
+  if (IsExplicitChoiceDialog()) {
+    ASSERT_TRUE(params->content.previous_setting);
+    EXPECT_EQ(u"example.com", params->content.previous_setting->text);
+    EXPECT_TRUE(params->content.previous_setting->image.IsVectorIcon());
+    ASSERT_TRUE(params->content.new_setting);
+    EXPECT_EQ(u"other.example", params->content.new_setting->text);
+  } else {
+    EXPECT_EQ(u"Did you mean to change your search provider?",
+              params->content.dialog_title);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    SearchOverriddenParamsProvidersOffTheRecordBrowserTest,
+    testing::Combine(testing::Bool(), testing::Bool()),
+    [](const testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+      return base::StrCat(
+          {std::get<0>(info.param) ? "ExplicitChoice" : "KeepOrBack", "_",
+           std::get<1>(info.param) ? "IsolatedMode" : "Incognito"});
+    });
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 

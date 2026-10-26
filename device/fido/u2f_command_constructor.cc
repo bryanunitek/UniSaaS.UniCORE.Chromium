@@ -8,12 +8,40 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/extend.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "components/apdu/apdu_command.h"
 #include "crypto/hash.h"
-#include "device/fido/fido_parsing_utils.h"
+#include "device/fido/authenticator_get_info_response.h"
+#include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
 
 namespace device {
+
+namespace {
+
+// Returns true if ES256 is the first algorithm in |request|'s pubKeyCredParams
+// that is also in |authenticator_algorithms|.
+bool IsEs256PreferredCommonAlgorithm(
+    const CtapMakeCredentialRequest& request,
+    base::span<const int32_t> authenticator_algorithms) {
+  for (const auto& param :
+       request.public_key_credential_params.public_key_credential_params()) {
+    if (param.type != CredentialType::kPublicKey) {
+      continue;
+    }
+    if (std::ranges::contains(authenticator_algorithms, param.algorithm)) {
+      return param.algorithm ==
+             static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256);
+    }
+  }
+  // No common algorithm. MakeCredentialRequestHandler normally filters these
+  // authenticators out already, so let CTAP2 report the error.
+  return false;
+}
+
+}  // namespace
 
 bool IsConvertibleToU2fRegisterCommand(
     const CtapMakeCredentialRequest& request) {
@@ -28,13 +56,20 @@ bool IsConvertibleToU2fRegisterCommand(
 }
 
 bool ShouldPreferCTAP2EvenIfItNeedsAPIN(
-    const CtapMakeCredentialRequest& request) {
-  return request.hmac_secret ||
-         // U2F devices can only support |kEnterpriseApprovedByBrowser| so
-         // |kEnterpriseIfRPListedOnAuthenticator| should go over CTAP2.
-         request.attestation_preference ==
-             AttestationConveyancePreference::
-                 kEnterpriseIfRPListedOnAuthenticator;
+    const CtapMakeCredentialRequest& request,
+    const AuthenticatorGetInfoResponse& device_info) {
+  if (request.hmac_secret ||
+      // U2F devices can only support |kEnterpriseApprovedByBrowser| so
+      // |kEnterpriseIfRPListedOnAuthenticator| should go over CTAP2.
+      request.attestation_preference ==
+          AttestationConveyancePreference::
+              kEnterpriseIfRPListedOnAuthenticator) {
+    return true;
+  }
+  return base::FeatureList::IsEnabled(
+             kWebAuthnU2fFallbackRequiresPreferredEs256) &&
+         device_info.algorithms &&
+         !IsEs256PreferredCommonAlgorithm(request, *device_info.algorithms);
 }
 
 bool IsConvertibleToU2fSignCommand(const CtapGetAssertionRequest& request) {
@@ -91,8 +126,8 @@ std::vector<uint8_t> ConstructU2fRegisterCommand(
     bool is_individual_attestation) {
   std::vector<uint8_t> data;
   data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength);
-  fido_parsing_utils::Append(&data, challenge_parameter);
-  fido_parsing_utils::Append(&data, application_parameter);
+  base::Extend(data, challenge_parameter);
+  base::Extend(data, application_parameter);
 
   apdu::ApduCommand command;
   command.set_ins(base::strict_cast<uint8_t>(U2fApduInstruction::kRegister));
@@ -114,10 +149,10 @@ std::optional<std::vector<uint8_t>> ConstructU2fSignCommand(
   std::vector<uint8_t> data;
   data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength + 1 +
                key_handle.size());
-  fido_parsing_utils::Append(&data, challenge_parameter);
-  fido_parsing_utils::Append(&data, application_parameter);
+  base::Extend(data, challenge_parameter);
+  base::Extend(data, application_parameter);
   data.push_back(static_cast<uint8_t>(key_handle.size()));
-  fido_parsing_utils::Append(&data, key_handle);
+  base::Extend(data, key_handle);
 
   apdu::ApduCommand command;
   command.set_ins(base::strict_cast<uint8_t>(U2fApduInstruction::kSign));

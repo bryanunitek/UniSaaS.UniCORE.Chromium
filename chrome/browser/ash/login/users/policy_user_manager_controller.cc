@@ -12,11 +12,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/syslog_logging.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_broker.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
@@ -34,7 +31,7 @@ namespace {
 
 user_manager::UserManager::EphemeralModeConfig CreateEphemeralModeConfig(
     ash::CrosSettings* cros_settings) {
-  DCHECK(cros_settings);
+  CHECK(cros_settings, base::NotFatalUntil::M161);
 
   bool ephemeral_users_enabled = false;
   // Only `UserManagerImpl` is allowed to directly use this setting. All
@@ -75,9 +72,18 @@ PolicyUserManagerController::PolicyUserManagerController(
     user_manager::UserManager* user_manager,
     CrosSettings* cros_settings,
     DeviceSettingsService* device_settings_service,
-    policy::MinimumVersionPolicyHandler* minimum_version_policy_handler)
-    : user_manager_(user_manager), cros_settings_(cros_settings) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    policy::MinimumVersionPolicyHandler* minimum_version_policy_handler,
+    policy::DeviceLocalAccountPolicyService*
+        device_local_account_policy_service)
+    : user_manager_(user_manager),
+      cros_settings_(cros_settings),
+      device_local_account_policy_service_(
+          device_local_account_policy_service) {
+  if (!device_local_account_policy_service_) {
+    CHECK_IS_TEST();
+  }
+
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // UserManager outlives PolicyUserManagerController, and subscriptions are
   // destroyed on destroying PolicyUserManagerController. So, base::Unretained
@@ -107,6 +113,11 @@ PolicyUserManagerController::PolicyUserManagerController(
 
   cros_settings_subscriptions_.push_back(cros_settings_->AddSettingsObserver(
       kAccountsPrefEphemeralUsersEnabled,
+      base::BindRepeating(
+          &PolicyUserManagerController::RetrieveTrustedDevicePolicies,
+          weak_factory_.GetWeakPtr())));
+  cros_settings_subscriptions_.push_back(cros_settings_->AddSettingsObserver(
+      kAccountsPrefDeviceMaxUserProfiles,
       base::BindRepeating(
           &PolicyUserManagerController::RetrieveTrustedDevicePolicies,
           weak_factory_.GetWeakPtr())));
@@ -146,10 +157,9 @@ PolicyUserManagerController::~PolicyUserManagerController() = default;
 
 void PolicyUserManagerController::OwnershipStatusChanged() {
   if (!device_local_account_policy_service_observation_.IsObserving()) {
+    CHECK(device_local_account_policy_service_);
     device_local_account_policy_service_observation_.Observe(
-        g_browser_process->platform_part()
-            ->browser_policy_connector_ash()
-            ->GetDeviceLocalAccountPolicyService());
+        device_local_account_policy_service_);
   }
   RetrieveTrustedDevicePolicies();
 }
@@ -197,6 +207,16 @@ void PolicyUserManagerController::RetrieveTrustedDevicePolicies() {
 
   user_manager_->SetEphemeralModeConfig(
       CreateEphemeralModeConfig(cros_settings_));
+
+  int max_user_profiles = 0;
+  if (cros_settings_->GetInteger(kAccountsPrefDeviceMaxUserProfiles,
+                                 &max_user_profiles) &&
+      max_user_profiles > 0) {
+    user_manager_->SetMaxUserProfiles(max_user_profiles);
+  } else {
+    user_manager_->SetMaxUserProfiles(std::nullopt);
+  }
+
   UpdateOwnerId();
   UpdateGuestSessionAllowed();
   UpdateShowUsersOnSignIn();
@@ -216,9 +236,11 @@ void PolicyUserManagerController::RetrieveTrustedDevicePolicies() {
   bool changed = user_manager_->UpdateDeviceLocalAccountUser(
       device_local_account_info_list);
 
-  // Remove ephemeral regular users (except the owner) when on the login screen.
+  // Remove ephemeral regular users (except the owner) and excess users when on
+  // the login screen.
   if (!user_manager_->IsUserLoggedIn()) {
     changed |= user_manager_->RemoveStaleEphemeralUsers();
+    changed |= user_manager_->TrimExcessUsers();
   }
 
   if (changed) {

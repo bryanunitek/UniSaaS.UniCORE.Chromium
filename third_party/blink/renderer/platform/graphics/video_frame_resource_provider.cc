@@ -5,9 +5,9 @@
 #include "third_party/blink/renderer/platform/graphics/video_frame_resource_provider.h"
 
 #include <memory>
+#include <ranges>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/threading/thread_restrictions.h"
@@ -20,7 +20,7 @@
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "media/base/limits.h"
 #include "media/base/video_frame.h"
-#include "media/renderers/video_resource_updater.h"
+#include "media/gfx/video_resource_updater.h"
 
 namespace blink {
 
@@ -155,7 +155,7 @@ VideoFrameResourceProvider::PrepareSendToParent(
 void VideoFrameResourceProvider::ReceiveReturnsFromParent(
     Vector<viz::ReturnedResource> transferable_resources) {
   resource_provider_->ReceiveReturnsFromParent(
-      base::ToVector(base::RangeAsRvalues(std::move(transferable_resources))));
+      base::ToVector(std::views::as_rvalue(transferable_resources)));
 }
 
 }  // namespace blink

@@ -134,7 +134,7 @@ class DataAndEncodedFileOrBlobBytesConsumer final : public BytesConsumer {
       : form_data_(std::move(form_data)) {
     DCHECK_EQ(ConsumerType::kDataAndEncodedFileOrBlob,
               GetConsumerType(form_data_.get()));
-    CHECK(form_data_->Boundary().data());
+    CHECK(form_data_->Boundary());
     if (consumer_for_testing) {
       blob_bytes_consumer_ = consumer_for_testing;
       return;
@@ -149,13 +149,15 @@ class DataAndEncodedFileOrBlobBytesConsumer final : public BytesConsumer {
         case FormDataElement::kEncodedFile: {
           auto file_length = element.file_length_;
           if (file_length < 0) {
-            if (!GetFileSize(element.filename_, *execution_context,
-                             file_length)) {
+            std::optional<int64_t> file_size =
+                GetFileSize(element.filename_, *execution_context);
+            if (!file_size) {
               form_data_ = nullptr;
               blob_bytes_consumer_ = BytesConsumer::CreateErrored(
                   Error("Cannot determine a file size"));
               return;
             }
+            file_length = *file_size;
           }
           blob_data->AppendBlob(
               BlobDataHandle::CreateForFile(
@@ -265,8 +267,8 @@ class DataPipeGetterConsumer : public BytesConsumer {
 
     data_pipe_getter->Read(
         std::move(pipe_producer_handle),
-        BindOnce(&DataPipeGetterConsumer::DataPipeGetterCallback,
-                 WrapWeakPersistent(consumer)));
+        ::blink::BindOnce(&DataPipeGetterConsumer::DataPipeGetterCallback,
+                          WrapWeakPersistent(consumer)));
     return consumer;
   }
 
@@ -304,10 +306,10 @@ class DataPipeGetterConsumer : public BytesConsumer {
   }
 
  private:
-  void DataPipeGetterCallback(int32_t status, uint64_t size) {
+  void DataPipeGetterCallback(
+      network::mojom::blink::DataPipeGetter::ReadResult size) {
     CHECK(completion_notifier_);
-    if (status == 0) {
-      // 0 is net::OK.
+    if (size.has_value()) {
       completion_notifier_->SignalComplete();
     } else {
       completion_notifier_->SignalError(Error("error"));

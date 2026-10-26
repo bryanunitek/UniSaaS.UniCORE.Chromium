@@ -4,9 +4,11 @@
 
 #include "extensions/common/manifest_handlers/csp_info.h"
 
+#include <optional>
 #include <string_view>
 
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
 #include "components/version_info/channel.h"
@@ -16,6 +18,7 @@
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/sandboxed_page_info.h"
 #include "extensions/common/manifest_test.h"
+#include "extensions/common/switches.h"
 
 namespace extensions {
 
@@ -74,6 +77,13 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
 
   EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
                                           extension1.get(), "/test"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension1.get(), "/t%65st"));
+  EXPECT_TRUE(SandboxedPageInfo::IsSandboxedPage(extension1.get(), "/t%65st"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension1.get(), "/Test"));
+  EXPECT_TRUE(SandboxedPageInfo::IsSandboxedPage(extension1.get(), "/Test"));
+  EXPECT_TRUE(SandboxedPageInfo::IsSandboxedPage(extension1.get(), "/tEsT"));
   EXPECT_EQ(
       kDefaultExtensionPagesCSP,
       CSPInfo::GetResourceContentSecurityPolicy(extension1.get(), "/none"));
@@ -89,6 +99,17 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
                                           extension4.get(), "/test"));
   EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
                                           extension5.get(), "/path/test.ext"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP,
+            CSPInfo::GetResourceContentSecurityPolicy(extension5.get(),
+                                                      "/path/test%2Eext"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension5.get(), "/path/test%2Eext"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension5.get(), "/PATH/TEST.EXT"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension5.get(), "/PATH/TEST.EXT"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension5.get(), "/path/TEST.ext"));
   EXPECT_EQ(
       kDefaultExtensionPagesCSP,
       CSPInfo::GetResourceContentSecurityPolicy(extension5.get(), "/test"));
@@ -96,6 +117,30 @@ TEST_F(CSPInfoUnitTest, SandboxedPages) {
                                      extension6.get(), "/test"));
   EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
                                           extension7.get(), "/test"));
+
+  static constexpr char kManifestUtf8Sandboxed[] =
+      R"({
+           "name": "UTF-8 Sandboxed Page Test",
+           "manifest_version": 3,
+           "version": "0.1",
+           "sandbox": {
+             "pages": ["café.html"]
+           }
+         })";
+  ManifestData manifest_data_utf8(
+      base::test::ParseJsonDict(kManifestUtf8Sandboxed));
+  scoped_refptr<const Extension> extension_utf8 =
+      LoadAndExpectSuccess(manifest_data_utf8);
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension_utf8.get(), "/café.html"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension_utf8.get(), "/café.html"));
+  EXPECT_EQ(kDefaultSandboxedPageCSP, CSPInfo::GetResourceContentSecurityPolicy(
+                                          extension_utf8.get(), "/CAFÉ.html"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension_utf8.get(), "/CAFÉ.html"));
+  EXPECT_TRUE(
+      SandboxedPageInfo::IsSandboxedPage(extension_utf8.get(), "/Café.html"));
 
   const Testcase testcases[] = {
       Testcase("sandboxed_pages_invalid_1.json",
@@ -524,7 +569,7 @@ TEST_F(CSPInfoUnitTest, UserScriptStrictCSP) {
   // also get a "minimum CSP" to append to the list of CSPs. This ensures every
   // item has at least a minimally-strict CSP that rejects remotely-hosted
   // code.
-  EXPECT_NE(nullptr,
+  EXPECT_NE(std::nullopt,
             CSPInfo::GetMinimumCSPToAppend(*extension, "page.html", false));
 }
 
@@ -609,6 +654,73 @@ const char kDefaultPlatformAppContentSecurityPolicy[] =
   EXPECT_EQ(kDefaultPlatformAppContentSecurityPolicy,
             CSPInfo::GetResourceContentSecurityPolicy(
                 extension_mv2_platform_app.get(), "/test"));
+}
+
+TEST_F(CSPInfoUnitTest, SandboxedPagesInvalidCharacters) {
+  // A sandboxed page CSP containing non-printable characters like DEL (0x7F)
+  // must fail manifest parsing.
+  ManifestData manifest_data(base::test::ParseJsonDict(R"({
+    "name": "Test Sandbox CSP With DEL",
+    "manifest_version": 3,
+    "version": "0.1",
+    "sandbox": {
+      "pages": ["sandboxed.html"]
+    },
+    "content_security_policy": {
+      "sandbox": "sandbox allow-scripts allow-same-origin\x7f"
+    }
+  })"));
+  LoadAndExpectError(manifest_data,
+                     GetInvalidManifestKeyError(
+                         keys::kContentSecurityPolicy_SandboxedPagesPath));
+}
+
+TEST_F(CSPInfoUnitTest, ComponentExtensionWebUITestCSP) {
+  static constexpr char kManifest[] =
+      R"({
+           "name": "Component Extension with WebUI Test CSP",
+           "manifest_version": 3,
+           "version": "0.1",
+           "content_security_policy": {
+             "extension_pages":
+                 "script-src 'self' chrome://webui-test; object-src 'self';"
+           }
+         })";
+
+  ManifestData manifest_data(base::test::ParseJsonDict(kManifest));
+  const std::string expected_error = ErrorUtils::FormatErrorMessage(
+      errors::kInvalidCSPInsecureValueError,
+      keys::kContentSecurityPolicy_ExtensionPagesPath, "chrome://webui-test",
+      "script-src");
+
+  // Listing chrome://webui-test in the manifest is not enough on its own:
+  // without the test-only switch, component extensions are rejected.
+  LoadAndExpectError(manifest_data, expected_error,
+                     mojom::ManifestLocation::kComponent);
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kAllowWebUITestInComponentExtensions);
+
+  // With the switch, component extensions can specify chrome://webui-test in
+  // extension_pages CSP.
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess(manifest_data, mojom::ManifestLocation::kComponent);
+  ASSERT_TRUE(extension);
+  EXPECT_EQ("script-src 'self' chrome://webui-test; object-src 'self';",
+            CSPInfo::GetExtensionPagesCSP(extension.get()));
+  EXPECT_EQ(
+      "script-src 'self' chrome://webui-test 'wasm-unsafe-eval' "
+      "'inline-speculation-rules'; object-src 'self';",
+      *CSPInfo::GetMinimumCSPToAppend(*extension, "/test.html",
+                                      /*is_service_worker=*/false));
+
+  // External component and non-component extensions cannot use
+  // chrome://webui-test, even with the switch.
+  LoadAndExpectError(manifest_data, expected_error,
+                     mojom::ManifestLocation::kExternalComponent);
+  LoadAndExpectError(manifest_data, expected_error,
+                     mojom::ManifestLocation::kInternal);
 }
 
 }  // namespace extensions

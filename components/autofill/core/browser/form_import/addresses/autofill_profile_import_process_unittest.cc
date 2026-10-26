@@ -12,12 +12,12 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_test_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_test_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics_util.h"
 #include "components/autofill/core/browser/metrics/profile_import_metrics.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_profiles.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -240,7 +240,8 @@ TEST_F(AutofillProfileImportProcessTest, IncorrectlyComplementedCountry) {
 
   // Test that the import is correctly classified as a duplicate.
   ProfileImportMetadata metadata;
-  metadata.did_complement_country = true;
+  metadata.country_source =
+      ProfileCountrySource::kDefaultCountryCodeForNewAddress;
   ProfileImportProcess import_data(
       profile, "en_US", url_, ukm_source_id(), &address_data_manager(),
       /*allow_only_silent_updates=*/false, metadata);

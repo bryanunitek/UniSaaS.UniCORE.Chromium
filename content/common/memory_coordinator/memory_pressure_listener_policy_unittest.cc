@@ -11,13 +11,15 @@
 #include "base/hash/hash.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/memory_pressure_listener_registry.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "content/common/memory_coordinator/memory_consumer_group_host.h"
-#include "content/common/memory_coordinator/memory_coordinator_policy.h"
 #include "content/common/memory_coordinator/memory_coordinator_policy_manager.h"
 #include "content/public/common/memory_consumer_update.h"
+#include "content/public/common/memory_coordinator/memory_coordinator_policy.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 
 namespace content {
 
@@ -27,11 +29,25 @@ using ::testing::_;
 using ::testing::Mock;
 using ::testing::UnorderedElementsAre;
 
+constexpr base::MemoryConsumerTraits kTestTraits(
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kReads,
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous);
+
 class MockMemoryConsumerGroupHost : public MemoryConsumerGroupHost {
  public:
   MOCK_METHOD(void,
               UpdateConsumers,
               (std::vector<MemoryConsumerUpdate> updates),
+              (override));
+  MOCK_METHOD(void,
+              SetOverrideLimit,
+              (uint32_t, base::MemoryLimit),
+              (override));
+  MOCK_METHOD(void,
+              ClearOverrideLimit,
+              (uint32_t, base::MemoryLimit),
               (override));
 };
 
@@ -59,34 +75,43 @@ TEST_F(MemoryPressureListenerPolicyTest, ResponseToPressure) {
   const std::string kConsumerName2 = "consumer2";
   const uint32_t kConsumerId2 = base::PersistentHash(kConsumerName2);
 
-  policy_manager().OnConsumerGroupAdded(kConsumerId1, kConsumerName1, {},
-                                        kChildId);
-  policy_manager().OnConsumerGroupAdded(kConsumerId2, kConsumerName2, {},
-                                        kChildId);
+  policy_manager().OnConsumerGroupAdded(kConsumerId1, kConsumerName1,
+                                        kTestTraits, kChildId);
+  policy_manager().OnConsumerGroupAdded(kConsumerId2, kConsumerName2,
+                                        kTestTraits, kChildId);
 
   MemoryPressureListenerPolicy policy(policy_manager());
   MemoryCoordinatorPolicyRegistration registration(policy_manager(), policy);
 
   // Moderate pressure: 50% limit and release memory.
-  EXPECT_CALL(host, UpdateConsumers(UnorderedElementsAre(
-                        MemoryConsumerUpdate{kConsumerId1, 50, true},
-                        MemoryConsumerUpdate{kConsumerId2, 50, true})));
+  EXPECT_CALL(
+      host, UpdateConsumers(UnorderedElementsAre(
+                MemoryConsumerUpdate{kConsumerId1,
+                                     base::MemoryLimit::FromPercent(50), true},
+                MemoryConsumerUpdate{
+                    kConsumerId2, base::MemoryLimit::FromPercent(50), true})));
   base::MemoryPressureListener::SimulatePressureNotification(
       base::MEMORY_PRESSURE_LEVEL_MODERATE);
   Mock::VerifyAndClearExpectations(&host);
 
   // Critical pressure: 0% limit and release memory.
-  EXPECT_CALL(host, UpdateConsumers(UnorderedElementsAre(
-                        MemoryConsumerUpdate{kConsumerId1, 0, true},
-                        MemoryConsumerUpdate{kConsumerId2, 0, true})));
+  EXPECT_CALL(host,
+              UpdateConsumers(UnorderedElementsAre(
+                  MemoryConsumerUpdate{kConsumerId1,
+                                       base::MemoryLimit::FromPercent(0), true},
+                  MemoryConsumerUpdate{
+                      kConsumerId2, base::MemoryLimit::FromPercent(0), true})));
   base::MemoryPressureListener::SimulatePressureNotification(
       base::MEMORY_PRESSURE_LEVEL_CRITICAL);
   Mock::VerifyAndClearExpectations(&host);
 
-  // No pressure: 100% limit and release memory.
-  EXPECT_CALL(host, UpdateConsumers(UnorderedElementsAre(
-                        MemoryConsumerUpdate{kConsumerId1, 100, true},
-                        MemoryConsumerUpdate{kConsumerId2, 100, true})));
+  // No pressure: 100% limit and do not release memory.
+  EXPECT_CALL(
+      host, UpdateConsumers(UnorderedElementsAre(
+                MemoryConsumerUpdate{kConsumerId1, base::MemoryLimit::Default(),
+                                     false},
+                MemoryConsumerUpdate{kConsumerId2, base::MemoryLimit::Default(),
+                                     false})));
   base::MemoryPressureListener::SimulatePressureNotification(
       base::MEMORY_PRESSURE_LEVEL_NONE);
   Mock::VerifyAndClearExpectations(&host);
@@ -104,7 +129,7 @@ TEST_F(MemoryPressureListenerPolicyTest, IgnoreOtherProcesses) {
 
   policy_manager().AddMemoryConsumerGroupHost(PROCESS_TYPE_RENDERER,
                                               kRemoteChildId, &host);
-  policy_manager().OnConsumerGroupAdded(kRemoteId, kRemoteName, {},
+  policy_manager().OnConsumerGroupAdded(kRemoteId, kRemoteName, kTestTraits,
                                         kRemoteChildId);
 
   MemoryPressureListenerPolicy policy(policy_manager());
@@ -140,19 +165,102 @@ TEST_F(MemoryPressureListenerPolicyTest, Persistence) {
 
     // A consumer added AFTER the pressure event should immediately receive the
     // limit that was set.
-    EXPECT_CALL(host, UpdateConsumers(UnorderedElementsAre(
-                          MemoryConsumerUpdate{kConsumerId, 50, true})));
-    policy_manager().OnConsumerGroupAdded(kConsumerId, kConsumerName, {},
-                                          kChildId);
+    EXPECT_CALL(host,
+                UpdateConsumers(UnorderedElementsAre(MemoryConsumerUpdate{
+                    kConsumerId, base::MemoryLimit::FromPercent(50), true})));
+    policy_manager().OnConsumerGroupAdded(kConsumerId, kConsumerName,
+                                          kTestTraits, kChildId);
     Mock::VerifyAndClearExpectations(&host);
 
     // Removing the policy should reset the limit to default (100%).
-    EXPECT_CALL(host, UpdateConsumers(UnorderedElementsAre(
-                          MemoryConsumerUpdate{kConsumerId, 100, false})));
+    EXPECT_CALL(host, UpdateConsumers(UnorderedElementsAre(MemoryConsumerUpdate{
+                          kConsumerId, base::MemoryLimit::Default(), false})));
   }
   Mock::VerifyAndClearExpectations(&host);
 
   policy_manager().OnConsumerGroupRemoved(kConsumerId, kChildId);
+  policy_manager().RemoveMemoryConsumerGroupHost(kChildId);
+}
+
+TEST_F(MemoryPressureListenerPolicyTest,
+       MemoryCacheSkippedWhenFeatureDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      blink::features::kReleaseResourceStrongReferencesOnMemoryPressure);
+
+  MockMemoryConsumerGroupHost host;
+  const ChildProcessId kChildId;
+
+  policy_manager().AddMemoryConsumerGroupHost(PROCESS_TYPE_BROWSER, kChildId,
+                                              &host);
+
+  const std::string kMemoryCacheName = "MemoryCache";
+  const uint32_t kMemoryCacheId = base::PersistentHash(kMemoryCacheName);
+  const std::string kOtherConsumerName = "other_consumer";
+  const uint32_t kOtherConsumerId = base::PersistentHash(kOtherConsumerName);
+
+  policy_manager().OnConsumerGroupAdded(kMemoryCacheId, kMemoryCacheName,
+                                        kTestTraits, kChildId);
+  policy_manager().OnConsumerGroupAdded(kOtherConsumerId, kOtherConsumerName,
+                                        kTestTraits, kChildId);
+
+  MemoryPressureListenerPolicy policy(policy_manager());
+  MemoryCoordinatorPolicyRegistration registration(policy_manager(), policy);
+
+  // When feature is disabled, MemoryCache is skipped, but other consumer is
+  // updated.
+  EXPECT_CALL(
+      host, UpdateConsumers(UnorderedElementsAre(MemoryConsumerUpdate{
+                kOtherConsumerId, base::MemoryLimit::FromPercent(50), true})));
+  base::MemoryPressureListener::SimulatePressureNotification(
+      base::MEMORY_PRESSURE_LEVEL_MODERATE);
+  Mock::VerifyAndClearExpectations(&host);
+
+  policy_manager().OnConsumerGroupRemoved(kMemoryCacheId, kChildId);
+  policy_manager().OnConsumerGroupRemoved(kOtherConsumerId, kChildId);
+  policy_manager().RemoveMemoryConsumerGroupHost(kChildId);
+}
+
+TEST_F(MemoryPressureListenerPolicyTest,
+       MemoryCacheIncludedWhenFeatureEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      blink::features::kReleaseResourceStrongReferencesOnMemoryPressure);
+
+  MockMemoryConsumerGroupHost host;
+  const ChildProcessId kChildId;
+
+  policy_manager().AddMemoryConsumerGroupHost(PROCESS_TYPE_BROWSER, kChildId,
+                                              &host);
+
+  const std::string kMemoryCacheName = "MemoryCache";
+  const uint32_t kMemoryCacheId = base::PersistentHash(kMemoryCacheName);
+  const std::string kOtherConsumerName = "other_consumer";
+  const uint32_t kOtherConsumerId = base::PersistentHash(kOtherConsumerName);
+
+  policy_manager().OnConsumerGroupAdded(kMemoryCacheId, kMemoryCacheName,
+                                        kTestTraits, kChildId);
+  policy_manager().OnConsumerGroupAdded(kOtherConsumerId, kOtherConsumerName,
+                                        kTestTraits, kChildId);
+
+  MemoryPressureListenerPolicy policy(policy_manager());
+  MemoryCoordinatorPolicyRegistration registration(policy_manager(), policy);
+
+  // When feature is enabled, MemoryCache is included along with other
+  // consumers.
+  EXPECT_CALL(
+      host,
+      UpdateConsumers(UnorderedElementsAre(
+          MemoryConsumerUpdate{kMemoryCacheId,
+                               base::MemoryLimit::FromPercent(50), true},
+          MemoryConsumerUpdate{kOtherConsumerId,
+                               base::MemoryLimit::FromPercent(50), true})));
+  base::MemoryPressureListener::SimulatePressureNotification(
+      base::MEMORY_PRESSURE_LEVEL_MODERATE);
+  Mock::VerifyAndClearExpectations(&host);
+
+  policy_manager().OnConsumerGroupRemoved(kMemoryCacheId, kChildId);
+  policy_manager().OnConsumerGroupRemoved(kOtherConsumerId, kChildId);
   policy_manager().RemoveMemoryConsumerGroupHost(kChildId);
 }
 

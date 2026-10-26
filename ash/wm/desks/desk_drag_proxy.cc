@@ -5,7 +5,7 @@
 #include "ash/wm/desks/desk_drag_proxy.h"
 
 #include "ash/drag_drop/drag_image_view.h"
-#include "ash/style/system_shadow.h"
+#include "ash/style/system_decoration.h"
 #include "ash/wm/desks/desk_bar_view_base.h"
 #include "ash/wm/desks/desk_mini_view.h"
 #include "ash/wm/desks/desk_preview_view.h"
@@ -35,7 +35,7 @@ DeskDragProxy::DeskDragProxy(
     DeskBarViewBase* desk_bar_view,
     DeskMiniView* drag_view,
     float init_offset_x,
-    base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator)
+    base::WeakPtr<DesksWindowOcclusionCalculator> window_occlusion_calculator)
     : desk_bar_view_(desk_bar_view),
       drag_view_(drag_view),
       drag_preview_size_(drag_view->GetPreviewBoundsInScreen().size()),

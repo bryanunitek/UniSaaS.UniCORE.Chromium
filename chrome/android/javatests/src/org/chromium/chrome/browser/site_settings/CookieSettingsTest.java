@@ -36,8 +36,7 @@ import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.components.browser_ui.site_settings.SingleCategorySettings;
@@ -53,20 +52,20 @@ import java.io.IOException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures({ChromeFeatureList.RELATED_WEBSITE_SETS_UI})
 public class CookieSettingsTest {
-    private static final int RENDER_TEST_REVISION = 2;
+    private static final int RENDER_TEST_REVISION = 3;
 
     @Rule
-    public SettingsActivityTestRule<SingleCategorySettings> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(SingleCategorySettings.class);
+    public SettingsTestRule<SingleCategorySettings> mSettingsTestRule =
+            new SettingsTestRule<>(SingleCategorySettings.class);
 
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setRevision(RENDER_TEST_REVISION)
+                    .setDescription("Ligatures and contextual alternates disabled in UI text")
                     .setBugComponent(Component.UI_BROWSER_MOBILE_SETTINGS)
                     .build();
 
-    private SettingsActivity mSettingsActivity;
     private UserActionTester mUserActionTester;
 
     @Before
@@ -75,7 +74,7 @@ public class CookieSettingsTest {
         fragmentArgs.putString(
                 SingleCategorySettings.EXTRA_CATEGORY,
                 SiteSettingsCategory.preferenceKey(SiteSettingsCategory.Type.THIRD_PARTY_COOKIES));
-        mSettingsActivity = mSettingsActivityTestRule.startSettingsActivity(fragmentArgs);
+        mSettingsTestRule.startSettingsActivity(fragmentArgs);
         mUserActionTester = new UserActionTester();
     }
 
@@ -136,7 +135,6 @@ public class CookieSettingsTest {
     @Test
     @SmallTest
     @Feature({"RenderTest"})
-    @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
     public void renderAllowDescriptionWhenAuxButtonClicked() throws IOException {
         onView(withId(R.id.allow_third_party_with_aux)).perform(click());
         onView(
@@ -153,7 +151,6 @@ public class CookieSettingsTest {
     @Test
     @SmallTest
     @Feature({"RenderTest"})
-    @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
     public void renderBlockDescriptionAndRwsToggleWhenAuxButtonClicked() throws IOException {
         onView(withId(R.id.block_third_party_with_aux)).perform(click());
         onView(
@@ -170,10 +167,7 @@ public class CookieSettingsTest {
     @Test
     @SmallTest
     @Feature({"RenderTest"})
-    @DisableFeatures({
-        ChromeFeatureList.RELATED_WEBSITE_SETS_UI,
-        ChromeFeatureList.SETTINGS_MULTI_COLUMN
-    })
+    @DisableFeatures({ChromeFeatureList.RELATED_WEBSITE_SETS_UI})
     public void renderBlockDescriptionWhenAuxButtonClicked() throws IOException {
         onView(withId(R.id.block_third_party_with_aux)).perform(click());
         onView(

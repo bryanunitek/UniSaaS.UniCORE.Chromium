@@ -203,7 +203,7 @@ DeviceStatisticsTracker::DeviceStatisticsTracker(
     signin::IdentityManager* identity_manager,
     const GURL& sync_server_url,
     RequestFactory request_factory,
-    std::vector<std::string> current_device_cache_guids)
+    base::flat_set<std::string> current_device_cache_guids)
     : identity_manager_(identity_manager),
       sync_server_url_(sync_server_url),
       request_factory_(std::move(request_factory)),
@@ -228,8 +228,12 @@ void DeviceStatisticsTracker::Start(base::OnceClosure callback) {
       !std::ranges::contains(accounts, primary_account_)) {
     // The primary account must have been removed between the constructor and
     // now, or something's wrong with the IdentityManager.
+    // Note: This is plumbed through a class method to ensure that the callback
+    // isn't run anymore if `this` gets destroyed first.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(callback_));
+        FROM_HERE,
+        base::BindOnce(&DeviceStatisticsTracker::RunCallback,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback_)));
     return;
   }
 
@@ -247,8 +251,12 @@ void DeviceStatisticsTracker::Start(base::OnceClosure callback) {
     RecordOverallDevicesOutcome();
     RecordOverallPlatformsOutcome();
 
+    // Note: This is plumbed through a class method to ensure that the callback
+    // isn't run anymore if `this` gets destroyed first.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(callback_));
+        FROM_HERE,
+        base::BindOnce(&DeviceStatisticsTracker::RunCallback,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback_)));
     return;
   }
 
@@ -755,6 +763,10 @@ DeviceStatisticsTracker::DeduplicateEntities(
   }
 
   return deduped_devices;
+}
+
+void DeviceStatisticsTracker::RunCallback(base::OnceClosure callback) {
+  std::move(callback).Run();
 }
 
 }  // namespace syncer

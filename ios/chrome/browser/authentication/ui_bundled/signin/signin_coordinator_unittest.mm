@@ -13,9 +13,9 @@
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -44,18 +44,15 @@ class SigninCoordinatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
-            std::make_unique<FakeAuthenticationServiceDelegate>()));
+        AuthenticationServiceFactory::GetDefaultFactory());
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateTestSyncService));
-    profile_ = std::move(builder).Build();
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
 
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
-    // Mock ProfileState to satisfy ScopedUIBlocker assertions during
-    // coordinator initialization.
-    mock_profile_state_ = OCMClassMock([ProfileState class]);
-    scene_state_.profileState = mock_profile_state_;
-    browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
+    scene_state_ = [[SceneState alloc] init];
+    profile_state_ = [[ProfileState alloc] initWithAppState:nil];
+    scene_state_.profileState = profile_state_;
+    browser_ = std::make_unique<TestBrowser>(profile_, scene_state_);
 
     view_controller_ = [[UIViewController alloc] init];
     [scoped_key_window_.Get() setRootViewController:view_controller_];
@@ -72,22 +69,24 @@ class SigninCoordinatorTest : public PlatformTest {
 
     // signinCompletion must be set before start.
     coordinator_.signinCompletion =
-        ^(SigninCoordinator* coordinator, SigninCoordinatorResult result,
-          id<SystemIdentity> identity) {
+        ^(SigninCoordinator* coordinator,
+          SigninCoordinatorResultOrIdentity result) {
         };
   }
 
-  void TearDown() override {
-    [mock_profile_state_ stopMocking];
-    PlatformTest::TearDown();
+  ~SigninCoordinatorTest() override {
+    coordinator_ = nil;
+    browser_.reset();
+    profile_ = nullptr;
   }
 
  protected:
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   web::WebTaskEnvironment task_environment_;
-  std::unique_ptr<TestProfileIOS> profile_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_ = nullptr;
   SceneState* scene_state_;
-  id mock_profile_state_ = nil;
+  ProfileState* profile_state_;
   std::unique_ptr<TestBrowser> browser_;
   ScopedKeyWindow scoped_key_window_;
   UIViewController* view_controller_;

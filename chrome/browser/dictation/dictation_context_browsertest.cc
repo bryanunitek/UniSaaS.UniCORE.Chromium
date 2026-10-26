@@ -4,6 +4,10 @@
 
 #include "chrome/browser/dictation/dictation_context.h"
 
+#include <optional>
+#include <string>
+#include <string_view>
+
 #include "base/strings/string_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/dictation/dictation_browser_test_base.h"
@@ -15,12 +19,87 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "components/optimization_guide/content/browser/page_context_eligibility.h"
+#include "components/optimization_guide/content/browser/page_context_eligibility_api.h"
+#include "content/public/browser/global_dom_node_id.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/common/switches.h"
+#include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace dictation {
+
+namespace {
+
+bool MockIsEligible(
+    const std::string& host,
+    const std::string& path,
+    const std::vector<optimization_guide::FrameMetadata>& frame_metadata) {
+  return false;
+}
+
+bool MockIsEligibleWithAccount(
+    const std::string& host,
+    const std::string& path,
+    const std::string& account_email,
+    const std::vector<optimization_guide::FrameMetadata>& frame_metadata) {
+  return false;
+}
+
+bool MockShouldReextractPageContext(
+    const std::string& host,
+    const std::string& path,
+    const std::vector<std::string>& updated_meta_tags) {
+  return false;
+}
+
+optimization_guide::StringViewSpan MockGetMeta(
+    std::string_view,
+    std::string_view,
+    const std::vector<optimization_guide::FrameMetadata>&) {
+  return optimization_guide::StringViewSpan{.data = nullptr, .size = 0};
+}
+
+optimization_guide::PageEligibilityResult MockCheckPageEligibility(
+    const std::vector<optimization_guide::FrameUrl>& frames) {
+  return optimization_guide::PageEligibilityResult{
+      .status = optimization_guide::PageEligibility::kIneligible,
+      .meta_tag_names_affecting_eligibility = {.data = nullptr, .size = 0}};
+}
+
+optimization_guide::PageContextEligibilityAPI g_ineligible_api = {
+    .IsPageContextEligible = &MockIsEligible,
+    .IsPageContextEligibleWithAccount = &MockIsEligibleWithAccount,
+    .ShouldReextractPageContext = &MockShouldReextractPageContext,
+    .GetMetaTagNamesAffectingEligibility = &MockGetMeta,
+    .CheckPageEligibility = &MockCheckPageEligibility,
+};
+
+class ScopedPageContextEligibilityForTesting {
+ public:
+  explicit ScopedPageContextEligibilityForTesting(
+      const optimization_guide::PageContextEligibilityAPI* api)
+      : holder_(api) {
+    optimization_guide::PageContextEligibility::SetForTesting(&holder_);
+  }
+  ~ScopedPageContextEligibilityForTesting() {
+    optimization_guide::PageContextEligibility::SetForTesting(nullptr);
+  }
+
+  ScopedPageContextEligibilityForTesting(
+      const ScopedPageContextEligibilityForTesting&) = delete;
+  ScopedPageContextEligibilityForTesting& operator=(
+      const ScopedPageContextEligibilityForTesting&) = delete;
+
+ private:
+  optimization_guide::PageContextEligibility holder_;
+};
+
+}  // namespace
 
 class DictationContextBrowserTest : public DictationBrowserTestBase {
  public:
@@ -204,7 +283,8 @@ IN_PROC_BROWSER_TEST_F(DictationContextBrowserTest,
   )JS";
   ASSERT_EQ(content::EvalJs(iframe, setup_script), "quick brown");
 
-  StartSession(content::GlobalDOMNodeId{iframe->GetWeakDocumentPtr()});
+  StartSession(
+      TargetDetails(content::GlobalDOMNodeId{iframe->GetWeakDocumentPtr()}));
 
   ASSERT_NE(session_controller(), nullptr);
 
@@ -219,6 +299,167 @@ IN_PROC_BROWSER_TEST_F(DictationContextBrowserTest,
 
   ASSERT_TRUE(context->editable_content.has_value());
   EXPECT_EQ(*context->editable_content, "quick brown");
+}
+
+IN_PROC_BROWSER_TEST_F(DictationContextBrowserTest, IneligiblePageElided) {
+  ScopedPageContextEligibilityForTesting scoped_eligibility(&g_ineligible_api);
+
+  const GURL url = embedded_test_server()->GetURL("/simple.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), url, WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+
+  StartSession();
+
+  ASSERT_NE(session_controller(), nullptr);
+
+  ListenerStreamProvider* provider = static_cast<ListenerStreamProvider*>(
+      session_controller()->attached_stream_provider());
+  ASSERT_NE(provider, nullptr);
+
+  ExtensionWaitForStreamStart(profile(), provider->stream_id_for_testing());
+  std::optional<DictationContext> context = ExtensionGetStartStreamDetails(
+      profile(), provider->stream_id_for_testing());
+  ASSERT_TRUE(context.has_value());
+
+  // Verify that the context was elided because the page is not eligible.
+  EXPECT_FALSE(context->annotated_page_content.has_value());
+  EXPECT_FALSE(context->inner_text.has_value());
+  EXPECT_FALSE(context->editable_content.has_value());
+}
+
+// Tests for editors that keep their text and selection in an EditContext
+// rather than in the DOM.
+class DictationEditContextBrowserTest : public DictationBrowserTestBase {
+ public:
+  DictationEditContextBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        kDictation, {{"use_component_extension", "false"},
+                     {"auto_session_end_delay", "0ms"},
+                     {"populate_edit_context_hosts", kListedHost}});
+  }
+  ~DictationEditContextBrowserTest() override = default;
+
+  void SetUpOnMainThread() override {
+    DictationBrowserTestBase::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
+    https_server_.ServeFilesFromSourceDirectory("chrome/test/data");
+    ASSERT_TRUE(https_server_.Start());
+  }
+
+ protected:
+  static constexpr char kListedHost[] = "a.test";
+  static constexpr char kUnlistedHost[] = "b.test";
+
+  // Loads a page on `host` and adds a focused `#editor` whose EditContext only
+  // holds a "_" placeholder until it sees IME input, then fills in "Hello
+  // world" and selects "world".
+  void NavigateToEditor(std::string_view host) {
+    ASSERT_TRUE(content::NavigateToURL(
+        web_contents(), https_server_.GetURL(host, "/simple.html")));
+    ASSERT_TRUE(content::ExecJs(web_contents(), R"JS(
+      const editor = document.createElement('div');
+      editor.id = 'editor';
+      document.body.appendChild(editor);
+      window.ec =
+          new EditContext({text: '_', selectionStart: 1, selectionEnd: 1});
+      editor.editContext = ec;
+      window.imeEvents = [];
+      editor.addEventListener(
+          'keydown', (e) => imeEvents.push('keydown:' + e.keyCode));
+      ec.addEventListener('textupdate', () => {
+        imeEvents.push('textupdate');
+        if (ec.text === '_') {
+          ec.updateText(0, 1, 'Hello world');
+          ec.updateSelection(6, 11);
+        }
+      });
+      editor.focus();
+    )JS"));
+  }
+
+  // Starts dictation in the page's editor and returns the context sent with the
+  // stream start.
+  std::optional<DictationContext> StartDictationInEditor() {
+    content::RenderFrameHost* rfh = web_contents()->GetPrimaryMainFrame();
+    std::optional<int> node_id = content::GetDOMNodeId(*rfh, "#editor");
+    if (!node_id) {
+      ADD_FAILURE() << "No #editor";
+      return std::nullopt;
+    }
+    StartSession(
+        TargetDetails(content::GlobalDOMNodeId(rfh->GetWeakDocumentPtr(),
+                                               blink::DOMNodeIdType(*node_id)),
+                      /*richly_editable=*/true));
+
+    ListenerStreamProvider* provider = static_cast<ListenerStreamProvider*>(
+        session_controller()->attached_stream_provider());
+    if (!provider) {
+      ADD_FAILURE() << "No stream provider";
+      return std::nullopt;
+    }
+    ExtensionWaitForStreamStart(profile(), provider->stream_id_for_testing());
+    return ExtensionGetStartStreamDetails(profile(),
+                                          provider->stream_id_for_testing());
+  }
+
+  // Returns the IME events the editor saw, e.g. "keydown:229,textupdate".
+  std::string GetImeEvents() {
+    return content::EvalJs(web_contents(), "imeEvents.join(',')")
+        .ExtractString();
+  }
+
+  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(DictationEditContextBrowserTest,
+                       EditContextPopulatedOnListedHost) {
+  NavigateToEditor(kListedHost);
+
+  std::optional<DictationContext> context = StartDictationInEditor();
+  ASSERT_TRUE(context.has_value());
+
+  EXPECT_EQ(GetImeEvents(), "keydown:229,textupdate");
+  ASSERT_TRUE(context->editable_content.has_value());
+  EXPECT_EQ(*context->editable_content, "world");
+  ASSERT_TRUE(context->inner_text.has_value());
+  EXPECT_THAT(*context->inner_text, testing::HasSubstr("Hello world"));
+}
+
+IN_PROC_BROWSER_TEST_F(DictationEditContextBrowserTest,
+                       EditContextNotPopulatedOnUnlistedHost) {
+  NavigateToEditor(kUnlistedHost);
+
+  std::optional<DictationContext> context = StartDictationInEditor();
+  ASSERT_TRUE(context.has_value());
+
+  EXPECT_EQ(GetImeEvents(), "");
+  EXPECT_EQ(content::EvalJs(web_contents(), "ec.text"), "_");
+  EXPECT_EQ(context->inner_text.value_or("").find("Hello world"),
+            std::string::npos);
+}
+
+IN_PROC_BROWSER_TEST_F(DictationEditContextBrowserTest,
+                       EditContextReadWhenAlreadyPopulated) {
+  NavigateToEditor(kUnlistedHost);
+  // An editor that already exposes its text doesn't need to be populated.
+  ASSERT_TRUE(content::ExecJs(web_contents(), R"JS(
+    ec.updateText(0, ec.text.length, 'Real text');
+    ec.updateSelection(0, 4);
+  )JS"));
+
+  std::optional<DictationContext> context = StartDictationInEditor();
+  ASSERT_TRUE(context.has_value());
+
+  EXPECT_EQ(GetImeEvents(), "");
+  ASSERT_TRUE(context->editable_content.has_value());
+  EXPECT_EQ(*context->editable_content, "Real");
+  ASSERT_TRUE(context->inner_text.has_value());
+  EXPECT_THAT(*context->inner_text, testing::HasSubstr("Real text"));
 }
 
 }  // namespace dictation

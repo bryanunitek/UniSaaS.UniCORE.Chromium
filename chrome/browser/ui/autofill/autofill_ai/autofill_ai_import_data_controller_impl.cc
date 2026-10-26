@@ -22,18 +22,21 @@
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_controller_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_utils.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_util.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_manager.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_wallet_util.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/metrics/autofill_ai_metrics.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/navigation_handle.h"
@@ -98,6 +101,7 @@ void AutofillAiImportDataControllerImpl::ShowPrompt(
     EntityInstance new_entity,
     std::optional<EntityInstance> old_entity,
     bool close_on_accept,
+    LegalMessageLines legal_message_lines,
     AutofillClient::EntityImportPromptResultCallback prompt_result_callback) {
   // Don't show the bubble if it's already visible.
   if (bubble_view() || !MaySetUpBubble()) {
@@ -111,7 +115,8 @@ void AutofillAiImportDataControllerImpl::ShowPrompt(
 
   was_bubble_shown_ = false;
   state_ = SaveUpdateState(std::move(new_entity), std::move(old_entity),
-                           close_on_accept, std::move(prompt_result_callback));
+                           close_on_accept, std::move(legal_message_lines),
+                           std::move(prompt_result_callback));
   QueueOrShowBubble();
 }
 
@@ -126,9 +131,7 @@ void AutofillAiImportDataControllerImpl::ShowLocalSaveNotification() {
 }
 
 void AutofillAiImportDataControllerImpl::OnSaveButtonClicked() {
-  if (GetSaveUpdateState().close_on_accept) {
-    OnBubbleClosed(AutofillClient::AutofillAiBubbleResult::kAccepted);
-  } else if (!GetSaveUpdateState().prompt_result_callback.is_null()) {
+  if (!GetSaveUpdateState().prompt_result_callback.is_null()) {
     std::move(GetSaveUpdateState().prompt_result_callback)
         .Run(AutofillClient::AutofillAiBubbleResult::kAccepted, std::nullopt,
              {GetNoticeStringId(), GetPrimaryButtonTextId(IsSavePrompt())});
@@ -171,20 +174,25 @@ bool AutofillAiImportDataControllerImpl::IsWalletableEntity() const {
          EntityInstance::RecordType::kServerWallet;
 }
 
-void AutofillAiImportDataControllerImpl::OnGoToWalletLinkClicked() {
-  if (BrowserWindowInterface* browser =
-          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
-              web_contents())) {
-    reopen_bubble_when_web_contents_becomes_visible_ = true;
-    const EntityInstance& new_entity = GetSaveUpdateState().new_entity;
-    EntityInstance::WalletPassType pass_type =
-        GetWalletPassType(new_entity.type(), new_entity.record_type());
-    CHECK_NE(pass_type, EntityInstance::WalletPassType::kUnsupported);
-    GURL wallet_url(pass_type == EntityInstance::WalletPassType::kPublic
-                        ? chrome::kWalletPassesPageURL
-                        : chrome::kWalletPrivatePassHelpCenterURL);
-    ShowSingletonTab(browser, wallet_url);
+bool AutofillAiImportDataControllerImpl::IsBranding2026FeatureEnabled() const {
+  if (!base::FeatureList::IsEnabled(
+          features::kAutofillAiWalletPassBranding2026)) {
+    return false;
   }
+  const EntityInstance& new_entity = GetSaveUpdateState().new_entity;
+  return GetWalletPassType(new_entity.type(), new_entity.record_type()) ==
+         EntityInstance::WalletPassType::kPrivate;
+}
+
+void AutofillAiImportDataControllerImpl::OnGoToWalletLinkClicked() {
+  const EntityInstance& new_entity = GetSaveUpdateState().new_entity;
+  EntityInstance::WalletPassType pass_type =
+      GetWalletPassType(new_entity.type(), new_entity.record_type());
+  CHECK_NE(pass_type, EntityInstance::WalletPassType::kUnsupported);
+  GURL wallet_url(pass_type == EntityInstance::WalletPassType::kPublic
+                      ? chrome::kWalletPassesPageURL
+                      : chrome::kWalletPrivatePassHelpCenterURL);
+  OpenUrlAndReopenBubbleOnReturn(wallet_url);
 }
 
 void AutofillAiImportDataControllerImpl::OnVisibilityChanged(
@@ -273,17 +281,24 @@ AutofillAiImportDataControllerImpl::GetWeakPtr() {
 
 int AutofillAiImportDataControllerImpl::
     GetSaveUpdateDialogTitleImagesResourceId() const {
+  const bool use_wallet_branding =
+      IsWalletableEntity() &&
+      base::FeatureList::IsEnabled(features::kAutofillAiWalletPassBranding2026);
   switch (GetSaveUpdateState().new_entity.type().name()) {
     case EntityTypeName::kDriversLicense:
-      return IDR_AUTOFILL_SAVE_DRIVERS_LICENSE_LOTTIE;
+      return use_wallet_branding
+                 ? IDR_AUTOFILL_SAVE_DRIVERS_LICENSE_WALLET_LOTTIE
+                 : IDR_AUTOFILL_SAVE_DRIVERS_LICENSE_LOTTIE;
     case EntityTypeName::kKnownTravelerNumber:
-      return IDR_AUTOFILL_SAVE_KNOWN_TRAVELER_NUMBER_AND_REDRESS_NUMBER_LOTTIE;
-    case EntityTypeName::kNationalIdCard:
-      return IDR_AUTOFILL_SAVE_PASSPORT_AND_NATIONAL_ID_CARD_LOTTIE;
-    case EntityTypeName::kPassport:
-      return IDR_AUTOFILL_SAVE_PASSPORT_AND_NATIONAL_ID_CARD_LOTTIE;
     case EntityTypeName::kRedressNumber:
-      return IDR_AUTOFILL_SAVE_KNOWN_TRAVELER_NUMBER_AND_REDRESS_NUMBER_LOTTIE;
+      return use_wallet_branding
+                 ? IDR_AUTOFILL_SAVE_KNOWN_TRAVELER_NUMBER_AND_REDRESS_NUMBER_WALLET_LOTTIE
+                 : IDR_AUTOFILL_SAVE_KNOWN_TRAVELER_NUMBER_AND_REDRESS_NUMBER_LOTTIE;
+    case EntityTypeName::kNationalIdCard:
+    case EntityTypeName::kPassport:
+      return use_wallet_branding
+                 ? IDR_AUTOFILL_SAVE_PASSPORT_AND_NATIONAL_ID_CARD_WALLET_LOTTIE
+                 : IDR_AUTOFILL_SAVE_PASSPORT_AND_NATIONAL_ID_CARD_LOTTIE;
     case EntityTypeName::kVehicle:
       return IDR_AUTOFILL_SAVE_VEHICLE_LOTTIE;
     case EntityTypeName::kFlightReservation:
@@ -331,15 +346,38 @@ int AutofillAiImportDataControllerImpl::GetNoticeStringId() const {
                         : IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_SUBTITLE;
 }
 
+const LegalMessageLines&
+AutofillAiImportDataControllerImpl::GetLegalMessageLines() const {
+  return GetSaveUpdateState().legal_message_lines;
+}
+
+void AutofillAiImportDataControllerImpl::OnLegalMessageLinkClicked(
+    const GURL& url) {
+  LogWalletNoticeFunnelEvent(AutofillAiWalletNoticeFunnelEvents::kLinkClicked);
+  OpenUrlAndReopenBubbleOnReturn(url);
+}
+
+void AutofillAiImportDataControllerImpl::OpenUrlAndReopenBubbleOnReturn(
+    const GURL& url) {
+  if (BrowserWindowInterface* browser =
+          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+              web_contents())) {
+    reopen_bubble_when_web_contents_becomes_visible_ = true;
+    ShowSingletonTab(browser, url);
+  }
+}
+
 AutofillAiImportDataControllerImpl::SaveUpdateState::SaveUpdateState(
     EntityInstance new_entity,
     std::optional<EntityInstance> old_entity,
     bool close_on_accept,
+    LegalMessageLines legal_message_lines,
     AutofillClient::EntityImportPromptResultCallback prompt_result_callback)
     : new_entity(std::move(new_entity)),
       old_entity(std::move(old_entity)),
       close_on_accept(close_on_accept),
-      prompt_result_callback(std::move(prompt_result_callback)) {}
+      prompt_result_callback(std::move(prompt_result_callback)),
+      legal_message_lines(std::move(legal_message_lines)) {}
 
 AutofillAiImportDataControllerImpl::SaveUpdateState::SaveUpdateState(
     SaveUpdateState&&) = default;

@@ -5,31 +5,54 @@
 #ifndef NET_DEVICE_BOUND_SESSIONS_URL_FETCHER_H_
 #define NET_DEVICE_BOUND_SESSIONS_URL_FETCHER_H_
 
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "net/base/net_export.h"
+#include "net/base/request_priority.h"
+#include "net/url_request/redirect_info.h"
 #include "net/url_request/url_request.h"
+#include "url/origin.h"
 
 namespace net {
 class URLRequestContext;
 class SSLCertRequestInfo;
 class X509Certificate;
 class SSLPrivateKey;
-}
+}  // namespace net
 
 namespace net::device_bound_sessions {
 
 class NET_EXPORT URLFetcher : public URLRequest::Delegate {
  public:
+  // Returns whether the fetcher may follow the redirect described by the
+  // argument.
+  using ShouldFollowRedirectCallback =
+      base::RepeatingCallback<bool(const RedirectInfo&)>;
+
+  // If positive, `timeout` configures a watchdog timer that cancels the request
+  // with `net::ERR_TIMED_OUT` if it does not complete within the specified
+  // duration. Non-positive durations disable the watchdog timer.
   URLFetcher(const URLRequestContext* context,
              GURL url,
+             const url::Origin& referring_origin,
              std::optional<net::NetLogSource> net_log_source,
-             bool is_refresh);
+             bool is_refresh,
+             net::RequestPriority priority,
+             base::TimeDelta timeout);
   ~URLFetcher() override;
+
+  // Lets the owner reject a redirect before it is followed. Must be called
+  // before `Start()`. If `callback` returns false, nothing is sent to the
+  // redirect target and the fetch completes with `net::ERR_UNSAFE_REDIRECT`.
+  void SetShouldFollowRedirectCallback(ShouldFollowRedirectCallback callback);
 
   void Start(base::OnceClosure complete_callback);
   std::string TakeDataReceived();
 
   URLRequest& request() { return *request_; }
+  net::RequestPriority priority() const { return request_->priority(); }
   const std::string& data_received() const { return data_received_; }
   int net_error() const { return net_error_; }
   const CookieAndLineAccessResultList& maybe_stored_cookies() const {
@@ -45,6 +68,14 @@ class NET_EXPORT URLFetcher : public URLRequest::Delegate {
   // Always cancel requests on SSL errors, this is the default implementation
   // of OnSSLCertificateError.
 
+  // Intercept HTTP 3xx redirects to re-synchronize W3C Fetch Metadata,
+  // evaluate cross-origin/same-site origin relationships, and strictly
+  // abort insecure (https -> http) protocol downgrades to prevent plaintext
+  // DBSC session token leakage.
+  void OnReceivedRedirect(URLRequest* request,
+                          const RedirectInfo& redirect_info,
+                          bool* defer_redirect) override;
+
   // This is always called unless the request is deleted before it is called.
   void OnResponseStarted(URLRequest* request, int net_error) override;
 
@@ -57,11 +88,18 @@ class NET_EXPORT URLFetcher : public URLRequest::Delegate {
                                        scoped_refptr<SSLPrivateKey> key,
                                        bool cancel);
 
+  void OnTimeout();
+  void Complete(int net_error);
+
   std::unique_ptr<URLRequest> request_;
   scoped_refptr<IOBuffer> buf_;
   std::string data_received_;
   int net_error_ = OK;
   base::OnceClosure callback_;
+  ShouldFollowRedirectCallback should_follow_redirect_callback_;
+  const url::Origin referring_origin_;
+  const base::TimeDelta timeout_;
+  base::OneShotTimer watchdog_timer_;
 
   base::WeakPtrFactory<URLFetcher> weak_factory_{this};
 };

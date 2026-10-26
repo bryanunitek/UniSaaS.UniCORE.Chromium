@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
@@ -16,6 +17,7 @@
 #include "base/strings/strcat.h"
 #include "base/types/expected.h"
 #include "build/build_config.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_features.h"
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker_controller.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker_manager.h"
@@ -34,6 +36,7 @@
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -44,6 +47,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "media/base/media_switches.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -74,7 +78,6 @@
 #if defined(USE_AURA)
 #include "ui/aura/window_tree_host.h"
 #endif
-
 
 using ::blink::mojom::MediaStreamRequestResult;
 using ::content::DesktopMediaID;
@@ -164,7 +167,7 @@ void RecordUmaSelection(content::GlobalRenderFrameHostId capturer_global_id,
                         const DesktopMediaID& selected_media,
                         DesktopMediaList::Type source_type,
                         base::TimeTicks dialog_open_time) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   switch (source_type) {
     case DesktopMediaList::Type::kNone:
@@ -391,6 +394,13 @@ bool DesktopMediaPickerDialogView::AudioSupported(
   NOTREACHED();
 }
 
+bool DesktopMediaPickerDialogView::IsAudioSelectionFeatureEnabled() const {
+  return base::FeatureList::IsEnabled(
+             blink::features::kGetDisplayMediaAudioSelection) &&
+         request_source_ ==
+             DesktopMediaPicker::Params::RequestSource::kGetDisplayMedia;
+}
+
 bool DesktopMediaPickerDialogView::AudioRequestedForType(
     DesktopMediaList::Type type) const {
   // TODO(crbug.com/397167331): Instead of special-casing kScreen, iterate
@@ -436,6 +446,7 @@ DesktopMediaPickerDialogView::DesktopMediaPickerDialogView(
     std::vector<std::unique_ptr<DesktopMediaList>> source_lists)
     : web_contents_(params.web_contents),
       request_source_(params.request_source),
+      audio_selection_preferred_(params.audio_selection_preferred),
       app_name_(params.app_name),
       audio_requested_(params.request_audio),
       screen_exclude_system_audio_requested_(params.exclude_system_audio),
@@ -455,7 +466,8 @@ DesktopMediaPickerDialogView::DesktopMediaPickerDialogView(
               ? params.web_contents->GetPrimaryMainFrame()->GetGlobalId()
               : content::GlobalRenderFrameHostId()),
       parent_(parent),
-      dialog_open_time_(base::TimeTicks::Now()) {
+      dialog_open_time_(base::TimeTicks::Now()),
+      on_picker_destroying_(std::move(params.on_picker_destroying)) {
   CHECK(!params.force_audio_checkboxes_to_default_checked ||
         !params.exclude_system_audio);
   RecordAction(base::UserMetricsAction("GetDisplayMedia.ShowDialog"));
@@ -520,7 +532,8 @@ DesktopMediaPickerDialogView::DesktopMediaPickerDialogView(
           switches::kTabCaptureAudioDefaultUnchecked);
   const bool system_audio_capture_default_checked =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kSystemAudioCaptureDefaultChecked);
+          switches::kSystemAudioCaptureDefaultChecked) ||
+      (IsAudioSelectionFeatureEnabled() && params.audio_selection_preferred);
 
   for (auto& source_list : source_lists) {
     switch (source_list->GetMediaListType()) {
@@ -652,9 +665,12 @@ DesktopMediaPickerDialogView::DesktopMediaPickerDialogView(
   if (request_source_ == RequestSource::kGlic) {
     description_label_->SetText(
         l10n_util::GetStringUTF16(IDS_GLIC_SCREEN_PICKER_DESCRIPTION));
+  } else if (request_source_ == RequestSource::kSearchbox) {
+    description_label_->SetText(
+        l10n_util::GetStringUTF16(IDS_SEARCHBOX_PICKER_DESCRIPTION));
   }
 
-  DCHECK(!categories_.empty());
+  CHECK(!categories_.empty(), base::NotFatalUntil::M162);
 
   if (params.restricted_by_policy) {
     AddChildView(CreatePolicyRestrictedView());
@@ -664,12 +680,16 @@ DesktopMediaPickerDialogView::DesktopMediaPickerDialogView(
   ConfigureUIForNewPane(previously_selected_category_);
 
   bool modal_dialog = MediaPickerCanShowAsWebModal(params.web_contents);
+  // Pass `params.context` or fallback to `params.parent` (which Mac callers
+  // often set instead of `context`) so that `CreateMediaPickerDialogWidget` can
+  // identify the target display and parent window.
   views::Widget* widget = CreateMediaPickerDialogWidget(
       modal_dialog ? GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
                          params.web_contents)
                    : nullptr,
       params.web_contents,
-      /*delegate=*/this, params.context, /*parent=*/gfx::NativeView());
+      /*delegate=*/this, params.context ? params.context : params.parent,
+      /*parent=*/gfx::NativeView());
 
   extensions::SecurityDialogTracker::GetInstance()->AddSecurityDialog(widget);
 
@@ -723,6 +743,9 @@ DesktopMediaPickerDialogView::DesktopMediaPickerDialogView(
 }
 
 DesktopMediaPickerDialogView::~DesktopMediaPickerDialogView() {
+  if (on_picker_destroying_) {
+    std::move(on_picker_destroying_).Run();
+  }
 #if BUILDFLAG(IS_WIN)
   if (!pip_exclusion_session_id_) {
     return;
@@ -776,12 +799,19 @@ void DesktopMediaPickerDialogView::ConfigureUIForNewPane(int index) {
 
   if (audio_requested_ && category.audio_offered) {
     category.pane->SetAudioSharingApprovedByUser(category.audio_checked);
+    if (IsAudioSelectionFeatureEnabled()) {
+      category.controller->OnAudioShareToggled(category.audio_checked);
+    }
+#if BUILDFLAG(IS_MAC)
+    UpdateAudioPermissionsWarningState(index);
+#endif
   }
 #if BUILDFLAG(IS_MAC)
   if (category.pane->IsPermissionPaneVisible()) {
     RecordPermissionButtonOpenedAction(category.type);
   }
 #endif
+  UpdateOkButtonLabel();
 }
 
 void DesktopMediaPickerDialogView::StoreAudioCheckboxState() {
@@ -857,6 +887,19 @@ std::u16string DesktopMediaPickerDialogView::GetLabelForAudioToggle(
         GetHintId(is_screen_audio_offered_, IsWindowAudioOffered()));
   }
 
+  if (IsAudioSelectionFeatureEnabled()) {
+    if (category.type == DesktopMediaList::Type::kScreen ||
+        (category.type == DesktopMediaList::Type::kWindow &&
+         window_audio_type_offered_ ==
+             content::DesktopMediaID::AudioType::kSystem)) {
+      return l10n_util::GetStringUTF16(
+          IDS_DISPLAY_MEDIA_PICKER_SHARE_SYSTEM_AUDIO_CHECKBOX);
+    } else if (category.type == DesktopMediaList::Type::kWebContents) {
+      return l10n_util::GetStringUTF16(
+          IDS_DISPLAY_MEDIA_PICKER_SHARE_TAB_AUDIO_CHECKBOX);
+    }
+  }
+
   switch (category.type) {
     case DesktopMediaList::Type::kScreen: {
       return l10n_util::GetStringUTF16(GetLabelForShareSystemAudioToggle(
@@ -898,17 +941,48 @@ std::unique_ptr<views::View> DesktopMediaPickerDialogView::SetupPane(
   }
 #endif
 
+  if (IsAudioSelectionFeatureEnabled()) {
+    if (trigger_audio_permission_check.is_null()) {
+      trigger_audio_permission_check = base::BindRepeating(
+          &DesktopMediaPickerDialogView::OnAudioShareToggled,
+          weak_factory_.GetWeakPtr());
+    } else {
+      trigger_audio_permission_check = base::BindRepeating(
+          [](base::WeakPtr<DesktopMediaPickerDialogView> dialog,
+             base::RepeatingClosure original_callback) {
+            if (!dialog) {
+              return;
+            }
+            original_callback.Run();
+            dialog->OnAudioShareToggled();
+          },
+          weak_factory_.GetWeakPtr(),
+          std::move(trigger_audio_permission_check));
+    }
+  }
+
+  const bool show_audio_recommendation = IsAudioSelectionFeatureEnabled() &&
+                                         audio_selection_preferred_ &&
+                                         audio_offered;
+
+  const AudioSharingToggleStyle style_audio_toggle =
+      IsAudioSelectionFeatureEnabled() ? AudioSharingToggleStyle::kBoxed
+                                       : AudioSharingToggleStyle::kDefault;
+
   auto share_audio_view =
       audio_requested_
-          ? std::make_unique<ShareAudioView>(GetLabelForAudioToggle(category),
-                                             category.audio_offered,
-                                             trigger_audio_permission_check)
+          ? std::make_unique<ShareAudioView>(
+                GetLabelForAudioToggle(category), category.audio_offered,
+                style_audio_toggle, trigger_audio_permission_check)
           : nullptr;
 
   auto pane = std::make_unique<DesktopMediaPaneView>(
-      category.type, std::move(content_view), std::move(share_audio_view));
+      category.type, std::move(content_view), std::move(share_audio_view),
+      show_audio_recommendation, style_audio_toggle);
   if (audio_requested_ && audio_offered) {
     pane->SetAudioSharingApprovedByUser(audio_checked);
+    pane->SetAudioRecommendationVisible(show_audio_recommendation &&
+                                        !audio_checked);
   }
   category.pane = pane.get();
   return pane;
@@ -931,8 +1005,9 @@ DesktopMediaPickerDialogView::GetSelectedController() {
 DesktopMediaList::Type DesktopMediaPickerDialogView::GetSelectedSourceListType()
     const {
   const int index = GetSelectedTabIndex();
-  DCHECK_GE(index, 0);
-  DCHECK_LT(static_cast<size_t>(index), categories_.size());
+  CHECK_GE(index, 0, base::NotFatalUntil::M162);
+  CHECK_LT(static_cast<size_t>(index), categories_.size(),
+           base::NotFatalUntil::M162);
   return categories_[index].type;
 }
 
@@ -942,6 +1017,39 @@ bool DesktopMediaPickerDialogView::IsAudioSharingApprovedByUser() const {
   CHECK_LT(static_cast<size_t>(index), categories_.size());
   return categories_[index].pane &&
          categories_[index].pane->IsAudioSharingApprovedByUser();
+}
+
+void DesktopMediaPickerDialogView::UpdateOkButtonLabel() {
+  if (!IsAudioSelectionFeatureEnabled()) {
+    return;
+  }
+  bool audio_shared = IsAudioSharingApprovedByUser();
+  int message_id =
+      audio_shared ? IDS_DISPLAY_MEDIA_PICKER_CONFIRM_BUTTON_SHARE_WITH_AUDIO
+                   : IDS_DESKTOP_MEDIA_PICKER_SHARE;
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
+                 l10n_util::GetStringUTF16(message_id));
+}
+
+void DesktopMediaPickerDialogView::OnAudioShareToggled() {
+  UpdateOkButtonLabel();
+
+  int index = GetSelectedTabIndex();
+  CHECK_GE(index, 0);
+  CHECK_LT(static_cast<size_t>(index), categories_.size());
+  DisplaySurfaceCategory& category = categories_[index];
+  if (!category.pane) {
+    return;
+  }
+
+  bool approved = category.pane->IsAudioSharingApprovedByUser();
+  bool show_recommendation = IsAudioSelectionFeatureEnabled() &&
+                             audio_selection_preferred_ &&
+                             category.audio_offered && !approved;
+  category.pane->SetAudioRecommendationVisible(show_recommendation);
+  if (IsAudioSelectionFeatureEnabled()) {
+    category.controller->OnAudioShareToggled(approved);
+  }
 }
 
 void DesktopMediaPickerDialogView::RecordSourceCountsUma() {
@@ -974,7 +1082,7 @@ void DesktopMediaPickerDialogView::RecordSourceCountsUma() {
 
 void DesktopMediaPickerDialogView::RecordAudioToggleUma(
     const content::DesktopMediaID& source) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (request_source_ != RequestSource::kGetDisplayMedia) {
     return;
@@ -995,10 +1103,6 @@ void DesktopMediaPickerDialogView::RecordAudioToggleUma(
       break;  // Should not happen - subsequent CHECK failure.
   }
   CHECK_NE(display_surface, nullptr);
-  const std::string name =
-      base::StrCat({"Media.Ui.GetDisplayMedia.BasicFlow.AudioToggleState.",
-                    display_surface});
-
   const DesktopMediaList::Type type = AsDesktopMediaListType(source.type);
   AudioToggleStatus status;
   if (!AudioRequestedForType(type)) {
@@ -1011,19 +1115,35 @@ void DesktopMediaPickerDialogView::RecordAudioToggleUma(
                  : AudioToggleStatus::kAudioRequestedButUserDidNotApprove;
   }
 
-  base::UmaHistogramEnumeration(name, status);
+  auto log_uma = [&](std::string_view flow, std::string_view surface) {
+    base::UmaHistogramEnumeration(
+        base::StrCat(
+            {"Media.Ui.GetDisplayMedia.", flow, ".AudioToggleState.", surface}),
+        status);
+  };
+
+  log_uma("BasicFlow", display_surface);
+  if (audio_selection_preferred_) {
+    log_uma("AudioSelectionPreferred", display_surface);
+  }
 
   if (source.type == DesktopMediaID::Type::TYPE_WINDOW &&
-      window_audio_type_offered_ == DesktopMediaID::AudioType::kApplication) {
-    base::UmaHistogramEnumeration(
-        "Media.Ui.GetDisplayMedia.BasicFlow.AudioToggleState.WindowsAppAudio",
-        status);
+      window_audio_type_offered_ != DesktopMediaID::AudioType::kNone) {
+    const std::string subset_suffix =
+        (window_audio_type_offered_ == DesktopMediaID::AudioType::kSystem)
+            ? "WindowsSystemAudio"
+            : "WindowsAppAudio";
+
+    log_uma("BasicFlow", subset_suffix);
+    if (audio_selection_preferred_) {
+      log_uma("AudioSelectionPreferred", subset_suffix);
+    }
   }
 }
 
 void DesktopMediaPickerDialogView::RecordTabDiscardedStatusUma(
     const DesktopMediaID& source) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (source.type != DesktopMediaID::Type::TYPE_WEB_CONTENTS) {
     return;
@@ -1050,7 +1170,7 @@ void DesktopMediaPickerDialogView::RecordTabDiscardedStatusUma(
 #if BUILDFLAG(IS_MAC)
 void DesktopMediaPickerDialogView::RecordUserActionOnDeniedAudioPermissionUma(
     std::optional<content::DesktopMediaID> source) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   if (request_source_ != RequestSource::kGetDisplayMedia) {
     return;
@@ -1133,6 +1253,9 @@ std::u16string DesktopMediaPickerDialogView::GetWindowTitle() const {
   if (request_source_ == RequestSource::kGlic) {
     return l10n_util::GetStringUTF16(IDS_GLIC_SCREEN_PICKER_HEADLINE);
   }
+  if (request_source_ == RequestSource::kSearchbox) {
+    return l10n_util::GetStringUTF16(IDS_SEARCHBOX_PICKER_HEADLINE);
+  }
 
   int title_id = IDS_DESKTOP_MEDIA_PICKER_TITLE;
 
@@ -1157,9 +1280,24 @@ std::u16string DesktopMediaPickerDialogView::GetWindowTitle() const {
 
 bool DesktopMediaPickerDialogView::IsDialogButtonEnabled(
     ui::mojom::DialogButton button) const {
-  return button != ui::mojom::DialogButton::kOk ||
-         GetSelectedController()->GetSelection().has_value() ||
-         accepted_source_.has_value();
+  if (button != ui::mojom::DialogButton::kOk) {
+    return true;
+  }
+  const DesktopMediaListController* controller = GetSelectedController();
+  std::optional<content::DesktopMediaID> selection =
+      accepted_source_.has_value() ? accepted_source_
+                                   : controller->GetSelection();
+  if (!selection.has_value()) {
+    return false;
+  }
+#if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+  if (base::FeatureList::IsEnabled(
+          enterprise_data_protection::kEnableTabSharingProtection) &&
+      controller->IsSourceSharingBlocked(*selection)) {
+    return false;
+  }
+#endif
+  return true;
 }
 
 views::View* DesktopMediaPickerDialogView::GetInitiallyFocusedView() {
@@ -1227,12 +1365,30 @@ void DesktopMediaPickerDialogView::OnSelectionChanged() {
 }
 
 void DesktopMediaPickerDialogView::AcceptSource() {
-  // This will call Accept() and close the dialog.
-  AcceptDialog();
+  if (IsDialogButtonEnabled(ui::mojom::DialogButton::kOk)) {
+    // This will call Accept() and close the dialog.
+    AcceptDialog();
+  }
 }
 
 void DesktopMediaPickerDialogView::AcceptSpecificSource(
     const DesktopMediaID& source) {
+#if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+  if (base::FeatureList::IsEnabled(
+          enterprise_data_protection::kEnableTabSharingProtection)) {
+    // Only the category matching `source.type` can own `source`; the other
+    // controllers would scan their full source list only to report no match.
+    for (const auto& category : categories_) {
+      if (AsDesktopMediaIdType(category.type) != source.type) {
+        continue;
+      }
+      if (category.controller->IsSourceSharingBlocked(source)) {
+        return;
+      }
+      break;
+    }
+  }
+#endif
   VLOG(1) << "DMPDV::AcceptSpecificSource: source_id = " << source.id;
 
   if (tabbed_pane_) {
@@ -1319,49 +1475,43 @@ void DesktopMediaPickerDialogView::OnPermissionUpdate(bool has_permission) {
   }
 }
 
-
-
 void DesktopMediaPickerDialogView::OnAudioSharingApprovedByUserUpdate() {
-  const int index = GetSelectedTabIndex();
+  UpdateAudioPermissionsWarningState(GetSelectedTabIndex());
+}
+
+void DesktopMediaPickerDialogView::UpdateAudioPermissionsWarningState(
+    int index) {
   CHECK_GE(index, 0);
   CHECK_LT(static_cast<size_t>(index), categories_.size());
-  if (!categories_[index].pane) {
+
+  DisplaySurfaceCategory& category = categories_[index];
+  if (!category.pane || !audio_capture_permission_checker_ ||
+      (category.type != DesktopMediaList::Type::kScreen &&
+       category.type != DesktopMediaList::Type::kWindow)) {
     return;
   }
 
-  if (categories_[index].pane->IsAudioSharingApprovedByUser()) {
+  if (category.pane->IsAudioSharingApprovedByUser()) {
     switch (audio_capture_permission_checker_->GetState()) {
       case AudioCapturePermissionChecker::State::kUnknown:
         audio_capture_permission_checker_->RunCheck();
         break;
       case AudioCapturePermissionChecker::State::kDenied:
-        categories_[index].pane->SetAudioWarningVisible(true);
+        category.pane->SetAudioWarningVisible(true);
         break;
       case AudioCapturePermissionChecker::State::kGranted:
       case AudioCapturePermissionChecker::State::kChecking:
-        // Do nothing.
+        category.pane->SetAudioWarningVisible(false);
         break;
     }
   } else {
-    categories_[index].pane->SetAudioWarningVisible(false);
+    category.pane->SetAudioWarningVisible(false);
   }
 }
 
 void DesktopMediaPickerDialogView::OnAudioPermissionUpdate() {
-  if (audio_capture_permission_checker_->GetState() !=
-      AudioCapturePermissionChecker::State::kDenied) {
-    return;
-  }
-
-  for (auto& category : categories_) {
-    if (!category.pane || (category.type != DesktopMediaList::Type::kScreen &&
-                           category.type != DesktopMediaList::Type::kWindow)) {
-      continue;
-    }
-
-    if (category.pane->IsAudioSharingApprovedByUser()) {
-      category.pane->SetAudioWarningVisible(true);
-    }
+  for (size_t i = 0; i < categories_.size(); ++i) {
+    UpdateAudioPermissionsWarningState(i);
   }
 }
 
@@ -1396,7 +1546,7 @@ void DesktopMediaPickerImpl::Show(
 
 void DesktopMediaPickerImpl::NotifyDialogResult(
     base::expected<DesktopMediaID, MediaStreamRequestResult> result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   // Once this method is called the |dialog_| will close and destroy itself.
   dialog_->DetachParent();

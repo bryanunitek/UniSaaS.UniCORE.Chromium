@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -18,7 +19,7 @@
 #include "build/buildflag.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_util.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 #include "components/autofill/core/browser/form_parsing/regex_patterns.h"
@@ -46,10 +47,13 @@ FieldCandidatesMap ParseFieldTypesWithPatterns(const FormData& form,
                                                bool ignore_small_forms) {
   FieldCandidatesMap field_type_map;
 
-  if (ShouldRunHeuristics(form, ignore_small_forms)) {
+  const DenseSet<FormParsingPermission> parsing_permissions =
+      GetFormParsingPermissions(form, ignore_small_forms);
+  if (parsing_permissions.contains(FormParsingPermission::kHeuristics)) {
     FormFieldParser::ParseFormFields(context, form.fields(), field_type_map,
                                      ignore_small_forms);
-  } else if (ShouldRunHeuristicsForSingleFields(form)) {
+  } else if (parsing_permissions.contains(
+                 FormParsingPermission::kSingleFieldHeuristics)) {
     FormFieldParser::ParseSingleFields(context, form.fields(), field_type_map);
     FormFieldParser::ParseStandaloneCVCFields(context, form.fields(),
                                               field_type_map);
@@ -76,7 +80,7 @@ RegexPredictions::RegexPredictions(HeuristicSource source,
                                    base::span<const FormFieldData> fields)
     : source_(source) {
   const HeuristicSource active_source = GetActiveHeuristicSource();
-  std::vector<std::pair<FieldGlobalId, FieldType>> field_predictions;
+  std::vector<std::pair<FieldGlobalId, FieldCandidate>> field_predictions;
   for (const FormFieldData& field : fields) {
     auto iter = field_type_map.find(field.global_id());
     if (iter == field_type_map.end()) {
@@ -90,7 +94,7 @@ RegexPredictions::RegexPredictions(HeuristicSource source,
     }
 
     field_predictions.emplace_back(field.global_id(),
-                                   candidates.BestHeuristicType());
+                                   candidates.BestHeuristicCandidate());
   }
   predictions_ = base::flat_map(std::move(field_predictions));
 }
@@ -120,7 +124,10 @@ void RegexPredictions::ApplyTo(
     if (it == predictions_.end()) {
       continue;
     }
-    field->set_heuristic_type(source_, it->second);
+
+    const FieldCandidate& candidate = it->second;
+    field->set_heuristic_type(source_, candidate.type);
+    field->set_regex_match_info(candidate.match_info);
 
     const size_t field_rank = ++field_rank_map.at(field->GetFieldSignature());
     // Log the field type predicted from local heuristics.

@@ -17,7 +17,7 @@
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "mojo/core/embedder/embedder.h"
+#include "mojo/buildflags.h"
 #include "mojo/core/ipcz_api.h"
 #include "mojo/core/ipcz_driver/driver.h"
 #include "mojo/core/ipcz_driver/transport.h"
@@ -34,18 +34,15 @@ using Transport = core::ipcz_driver::Transport;
 using TransportPair =
     std::pair<scoped_refptr<Transport>, scoped_refptr<Transport>>;
 
+// Creates a transport pair for connecting a `ThreadLocalNode` to the ipcz
+// network. `transports.first` is always the endpoint passed to the broker
+// (directly in a broker process, or via IPCZ_CONNECT_NODE_SHARE_BROKER in a
+// non-broker process) and `transports.second` is always the
+// `ThreadLocalNode`'s endpoint.
 TransportPair CreateTransportPair() {
-  const Transport::EndpointType global_node_type =
-      core::GetIpczNodeOptions().is_broker
-          ? Transport::EndpointType::kBroker
-          : Transport::EndpointType::kNonBroker;
-  const Transport::EndpointType local_node_type =
-      Transport::EndpointType::kNonBroker;
-
-  TransportPair transports =
-      Transport::CreatePair(global_node_type, local_node_type);
+  TransportPair transports = Transport::CreatePair(
+      Transport::EndpointType::kBroker, Transport::EndpointType::kNonBroker);
   transports.first->set_remote_process(base::Process::Current());
-  transports.second->set_remote_process(base::Process::Current());
   return transports;
 }
 
@@ -153,12 +150,12 @@ ThreadLocalNode::ThreadLocalNode(base::PassKey<ThreadLocalNode>) {
       .memory_flags = IPCZ_MEMORY_FIXED_PARCEL_CAPACITY,
   };
   IpczHandle node;
-  const IpczResult create_result = ipcz.CreateNode(
-      &core::ipcz_driver::kDriver, IPCZ_NO_FLAGS, &create_options, &node);
+  const IpczResult create_result =
+      ipcz.CreateNode(&core::ipcz_driver::GetIpczDriver(), IPCZ_NO_FLAGS,
+                      &create_options, &node);
   CHECK_EQ(create_result, IPCZ_RESULT_OK);
   node_.reset(Handle(node));
 
-  // Create a new transport pair to connect the two nodes.
   const core::IpczNodeOptions& global_node_options = core::GetIpczNodeOptions();
   IpczConnectNodeFlags local_connect_flags;
   IpczConnectNodeFlags global_connect_flags;
@@ -364,7 +361,13 @@ void ThreadLocalNode::OnTransferredPortalAvailable() {
 namespace mojo {
 
 bool IsDirectReceiverSupported() {
-  return core::IsMojoIpczEnabled();
+#if BUILDFLAG(IS_APPLE) && !BUILDFLAG(MOJO_USE_APPLE_CHANNEL)
+  // Connecting a node hands over ipcz' node link memory as a Mach handle, but
+  // ChannelPosix can only carry file descriptors. Affects tvOS only.
+  return false;
+#else
+  return true;
+#endif
 }
 
 bool IsAsyncIOSupported() {

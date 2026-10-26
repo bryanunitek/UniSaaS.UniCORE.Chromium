@@ -21,7 +21,8 @@ const char kPrintPath[] = "/printpage";
 // Matcher for the cancel button on the printer options view.
 id<GREYMatcher> PrintOptionsCancelButton() {
   if (@available(iOS 26, *)) {
-    return grey_allOf(grey_accessibilityLabel(@"Close"),
+    return grey_allOf(grey_anyOf(grey_accessibilityLabel(@"Close"),
+                                 grey_accessibilityLabel(@"Cancel"), nil),
                       grey_kindOfClassName(@"_UIModernBarButton"),
                       grey_kindOfClass([UIButton class]), nil);
   }
@@ -75,7 +76,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
   // Test if print dialog appeared.
   NSString* dialogTitle = @"Options";
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(dialogTitle)]
-      assertWithMatcher:grey_minimumVisiblePercent(0.7)];
+      assertWithMatcher:grey_minimumVisiblePercent(0.6)];
 
   // Clean up and close print dialog.
   [[EarlGrey selectElementWithMatcher:PrintOptionsCancelButton()]

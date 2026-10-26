@@ -22,7 +22,6 @@
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/connection_information.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_activation_level.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -35,7 +34,7 @@
 #import "ios/chrome/browser/sync/model/prefs/cross_device_pref_tracker/cross_device_pref_tracker_factory.h"
 #import "ios/chrome/browser/sync/model/prefs/cross_device_pref_tracker/cross_device_pref_tracker_observer_bridge.h"
 #import "ios/chrome/browser/synced_set_up/public/synced_set_up_metrics.h"
-#import "ios/chrome/browser/synced_set_up/utils/utils.h"
+#import "ios/chrome/browser/synced_set_up/public/synced_set_up_utils.h"
 
 namespace {
 
@@ -130,8 +129,6 @@ using ServiceStatus = ::sync_preferences::CrossDevicePrefTracker::ServiceStatus;
                                        tracker:(sync_preferences::
                                                     CrossDevicePrefTracker*)
                                                    tracker {
-  CHECK(IsSyncedSetUpEnabled());
-
   if (_activationAlreadyHandled) {
     return;
   }

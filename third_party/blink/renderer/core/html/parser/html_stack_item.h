@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/core/html/parser/atomic_html_token.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
+#include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -228,17 +229,6 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
     }
   }
 
-  bool IsTableBodyContextElement() const {
-    switch (GetHTMLTag()) {
-      case html_names::HTMLTag::kTbody:
-      case html_names::HTMLTag::kTfoot:
-      case html_names::HTMLTag::kThead:
-        return namespace_uri_ == html_names::xhtmlNamespaceURI;
-      default:
-        return false;
-    }
-  }
-
   // http://www.whatwg.org/specs/web-apps/current-work/multipage/parsing.html#special
   bool IsSpecialNode() const {
     if (IsDocumentFragmentNode())
@@ -358,6 +348,26 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   void Trace(Visitor* visitor) const {
     visitor->Trace(node_);
     visitor->Trace(next_item_in_stack_);
+    visitor->Trace(sanitizer_);
+    visitor->Trace(replaced_insertion_parent_);
+    visitor->Trace(replaced_insertion_next_child_);
+  }
+
+  void SetSanitizer(StreamingSanitizer* sanitizer) { sanitizer_ = sanitizer; }
+
+  StreamingSanitizer* GetSanitizer() const { return sanitizer_.Get(); }
+
+  void SetReplacedInsertionLocation(ContainerNode* parent, Node* next_child) {
+    is_replaced_with_children_ = true;
+    replaced_insertion_parent_ = parent;
+    replaced_insertion_next_child_ = next_child;
+  }
+  bool IsReplacedWithChildren() const { return is_replaced_with_children_; }
+  ContainerNode* ReplacedInsertionParent() const {
+    return replaced_insertion_parent_.Get();
+  }
+  Node* ReplacedInsertionNextChild() const {
+    return replaced_insertion_next_child_.Get();
   }
 
  private:
@@ -398,10 +408,18 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   // This member is maintained by HTMLElementStack.
   Member<HTMLStackItem> next_item_in_stack_{nullptr};
 
+  Member<StreamingSanitizer> sanitizer_;
+  Member<ContainerNode> replaced_insertion_parent_;
+  Member<Node> replaced_insertion_next_child_;
+
   HTMLTokenName token_name_;
   AtomicString namespace_uri_;
   wtf_size_t num_token_attributes_ = 0;
   bool is_document_fragment_node_;
+  bool is_replaced_with_children_ = false;
+
+  // Maintained by HTMLElementStack.
+  bool has_p_element_in_button_scope_ = false;
 };
 
 }  // namespace blink

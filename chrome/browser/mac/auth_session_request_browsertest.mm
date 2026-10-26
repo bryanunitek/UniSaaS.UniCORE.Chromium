@@ -8,16 +8,19 @@
 #import "base/apple/foundation_util.h"
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "net/base/apple/url_conversions.h"
 #include "net/http/http_status_code.h"
@@ -250,7 +253,7 @@ IN_PROC_BROWSER_TEST_F(AuthSessionBrowserTest, ProfileNotLoaded) {
   g_browser_process->local_state()->SetString(prefs::kProfileLastUsed,
                                               kProfileName);
   const base::FilePath kProfilePath =
-      browser()->profile()->GetPath().DirName().Append(kProfileName);
+      browser()->GetProfile()->GetPath().DirName().Append(kProfileName);
   ASSERT_FALSE(
       g_browser_process->profile_manager()->GetProfileByPath(kProfilePath));
 

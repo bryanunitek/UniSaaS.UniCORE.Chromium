@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <ranges>
 
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/public/cpp/app_types_util.h"
@@ -26,7 +27,6 @@
 #include "ash/wm/wm_event.h"
 #include "base/auto_reset.h"
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ui/base/app_types.h"
@@ -46,10 +46,6 @@ namespace ash {
 namespace {
 
 WindowRestoreController* g_instance = nullptr;
-
-// Callback for testing which is run when `SaveWindowImpl()` triggers a write to
-// file.
-WindowRestoreController::SaveWindowCallback g_save_window_callback_for_testing;
 
 // The list of possible app window parents.
 constexpr ShellWindowId kAppParentContainers[19] = {
@@ -187,7 +183,7 @@ bool WindowRestoreController::CanActivateRestoredWindow(
 
   // Only the topmost unminimize restored window can be activated.
   auto siblings = desk_container->children();
-  for (aura::Window* const sibling : base::Reversed(siblings)) {
+  for (aura::Window* const sibling : std::views::reverse(siblings)) {
     if (WindowState::Get(sibling)->IsMinimized())
       continue;
 
@@ -535,8 +531,9 @@ void WindowRestoreController::SaveWindowImpl(
       BuildWindowInfo(window, activation_index, mru_windows);
   ::full_restore::SaveWindowInfo(*window_info);
 
-  if (g_save_window_callback_for_testing)
-    g_save_window_callback_for_testing.Run(*window_info);
+  if (save_window_callback_for_testing_) {
+    save_window_callback_for_testing_.Run(*window_info);
+  }
 }
 
 void WindowRestoreController::RestoreStateTypeAndClearLaunchedKey(
@@ -630,7 +627,7 @@ void WindowRestoreController::CancelAndRemoveRestorePropertyClearCallback(
 
 void WindowRestoreController::SetSaveWindowCallbackForTesting(
     SaveWindowCallback callback) {
-  g_save_window_callback_for_testing = std::move(callback);
+  save_window_callback_for_testing_ = std::move(callback);
 }
 
 }  // namespace ash

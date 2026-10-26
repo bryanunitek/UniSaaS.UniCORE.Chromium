@@ -45,7 +45,9 @@
 #include "chrome/browser/ui/views/profiles/profile_picker_feature_promo_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_glic_flow_controller.h"
+#include "chrome/browser/ui/views/profiles/profile_picker_omnibox_everywhere_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_toolbar.h"
+#include "chrome/browser/ui/views/profiles/profile_picker_utils.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_widget.h"
 #include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
@@ -63,6 +65,7 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -70,7 +73,8 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/views/controls/native/native_view_host.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view.h"
@@ -86,6 +90,7 @@
 
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
+#include "chrome/browser/renderer_host/chrome_render_widget_host_view_mac_history_swiping_control.h"
 #endif
 
 #if BUILDFLAG(IS_LINUX)
@@ -101,6 +106,9 @@ constexpr int kWindowTitleId = IDS_PRODUCT_NAME;
 
 constexpr int kWindowWidth = 1024;
 constexpr int kWindowHeight = 758;
+constexpr int kWindowWidthIncreased = 1600;
+constexpr int kWindowHeightIncreased = 1000;
+
 constexpr float kMaxRatioOfWorkArea = 0.9;
 
 constexpr int kSupportedAcceleratorCommands[] = {
@@ -130,6 +138,7 @@ bool IsClassicProfilePickerFlow(const ProfilePicker::Params& params) {
       return true;
     case ProfilePicker::EntryPoint::kFirstRun:
     case ProfilePicker::EntryPoint::kGlicManager:
+    case ProfilePicker::EntryPoint::kOmniboxEverywhere:
       return false;
   }
 }
@@ -273,8 +282,9 @@ views::View* ProfilePicker::GetViewForTesting() {
 // static
 void ProfilePicker::AddOnProfilePickerOpenedCallbackForTesting(
     base::OnceClosure callback) {
-  DCHECK(!g_profile_picker_opened_callback_for_testing);
-  DCHECK(!callback.is_null());
+  CHECK(!g_profile_picker_opened_callback_for_testing,
+        base::NotFatalUntil::M162);
+  CHECK(!callback.is_null(), base::NotFatalUntil::M162);
   g_profile_picker_opened_callback_for_testing =
       new base::OnceClosure(std::move(callback));
 }
@@ -325,7 +335,7 @@ void ProfilePickerView::NavigationFinishedObserver::DidFinishNavigation(
 // ProfilePickerView ----------------------------------------------------------
 
 void ProfilePickerView::UpdateParams(ProfilePicker::Params&& params) {
-  DCHECK(params_.CanReusePickerWindow(params));
+  CHECK(params_.CanReusePickerWindow(params), base::NotFatalUntil::M162);
   params_ = std::move(params);
 }
 
@@ -345,6 +355,10 @@ void ProfilePickerView::ShowScreen(
       std::move(navigation_finished_closure).Run();
     }
     return;
+  }
+
+  if (GetWidget()) {
+    contents->SetColorProviderSource(GetWidget());
   }
 
   contents->GetController().LoadURL(url, content::Referrer(),
@@ -472,13 +486,14 @@ void ProfilePickerView::SetNativeToolbarSigninButtonsVisible(bool visible) {
   CHECK_DEREF(toolbar_).SetSigninButtonsVisible(visible);
 }
 
-void ProfilePickerView::SetNativeToolbarDontSignInButtonVisible(bool visible) {
-  CHECK_DEREF(toolbar_).SetDontSignInButtonVisible(visible);
-}
-
 void ProfilePickerView::SetNativeToolbarStartBrowsingButtonVisible(
     bool visible) {
   CHECK_DEREF(toolbar_).SetStartBrowsingButtonVisible(visible);
+}
+
+void ProfilePickerView::SetNativeToolbarEffectsControlButtonVisible(
+    bool visible) {
+  CHECK_DEREF(toolbar_).SetEffectsControlButtonVisible(visible);
 }
 
 bool ProfilePickerView::AreNativeToolbarSigninButtonsVisibleForTesting() const {
@@ -489,13 +504,8 @@ SkColor ProfilePickerView::GetPreferredBackgroundColor() const {
   return GetColorProvider()->GetColor(kColorToolbar);
 }
 
-bool ProfilePickerView::HandleKeyboardEvent(
-    content::WebContents* source,
-    const input::NativeWebKeyboardEvent& event) {
-  // Forward the keyboard event to AcceleratorPressed() through the
-  // FocusManager.
-  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-      event, GetFocusManager());
+bool ProfilePickerView::CanNavigateBack() const {
+  return flow_controller_ && flow_controller_->CanNavigateBack();
 }
 
 bool ProfilePickerView::HandleContextMenu(
@@ -503,6 +513,25 @@ bool ProfilePickerView::HandleContextMenu(
     const content::ContextMenuParams& params) {
   // Ignores context menu.
   return true;
+}
+
+content::WebContents* ProfilePickerView::AddNewContents(
+    content::WebContents* source,
+    std::unique_ptr<content::WebContents> new_contents,
+    const GURL& target_url,
+    WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
+    bool user_gesture,
+    bool* was_blocked) {
+  if (params_.entry_point() != ProfilePicker::EntryPoint::kFirstRun) {
+    return content::WebContentsDelegate::AddNewContents(
+        source, std::move(new_contents), target_url, disposition,
+        window_features, user_gesture, was_blocked);
+  }
+  CHECK(source);
+  OpenLearnMorePopup(Profile::FromBrowserContext(source->GetBrowserContext()),
+                     std::move(new_contents), target_url, window_features);
+  return nullptr;
 }
 
 gfx::NativeView ProfilePickerView::GetHostView() const {
@@ -565,7 +594,7 @@ bool ProfilePickerView::MaybeReopen(ProfilePicker::Params& params) {
 }
 
 void ProfilePickerView::Display() {
-  DCHECK_NE(state_, kClosing);
+  CHECK_NE(state_, kClosing, base::NotFatalUntil::M162);
   TRACE_EVENT2("browser,startup", "ProfilePickerView::Display", "entry_point",
                params_.entry_point(), "state", state_);
 
@@ -593,24 +622,35 @@ void ProfilePickerView::OnPickerProfileCreated(Profile* picker_profile) {
       "browser,startup", "ProfilePickerView::OnPickerProfileCreated",
       "profile_path",
       (picker_profile ? picker_profile->GetPath().AsUTF8Unsafe() : ""));
-  DCHECK(picker_profile);
+  CHECK(picker_profile, base::NotFatalUntil::M162);
   Init(picker_profile);
 
   InitializeFeaturePromo(picker_profile);
 }
 
 void ProfilePickerView::Init(Profile* picker_profile) {
-  DCHECK_EQ(state_, kInitializing);
+  CHECK_EQ(state_, kInitializing, base::NotFatalUntil::M162);
   TRACE_EVENT1(
       "browser,startup", "ProfilePickerView::Init", "profile_path",
       (picker_profile ? picker_profile->GetPath().AsUTF8Unsafe() : ""));
   contents_ = content::WebContents::Create(
       content::WebContents::CreateParams(picker_profile));
   contents_->SetDelegate(this);
+  SetAcceleratorHandling(
+      views::WebContentsAcceleratorHandling::kProcessBeforeRenderer);
   web_modal::WebContentsModalDialogManager::CreateForWebContents(
       contents_.get());
   web_modal::WebContentsModalDialogManager::FromWebContents(contents_.get())
       ->SetDelegate(this);
+#if BUILDFLAG(IS_MAC)
+  history_swiper::HistorySwipingControl::CreateForWebContents(
+      contents_.get(),
+      base::BindRepeating(
+          [](base::WeakPtr<ProfilePickerView> view) {
+            return view ? view->CanNavigateBack() : true;
+          },
+          weak_ptr_factory_.GetWeakPtr()));
+#endif
 
   // Destroy the System Profile when the ProfilePickerView is closed (assuming
   // its refcount hits 0). We need to use GetOriginalProfile() here because
@@ -642,12 +682,12 @@ void ProfilePickerView::Init(Profile* picker_profile) {
       views::HWNDForWidget(GetWidget()));
 #endif
 
-  DCHECK(flow_controller_);
+  CHECK(flow_controller_, base::NotFatalUntil::M162);
   flow_controller_->Init();
 }
 
 void ProfilePickerView::FinishInit() {
-  DCHECK_EQ(kInitializing, state_);
+  CHECK_EQ(kInitializing, state_, base::NotFatalUntil::M162);
   state_ = kDisplayed;
 
   if (IsClassicProfilePickerFlow(params_)) {
@@ -687,7 +727,16 @@ ProfilePickerView::CreateFlowController(Profile* picker_profile,
         std::move(profile_picked_callback));
   }
 
-  DCHECK(IsClassicProfilePickerFlow(params_));
+  if (params_.entry_point() == ProfilePicker::EntryPoint::kOmniboxEverywhere) {
+    auto profile_picked_callback =
+        base::BindOnce(&ProfilePicker::Params::NotifyProfilePicked,
+                       base::Unretained(&params_));
+    return std::make_unique<ProfilePickerOmniboxEverywhereFlowController>(
+        /*host=*/this, std::move(clear_host_callback),
+        std::move(profile_picked_callback));
+  }
+
+  CHECK(IsClassicProfilePickerFlow(params_), base::NotFatalUntil::M162);
   return std::make_unique<ProfilePickerFlowController>(
       /*host=*/this, std::move(clear_host_callback), params_.entry_point(),
       params_.on_select_profile_target_url(), params_.initial_email());
@@ -715,6 +764,10 @@ void ProfilePickerView::WindowClosing() {
   // `ProfileKeepAliveOrigin::kWaitingForFirstBrowserWindow` to be able to
   // delete the profile.
   ClearLockedProfilesFirstBrowserKeepAlive();
+
+  if (flow_controller_) {
+    flow_controller_->OnWindowClosing();
+  }
 
   views::WidgetDelegateView::WindowClosing();
   // Now that the window is closed, we can allow a new one to be opened.
@@ -756,7 +809,11 @@ std::u16string ProfilePickerView::GetAccessibleWindowTitle() const {
 
 gfx::Size ProfilePickerView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
-  gfx::Size preferred_size = gfx::Size(kWindowWidth, kWindowHeight);
+  gfx::Size preferred_size = gfx::Size(
+      switches::IsPreFirstRunDesktopRefreshEnabled() ? kWindowWidthIncreased
+                                                     : kWindowWidth,
+      switches::IsPreFirstRunDesktopRefreshEnabled() ? kWindowHeightIncreased
+                                                     : kWindowHeight);
   gfx::Size work_area_size = GetWidget()->GetWorkAreaBoundsInScreen().size();
   // Keep the window smaller then |work_area_size| so that it feels more like a
   // dialog then like the actual Chrome window.
@@ -799,7 +856,9 @@ bool ProfilePickerView::AcceleratorPressed(const ui::Accelerator& accelerator) {
       GetWidget()->Minimize();
       break;
     case IDC_BACK: {
-      flow_controller_->OnNavigateBackRequested();
+      if (CanNavigateBack()) {
+        flow_controller_->OnNavigateBackRequested();
+      }
       break;
     }
     // Always reload bypassing cache.
@@ -831,15 +890,12 @@ void ProfilePickerView::Layout(PassKey) {
   LayoutSuperclass<views::WidgetDelegateView>(this);
   CHECK(toolbar_);
   toolbar_->SetBounds(0, 0, width(), toolbar_->GetPreferredSize().height());
-  CHECK(web_view_);
-  web_view_->holder()->SetHitTestTopInset(toolbar_->bounds().height());
 }
 
 void ProfilePickerView::BuildLayout() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
   auto web_view = std::make_unique<views::WebView>();
-  web_view->set_allow_accelerators(true);
   web_view_ = AddChildView(std::move(web_view));
 
   web_contents_attached_subscription_ =
@@ -905,7 +961,7 @@ void ProfilePickerView::InitializeFeaturePromo(Profile* system_profile) {
 
 ProfilePickerFlowController* ProfilePickerView::GetProfilePickerFlowController()
     const {
-  DCHECK(IsClassicProfilePickerFlow(params_));
+  CHECK(IsClassicProfilePickerFlow(params_), base::NotFatalUntil::M162);
   return static_cast<ProfilePickerFlowController*>(flow_controller_.get());
 }
 

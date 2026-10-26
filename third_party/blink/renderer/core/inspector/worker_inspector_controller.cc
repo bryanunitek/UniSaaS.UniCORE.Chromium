@@ -118,9 +118,8 @@ void WorkerInspectorController::AttachSession(DevToolsSession* session,
   session->ConnectToV8(debugger_->GetV8Inspector(),
                        debugger_->ContextGroupId(thread_));
   session->CreateAndAppend<InspectorLogAgent>(
-      thread_->GetConsoleMessageStorage(), nullptr, session->V8Session());
-  session->CreateAndAppend<InspectorEventBreakpointsAgent>(
-      session->V8Session());
+      thread_->GetConsoleMessageStorage(), nullptr);
+  session->CreateAndAppend<InspectorEventBreakpointsAgent>();
 
   WorkerOrWorkletGlobalScope* worker_or_worklet_global_scope =
       thread_->GlobalScope();
@@ -128,7 +127,7 @@ void WorkerInspectorController::AttachSession(DevToolsSession* session,
 
   auto* network_agent = session->CreateAndAppend<InspectorNetworkAgent>(
       inspected_frames_.Get(), worker_or_worklet_global_scope,
-      session->V8Session());
+      session->client_is_trusted());
   session->CreateAndAppend<InspectorAuditsAgent>(
       network_agent, thread_->GetInspectorIssueStorage(),
       /*inspected_frames=*/nullptr, /*web_autofill_client=*/nullptr);

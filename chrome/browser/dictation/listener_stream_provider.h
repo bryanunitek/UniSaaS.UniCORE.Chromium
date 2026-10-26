@@ -38,13 +38,14 @@ class ListenerStreamProvider : public StreamProvider {
 
   // StreamProvider:
   void BindToTargetAndConnect(std::unique_ptr<Target> target) override;
-  void Stop() override;
+  void Stop(DictationStreamEndTrigger trigger) override;
   void OnTranscriptionUpdated(const std::string& data, bool is_final) override;
-  void OnStreamStateChanged(StreamState state) override;
+  void OnStreamStateChanged(StreamState state,
+                            StreamErrorReason reason) override;
   StreamState GetState() const override;
+  Target* GetTarget() override;
   const Target* GetTarget() const override;
 
-  void SetOnUpdateForTesting(base::RepeatingClosure callback);
   const std::string& GetLatestTranscriptionForTesting() const;
   bool IsTranscriptionFinalForTesting() const;
   DictationMultiplexer::StreamId stream_id_for_testing() const {
@@ -57,6 +58,8 @@ class ListenerStreamProvider : public StreamProvider {
   void StartStream(std::optional<DictationContext> context);
   void OnStartContextCaptured(DictationContext result);
   void OnAsyncContextCaptured(DictationContext result);
+  void OnPendingInsertionsComplete();
+  void RecordExitMetric(DictationStreamEndTrigger trigger);
 
   // Owns this
   const base::raw_ref<StreamProviderDelegate> delegate_;
@@ -64,12 +67,12 @@ class ListenerStreamProvider : public StreamProvider {
   raw_ptr<content::BrowserContext> browser_context_;
 
   bool needs_end_stream_ = false;
+  bool has_recorded_exit_status_ = false;
   DictationMultiplexer::StreamId stream_id_;
   std::string latest_transcription_;
   StreamState state_ = StreamState::kInitializing;
 
   bool is_final_for_testing_ = false;
-  base::RepeatingClosure update_callback_for_testing_;
 
   std::unique_ptr<DictationContextFetcher> context_fetcher_;
 

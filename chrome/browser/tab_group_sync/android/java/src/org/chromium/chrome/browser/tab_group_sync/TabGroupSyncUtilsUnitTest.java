@@ -26,7 +26,6 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -44,7 +43,6 @@ import java.util.List;
 
 /** Unit tests for the {@link TabGroupSyncUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupSyncUtilsUnitTest {
     private static final int TAB_ID_1 = 1;
     private static final int TAB_ID_2 = 2;
@@ -94,8 +92,8 @@ public class TabGroupSyncUtilsUnitTest {
                 .thenReturn(new String[] {SYNC_GROUP_ID1, SYNC_GROUP_ID2});
         when(mTabGroupSyncService.getGroup(SYNC_GROUP_ID1)).thenReturn(group1);
         when(mTabGroupSyncService.getGroup(SYNC_GROUP_ID2)).thenReturn(group2);
-        when(mTabModel.tabGroupExists(TOKEN_1)).thenReturn(true);
-        when(mTabModel.tabGroupExists(TOKEN_2)).thenReturn(false);
+        when(mTabModel.containsTabGroup(TOKEN_1)).thenReturn(true);
+        when(mTabModel.containsTabGroup(TOKEN_2)).thenReturn(false);
 
         TabGroupSyncUtils.unmapLocalIdsNotInTabModel(mTabGroupSyncService, mTabModel);
 
@@ -124,7 +122,7 @@ public class TabGroupSyncUtilsUnitTest {
         TabGroupSyncUtils.unmapLocalIdsNotInTabModel(mTabGroupSyncService, mTabModel);
 
         // Shouldn't crash and never called.
-        verify(mTabModel, never()).tabGroupExists(any());
+        verify(mTabModel, never()).containsTabGroup(any());
         verify(mTabGroupSyncService, never())
                 .removeLocalTabGroupMapping(eq(LOCAL_TAB_GROUP_ID_1), anyInt());
     }
@@ -139,6 +137,10 @@ public class TabGroupSyncUtilsUnitTest {
         expectFilteredUrlAndTitle("chrome://newtab", "New tab", "chrome://newtab", "New tab");
         expectFilteredUrlAndTitle("chrome://newtab", "New tab", "chrome://newtab/", "New tab");
         expectFilteredUrlAndTitle("chrome://newtab", "New tab", "chrome://new-tab-page", "New Tab");
+        expectFilteredUrlAndTitle(
+                "chrome://newtab", "New tab", "chrome://new-tab-page-third-party", "New Tab");
+        expectFilteredUrlAndTitle(
+                "chrome://newtab", "New tab", "chrome://new-tab-page-third-party/", "New Tab");
     }
 
     @Test
@@ -170,6 +172,6 @@ public class TabGroupSyncUtilsUnitTest {
             tab.setTabGroupId(tabGroupId);
         }
         when(mTabModel.getTabsInGroup(eq(tabGroupId))).thenReturn(tabs);
-        when(mTabModel.tabGroupExists(tabGroupId)).thenReturn(true);
+        when(mTabModel.containsTabGroup(tabGroupId)).thenReturn(true);
     }
 }

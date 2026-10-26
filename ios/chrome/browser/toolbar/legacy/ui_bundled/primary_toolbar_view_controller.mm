@@ -108,9 +108,7 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   [super setScrollProgressForTabletOmnibox:progress];
 
   // Sometimes an NTP may make a delegate call when it's no longer visible.
-  if (!self.isNTP ||
-      (!IsComposeboxIpadEnabled() &&
-       (!self.shouldHideOmniboxOnNTP || self.locationBarFocused))) {
+  if (!self.isNTP) {
     progress = 1;
   }
 
@@ -128,12 +126,16 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   if (progress == 0 && !self.view.fakeOmniboxTarget) {
     [self.view addFakeOmniboxTarget];
     UITapGestureRecognizer* tapRecognizer = [[UITapGestureRecognizer alloc]
-        initWithTarget:self.browserCoordinatorHandler
-                action:@selector(showComposebox)];
+        initWithTarget:self
+                action:@selector(fakeOmniboxTargetTapped)];
     [self.view.fakeOmniboxTarget addGestureRecognizer:tapRecognizer];
   } else if (progress > 0 && self.view.fakeOmniboxTarget) {
     [self.view removeFakeOmniboxTarget];
   }
+}
+
+- (void)fakeOmniboxTargetTapped {
+  [self.browserCoordinatorHandler showComposebox];
 }
 
 #pragma mark - UIViewController
@@ -237,12 +239,6 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   }
   [super setLocationBarFocused:locationBarFocused];
 
-  if (!IsComposeboxIpadEnabled()) {
-    [self setScrollProgressForTabletOmnibox:(self.isNTP &&
-                                             self.shouldHideOmniboxOnNTP)
-                                                ? 0
-                                                : 1];
-  }
 }
 
 - (BOOL)locationBarIsExpanded {
@@ -420,11 +416,12 @@ BASE_FEATURE(kPrimaryToolbarViewDidLoadUpdateViews,
   // 3pt in all other configurations.
   CGFloat fullscreenVerticalMargin =
       IsCompactHeight(self) ? 0 : kAdaptiveLocationBarVerticalMarginFullscreen;
-  return -AlignValueToPixel((kAdaptiveLocationBarVerticalMargin * progress +
-                             fullscreenVerticalMargin * (1 - progress)) *
-                                [self clampedFontSizeMultiplier] +
-                            ([self clampedFontSizeMultiplier] - 1) *
-                                kLocationBarVerticalMarginDynamicType);
+  return -AlignValueToLowerPixel(
+      (kAdaptiveLocationBarVerticalMargin * progress +
+       fullscreenVerticalMargin * (1 - progress)) *
+          [self clampedFontSizeMultiplier] +
+      ([self clampedFontSizeMultiplier] - 1) *
+          kLocationBarVerticalMarginDynamicType);
 }
 
 // Sets the height of the location bar container.

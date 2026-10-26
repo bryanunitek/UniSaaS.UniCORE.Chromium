@@ -8,6 +8,8 @@
 
 #include "base/command_line.h"
 #include "chrome/browser/devtools/devtools_navigation_gating_rule_manager.h"
+#include "chrome/browser/devtools/devtools_navigation_gating_service.h"
+#include "chrome/browser/devtools/devtools_navigation_gating_service_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_handle.h"
@@ -59,14 +61,30 @@ DevToolsNavigationThrottle::WillRedirectRequest() {
 
 content::NavigationThrottle::ThrottleCheckResult
 DevToolsNavigationThrottle::WillStartOrRedirectRequest() {
-  const GURL& request_url = navigation_handle()->GetURL();
-  const auto& rules = DevToolsNavigationGatingRuleManager::Get();
-
-  if (!rules.IsNavigationAllowed(request_url)) {
-    return {content::NavigationThrottle::CANCEL, net::ERR_BLOCKED_BY_CLIENT};
+  DevToolsNavigationGatingService* service =
+      DevToolsNavigationGatingServiceFactory::GetForBrowserContext(
+          navigation_handle()->GetWebContents()->GetBrowserContext());
+  if (!service) {
+    return content::NavigationThrottle::PROCEED;
   }
 
-  return content::NavigationThrottle::PROCEED;
+  const GURL& request_url = navigation_handle()->GetURL();
+
+  service->IsNavigationAllowed(
+      request_url, base::BindOnce(&DevToolsNavigationThrottle::OnGatingDecision,
+                                  weak_ptr_factory_.GetWeakPtr()));
+
+  return content::NavigationThrottle::DEFER;
+}
+
+void DevToolsNavigationThrottle::OnGatingDecision(bool is_allowed) {
+  if (is_allowed) {
+    Resume();
+    return;
+  }
+
+  CancelDeferredNavigation(content::NavigationThrottle::ThrottleCheckResult(
+      CANCEL, net::ERR_BLOCKED_BY_CLIENT));
 }
 
 const char* DevToolsNavigationThrottle::GetNameForLogging() {

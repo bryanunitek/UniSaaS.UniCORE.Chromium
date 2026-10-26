@@ -5,17 +5,18 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TOOLBAR_WEBUI_TOOLBAR_EXTENSIONS_CONTAINER_WRAPPER_H_
 #define CHROME_BROWSER_UI_VIEWS_TOOLBAR_WEBUI_TOOLBAR_EXTENSIONS_CONTAINER_WRAPPER_H_
 
-#include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/extensions/extensions_toolbar_view_model.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_extensions_container_observer.h"
-#include "components/browser_apis/ui_controllers/toolbar/extensions_bar.mojom.h"
-#include "components/browser_apis/ui_controllers/toolbar/extensions_bar_data_model.mojom.h"
+#include "components/browser_apis/ui_controllers/toolbar/icon_handle.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "ui/base/interaction/element_tracker.h"
 
 class BrowserWindowInterface;
@@ -24,6 +25,7 @@ class WebUIToolbarControlDelegate;
 class WebUIToolbarExtensionsContainer;
 
 namespace content {
+class Page;
 class WebContents;
 }
 
@@ -37,7 +39,8 @@ class ScopedUnownedUserData;
 // and initialization. It implements WebUIToolbarExtensionsContainer::Observer
 // to cache extensions state and notify the delegate.
 class WebUIToolbarExtensionsContainerWrapper
-    : public WebUIToolbarExtensionsContainerObserver {
+    : public WebUIToolbarExtensionsContainerObserver,
+      public content::WebContentsObserver {
  public:
   explicit WebUIToolbarExtensionsContainerWrapper(
       WebUIToolbarControlDelegate* delegate);
@@ -50,9 +53,15 @@ class WebUIToolbarExtensionsContainerWrapper
   void Init(content::WebContents* web_contents);
   void OnThemeChanged();
 
+  WebUIToolbarExtensionsContainer* extensions_container() {
+    return extensions_container_.get();
+  }
+
   void ExecuteUserAction(const std::string& extension_id);
   void ShowContextMenu(ui::mojom::MenuSourceType source,
                        const std::string& extension_id);
+  void MoveExtension(const std::string& extension_id, int32_t target_index);
+  void MoveExtensionBy(const std::string& extension_id, int32_t delta);
 
   // WebUIToolbarExtensionsContainer::Observer:
   void OnActionsAddedOrUpdated(
@@ -61,11 +70,14 @@ class WebUIToolbarExtensionsContainerWrapper
       override;
   void OnActionRemoved(std::vector<toolbar_ui_api::mojom::IconUpdatePtr> icons,
                        const std::string& id) override;
-  void OnActionPoppedOut(base::OnceClosure callback) override;
+  void OnActionPoppedOut(const std::string& action_id,
+                         base::OnceClosure callback) override;
+  void OnPopOutCancelled() override;
+
+  // content::WebContentsObserver:
+  void PrimaryPageChanged(content::Page& page) override;
 
  private:
-  struct PendingAnchorRequest;
-
   // This string is used as the extensions_bar::mojom::ExtensionActionInfo::id
   // value to indicate the extensions button (not actually an extension).
   // Empty string should not overlap with actual extension IDs.
@@ -77,6 +89,8 @@ class WebUIToolbarExtensionsContainerWrapper
   bool AnyActionHasCurrentSiteAccess(content::WebContents& web_contents);
   // Compute WebUI state for extensions button.
   extensions_bar::mojom::ExtensionActionInfoPtr GetExtensionsButton();
+  // Update `extensions_button_state`.  Returns true if state changed.
+  bool UpdateExtensionsButtonState();
 
   // Handles notifications when an extension button element is shown in the UI.
   void OnElementShown(ui::TrackedElement* element);
@@ -92,7 +106,22 @@ class WebUIToolbarExtensionsContainerWrapper
   std::map<std::string, extensions_bar::mojom::ExtensionActionInfoPtr>
       cached_actions_;
 
-  std::list<PendingAnchorRequest> pending_anchor_requests_;
+  std::vector<std::string> last_sent_extension_ids_;
+
+  // Action ID, callback, and subscription for the pending OnActionPoppedOut()
+  // request, if any. There's at most one at a time, since the container cancels
+  // any pending pop out before starting a new one.
+  std::optional<std::string> pending_pop_out_action_id_;
+  base::OnceClosure pending_pop_out_callback_;
+  ui::ElementTracker::Subscription pending_pop_out_subscription_;
+
+  // Only for use by GetExtensionsButton(). Update by calling
+  // UpdateExtensionsButtonState().
+  ExtensionsToolbarViewModel::ExtensionsToolbarButtonState
+      extensions_button_state_ =
+          ExtensionsToolbarViewModel::ExtensionsToolbarButtonState::kDefault;
+  // Only for use by GetExtensionsButton().
+  toolbar_ui_api::IconHandle extensions_button_icon_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TOOLBAR_WEBUI_TOOLBAR_EXTENSIONS_CONTAINER_WRAPPER_H_

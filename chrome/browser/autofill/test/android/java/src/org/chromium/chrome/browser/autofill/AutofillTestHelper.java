@@ -25,7 +25,6 @@ import org.jni_zero.NativeMethods;
 
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
-import org.chromium.chrome.browser.autofill.PersonalDataManager.Iban;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.components.autofill.AddressNormalizer;
 import org.chromium.components.autofill.AutofillProfile;
@@ -37,6 +36,7 @@ import org.chromium.components.autofill.SuggestionType;
 import org.chromium.components.autofill.VirtualCardEnrollmentState;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
+import org.chromium.components.autofill.payments.Iban;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.url.GURL;
 
@@ -407,7 +407,7 @@ public class AutofillTestHelper {
     /** Creates a simple {@link CreditCard}. */
     public static CreditCard createLocalCreditCard(
             String name, String number, String month, String year) {
-        return new CreditCard("", "", true, name, number, "", month, year, "", 0, "", "");
+        return new CreditCard("", false, true, name, number, "", month, year, "", 0, "", "");
     }
 
     /** Creates a virtual credit card. */
@@ -422,7 +422,7 @@ public class AutofillTestHelper {
             String obfuscatedLastFourDigits) {
         return new CreditCard(
                 /* guid= */ "",
-                /* origin= */ "",
+                /* isUserConfirmed= */ false,
                 /* isLocal= */ false,
                 /* isVirtual= */ true,
                 /* name= */ name,
@@ -460,7 +460,7 @@ public class AutofillTestHelper {
             String network) {
         return new CreditCard(
                 /* guid= */ "",
-                /* origin= */ "",
+                /* isUserConfirmed= */ false,
                 /* isLocal= */ isLocal,
                 /* isVirtual= */ false,
                 /* name= */ name,
@@ -543,11 +543,10 @@ public class AutofillTestHelper {
             int callCount = mOnPersonalDataChangedHelper.getCallCount();
             boolean isDataLoaded =
                     runOnUiThreadBlocking(
-                            () -> {
-                                return getPersonalDataManagerForLastUsedProfile()
-                                        .registerDataObserver(
-                                                mOnPersonalDataChangedHelper::notifyCalled);
-                            });
+                            () ->
+                                    getPersonalDataManagerForLastUsedProfile()
+                                            .registerDataObserver(
+                                                    mOnPersonalDataChangedHelper::notifyCalled));
             if (isDataLoaded) return;
             mOnPersonalDataChangedHelper.waitForCallback(callCount);
         } catch (TimeoutException e) {

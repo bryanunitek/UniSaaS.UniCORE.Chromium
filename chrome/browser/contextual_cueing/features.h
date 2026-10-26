@@ -19,6 +19,10 @@ BASE_DECLARE_FEATURE(kContextualCueingV2EnforceAgeRestriction);
 // the single-source Glic annotation-driven path.
 BASE_DECLARE_FEATURE(kContextualCueingV2MultiSource);
 
+// When enabled, a target returning true for OverridesUcbScoring() will bypass
+// the standard UCB scoring and automatically win the cue evaluation.
+BASE_DECLARE_FEATURE(kContextualCueingV2AllowOverridingUcbScoring);
+
 extern const base::FeatureParam<double> kEduClassifierThreshold;
 extern const base::FeatureParam<double> kShoppingClassifierThreshold;
 
@@ -89,6 +93,9 @@ extern const base::FeatureParam<bool> kShouldShowCueInSplitView;
 
 // If true, logs telemetry events to the Private Insights Service.
 extern const base::FeatureParam<bool> kEnablePrivateInsightsLogging;
+
+// Happiness Tracking Survey (HaTS) feature for contextual cueing dismissals.
+BASE_DECLARE_FEATURE(kHappinessTrackingSurveysForContextualCueingDismissed);
 
 }  // namespace contextual_cueing
 

@@ -9,12 +9,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import static org.chromium.base.test.util.Batch.UNIT_TESTS;
-
 import android.content.Context;
 import android.view.View;
-
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -24,18 +20,15 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherCustomViewManager;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 /** Robolectric tests for {@link TabSwitcherIncognitoReauthCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@Batch(UNIT_TESTS)
 public class TabSwitcherIncognitoReauthCoordinatorTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Context mContextMock;
@@ -44,9 +37,9 @@ public class TabSwitcherIncognitoReauthCoordinatorTest {
     @Mock private Runnable mSeeOtherTabsRunnableMock;
     @Mock private Runnable mBackPressRunnableMock;
     @Mock private TabSwitcherCustomViewManager mTabSwitcherCustomViewManagerMock;
-    @Mock private View mIncognitoReauthViewMock;
     @Mock private PropertyModelChangeProcessor mPropertyModelChangeProcessorMock;
 
+    private final View mIncognitoReauthViewMock = new View(ContextUtils.getApplicationContext());
     private TabSwitcherIncognitoReauthCoordinator mTabSwitcherIncognitoReauthCoordinator;
 
     @Before
@@ -69,7 +62,6 @@ public class TabSwitcherIncognitoReauthCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testShowMethod_Invokes_RequestView_And_DisableNewTabButton() {
         mTabSwitcherIncognitoReauthCoordinator.mIgnoreViewAndModelCreationForTesting = true;
         mTabSwitcherIncognitoReauthCoordinator.setIncognitoReauthViewForTesting(
@@ -87,7 +79,6 @@ public class TabSwitcherIncognitoReauthCoordinatorTest {
     }
 
     @Test
-    @SmallTest
     public void testHideMethod_Invokes_ReleaseView_And_EnablesNewTabButton() {
         mTabSwitcherIncognitoReauthCoordinator.setModelChangeProcessorForTesting(
                 mPropertyModelChangeProcessorMock);

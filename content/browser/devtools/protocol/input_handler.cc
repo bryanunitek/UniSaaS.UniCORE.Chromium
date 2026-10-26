@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <tuple>
 #include <utility>
@@ -43,6 +45,7 @@
 #include "content/common/input/synthetic_tap_gesture_params.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "ui/base/clipboard/clipboard_constants.h"
@@ -469,8 +472,16 @@ CreateWebMouseEvent(const std::string& event_type,
       return base::unexpected(Response::InvalidParams(
           "'deltaX' and 'deltaY' are expected for mouseWheel event"));
     }
-    wheel_event->delta_x = static_cast<float>(-delta_x.value());
-    wheel_event->delta_y = static_cast<float>(-delta_y.value());
+    const double scaled_delta_x = -delta_x.value() * scale_factor;
+    const double scaled_delta_y = -delta_y.value() * scale_factor;
+    if (!std::isfinite(scaled_delta_x) || !std::isfinite(scaled_delta_y) ||
+        std::abs(scaled_delta_x) > std::numeric_limits<float>::max() ||
+        std::abs(scaled_delta_y) > std::numeric_limits<float>::max()) {
+      return base::unexpected(
+          Response::InvalidParams("Wheel deltas exceed the supported range"));
+    }
+    wheel_event->delta_x = static_cast<float>(scaled_delta_x);
+    wheel_event->delta_y = static_cast<float>(scaled_delta_y);
     if (wheel_event->delta_x != 0.0f) {
       wheel_event->wheel_ticks_x = wheel_event->delta_x > 0.0f ? 1.0f : -1.0f;
     }
@@ -1299,7 +1310,7 @@ void InputHandler::InsertText(const std::string& text,
   widget_host->Focus();
   widget_host->GetWidgetInputHandler()->ImeCommitText(
       text16, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
-      std::move(closure));
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), std::move(closure));
 }
 
 void InputHandler::ImeSetComposition(
@@ -1354,7 +1365,7 @@ void InputHandler::ImeSetComposition(
   widget_host->GetWidgetInputHandler()->ImeSetComposition(
       text16, std::vector<ui::ImeTextSpan>(), replacement_range,
       selection_start, selection_end, blink::mojom::ImeState::kNone,
-      std::move(closure));
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), std::move(closure));
 }
 
 void InputHandler::DispatchMouseEvent(
@@ -1400,8 +1411,7 @@ void InputHandler::HandleMouseEvent(
   RenderWidgetHostImpl* widget_host =
       host_ ? host_->GetRenderWidgetHost() : nullptr;
   if (!widget_host || !widget_host->delegate() ||
-      !widget_host->delegate()->GetInputEventRouter() ||
-      !widget_host->GetView()) {
+      !widget_host->GetInputEventRouter() || !widget_host->GetView()) {
     callback->sendFailure(Response::InternalError());
     return;
   }
@@ -1448,8 +1458,7 @@ void InputHandler::DispatchDragEvent(
   RenderWidgetHostImpl* widget_host =
       host_ ? host_->GetRenderWidgetHost() : nullptr;
   if (!widget_host || !widget_host->delegate() ||
-      !widget_host->delegate()->GetInputEventRouter() ||
-      !widget_host->GetView()) {
+      !widget_host->GetInputEventRouter() || !widget_host->GetView()) {
     callback->sendFailure(Response::InternalError());
     return;
   }
@@ -1550,7 +1559,7 @@ void InputHandler::OnWidgetForDispatchDragEvent(
 }
 
 float InputHandler::ScaleFactor() {
-  DCHECK(web_contents_);
+  CHECK(web_contents_, base::NotFatalUntil::M159);
   // Browser zoom
   RenderWidgetHostImpl* widget_host_for_zoom_level =
       (host_ && host_->GetRenderWidgetHost())
@@ -1704,8 +1713,7 @@ void InputHandler::DispatchWebTouchEvent(
   RenderWidgetHostImpl* widget_host =
       host_ ? host_->GetRenderWidgetHost() : nullptr;
   if (!widget_host || !widget_host->delegate() ||
-      !widget_host->delegate()->GetInputEventRouter() ||
-      !widget_host->GetView()) {
+      !widget_host->GetInputEventRouter() || !widget_host->GetView()) {
     callback->sendFailure(Response::InternalError());
     return;
   }
@@ -1744,8 +1752,20 @@ void InputHandler::OnWidgetForDispatchWebTouchEvent(
   RenderWidgetHostImpl* widget_host =
       RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
 
+  RenderWidgetHostViewBase* root_view = target->GetRootView();
+  if (!root_view) {
+    root_view = target.get();
+  }
+  // Keep injected touches in root coordinates for the touch emulator. The
+  // input event router converts them to target coordinates for the renderer.
+  // In WebUI Browser, `target` is a RenderWidgetHostViewChildFrame, so
+  // transform the touch points to root view coordinates. This code is no-op for
+  // regular browser (i.e., delta_to_root is zero).
+  CHECK(events.size() > 0);
   gfx::PointF original(events[0].touches[0].PositionInWidget());
-  gfx::Vector2dF delta = *transformed - original;
+  gfx::PointF transformed_in_root =
+      target->TransformPointToRootCoordSpaceF(*transformed);
+  gfx::Vector2dF delta_to_root = transformed_in_root - original;
   for (auto& event : events) {
     event.dispatch_type =
         event.GetType() == blink::WebInputEvent::Type::kTouchCancel
@@ -1754,12 +1774,10 @@ void InputHandler::OnWidgetForDispatchWebTouchEvent(
     event.moved_beyond_slop_region = true;
     event.unique_touch_event_id = ui::GetNextTouchEventId();
     for (unsigned j = 0; j < event.touches_length; j++) {
-      gfx::PointF point = event.touches[j].PositionInWidget();
-      gfx::PointF position_in_widget(point.x() + delta.x(),
-                                     point.y() + delta.y());
-      event.touches[j].SetPositionInWidget(position_in_widget);
+      event.touches[j].SetPositionInWidget(
+          event.touches[j].PositionInWidget() + delta_to_root);
       event.touches[j].SetPositionInScreen(ConvertWidgetPointToScreenPoint(
-          CHECK_DEREF(target.get()), position_in_widget));
+          CHECK_DEREF(root_view), event.touches[j].PositionInWidget()));
     }
   }
   EnsureInjector(widget_host)->InjectTouchEvents(events, std::move(callback));

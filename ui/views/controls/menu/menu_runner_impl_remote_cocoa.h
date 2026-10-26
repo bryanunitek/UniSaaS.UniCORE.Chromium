@@ -13,8 +13,12 @@
 #include "base/unguessable_token.h"
 #include "components/remote_cocoa/common/menu.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "ui/views/controls/menu/menu_runner_impl_interface.h"
+
+namespace ui {
+class ColorProvider;
+}
 
 namespace views {
 
@@ -75,7 +79,8 @@ class VIEWS_EXPORT MenuRunnerImplRemoteCocoa
   // menu items in the model do in fact have unique command IDs.
   std::vector<remote_cocoa::mojom::MenuItemPtr> ModelToMojo(
       const ui::MenuModel& menu_model,
-      std::set<int>& command_ids);
+      std::set<int>& command_ids,
+      const ui::ColorProvider* color_provider);
 
   raw_ptr<ui::MenuModel> menu_model_;
   mojo::Receiver<remote_cocoa::mojom::MenuHost> host_receiver_{this};

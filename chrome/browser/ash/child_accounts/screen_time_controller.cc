@@ -21,6 +21,7 @@
 #include "chrome/browser/ash/child_accounts/child_status_reporting_service_factory.h"
 #include "chrome/browser/ash/child_accounts/time_limit_override.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -106,12 +107,12 @@ ScreenTimeController::~ScreenTimeController() {
 }
 
 void ScreenTimeController::AddObserver(Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.AddObserver(observer);
 }
 
 void ScreenTimeController::RemoveObserver(Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.RemoveObserver(observer);
 }
 
@@ -164,7 +165,7 @@ void ScreenTimeController::CheckTimeLimit(const std::string& source) {
 
   if (state.is_locked) {
     OnScreenLockByPolicy(state.active_policy, state.next_unlock_time);
-    DCHECK(!state.next_unlock_time.is_null());
+    CHECK(!state.next_unlock_time.is_null(), base::NotFatalUntil::M160);
     if (!session_manager::SessionManager::Get()->IsScreenLocked()) {
       ForceScreenLockByPolicy();
     }
@@ -192,7 +193,7 @@ void ScreenTimeController::CheckTimeLimit(const std::string& source) {
 
     std::optional<TimeLimitNotifier::LimitType> notification_type =
         ConvertPolicyType(policy_type);
-    DCHECK(notification_type);
+    CHECK(notification_type, base::NotFatalUntil::M160);
     time_limit_notifier_.ShowPolicyUpdateNotification(notification_type.value(),
                                                       lock_time);
   }
@@ -214,7 +215,8 @@ void ScreenTimeController::CheckTimeLimit(const std::string& source) {
 }
 
 void ScreenTimeController::ForceScreenLockByPolicy() {
-  DCHECK(!session_manager::SessionManager::Get()->IsScreenLocked());
+  CHECK(!session_manager::SessionManager::Get()->IsScreenLocked(),
+        base::NotFatalUntil::M160);
 
   // Avoid abrupt session restart that looks like a crash and happens when lock
   // screen is requested before sign in completion. It is safe, because time
@@ -264,7 +266,7 @@ void ScreenTimeController::OnScreenLockByPolicy(
       ProfileHelper::Get()
           ->GetUserByProfile(Profile::FromBrowserContext(context_))
           ->GetAccountId();
-  ScreenLocker::default_screen_locker()->TemporarilyDisableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->TemporarilyDisableAuthForUser(
       account_id, AuthDisabledData(ConvertLockReason(active_policy),
                                    next_unlock_time, GetScreenTimeDuration(),
                                    true /*disable_lock_screen_media*/));
@@ -282,7 +284,8 @@ void ScreenTimeController::OnScreenLockByPolicyEnd() {
       ProfileHelper::Get()
           ->GetUserByProfile(Profile::FromBrowserContext(context_))
           ->GetAccountId();
-  ScreenLocker::default_screen_locker()->ReenableAuthForUser(account_id);
+  ScreenLockerController::Get().screen_locker()->ReenableAuthForUser(
+      account_id);
 
   // TODO(agawronska): Move showing shelf button to ash.
   LoginScreen::Get()->ShowParentAccessButton(false);

@@ -13,8 +13,11 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/heap_array.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
@@ -23,11 +26,16 @@
 #include "gpu/vulkan/vulkan_ycbcr_info.h"
 #include "media/capture/capture_export.h"
 #include "media/capture/video/video_capture_device.h"
+#include "media/capture/video/video_capture_gpu_channel_host.h"
 
 namespace base {
 class Location;
 class SingleThreadTaskRunner;
 }  // namespace base
+
+namespace gpu {
+enum class SkiaBackendType;
+}  // namespace gpu
 
 namespace media {
 
@@ -35,8 +43,16 @@ namespace media {
 // by VideoCaptureManager on its own thread, while OnFrameAvailable is called
 // on JAVA thread (i.e., UI thread). Both will access |state_| and |client_|,
 // but only VideoCaptureManager would change their value.
-class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
+class CAPTURE_EXPORT VideoCaptureDeviceAndroid
+    : public VideoCaptureDevice,
+      public VideoCaptureGpuContextLostObserver {
  public:
+  using HardwareBufferAvailableCallback =
+      base::RepeatingCallback<void(base::android::ScopedHardwareBufferHandle,
+                                   int32_t,
+                                   int32_t,
+                                   int64_t)>;
+
   // Automatically generated enum to interface with Java world.
   //
   // A Java counterpart will be generated for this enum.
@@ -101,6 +117,10 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                        SetPhotoOptionsCallback callback) override;
   void TakePhoto(TakePhotoCallback callback) override;
+  void InvalidateBuffers() override;
+
+  // VideoCaptureGpuContextLostObserver implementation.
+  void OnContextLost() override;
 
   void OnHardwareBufferAvailableOnMainThread(
       base::android::ScopedHardwareBufferHandle ahb_handle,
@@ -173,8 +193,7 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   // dropped. If not, advance the next frame expectation time and return false;
   bool ThrottleFrame(base::TimeTicks current_time);
 
-  void SendIncomingDataToClient(const uint8_t* data,
-                                int length,
+  void SendIncomingDataToClient(base::span<const uint8_t> data,
                                 int rotation,
                                 base::TimeTicks reference_time,
                                 base::TimeDelta timestamp,
@@ -202,24 +221,27 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   // Thread on which we are created.
   const scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
 
-  // |lock_| protects |state_|, |client_|, |got_first_frame_| and
-  // |photo_requests_queue_| from concurrent access.
+  // |lock_| protects |state_|, |client_|, |got_first_frame_|,
+  // |photo_requests_queue_|, and |expected_next_frame_time_| from concurrent
+  // access.
   base::Lock lock_;
-  InternalState state_ = kIdle;
-  std::unique_ptr<VideoCaptureDevice::Client> client_;
-  bool got_first_frame_ = false;
+  InternalState state_ GUARDED_BY(lock_) = kIdle;
+  std::unique_ptr<VideoCaptureDevice::Client> client_ GUARDED_BY(lock_);
+  bool got_first_frame_ GUARDED_BY(lock_) = false;
   // Photo-related requests waiting for |got_first_frame_| to be served. Android
   // APIs need the device capturing or nearly-capturing to be fully operational.
-  std::list<base::OnceClosure> photo_requests_queue_;
+  std::list<base::OnceClosure> photo_requests_queue_ GUARDED_BY(lock_);
 
-  base::TimeTicks expected_next_frame_time_;
+  base::TimeTicks expected_next_frame_time_ GUARDED_BY(lock_);
   base::TimeDelta frame_interval_;
 
   // List of callbacks for photo API in flight, being served in Java side.
   base::Lock photo_callbacks_lock_;
-  int64_t nextPhotoRequestId_ = 0;
-  base::flat_map<int64_t, GetPhotoStateCallback> get_photo_state_callbacks_;
-  base::flat_map<int64_t, TakePhotoCallback> take_photo_callbacks_;
+  int64_t nextPhotoRequestId_ GUARDED_BY(photo_callbacks_lock_) = 0;
+  base::flat_map<int64_t, GetPhotoStateCallback> get_photo_state_callbacks_
+      GUARDED_BY(photo_callbacks_lock_);
+  base::flat_map<int64_t, TakePhotoCallback> take_photo_callbacks_
+      GUARDED_BY(photo_callbacks_lock_);
 
   const VideoCaptureDeviceDescriptor device_descriptor_;
   VideoCaptureFormat capture_format_;
@@ -233,11 +255,17 @@ class CAPTURE_EXPORT VideoCaptureDeviceAndroid : public VideoCaptureDevice {
   const gpu::GpuDriverBugWorkarounds gpu_workarounds_;
 
   std::optional<bool> need_ycbcr_info_;
+  gpu::SkiaBackendType skia_backend_;
   std::optional<gpu::VulkanYCbCrInfo> ycbcr_info_;
 
   base::TimeTicks first_failed_shared_image_time_;
+  HardwareBufferAvailableCallback hardware_buffer_available_cb_
+      GUARDED_BY(lock_);
 
-  base::WeakPtrFactory<VideoCaptureDeviceAndroid> weak_ptr_factory_{this};
+  base::WeakPtr<VideoCaptureDeviceAndroid> weak_this_ GUARDED_BY(lock_);
+  SEQUENCE_CHECKER(main_sequence_checker_);
+  base::WeakPtrFactory<VideoCaptureDeviceAndroid> weak_ptr_factory_
+      GUARDED_BY_CONTEXT(main_sequence_checker_){this};
 };
 
 }  // namespace media

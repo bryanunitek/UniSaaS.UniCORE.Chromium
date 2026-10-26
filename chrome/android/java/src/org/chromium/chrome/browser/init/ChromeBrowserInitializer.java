@@ -18,8 +18,6 @@ import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.signin.SigninCheckerProvider;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
 import org.chromium.content_public.browser.BrowserStartupController;
 import org.chromium.content_public.browser.BrowserStartupController.StartupMetrics;
@@ -34,7 +32,6 @@ import java.util.List;
  */
 @NullMarked
 public class ChromeBrowserInitializer {
-    private static final String TAG = "BrowserInitializer";
     private static ChromeBrowserInitializer sChromeBrowserInitializer =
             new ChromeBrowserInitializer();
     private static @Nullable BrowserStartupController sBrowserStartupController;
@@ -112,7 +109,7 @@ public class ChromeBrowserInitializer {
         if (parts.isActivityFinishingOrDestroyed()) return;
         ProcessInitializationHandler.getInstance().initializePreNative();
         ProcessInitializationHandler.getInstance().initializePreNativeLibraryLoad();
-        try (TraceEvent e = TraceEvent.scoped("ChromeBrowserInitializer.preInflationStartup")) {
+        try (TraceEvent _ = TraceEvent.scoped("ChromeBrowserInitializer.preInflationStartup")) {
             parts.preInflationStartup();
         }
         if (parts.isActivityFinishingOrDestroyed()) return;
@@ -176,7 +173,7 @@ public class ChromeBrowserInitializer {
         tasks.add(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    try (TraceEvent te = TraceEvent.scoped("Activity.maybePreconnect")) {
+                    try (TraceEvent _ = TraceEvent.scoped("Activity.maybePreconnect")) {
                         // Run as early as possible. It should also be in a separate task (and
                         // after) initNetworkChangeNotifier, as this posts a task to the UI thread
                         // that would interfere with preconneciton otherwise. By preconnecting
@@ -188,7 +185,7 @@ public class ChromeBrowserInitializer {
         tasks.add(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    try (TraceEvent te = TraceEvent.scoped("Activity.initializeCompositor")) {
+                    try (TraceEvent _ = TraceEvent.scoped("Activity.initializeCompositor")) {
                         if (delegate.isActivityFinishingOrDestroyed()) return;
                         delegate.initializeCompositor();
                     }
@@ -197,7 +194,7 @@ public class ChromeBrowserInitializer {
         tasks.add(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    try (TraceEvent te = TraceEvent.scoped("Activity.initializeState")) {
+                    try (TraceEvent _ = TraceEvent.scoped("Activity.initializeState")) {
                         if (delegate.isActivityFinishingOrDestroyed()) return;
                         delegate.initializeState();
                     }
@@ -206,7 +203,7 @@ public class ChromeBrowserInitializer {
         tasks.add(
                 TaskTraits.UI_DEFAULT,
                 () -> {
-                    try (TraceEvent te = TraceEvent.scoped("Activity.finishNativeInitialization")) {
+                    try (TraceEvent _ = TraceEvent.scoped("Activity.finishNativeInitialization")) {
                         if (delegate.isActivityFinishingOrDestroyed()) return;
                         // Some tasks posted by this are on the critical path.
                         delegate.startNativeInitialization();
@@ -224,9 +221,9 @@ public class ChromeBrowserInitializer {
                 getBrowserStartupController().getStartupMode(delegate.startMinimalBrowser());
         tasks.add(
                 TaskTraits.UI_DEFAULT,
-                () -> {
-                    BackgroundTaskSchedulerFactory.getUmaReporter().reportStartupMode(startupMode);
-                });
+                () ->
+                        BackgroundTaskSchedulerFactory.getUmaReporter()
+                                .reportStartupMode(startupMode));
 
         if (isAsync) {
             // We want to start this queue once the C++ startup tasks have run; allow the
@@ -282,7 +279,6 @@ public class ChromeBrowserInitializer {
                             LibraryProcessType.PROCESS_BROWSER,
                             /* singleProcess= */ false,
                             /* startGpuProcess= */ startGpuProcess);
-            SigninCheckerProvider.get(ProfileManager.getLastUsedRegularProfile());
         } finally {
             TraceEvent.end("ChromeBrowserInitializer.startChromeBrowserProcessesSync");
         }

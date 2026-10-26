@@ -77,7 +77,10 @@ NSString* GetUsername2() {
 // Returns a URL with localized according to the Application Locale.
 GURL GetLocalizedURL(const GURL& original) {
   return google_util::AppendGoogleLocaleParam(
-      original, GetApplicationContext()->GetApplicationLocaleStorage()->Get());
+      original, std::string(GetApplicationContext()
+                                ->GetApplicationLocaleStorage()
+                                ->GetTag()
+                                .tag_string()));
 }
 
 }  // namespace
@@ -175,7 +178,8 @@ class PasswordIssuesMediatorTest : public BlockCleanupTest {
     password_manager::StoredCredential cred;
     cred.signon_realm = website;
     cred.username_value = base::ASCIIToUTF16(username);
-    cred.password_value = base::ASCIIToUTF16(password);
+    cred.password_value =
+        password_manager::PasswordString(base::ASCIIToUTF16(password));
     cred.url = GURL(website + "/login");
     cred.action = GURL(website + "/action");
     cred.username_element = u"email";

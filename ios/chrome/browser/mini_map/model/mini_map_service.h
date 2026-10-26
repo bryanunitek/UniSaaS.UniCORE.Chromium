@@ -32,6 +32,9 @@ class MiniMapService : public KeyedService, public TemplateURLServiceObserver {
   // Whether GoogleMaps is installed.
   bool IsGoogleMapsInstalled();
 
+  // Whether the experiment flag for bypassing Native Preview is enabled.
+  bool IsMapsNativePreviewBypassEnabled();
+
   // KeyedService
   void Shutdown() override;
 
@@ -51,7 +54,7 @@ class MiniMapService : public KeyedService, public TemplateURLServiceObserver {
   raw_ptr<PrefService> pref_service_ = nullptr;
 
   // Service to check if the DSE is Google.
-  raw_ptr<TemplateURLService> template_url_service_;
+  raw_ptr<TemplateURLService> template_url_service_ = nullptr;
   // Whether the current default search engine is Google.
   bool is_dse_google_ = false;
 
@@ -59,6 +62,9 @@ class MiniMapService : public KeyedService, public TemplateURLServiceObserver {
   BooleanPrefMember mini_map_enabled_pref_;
   // Whether the mini map feature is currently enabled.
   bool is_mini_map_enabled_ = false;
+
+  // Whether the experiment flag for bypassing Native Preview is enabled.
+  bool is_maps_native_preview_bypass_enabled_ = false;
 
   // An observer for App scoped data.
   class MiniMapAppObserver {

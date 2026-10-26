@@ -6,6 +6,7 @@
 #include "extensions/browser/guest_view/web_view/web_view_permission_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace controlled_frame {
 
@@ -183,8 +184,8 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS:
       case ContentSettingsType::DISPLAY_MEDIA_SYSTEM_AUDIO:
       case ContentSettingsType::JAVASCRIPT_OPTIMIZER:
-      case ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL:
-      case ContentSettingsType::DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS:
+      case ContentSettingsType::
+          DEPRECATED_DIRECT_SOCKETS_PRIVATE_NETWORK_ACCESS:
       case ContentSettingsType::LEGACY_COOKIE_SCOPE:
       case ContentSettingsType::
           ARE_SUSPICIOUS_NOTIFICATIONS_ALLOWLISTED_BY_USER:
@@ -202,6 +203,7 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::SUSPICIOUS_NOTIFICATION_SHOW_ORIGINAL:
       case ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS:
       case ContentSettingsType::INLINE_CUE_MENU:
+      case ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA:
         break;
 
       default:

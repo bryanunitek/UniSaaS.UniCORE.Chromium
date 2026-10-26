@@ -11,9 +11,13 @@
 #include "base/auto_reset.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/feature.h"
+#include "base/feature_list.h"
 #include "base/mac/mac_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
+#import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
 
@@ -27,6 +31,61 @@ bool IsBrowserProcess() {
   return base::CommandLine::ForCurrentProcess()
       ->GetSwitchValueASCII("type")
       .empty();
+}
+
+// Emergency shutoff for macOS 26 / Stage Manager. See
+// https://crbug.com/448103577 for the history here. Hopefully this can all be
+// removed soon.
+
+enum MacOcclusionForceShutoff {
+  kShutoffMacOS26Entirely,
+  kShutoffStageManagerEntirely,
+  kShutoffMacOS26StageManager,
+};
+
+BASE_FEATURE(kMacOcclusionForceShutoff, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(int,
+                   kShutoffType,
+                   &kMacOcclusionForceShutoff,
+                   kShutoffMacOS26Entirely);
+
+bool IsEmergencyShutoffEnabled() {
+  if (!base::FeatureList::IsEnabled(kMacOcclusionForceShutoff)) {
+    return false;
+  }
+
+  bool is_macos26 = base::mac::MacOSMajorVersion() >= 26;
+  bool is_stage_manager_enabled = [] {
+    NSDictionary* window_manager_prefs = [NSUserDefaults.standardUserDefaults
+        persistentDomainForName:@"com.apple.WindowManager"];
+    NSNumber* value = base::apple::ObjCCast<NSNumber>(
+        window_manager_prefs[@"GloballyEnabled"]);
+    return value.boolValue;
+  }();
+
+  switch (kShutoffType.Get()) {
+    case kShutoffMacOS26Entirely:
+      return is_macos26;
+    case kShutoffStageManagerEntirely:
+      return is_stage_manager_enabled;
+    case kShutoffMacOS26StageManager:
+      return is_macos26 && is_stage_manager_enabled;
+    default:
+      NOTREACHED();
+  }
+}
+
+bool WindowHasOpaqueFrameBackgroundView(NSView* view) {
+  if ([view.identifier
+          isEqualToString:remote_cocoa::kOpaqueFrameBackgroundViewIdentifier]) {
+    return true;
+  }
+  for (NSView* subview in [view subviews]) {
+    if (WindowHasOpaqueFrameBackgroundView(subview)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -71,7 +130,11 @@ bool IsBrowserProcess() {
 }
 
 + (BOOL)manualOcclusionDetectionSupportedForPackedVersion:(int)version {
-  if ((version >= 13'00'00 && version < 13'03'00) || version >= 26'00'00) {
+  if (version >= 13'00'00 && version < 13'03'00) {
+    return NO;
+  }
+
+  if (IsEmergencyShutoffEnabled()) {
     return NO;
   }
 
@@ -238,8 +301,14 @@ bool IsBrowserProcess() {
   // so they can update their visibility state. Therefore, we ignore windows
   // that don't have a web contents (they essentially don't exist for our manual
   // occlusion calculations).
-  if (![window containsWebContentsViewCocoa])
+  if (![window containsWebContentsViewCocoa]) {
+    // As with child windows below, `window` may have been marked occluded while
+    // it still contained a web contents. Clear that state before ignoring the
+    // notification so it cannot get stuck if no other window triggers an update
+    // pass.
+    [window setOccluded:NO];
     return NO;
+  }
 
   // The checker cycles through the window list when performing its manual
   // occlusion checks. Child windows don't appear in this list, so don't
@@ -399,17 +468,63 @@ bool IsBrowserProcess() {
 
   for (NSWindow* window in windowsFromFrontToBack) {
     // The fullscreen transition causes spurious occlusion notifications.
-    // See https://crbug.com/1081229 . Also, ignore windows that don't have
-    // web contentses.
-    if (window == _windowReceivingFullscreenTransitionNotifications ||
-        ![window containsWebContentsViewCocoa])
+    // See https://crbug.com/1081229 .
+    if (window == _windowReceivingFullscreenTransitionNotifications) {
       continue;
+    }
+
+    // Ignore windows that don't have web contentses. If such a window was
+    // marked occluded while it had one (e.g. a closing window whose
+    // webcontents was removed, https://crbug.com/1356622), clear the stale
+    // state so that observers (e.g. the browser compositor) are not left
+    // thinking it is occluded. The window has no webcontents to update; one
+    // added back later starts out visible until the next update pass.
+    if (![window containsWebContentsViewCocoa]) {
+      [window setOccluded:NO];
+      continue;
+    }
+
+    // `WebContentsViewCocoa` handles hidden windows. Clear their occlusion
+    // state to avoid stale results if they are shown before the next AppKit
+    // update.
+    if (![window isVisible] && ![window isMiniaturized]) {
+      [window setOccluded:NO];
+      continue;
+    }
 
     [window setOccluded:[self isWindowOccluded:window
                                     windowList:windowsFromFrontToBack]];
   }
 
   _updatingOcclusionStates = NO;
+}
+
+// Returns NO for windows that cannot visually obscure the windows beneath
+// them: faded windows, non-opaque windows without an opaque background
+// (e.g. an embedder's transparent overlay shows the covered content through
+// it) and windows that let mouse events pass through. This mirrors
+// gfx::IsWindowVisibleAndFullyOpaque, which the Windows occlusion tracker
+// uses to ignore translucent layered windows and WS_EX_TRANSPARENT windows.
+- (BOOL)windowCanOccludeOtherWindows:(NSWindow*)window {
+  if (!([window occlusionState] & NSWindowOcclusionStateVisible)) {
+    return NO;
+  }
+  if ([window alphaValue] < 1.0 || [window ignoresMouseEvents]) {
+    return NO;
+  }
+  if ([window isOpaque]) {
+    return YES;
+  }
+  // Non-opaque windows still hide what's beneath them as long as they paint
+  // an opaque background (embedders clear -isOpaque just to get rounded
+  // corners).
+  if ([[window backgroundColor] alphaComponent] >= 1.0) {
+    return YES;
+  }
+  // Browser windows with a glass frame are non-opaque and have a clear
+  // background to enable the glass frame effect, but paint an opaque
+  // background view behind the client area.
+  return WindowHasOpaqueFrameBackgroundView([window contentView]);
 }
 
 // Returns YES if `window` is occluded, either according to macOS or via
@@ -433,6 +548,10 @@ bool IsBrowserProcess() {
   }
 
   NSRect windowFrame = [window frame];
+  BOOL windowIsActive = [window isKeyWindow] || [window isMainWindow];
+  BOOL windowCanBecomeActive =
+      [window canBecomeKeyWindow] || [window canBecomeMainWindow];
+  BOOL seenWindow = NO;
 
   // Determine if there's a window occluding `window`.
   for (NSWindow* nextWindow in windowList) {
@@ -440,9 +559,17 @@ bool IsBrowserProcess() {
       continue;
     }
 
-    // If we come to our window in the list, we're done.
     if (nextWindow == window) {
-      break;
+      if (windowIsActive || !windowCanBecomeActive) {
+        break;
+      }
+      // `windowList` (from `-[NSApplication orderedWindows]`) can be stale when
+      // a window becomes active before WindowServer updates the z-order, or in
+      // Stage Manager where strip windows can precede the active stage window.
+      // Continue looping through `windowList` in case an active key/main window
+      // that is actually in front of `window` appears later in the list.
+      seenWindow = YES;
+      continue;
     }
 
     // If the next window is moving or resizing, treat it as if it doesn't
@@ -451,6 +578,35 @@ bool IsBrowserProcess() {
     // fresh. We'll recompute `window`'s occlusion state after the move or
     // resize ends.
     if (nextWindow == _windowResizingOrMoving) {
+      continue;
+    }
+
+    BOOL nextWindowIsActive =
+        [nextWindow isKeyWindow] || [nextWindow isMainWindow];
+
+    // If `nextWindow` appears after `window` in `windowList`, it is behind
+    // `window` unless `window` is inactive and `nextWindow` is the active
+    // key/main window at the same or higher window level (which happens when
+    // NSWindowDidBecomeMainNotification fires before -[NSApplication
+    // orderedWindows] reflects the new z-order, e.g. during Cmd+` window
+    // cycling or animated window transitions).
+    if (seenWindow &&
+        (!nextWindowIsActive || [nextWindow level] < [window level])) {
+      continue;
+    }
+
+    // Conversely, an active key/main window cannot be covered by an inactive
+    // window of the same application at the same or lower window level, even
+    // if WindowServer places the inactive window ahead in -[NSApplication
+    // orderedWindows] (e.g. Stage Manager strip windows or Cmd+` window
+    // cycling).
+    if (windowIsActive && !nextWindowIsActive &&
+        [nextWindow level] <= [window level]) {
+      continue;
+    }
+
+    // Skip windows that can't visually cover the web contents beneath them.
+    if (![self windowCanOccludeOtherWindows:nextWindow]) {
       continue;
     }
 
@@ -482,17 +638,31 @@ bool IsBrowserProcess() {
 }
 
 - (void)setOccluded:(BOOL)flag {
-  if (flag == [self isOccluded])
+  const BOOL wasOccluded = [self isOccluded];
+  if (!flag && !wasOccluded) {
     return;
+  }
+  if (flag != wasOccluded) {
+    objc_setAssociatedObject(self, kWindowIsOccludedKey, flag ? @YES : nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-  objc_setAssociatedObject(self, kWindowIsOccludedKey, flag ? @YES : nil,
-                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSString* occlusionCheckerKey = [WebContentsOcclusionCheckerMac className];
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:NSWindowDidChangeOcclusionStateNotification
+                      object:self
+                    userInfo:@{occlusionCheckerKey : @YES}];
+  }
 
-  NSString* occlusionCheckerKey = [WebContentsOcclusionCheckerMac className];
-  [[NSNotificationCenter defaultCenter]
-      postNotificationName:NSWindowDidChangeOcclusionStateNotification
-                    object:self
-                  userInfo:@{occlusionCheckerKey : @YES}];
+  // Let the views browser compositor know, after the synthetic notification
+  // above has been dispatched. An occluded report is forwarded even if
+  // `wasOccluded` was already true: the host may have reset its own state (e.g.
+  // when the window is shown again), and it ignores redundant updates. Calling
+  // this on every pass is cheap since the checker only runs in the browser
+  // process, where this is a direct call to the host (no IPC).
+  if (auto* bridge =
+          remote_cocoa::NativeWidgetNSWindowBridge::GetFromNSWindow(self)) {
+    bridge->OnWindowOcclusionChanged(flag);
+  }
 }
 
 @end

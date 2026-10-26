@@ -233,6 +233,7 @@ class CORE_EXPORT SVGElement : public Element {
   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void RemovedFrom(ContainerNode&) override;
   void ChildrenChanged(const ChildrenChange&) override;
+  void DidChangeIsInCanvasSubtree(CanvasSubtreePropagation) override;
 
   void DetachLayoutTree(bool performing_reattach) override;
 
@@ -244,6 +245,7 @@ class CORE_EXPORT SVGElement : public Element {
   SVGElementSet* SetOfIncomingReferences() const;
 
   SVGElementRareData* EnsureSVGRareData();
+  bool MayHaveInstances() const { return HasSVGRareData(); }
   inline bool HasSVGRareData() const { return svg_rare_data_ != nullptr; }
   inline SVGElementRareData* SvgRareData() const {
     DCHECK(svg_rare_data_);
@@ -315,7 +317,7 @@ void SVGElement::NotifyIncomingReferences(
 
 struct SVGAttributeHashTranslator {
   STATIC_ONLY(SVGAttributeHashTranslator);
-  static unsigned GetHash(const QualifiedName& key) {
+  static uint32_t GetHash(const QualifiedName& key) {
     if (key.HasPrefix()) {
       QualifiedNameComponents components = {g_null_atom.Impl(),
                                             key.LocalName().Impl(),

@@ -12,6 +12,7 @@
 #include "ash/public/cpp/app_list/app_list_features.h"
 #include "ash/public/cpp/app_list/app_list_metrics.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/metrics_hashes.h"
@@ -58,11 +59,13 @@ void ClearNonZeroStateResults(ResultsMap& results) {
 
 }  // namespace
 
-SearchController::SearchController(AppListModelUpdater* model_updater,
+SearchController::SearchController(PrefService* local_state,
+                                   AppListModelUpdater* model_updater,
                                    AppListControllerDelegate* list_controller,
                                    ash::AppListNotifier* notifier,
                                    Profile* profile)
-    : profile_(profile),
+    : local_state_(CHECK_DEREF(local_state)),
+      profile_(profile),
       model_updater_(model_updater),
       list_controller_(list_controller),
       notifier_(notifier) {}
@@ -86,7 +89,7 @@ void SearchController::Initialize() {
   if (search_features::IsLauncherSearchFileScanEnabled()) {
     search_file_scanner_ = std::make_unique<SearchFileScanner>(
         profile_, file_manager::util::GetMyFilesFolderForProfile(profile_),
-        GetTrashPaths(profile_));
+        GetTrashPaths(local_state_.get(), profile_));
   }
 }
 
@@ -119,7 +122,7 @@ void SearchController::AddProvider(std::unique_ptr<SearchProvider> provider) {
 }
 
 void SearchController::StartSearch(const std::u16string& query) {
-  DCHECK(!query.empty());
+  CHECK(!query.empty(), base::NotFatalUntil::M160);
 
   burn_in_controller_->Start();
 
@@ -227,6 +230,12 @@ void SearchController::AppListViewChanging(bool is_visible) {
     app_discovery_metrics_manager_->OnLauncherOpen();
   }
 
+  // Lazily initialize search providers the first time the launcher is opened.
+  if (is_visible && !providers_initialized_) {
+    providers_initialized_ = true;
+    search_engine_->InitializeProviders();
+  }
+
   // On close.
   if (!is_visible) {
     search_engine_->StopZeroState();
@@ -331,7 +340,7 @@ void SearchController::SetZeroStateResults(ResultType result_type) {
 }
 
 void SearchController::Rank(ProviderType provider_type) {
-  DCHECK(ranker_manager_);
+  CHECK(ranker_manager_, base::NotFatalUntil::M160);
   if (results_.empty()) {
     // Happens if the burn-in period has elapsed without any results having been
     // received from providers. Return early.

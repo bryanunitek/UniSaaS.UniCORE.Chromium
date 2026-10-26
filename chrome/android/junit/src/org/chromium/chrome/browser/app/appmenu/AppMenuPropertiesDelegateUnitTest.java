@@ -18,6 +18,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
+import android.os.Bundle;
 import android.view.ContextThemeWrapper;
 import android.view.View;
 
@@ -33,6 +34,8 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.Token;
+import org.chromium.base.TriState;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
@@ -64,6 +67,8 @@ import org.chromium.chrome.browser.toolbar.menu_button.MenuUiState;
 import org.chromium.chrome.browser.translate.TranslateBridge;
 import org.chromium.chrome.browser.translate.TranslateBridgeJni;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
+import org.chromium.chrome.browser.ui.appmenu.AppMenuTabGroupItemProperties;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.chrome.browser.webapps.WebappRegistry;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
@@ -75,6 +80,7 @@ import org.chromium.components.commerce.core.CommerceFeatureUtils;
 import org.chromium.components.commerce.core.CommerceFeatureUtilsJni;
 import org.chromium.components.commerce.core.ShoppingService;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.power_bookmarks.PowerBookmarkMeta;
 import org.chromium.components.power_bookmarks.PowerBookmarkType;
 import org.chromium.components.power_bookmarks.ShoppingSpecifics;
@@ -107,7 +113,6 @@ public class AppMenuPropertiesDelegateUnitTest {
     @Mock private TabModel mTabModel;
     @Mock private TabModel mIncognitoTabModel;
     @Mock private ToolbarManager mToolbarManager;
-    @Mock private View mDecorView;
     @Mock private LayoutStateProvider mLayoutStateProvider;
     @Mock private UpdateMenuItemHelper mUpdateMenuItemHelper;
     @Mock private UserPrefs.Natives mUserPrefsJniMock;
@@ -124,6 +129,7 @@ public class AppMenuPropertiesDelegateUnitTest {
     @Mock private ReadAloudController mReadAloudController;
     @Mock private TranslateBridge.Natives mTranslateBridgeJniMock;
     @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
+    private final View mDecorView = new View(ContextUtils.getApplicationContext());
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
     private final OneshotSupplierImpl<LayoutStateProvider> mLayoutStateProviderSupplier =
             new OneshotSupplierImpl<>();
@@ -156,7 +162,7 @@ public class AppMenuPropertiesDelegateUnitTest {
         when(mTabModelSelector.getModel(true)).thenReturn(mIncognitoTabModel);
         when(mTabModel.isIncognito()).thenReturn(false);
         when(mIncognitoTabModel.isIncognito()).thenReturn(true);
-        PageZoomUtils.setShouldShowMenuItemForTesting(false);
+        PageZoomUtils.setShouldShowMenuItemForTesting(TriState.FALSE);
 
         UpdateMenuItemHelper.setInstanceForTesting(mUpdateMenuItemHelper);
         mMenuUiState = new MenuUiState();
@@ -460,7 +466,7 @@ public class AppMenuPropertiesDelegateUnitTest {
         // Setup: Bottom sheet controller is available and sheet is open
         BottomSheetControllerProvider.setInstanceForTesting(mBottomSheetControllerMock);
         when(mBottomSheetControllerMock.isSheetOpen()).thenReturn(true);
-        PageZoomUtils.setShouldShowMenuItemForTesting(true);
+        PageZoomUtils.setShouldShowMenuItemForTesting(TriState.TRUE);
 
         // Stub dependent tab setup
         when(mTab.getWindowAndroid()).thenReturn(mock(WindowAndroid.class));
@@ -477,7 +483,7 @@ public class AppMenuPropertiesDelegateUnitTest {
         // Setup: Bottom sheet controller is available and sheet is closed
         BottomSheetControllerProvider.setInstanceForTesting(mBottomSheetControllerMock);
         when(mBottomSheetControllerMock.isSheetOpen()).thenReturn(false);
-        PageZoomUtils.setShouldShowMenuItemForTesting(true);
+        PageZoomUtils.setShouldShowMenuItemForTesting(TriState.TRUE);
 
         // Stub dependent tab setup
         when(mTab.getWindowAndroid()).thenReturn(mock(WindowAndroid.class));
@@ -500,6 +506,77 @@ public class AppMenuPropertiesDelegateUnitTest {
                 .when(mAppMenuPropertiesDelegate)
                 .shouldShowAutoDarkItem(any(Tab.class), eq(true));
         setUpIncognitoMocks();
+    }
+
+    @Test
+    public void testBuildAddToHomescreenListItem_AlwaysReturnsUniversalInstall() {
+        doReturn(new GURL("https://example.com/subpath")).when(mTab).getUrl();
+        doReturn("Example App").when(mTab).getTitle();
+
+        // Mock WebappRegistry to return a package, so it looks like a WebAPK is installed
+        WebappRegistry mockRegistry = mock(WebappRegistry.class);
+        WebappRegistry.setInstanceForTests(mockRegistry);
+        doReturn("org.chromium.webapk.example").when(mockRegistry).findWebApkWithManifestId(any());
+
+        var item =
+                mAppMenuPropertiesDelegate.buildAddToHomescreenListItem(mTab, /* showIcon= */ true);
+        assertNotNull(item);
+        assertEquals(
+                R.id.universal_install,
+                item.model.get(
+                        org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties.MENU_ITEM_ID));
+    }
+
+    @Test
+    public void testGetBundleForMenuItem_tabGroupSyncId() {
+        PropertyModel model =
+                new PropertyModel.Builder(AppMenuTabGroupItemProperties.ALL_KEYS)
+                        .with(AppMenuTabGroupItemProperties.SYNC_GROUP_ID, "sync_group_123")
+                        .build();
+
+        Bundle bundle = mAppMenuPropertiesDelegate.getBundleForMenuItem(model);
+        assertNotNull(bundle);
+        assertEquals(
+                "sync_group_123",
+                bundle.getString(AppMenuPropertiesDelegateImpl.SYNC_GROUP_ID_BUNDLE_KEY));
+    }
+
+    @Test
+    public void testGetBundleForMenuItem_tabGroupLocalAndSyncId() {
+        Token groupId = Token.createRandom();
+        PropertyModel model =
+                new PropertyModel.Builder(AppMenuTabGroupItemProperties.ALL_KEYS)
+                        .with(AppMenuTabGroupItemProperties.TAB_GROUP_ID, groupId)
+                        .with(AppMenuTabGroupItemProperties.SYNC_GROUP_ID, "sync_group_456")
+                        .build();
+
+        Bundle bundle = mAppMenuPropertiesDelegate.getBundleForMenuItem(model);
+        assertNotNull(bundle);
+        assertEquals(
+                groupId,
+                Token.maybeCreateFromBundle(
+                        bundle.getBundle(AppMenuPropertiesDelegateImpl.TAB_GROUP_ID_BUNDLE_KEY)));
+        assertEquals(
+                "sync_group_456",
+                bundle.getString(AppMenuPropertiesDelegateImpl.SYNC_GROUP_ID_BUNDLE_KEY));
+    }
+
+    @Test
+    public void testShouldKeepMenuBelowTopControls() {
+        when(mTab.getNativePage()).thenReturn(null);
+        assertTrue(mAppMenuPropertiesDelegate.shouldKeepMenuBelowTopControls());
+
+        NativePage nativePage = mock(NativePage.class);
+        when(nativePage.getHost()).thenReturn(UrlConstants.NTP_HOST);
+        when(mTab.getNativePage()).thenReturn(nativePage);
+        assertFalse(mAppMenuPropertiesDelegate.shouldKeepMenuBelowTopControls());
+
+        // The incognito NTP is intentionally treated the same: its omnibox shows no URL.
+        when(mTab.isOffTheRecord()).thenReturn(true);
+        assertFalse(mAppMenuPropertiesDelegate.shouldKeepMenuBelowTopControls());
+
+        mActivityTabProvider.setForTesting(null);
+        assertTrue(mAppMenuPropertiesDelegate.shouldKeepMenuBelowTopControls());
     }
 
     private void setUpIncognitoMocks() {

@@ -8,8 +8,10 @@
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_keyed_service_factory.h"
 #include "chrome/browser/actor/actor_keyed_service_fake.h"
+#include "chrome/browser/actor/actor_surface_registry.h"
 #include "chrome/browser/actor/ui/actor_ui_state_manager_interface.h"
 #include "chrome/browser/actor/ui/test_support/mock_actor_ui_tab_controller.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
@@ -51,10 +53,8 @@ class ActorUiStateManagerTest : public testing::Test {
   void SetUp() override {
     scoped_feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/{{features::kGlicActorUi, {}},
-                              {features::kGlicActor,
-                               {{features::kGlicActorPolicyControlExemption
-                                     .name,
-                                 "true"}}}},
+                              {features::kGlicActor, {}},
+                              {features::kGlicActorPolicyControlExemption, {}}},
         /*disabled_features=*/{});
     profile_ = TestingProfile::Builder()
                    .AddTestingFactory(
@@ -71,6 +71,9 @@ class ActorUiStateManagerTest : public testing::Test {
     ON_CALL(mock_browser_window_interface_, GetTabStripModel())
         .WillByDefault(Return(tab_strip_model_.get()));
 
+    ON_CALL(mock_tab_, GetProfile).WillByDefault(testing::Return(profile()));
+    ActorKeyedService::Get(profile())->GetSurfaceRegistry().OnTabCreated(
+        mock_tab_);
     MockActorUiTabController::SetupDefaultBrowserWindow(
         mock_tab(), mock_browser_window_interface_, user_data_host_);
     mock_actor_ui_tab_controller_.emplace(mock_tab());
@@ -104,8 +107,8 @@ class ActorUiStateManagerTest : public testing::Test {
             });
   }
 
-  ActorUiStateManagerInterface* actor_ui_state_manager() {
-    return actor_keyed_service_fake_->GetActorUiStateManager();
+  ActorUiStateManager* actor_ui_state_manager() {
+    return ActorUiStateManager::Get(profile());
   }
 
   ActorKeyedServiceFake* actor_keyed_service() {
@@ -577,6 +580,30 @@ TEST_F(ActorUiStateManagerUiEventUiTabScopedTest,
   EXPECT_CALL(*mock_actor_ui_tab_controller(), OnUiTabStateChange(_, _))
       .Times(0);
   task_environment().FastForwardBy(base::Seconds(2));
+}
+
+TEST_F(ActorUiStateManagerUiEventUiTabScopedTest,
+       SetAndClearTabPendingActuation) {
+  UiTabState expected_pending_state{
+      .actor_overlay = {.is_active = false, .border_glow_visible = false},
+      .handoff_button = {.is_active = false, .controller = kClient},
+      .tab_indicator = TabIndicatorStatus::kDynamic,
+      .border_glow_visible = false,
+  };
+  ExpectUiTabStateChange(expected_pending_state);
+  actor_ui_state_manager()->SetTabPendingActuation(mock_tab().GetHandle());
+
+  UiTabState expected_completed_state{
+      .actor_overlay = {.is_active = false, .border_glow_visible = false},
+      .handoff_button = {.is_active = false, .controller = kClient},
+      .tab_indicator = TabIndicatorStatus::kNone,
+      .border_glow_visible = false,
+  };
+  ExpectUiTabStateChange(expected_completed_state);
+  EXPECT_TRUE(actor_ui_state_manager()->ClearTabPendingActuation(
+      mock_tab().GetHandle()));
+  EXPECT_FALSE(actor_ui_state_manager()->ClearTabPendingActuation(
+      mock_tab().GetHandle()));
 }
 
 }  // namespace

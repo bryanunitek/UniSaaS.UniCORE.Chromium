@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -28,19 +30,10 @@ bool AreProgressMarkersEquivalent(const std::string& serialized1,
   sync_pb::DataTypeProgressMarker marker2;
   CHECK(marker1.ParseFromString(serialized1));
   CHECK(marker2.ParseFromString(serialized2));
-  DCHECK(marker1.data_type_id() == marker2.data_type_id());
-  DCHECK(!marker1.has_gc_directive());
-  DCHECK(!marker2.has_gc_directive());
+  CHECK_EQ(marker1.data_type_id(), marker2.data_type_id());
+  CHECK(!marker1.has_gc_directive());
+  CHECK(!marker2.has_gc_directive());
 
-  if (syncer::GetDataTypeFromSpecificsFieldNumber(marker1.data_type_id()) ==
-          syncer::AUTOFILL_WALLET_DATA ||
-      syncer::GetDataTypeFromSpecificsFieldNumber(marker1.data_type_id()) ==
-          syncer::AUTOFILL_WALLET_OFFER ||
-      syncer::GetDataTypeFromSpecificsFieldNumber(marker1.data_type_id()) ==
-          syncer::AUTOFILL_VALUABLE) {
-    return fake_server::AreFullUpdateTypeDataProgressMarkersEquivalent(marker1,
-                                                                       marker2);
-  }
   return marker1.SerializeAsString() == marker2.SerializeAsString();
 }
 
@@ -121,7 +114,7 @@ class QuiesceStatusChangeChecker::NestedUpdatedProgressMarkerChecker
 QuiesceStatusChangeChecker::QuiesceStatusChangeChecker(
     std::vector<raw_ptr<syncer::SyncServiceImpl, VectorExperimental>> services)
     : MultiClientStatusChangeChecker(services) {
-  DCHECK_LE(1U, services.size());
+  CHECK_LE(1U, services.size());
   for (syncer::SyncServiceImpl* service : services) {
     checkers_.push_back(std::make_unique<NestedUpdatedProgressMarkerChecker>(
         service,
@@ -133,11 +126,18 @@ QuiesceStatusChangeChecker::QuiesceStatusChangeChecker(
 QuiesceStatusChangeChecker::~QuiesceStatusChangeChecker() = default;
 
 bool QuiesceStatusChangeChecker::IsExitConditionSatisfied(std::ostream* os) {
-  // Check that all progress markers are up to date.
-  std::vector<syncer::SyncServiceImpl*> enabled_services;
+  // Check that all progress markers are up to date for active services.
+  std::vector<syncer::SyncServiceImpl*> active_services;
   for (const std::unique_ptr<NestedUpdatedProgressMarkerChecker>& checker :
        checkers_) {
-    enabled_services.push_back(checker->service());
+    if (checker->service()->GetTransportState() ==
+            syncer::SyncService::TransportState::DISABLED ||
+        checker->service()->GetTransportState() ==
+            syncer::SyncService::TransportState::PAUSED) {
+      continue;
+    }
+
+    active_services.push_back(checker->service());
 
     if (!checker->IsExitConditionSatisfied(os)) {
       *os << "Not quiesced: Progress markers are old.";
@@ -145,10 +145,9 @@ bool QuiesceStatusChangeChecker::IsExitConditionSatisfied(std::ostream* os) {
     }
   }
 
-  for (size_t i = 1; i < enabled_services.size(); ++i) {
+  for (size_t i = 1; i < active_services.size(); ++i) {
     // Return false if there is a progress marker mismatch.
-    if (!ProgressMarkersMatch(enabled_services[i - 1], enabled_services[i],
-                              os)) {
+    if (!ProgressMarkersMatch(active_services[i - 1], active_services[i], os)) {
       *os << "Not quiesced: Progress marker mismatch.";
       return false;
     }

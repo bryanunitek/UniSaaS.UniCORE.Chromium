@@ -45,7 +45,7 @@
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/script/value_wrapper_synthetic_module_script.h"
 #include "third_party/blink/renderer/core/svg/svg_style_element.h"
-#include "third_party/blink/renderer/core/url/dom_url.h"
+#include "third_party/blink/renderer/core/url/url.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -200,12 +200,16 @@ StyleElement::ProcessingResult StyleElement::CreateSheetOrModule(
                 ->GetContentSecurityPolicyForCurrentWorld()
           : nullptr;
 
+  ReportingDisposition reporting_disposition =
+      document.IsDOMParserDocument() ? ReportingDisposition::kSuppressReporting
+                                     : ReportingDisposition::kReport;
+
   // CSP is bypassed for style elements in user agent shadow DOM.
   const bool passes_style_csp =
       IsInUserAgentShadowDOM(element) ||
       (csp && csp->AllowInline(ContentSecurityPolicy::InlineType::kStyle,
                                &element, text, element.nonce(), document.Url(),
-                               start_position_.line_));
+                               start_position_, reporting_disposition));
 
   // Declarative CSS Modules impact the module map, so they must also respect
   // `script-src` CSP. The strictest union applies: the module is blocked if
@@ -214,7 +218,7 @@ StyleElement::ProcessingResult StyleElement::CreateSheetOrModule(
       !IsModule(document) || IsInUserAgentShadowDOM(element) ||
       (csp && csp->AllowInline(ContentSecurityPolicy::InlineType::kScript,
                                &element, text, element.nonce(), document.Url(),
-                               start_position_.line_));
+                               start_position_));
 
   const bool passes_content_security_policy_checks =
       passes_style_csp && passes_script_csp;
@@ -323,7 +327,7 @@ void StyleElement::AddImportMapEntry(Element& element, const String& text) {
     StringUtf8Adaptor utf8(text, Utf8ConversionMode::kLenient);
     auto* blob = Blob::Create(base::as_byte_span(utf8), "text/css");
     CHECK(blob);
-    url_string = DOMURL::CreatePublicURL(context, blob);
+    url_string = URL::CreatePublicURL(context, blob);
   }
   KURL url(url_string);
   CHECK(url.IsValid());

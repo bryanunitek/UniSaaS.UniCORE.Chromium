@@ -12,16 +12,14 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "build/branding_buildflags.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
-#include "components/optimization_guide/core/model_execution/model_execution_util.h"
+#include "components/optimization_guide/core/model_execution/android/android_manifest.h"
 #include "components/optimization_guide/core/model_execution/on_device_features.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_adaptation_loader.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_component.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_download_progress_manager.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_feature_adapter.h"
+#include "components/optimization_guide/core/model_execution/on_device_prefs.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/model_quality_metadata.pb.h"
-#include "components/optimization_guide/proto/text_safety_model_metadata.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom.h"
 #include "services/on_device_model/android/backend_model_impl_android.h"
 #include "services/on_device_model/android/downloader_params.mojom.h"
@@ -37,6 +35,7 @@ namespace {
 using BaseModelSpec = on_device_model::ModelDownloaderAndroid::BaseModelSpec;
 using DownloadFailureReason =
     on_device_model::ModelDownloaderAndroid::DownloadFailureReason;
+using ModelStatus = on_device_model::ModelDownloaderAndroid::ModelStatus;
 using AICoreFeature = proto::ModelExecutionFeature;
 
 // Returns the AICore feature for the given OnDeviceFeature, or std::nullopt if
@@ -72,7 +71,7 @@ std::optional<AICoreFeature> GetAICoreFeatureFor(
 
 bool IsModelAllowed(PrefService* local_state) {
   return features::IsOnDeviceExecutionEnabled() &&
-         optimization_guide::
+         model_execution::prefs::
                  GetGenAILocalFoundationalModelEnterprisePolicySettings(
                      local_state) ==
              model_execution::prefs::
@@ -113,42 +112,31 @@ on_device_model::Capabilities AICoreModelCapabilities() {
   return {on_device_model::CapabilityFlags::kImageInput};
 }
 
-// Returns an ineligibility reason if the AICore model is not ready, or
-// std::nullopt if the model is available and we should continue.
-std::optional<OnDeviceModelEligibilityReason> GetModelIneligibilityReason(
-    const std::optional<on_device_model::ModelDownloaderAndroid::ModelStatus>&
-        status) {
-  // The model status is unknown, return std::nullopt to indicate the "unknown"
-  // status, so the caller can proceed with other flow.
-  if (!status.has_value()) {
-    return std::nullopt;
-  }
-
-  switch (status.value()) {
-    // The backend API is not constructed. This usually returns from Chrome
-    // branded builds whose backend API is not constructed via MLKit library, so
-    // the model status will always be marked as kApiNotAvailable. We return
-    // std::nullopt in this case to allow the flow to continue since Chrome
-    // branded builds may not check model status via MLKit.
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kApiNotAvailable:
-      return std::nullopt;
+OnDeviceModelEligibilityReason GetEligibilityReasonForModelStatus(
+    ModelStatus status) {
+  switch (status) {
     // The device is not eligible to have the on-device model capability.
     // Return kModelNotEligible to indicate the ineligibility specifically.
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kUnavailable:
+    case ModelStatus::kUnavailable:
       return OnDeviceModelEligibilityReason::kModelNotEligible;
     // The model is not yet available but can be downloaded. Return
     // kNoOnDeviceFeatureUsed which may prompt the caller to trigger the
     // download.
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kDownloadable:
+    case ModelStatus::kDownloadable:
       return OnDeviceModelEligibilityReason::kNoOnDeviceFeatureUsed;
     // The model downloading is in progress but not completed. Return
     // kModelToBeInstalled to indicate the model is on the way.
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kDownloading:
+    case ModelStatus::kDownloading:
       return OnDeviceModelEligibilityReason::kModelToBeInstalled;
-    // kAvailable means the model is available for use. Return std::nullopt so
-    // the caller can proceed with other flow.
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kAvailable:
-      return std::nullopt;
+    // CheckStatus does not return the model specification, so report pending
+    // until StartDownload supplies it.
+    case ModelStatus::kAvailable:
+      return OnDeviceModelEligibilityReason::kModelToBeInstalled;
+    // The backend API is not constructed. This usually happens in
+    // Chrome-branded builds that do not check model status via MLKit. Callers
+    // must bypass eligibility mapping and use the normal download path.
+    case ModelStatus::kApiNotAvailable:
+      NOTREACHED();
   }
 }
 
@@ -169,9 +157,6 @@ class SolutionImpl : public ModelBrokerImpl::Solution {
   void CreateSession(
       mojo::PendingReceiver<on_device_model::mojom::Session> pending,
       on_device_model::mojom::SessionParamsPtr params) override;
-  void CreateTextSafetySession(
-      mojo::PendingReceiver<on_device_model::mojom::TextSafetySession> pending)
-      override;
   void ReportHealthyCompletion() override;
 
   base::WeakPtr<ModelBrokerAndroid> parent_;
@@ -202,9 +187,6 @@ mojom::ModelSolutionConfigPtr SolutionImpl::MakeConfig() const {
   config->feature_config = mojo_base::ProtoWrapper(adapter_->config());
   config->model_versions =
       mojo_base::ProtoWrapper(GetModelVersions(spec_, adaptation_version_));
-  // TODO: crbug.com/442914748 - Add safety config.
-  config->text_safety_config =
-      mojo_base::ProtoWrapper(proto::FeatureTextSafetyConfiguration());
   config->model_capabilities = AICoreModelCapabilities();
   return config;
 }
@@ -216,11 +198,6 @@ void SolutionImpl::CreateSession(
     parent_->GetOrCreateModelRemote(adapter_->config().feature())
         ->StartSession(std::move(pending), std::move(params));
   }
-}
-
-void SolutionImpl::CreateTextSafetySession(
-    mojo::PendingReceiver<on_device_model::mojom::TextSafetySession> pending) {
-  // TODO: crbug.com/442914748 - Implement (can be a no-op initially).
 }
 
 void SolutionImpl::ReportHealthyCompletion() {
@@ -263,16 +240,15 @@ class ModelBrokerAndroid::SolutionFactory final
   // |done_callback| when all status checks complete.
   void CheckModelStatus(base::OnceClosure done_callback);
 
-  // Updates model availability for all features, e.g. for a change in a shared
-  // asset like a safety config.
+  // Updates model availability for all features.
   void UpdateSolutionProviders();
   // Updates model availability for one feature.
   void UpdateSolutionProvider(mojom::OnDeviceFeature feature);
 
  private:
   // UsageTracker::Observer
-  void OnDeviceEligibleUseCaseUsed(const std::string& use_case_name,
-                                   bool is_first_usage) override;
+  void OnPriorityIncrease(const std::string& use_case_name,
+                          UsageTracker::Priority previous_priority) override;
 
   // Asks AICore to download the base model.
   void MaybeStartDownload(mojom::OnDeviceFeature feature);
@@ -284,10 +260,9 @@ class ModelBrokerAndroid::SolutionFactory final
 
   // Called when CheckStatus completes. Calls |barrier_done_callback| when
   // finished.
-  void OnAICoreModelStatusChecked(
-      AICoreFeature aicore_feature,
-      base::OnceClosure barrier_done_callback,
-      on_device_model::ModelDownloaderAndroid::ModelStatus status);
+  void OnAICoreModelStatusChecked(AICoreFeature aicore_feature,
+                                  base::OnceClosure barrier_done_callback,
+                                  ModelStatus status);
 
   // Updates the model adaptation for the feature.
   void MaybeUpdateModelAdaptation(mojom::OnDeviceFeature feature,
@@ -299,18 +274,24 @@ class ModelBrokerAndroid::SolutionFactory final
   // The broker that owns |this|.
   raw_ref<ModelBrokerAndroid> parent_;
 
-  // Current registrations to fetch adaptation assets.
+  // Fetches adaptations delivered through OptimizationGuideModelProvider.
+  // This remains the active config path for features such as Scam Detection
+  // and tests. Web AI APIs use configs from AndroidManifest instead.
   AdaptationLoaderMap loader_map_;
 
   // The current model adaptation assets.
   AdaptationMetadataMap adaptation_metadata_;
 
-  // Holds the model spec for each available AICore feature, or a status if spec
-  // is not available. The spec is set when base model download completes.
+  // Stores the solution configs available to Android model execution.
+  // Currently populated with the built-in fallback; allow configs delivered by
+  // the component updater to replace it.
+  AndroidManifest manifest_ = AndroidManifest::CreateFromBuiltin();
+
+  // Holds the model spec for each available AICore feature, or an eligibility
+  // reason if the spec is not available.
   absl::flat_hash_map<
       AICoreFeature,
-      base::expected<OnDeviceBaseModelSpec,
-                     on_device_model::ModelDownloaderAndroid::ModelStatus>>
+      base::expected<OnDeviceBaseModelSpec, OnDeviceModelEligibilityReason>>
       base_model_specs_;
 
   // Map from AICore feature to the downloader for the base model. The
@@ -337,8 +318,8 @@ ModelBrokerAndroid::SolutionFactory::SolutionFactory(ModelBrokerAndroid& parent)
   parent_->usage_tracker_.AddObserver(this);
   // Start model downloads for recently used features
   for (auto feature : OnDeviceFeatureSet::All()) {
-    if (parent_->usage_tracker_.WasUseCaseRecentlyUsed(
-            ToUseCaseName(feature))) {
+    if (parent_->usage_tracker_.GetPriority(ToUseCaseName(feature)) >=
+        UsageTracker::Priority::kBestEffort) {
       MaybeStartDownload(feature);
     }
   }
@@ -347,10 +328,10 @@ ModelBrokerAndroid::SolutionFactory::~SolutionFactory() {
   parent_->usage_tracker_.RemoveObserver(this);
 }
 
-void ModelBrokerAndroid::SolutionFactory::OnDeviceEligibleUseCaseUsed(
+void ModelBrokerAndroid::SolutionFactory::OnPriorityIncrease(
     const std::string& use_case_name,
-    bool is_first_usage) {
-  if (!is_first_usage) {
+    UsageTracker::Priority previous_priority) {
+  if (previous_priority >= UsageTracker::Priority::kBestEffort) {
     return;
   }
   auto feature = GetFeatureForUseCase(use_case_name);
@@ -364,8 +345,9 @@ void ModelBrokerAndroid::SolutionFactory::OnDeviceEligibleUseCaseUsed(
 void ModelBrokerAndroid::SolutionFactory::MaybeStartDownload(
     mojom::OnDeviceFeature feature) {
   if (!IsModelAllowed(&(*parent_->local_state_))) {
-    MaybeUpdateModelAdaptation(
-        feature, base::unexpected(AdaptationUnavailability::kNotSupported));
+    // Refresh availability without storing policy state as an adaptation result
+    // since MakeSolution evaluates policy directly.
+    UpdateSolutionProvider(feature);
     return;
   }
 
@@ -403,9 +385,8 @@ void ModelBrokerAndroid::SolutionFactory::OnAICoreModelUpdated(
     parent_->model_already_downloaded_ = true;
     parent_->has_active_download_progress_ = false;
     // Performance hint is not supported on Android.
-    OnDeviceBaseModelSpec spec{
-        result->name, result->version,
-        proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_UNSPECIFIED};
+    OnDeviceBaseModelSpec spec{.model_name = result->name,
+                               .model_version = result->version};
     base_model_specs_.insert_or_assign(aicore_feature, spec);
     // Register the model download for all features that share the same
     // AICore feature, since multiple mojom::OnDeviceFeature values may map to
@@ -415,15 +396,26 @@ void ModelBrokerAndroid::SolutionFactory::OnAICoreModelUpdated(
       if (GetAICoreFeatureFor(f) == aicore_feature) {
         loader_map_.MaybeRegisterModelDownload(
             f, spec,
-            parent_->usage_tracker_.WasUseCaseRecentlyUsed(ToUseCaseName(f)));
+            parent_->usage_tracker_.GetPriority(ToUseCaseName(f)) >=
+                UsageTracker::Priority::kBestEffort);
+        // Update solution because the returned model spec may allow
+        // MakeSolution to select a solution config and publish an available
+        // solution.
+        UpdateSolutionProvider(f);
       }
     }
   } else {
+    // ModelDownloaderAndroid already records the backend-specific failure
+    // reason. The broker exposes a stable user-facing availability state, so
+    // collapse download failures to a terminal result that completes pending
+    // session requests.
+    base_model_specs_.insert_or_assign(
+        aicore_feature,
+        base::unexpected(OnDeviceModelEligibilityReason::kModelNotEligible));
     // Notify all features that share this AICore feature of the failure.
     for (auto f : OnDeviceFeatureSet::All()) {
       if (GetAICoreFeatureFor(f) == aicore_feature) {
-        MaybeUpdateModelAdaptation(
-            f, base::unexpected(AdaptationUnavailability::kNotSupported));
+        UpdateSolutionProvider(f);
       }
     }
   }
@@ -458,6 +450,13 @@ ModelBrokerAndroid::SolutionFactory::MakeSolution(
         OnDeviceModelEligibilityReason::kFeatureExecutionNotEnabled);
   }
 
+  if (!IsModelAllowed(&(*parent_->local_state_))) {
+    // Preserve the existing policy-denial mapping previously represented by
+    // AdaptationUnavailability::kNotSupported.
+    return base::unexpected(
+        OnDeviceModelEligibilityReason::kModelAdaptationNotAvailable);
+  }
+
   auto spec_it = base_model_specs_.find(*aicore_feature);
 
   // No spec or status record yet.
@@ -467,33 +466,30 @@ ModelBrokerAndroid::SolutionFactory::MakeSolution(
 
   // Check base model availability.
   if (!spec_it->second.has_value()) {
-    if (auto ineligibility_reason =
-            GetModelIneligibilityReason(spec_it->second.error())) {
-      return base::unexpected(*ineligibility_reason);
-    }
+    return base::unexpected(spec_it->second.error());
   }
 
-  // Check feature config.
-  MaybeAdaptationMetadata metadata = adaptation_metadata_.Get(feature);
-  if (!metadata.has_value()) {
-    if (metadata.error() == AdaptationUnavailability::kNotSupported) {
-      return base::unexpected(
-          OnDeviceModelEligibilityReason::kModelAdaptationNotAvailable);
-    }
+  const MaybeAdaptationMetadata& metadata = adaptation_metadata_.Get(feature);
+  scoped_refptr<const OnDeviceModelFeatureAdapter> adapter;
+  // Manifest configs do not have a downloaded adaptation version. Use 0 to
+  // preserve the existing ModelSolutionConfig version shape.
+  int64_t adaptation_version = 0;
+  if (metadata.has_value()) {
+    adapter = metadata->adapter();
+    adaptation_version = metadata->version();
+  } else if (auto config = manifest_.SelectConfig(feature)) {
+    adapter = std::move(config);
+  } else {
     return base::unexpected(
-        OnDeviceModelEligibilityReason::kConfigNotAvailableForFeature);
+        metadata.error() == AdaptationUnavailability::kNotSupported
+            ? OnDeviceModelEligibilityReason::kModelAdaptationNotAvailable
+            : OnDeviceModelEligibilityReason::kConfigNotAvailableForFeature);
   }
 
-  if (!metadata->adapter()->CanSkipTextSafety()) {
-    // TODO: crbug.com/442914748 - Support text safety.
-    return base::unexpected(
-        OnDeviceModelEligibilityReason::kModelAdaptationNotAvailable);
-  }
-
-  // Base model specs should always be set before adaptation becomes available.
+  // A base model spec is required for both adaptation and manifest solutions.
   return std::make_unique<SolutionImpl>(
-      parent_->weak_ptr_factory_.GetWeakPtr(), metadata->adapter(),
-      spec_it->second.value(), metadata->version());
+      parent_->weak_ptr_factory_.GetWeakPtr(), std::move(adapter),
+      spec_it->second.value(), adaptation_version);
 }
 
 void ModelBrokerAndroid::SolutionFactory::CheckModelStatus(
@@ -541,35 +537,39 @@ void ModelBrokerAndroid::SolutionFactory::CheckModelStatus(
 void ModelBrokerAndroid::SolutionFactory::OnAICoreModelStatusChecked(
     AICoreFeature aicore_feature,
     base::OnceClosure barrier_done_callback,
-    on_device_model::ModelDownloaderAndroid::ModelStatus status) {
+    ModelStatus status) {
   status_checkers_.erase(aicore_feature);
 
   switch (status) {
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kUnavailable:
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kDownloadable:
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kDownloading:
+    case ModelStatus::kUnavailable:
+    case ModelStatus::kDownloadable:
+    case ModelStatus::kDownloading:
       // The model is not available. Insert or overwrite any previously stored
       // status.
-      base_model_specs_.insert_or_assign(aicore_feature,
-                                         base::unexpected(status));
+      base_model_specs_.insert_or_assign(
+          aicore_feature,
+          base::unexpected(GetEligibilityReasonForModelStatus(status)));
       break;
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kAvailable:
-      // The model is available but we may not have a valid spec yet. Store the
-      // status so MakeSolution knows the status check completed. Skip if a
-      // valid spec is already present — MaybeStartDownload for recently used
-      // features may have completed a download before the status check fires.
+    case ModelStatus::kAvailable:
+      // CheckStatus does not return a model specification. Request the
+      // already-installed model so StartDownload resolves with its spec. The
+      // model is already installed, so this only retrieves its base model name
+      // and does not initiate a download or emit progress events. Skip this if
+      // MaybeStartDownload for a recently used feature already supplied one
+      // before the status check completed.
       if (auto it = base_model_specs_.find(aicore_feature);
           it == base_model_specs_.end() || !it->second.has_value()) {
-        base_model_specs_.insert_or_assign(aicore_feature,
-                                           base::unexpected(status));
+        base_model_specs_.insert_or_assign(
+            aicore_feature,
+            base::unexpected(GetEligibilityReasonForModelStatus(status)));
+        for (auto feature : OnDeviceFeatureSet::All()) {
+          if (GetAICoreFeatureFor(feature) == aicore_feature) {
+            MaybeStartDownload(feature);
+          }
+        }
       }
       break;
-    case on_device_model::ModelDownloaderAndroid::ModelStatus::kApiNotAvailable:
-      // Store the status so MakeSolution knows the status check completed.
-      // This usually happens on Chrome branded builds whose backend API is not
-      // constructed via MLKit library.
-      base_model_specs_.insert_or_assign(aicore_feature,
-                                         base::unexpected(status));
+    case ModelStatus::kApiNotAvailable:
       break;
   }
 
@@ -587,7 +587,9 @@ ModelBrokerAndroid::ModelBrokerAndroid(
                                 base::Unretained(this)),
             base::BindRepeating(
                 &ModelBrokerAndroid::AddModelDownloadProgressObserver,
-                base::Unretained(this))) {}
+                base::Unretained(this))) {
+  impl_.SetFeatureConfigs(AndroidManifest::GetFeatureRoutingConfigs());
+}
 ModelBrokerAndroid::~ModelBrokerAndroid() = default;
 
 void ModelBrokerAndroid::BindModelBroker(
@@ -623,7 +625,9 @@ void ModelBrokerAndroid::GetStateInfo(
 
 void ModelBrokerAndroid::SetUseCaseRequested(const std::string& use_case,
                                              bool requested) {
-  usage_tracker_.SetUseCaseRequested(use_case, requested);
+  usage_tracker_.SetPriority(use_case,
+                             requested ? UsageTracker::Priority::kUserBlocking
+                                       : UsageTracker::Priority::kEvictable);
 }
 
 void ModelBrokerAndroid::UninstallModels() {
@@ -645,7 +649,7 @@ ModelBrokerAndroid::GetOrCreateModelRemote(AICoreFeature feature) {
         base::BindOnce(&ModelBrokerAndroid::OnModelDisconnected,
                        weak_ptr_factory_.GetWeakPtr(), feature));
     service.remote.set_idle_handler(
-        features::GetOnDeviceModelIdleTimeout(),
+        base::Minutes(1),
         base::BindRepeating(&ModelBrokerAndroid::OnModelDisconnected,
                             weak_ptr_factory_.GetWeakPtr(), feature, nullptr));
     model_services_.emplace(feature, std::move(service));
@@ -722,6 +726,12 @@ void ModelBrokerAndroid::OnDownloadProgressUpdated(int64_t downloaded_bytes,
 
 void ModelBrokerAndroid::AddObserver(
     mojo::PendingRemote<mojom::ModelBrokerDebugObserver>) {
+  // Not yet implemented on Android.
+}
+
+void ModelBrokerAndroid::AddAssetDownloadObserver(
+    const std::string& asset_name,
+    mojo::PendingRemote<on_device_model::mojom::DownloadObserver> observer) {
   // Not yet implemented on Android.
 }
 

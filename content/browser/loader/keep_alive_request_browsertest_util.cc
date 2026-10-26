@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 #include "content/browser/loader/keep_alive_request_browsertest_util.h"
 
+#include "base/no_destructor.h"
 #include "base/strings/stringprintf.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -28,9 +29,9 @@ void KeepAliveRequestBrowserTestBase::SetUp() {
 
 const KeepAliveRequestBrowserTestBase::DisabledFeaturesType&
 KeepAliveRequestBrowserTestBase::GetDisabledFeatures() {
-  static const DisabledFeaturesType disabled_features =
-      GetDefaultDisabledBackForwardCacheFeaturesForTesting();
-  return disabled_features;
+  static const base::NoDestructor<DisabledFeaturesType> disabled_features(
+      GetDefaultDisabledBackForwardCacheFeaturesForTesting());
+  return *disabled_features;
 }
 
 void KeepAliveRequestBrowserTestBase::SetUpOnMainThread() {
@@ -143,8 +144,7 @@ void KeepAliveRequestBrowserTestBase::ExpectFetchKeepAliveHistogram(
   const int renderer_sample = static_cast<int>(expected_sample);
   const int browser_sample =
       (expected_sample == FetchKeepAliveRequestMetricType::kBeacon ||
-       expected_sample == FetchKeepAliveRequestMetricType::kPing ||
-       expected_sample == FetchKeepAliveRequestMetricType::kAttribution)
+       expected_sample == FetchKeepAliveRequestMetricType::kPing)
           ? static_cast<int>(FetchKeepAliveRequestMetricType::kPing)
           : static_cast<int>(expected_sample);
   histogram_tester().ExpectUniqueSample(

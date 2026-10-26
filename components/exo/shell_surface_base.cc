@@ -58,7 +58,8 @@
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor_extra/shadow.h"
+#include "ui/decoration/decoration.h"
+#include "ui/decoration/shadow.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point.h"
@@ -467,7 +468,7 @@ ShellSurfaceBase::~ShellSurfaceBase() {
 
   // If the surface was TrustedPinned, we have to unpin first as this might have
   // locked down some system functions.
-  if (current_pinned_state_ == chromeos::WindowPinType::kLockedFullscreen) {
+  if (current_pinned_state_ == chromeos::WindowPinType::kTrustedPinned) {
     pending_pinned_state_ = chromeos::WindowPinType::kNone;
     UpdatePinned();
   }
@@ -555,6 +556,17 @@ void ShellSurfaceBase::SetSystemModal(bool system_modal) {
   if (system_modal == system_modal_)
     return;
 
+  if (system_modal) {
+    SecurityDelegate* security = GetSecurityDelegate();
+    if (!security || !security->CanSetSystemModal()) {
+      return;
+    }
+  }
+
+  // TODO(b/516545207): The system modal widget has to be created as a
+  // system modal and can only be changed to non system modal after that.
+  // It should fail if a client attemps to change from normal to system
+  // modal.
   bool non_system_modal_window_was_active =
       !system_modal_ && widget_ && widget_->IsActive();
 
@@ -791,7 +803,7 @@ void ShellSurfaceBase::SetInitialWorkspace(const char* initial_workspace) {
 }
 
 void ShellSurfaceBase::Pin(bool trusted) {
-  pending_pinned_state_ = trusted ? chromeos::WindowPinType::kLockedFullscreen
+  pending_pinned_state_ = trusted ? chromeos::WindowPinType::kTrustedPinned
                                   : chromeos::WindowPinType::kPinned;
   UpdatePinned();
 }
@@ -818,7 +830,7 @@ void ShellSurfaceBase::UpdatePinned() {
       ash::WindowState::Get(window)->Restore();
     } else {
       bool trusted_pinned =
-          pending_pinned_state_ == chromeos::WindowPinType::kLockedFullscreen;
+          pending_pinned_state_ == chromeos::WindowPinType::kTrustedPinned;
       ash::window_util::PinWindow(window,
                                   /*trusted=*/trusted_pinned);
     }
@@ -843,7 +855,12 @@ void ShellSurfaceBase::UpdateTopInset() {
 }
 
 void ShellSurfaceBase::SetChildAxTreeId(ui::AXTreeID child_ax_tree_id) {
-  GetViewAccessibility().SetChildTreeID(child_ax_tree_id);
+  if (child_ax_tree_id != ui::AXTreeIDUnknown()) {
+    GetViewAccessibility().SetChildTreeID(child_ax_tree_id);
+  } else {
+    GetViewAccessibility().RemoveChildTreeID();
+  }
+
   this->NotifyAccessibilityEventDeprecated(ax::mojom::Event::kChildrenChanged,
                                            false);
 }
@@ -918,6 +935,10 @@ void ShellSurfaceBase::SetRestoreInfo(int32_t restore_session_id,
   // TODO(crbug.com/1327490): Rename restore info variables.
   // Restore information must be set before widget is created.
   DCHECK(!widget_);
+  SecurityDelegate* security = GetSecurityDelegate();
+  if (!security || !security->CanSetRestoreInfo()) {
+    return;
+  }
   restore_session_id_.emplace(restore_session_id);
   restore_window_id_.emplace(restore_window_id);
   ash::LoginUnlockThroughputRecorder* throughput_recorder =
@@ -928,6 +949,10 @@ void ShellSurfaceBase::SetRestoreInfo(int32_t restore_session_id,
 void ShellSurfaceBase::SetRestoreInfoWithWindowIdSource(
     int32_t restore_session_id,
     const std::string& restore_window_id_source) {
+  SecurityDelegate* security = GetSecurityDelegate();
+  if (!security || !security->CanSetRestoreInfo()) {
+    return;
+  }
   restore_session_id_.emplace(restore_session_id);
   if (!restore_window_id_source.empty())
     restore_window_id_source_.emplace(restore_window_id_source);
@@ -1211,7 +1236,7 @@ void ShellSurfaceBase::OnSetFrame(SurfaceFrameType frame_type) {
   // not specified, the widget's layer is set to 'NOT_DRAWN' and the frame can't
   // be drawn. `ClientControlledShellSurface` is not affected.
   if (frame_type_changed && widget_ &&
-      widget_->GetNativeWindow()->layer()->type() == ui::LAYER_NOT_DRAWN) {
+      widget_->GetNativeWindow()->layer()->AsNotDrawn()) {
     if (frame_type != SurfaceFrameType::NONE &&
         frame_type != SurfaceFrameType::SHADOW) {
       DLOG(FATAL)
@@ -1462,6 +1487,8 @@ void ShellSurfaceBase::OnCaptureChanged(aura::Window* lost_capture,
   if (lost_capture == gained_capture_parent)
     return;
 
+  base::WeakPtr<aura::Window> weak_gained =
+      gained_capture ? gained_capture->GetWeakPtrAsWindow() : nullptr;
   if (!gained_capture) {
     // If `gained_capture` is nullptr, find the closest ancestor of
     // `lost_capture` that is a popup with grab.
@@ -1472,11 +1499,17 @@ void ShellSurfaceBase::OnCaptureChanged(aura::Window* lost_capture,
         break;
       }
     }
-    // Give capture to the new `gained_capture`.
     if (gained_capture) {
+      base::WeakPtr<aura::Window> weak_lost =
+          lost_capture ? lost_capture->GetWeakPtrAsWindow() : nullptr;
+      weak_gained = gained_capture->GetWeakPtrAsWindow();
       ShellSurfaceBase* parent_shell_surface =
           GetShellSurfaceBaseForWindow(gained_capture);
       parent_shell_surface->StartCapture();
+      // If the lost capture is destroyed, there is nothing to close.
+      if (!weak_lost) {
+        return;
+      }
     }
   }
 
@@ -1503,7 +1536,7 @@ void ShellSurfaceBase::OnCaptureChanged(aura::Window* lost_capture,
 
   // Please note that `gained_capture_ancestors` also includes `gained_capture`.
   base::flat_set<aura::Window*> gained_capture_ancestors;
-  for (aura::Window* next = gained_capture; next != nullptr;
+  for (aura::Window* next = weak_gained.get(); next != nullptr;
        next = wm::GetTransientParent(next)) {
     gained_capture_ancestors.insert(next);
   }
@@ -1683,15 +1716,17 @@ void ShellSurfaceBase::OnWindowActivated(ActivationReason reason,
 void ShellSurfaceBase::OnTooltipShown(aura::Window* target,
                                       std::u16string_view text,
                                       const gfx::Rect& bounds) {
-  if (root_surface()) {
-    root_surface()->OnTooltipShown(text, bounds);
+  if (!IsShellSurfaceWindow(target) || !root_surface()) {
+    return;
   }
+  root_surface()->OnTooltipShown(text, bounds);
 }
 
 void ShellSurfaceBase::OnTooltipHidden(aura::Window* target) {
-  if (root_surface()) {
-    root_surface()->OnTooltipHidden();
+  if (!IsShellSurfaceWindow(target) || !root_surface()) {
+    return;
   }
+  root_surface()->OnTooltipHidden();
 }
 
 // Returns true if surface is currently being resized.
@@ -2107,8 +2142,9 @@ void ShellSurfaceBase::UpdateShadow() {
 
   // A window may not have a shadow object if the window was created in
   // maximized/fullscreen state.
-  ui::Shadow* shadow = wm::ShadowController::GetShadowForWindow(window);
-  if (shadow && shadow_elevation != wm::kShadowElevationNone) {
+  ui::Decoration* shadow_decoration =
+      wm::ShadowController::GetShadowDecorationForWindow(window);
+  if (shadow_decoration && shadow_elevation != wm::kShadowElevationNone) {
     gfx::Rect shadow_bounds = GetShadowBounds();
     gfx::Point origin = GetClientViewBounds().origin();
 
@@ -2133,17 +2169,19 @@ void ShellSurfaceBase::UpdateShadow() {
       }
     }
 
-    shadow->SetContentBounds(shadow_bounds);
+    shadow_decoration->SetContentBounds(shadow_bounds);
 
     // Surfaces that can't be activated are usually menus and tooltips. Use a
     // small style shadow for them.
-    if (!CanActivate())
-      shadow->SetElevation(wm::kShadowElevationMenuOrTooltip);
+    if (!CanActivate()) {
+      shadow_decoration->GetSourceAs<ui::decoration::Shadow>()->SetElevation(
+          wm::kShadowElevationMenuOrTooltip);
+    }
 
     UpdateShadowRoundedCorners();
   }
 
-  if (window->layer()->type() == ui::LAYER_NOT_DRAWN) {
+  if (window->layer()->AsNotDrawn()) {
     DCHECK(!window->GetProperty(chromeos::kWindowManagerManagesOpacityKey));
 
     // Snapped window should not be opaque because it can be drag-resized, in
@@ -2172,9 +2210,10 @@ void ShellSurfaceBase::UpdateShadowRoundedCorners() {
   shadow_corners_radii_dp_ = pending_shadow_corners_radii_dp_;
 
   aura::Window* window = widget_->GetNativeWindow();
-  ui::Shadow* shadow = wm::ShadowController::GetShadowForWindow(window);
+  ui::Decoration* shadow_decoration =
+      wm::ShadowController::GetShadowDecorationForWindow(window);
 
-  if (!shadow) {
+  if (!shadow_decoration) {
     return;
   }
 
@@ -2193,7 +2232,8 @@ void ShellSurfaceBase::UpdateShadowRoundedCorners() {
   }
 
   // TODO(crbug.com/40256581): Support shadow with variable radius corners.
-  shadow->SetRoundedCornerRadius(shadow_radii.upper_left());
+  shadow_decoration->SetRoundedCorners(
+      gfx::RoundedCornersF(shadow_radii.upper_left()));
 }
 
 void ShellSurfaceBase::UpdateFrameType() {

@@ -114,22 +114,22 @@ export class SearchPageElement extends SearchPageElementBase {
     };
   }
 
-  feedbackContext: FeedbackContext;
-  descriptionTemplate = '';
-  descriptionPlaceholderText: string = '';
-  private helpContentSearchResultCount: number = 0;
-  private noHelpContentDisplayed = false;
+  declare feedbackContext: FeedbackContext;
+  declare descriptionTemplate: string;
+  declare descriptionPlaceholderText: string;
+  declare private helpContentSearchResultCount: number;
+  declare private noHelpContentDisplayed: boolean;
   private helpContentProvider: HelpContentProviderInterface;
   /**
    * The event handler called when the iframe is loaded. It is set in the
    * html.
    */
-  private resolveIframeLoaded: Function;
+  private resolveIframeLoaded: Function|null = null;
   /**  A promise that resolves when the iframe loading is completed. */
-  private iframeLoaded: Promise<void>;
-  private iframe: HTMLIFrameElement|null;
+  private iframeLoaded: Promise<void>|null = null;
+  private iframe: HTMLIFrameElement|null = null;
   /**  The content list received when query is empty. */
-  private popularHelpContentList: HelpContent[];
+  private popularHelpContentList: HelpContent[]|null = null;
   /**
    * The list of questionnaire questions that have already been appended to
    * the input text.
@@ -163,6 +163,10 @@ export class SearchPageElement extends SearchPageElementBase {
 
   constructor() {
     super();
+    this.descriptionTemplate = '';
+    this.descriptionPlaceholderText = '';
+    this.helpContentSearchResultCount = 0;
+    this.noHelpContentDisplayed = false;
 
     this.helpContentProvider = getHelpContentProvider();
     this.lastPostedQuerySeqNo = -1;
@@ -261,7 +265,7 @@ export class SearchPageElement extends SearchPageElementBase {
 
     if (isQueryEmpty) {
       // Load popular help content if they are not loaded before.
-      if (this.popularHelpContentList === undefined) {
+      if (this.popularHelpContentList === null) {
         response = await this.helpContentProvider.getHelpContents(request);
         this.popularHelpContentList = response.response.results;
       }
@@ -276,7 +280,7 @@ export class SearchPageElement extends SearchPageElementBase {
     this.isPopularContentForTesting = isPopularContent;
     const data = {
       contentList:
-          (isPopularContent ? this.popularHelpContentList :
+          (isPopularContent ? this.popularHelpContentList! :
                               response!.response.results),
       isQueryEmpty: isQueryEmpty,
       isPopularContent: isPopularContent,

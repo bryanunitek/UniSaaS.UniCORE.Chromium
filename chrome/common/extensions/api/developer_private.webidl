@@ -125,6 +125,8 @@ dictionary DisableReasons {
   required boolean parentDisabledPermissions;
   required boolean unsupportedManifestVersion;
   required boolean unsupportedDeveloperExtension;
+  required boolean disabledByAnotherExtension;
+  DOMString? disabledByExtensionName;
 };
 
 dictionary OptionsPage {
@@ -254,6 +256,7 @@ dictionary ExtensionInfo {
   boolean pinnedToToolbar;
   required boolean isAffectedByMV2Deprecation;
   required boolean canUploadAsAccountExtension;
+  required boolean canShowReviewPrompt;
 };
 
 dictionary ProfileInfo {
@@ -657,6 +660,10 @@ interface DeveloperPrivate {
   //     Any properties omitted from |update| will not be changed.
   static Promise<undefined> updateExtensionConfiguration(
       ExtensionConfigurationUpdate update);
+
+  // Opens the review page for a specific extension.
+  // |extensionId|: The id of the extension to review.
+  static Promise<undefined> openReviewPage(DOMString extensionId);
 
   // Loads a user-selected unpacked item.
   // |options|: Additional configuration parameters.

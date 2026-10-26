@@ -17,12 +17,23 @@
   width: 100%;
 }
 
+:host([inline-action-buttons]) {
+  align-items: flex-start;
+  flex-direction: row;
+}
+
 #textContainer {
   display: flex;
   flex-direction: row;
   padding-block-start: var(--cr-composebox-text-container-padding-block-start, 8px);
   padding-block-end: 0;
-  padding-inline: var(--text-input-inline-start-spacing) 0;
+  padding-inline: var(--text-input-inline-start-spacing, 0)
+      max(0px, calc(var(--text-input-inline-end-spacing, 0px) - 12px));
+}
+
+:host([inline-action-buttons]) #textContainer {
+  flex: 1;
+  min-width: 0;
 }
 
 :host-context([use-pec-api]:not([has-allowed-inputs])) #textContainer {
@@ -38,7 +49,7 @@
   --text-input-top-spacing: 8px;
   align-items: center;
   display: flex;
-  height: 48px;
+  height: var(--cr-composebox-icon-container-height, 48px);
   justify-content: center;
 }
 
@@ -57,11 +68,11 @@
 }
 
 :host-context([searchbox-next-enabled]) #iconContainer {
-  height: 44px;
+  height: var(--cr-composebox-icon-container-height, 44px);
 }
 
 #aimIcon {
-  -webkit-mask-image: url(//resources/cr_components/searchbox/icons/search_spark.svg);
+  -webkit-mask-image: url(//resources/cr_components/searchbox/icons/search_spark_old.svg);
   -webkit-mask-position: center;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-size: cover;
@@ -94,8 +105,9 @@
   font-family: inherit;
   font-size: var(--cr-composebox-font-size, inherit);
   line-height: 24px;
-  padding-block: var(--text-input-top-spacing) 4px;
-  padding-inline: 12px var(--text-input-inline-end-spacing);
+  padding-block: var(--cr-composebox-input-padding-block,
+      var(--text-input-top-spacing) 4px);
+  padding-inline: 12px;
   width: 100%;
 }
 
@@ -107,16 +119,19 @@
   position: absolute;
   top: 0;
   user-select: none;
-  white-space: pre-wrap;
+  white-space: break-spaces;
   word-break: break-word;
+}
+
+:host([entrypoint-name='ContextualTasks']) #textContainer {
+  padding-inline-end: var(--text-input-inline-end-spacing, 0);
 }
 
 :host([entrypoint-name='ContextualTasks']) #input,
 :host([entrypoint-name='ContextualTasks']) #mirror,
 :host([entrypoint-name='ContextualTasks']) #smartCompose {
   padding-block: 12px;
-  padding-inline-end: var(--text-input-inline-end-spacing);
-  padding-inline-start: 0;
+  padding-inline: 0;
 }
 
 :host-context(:not([searchbox-next-enabled])) #input {
@@ -131,6 +146,14 @@
   outline: none;
   position: relative;
   resize: none;
+  white-space: break-spaces;
+}
+
+:host([composebox-skills-enabled]) #input {
+  display: inline-block;
+  min-height: 24px;
+  white-space: break-spaces;
+  word-break: break-word;
 }
 
 :host(:not([disable-caret-color-animation])) #input {
@@ -158,11 +181,11 @@
   left: anchor(start);
 }
 
-:host-context([dir='rtl']) #caret {
+#caret:dir(rtl) {
   left: anchor(left);
 }
 
-:host-context([dir='rtl']) #caret.at-start {
+#caret.at-start:dir(rtl) {
   left: anchor(right);
 }
 
@@ -208,11 +231,15 @@
   }
 }
 
-#input::placeholder {
+#input::placeholder,
+#input:empty::before {
+  content: attr(placeholder);
   color: var(--cr-composebox-input-placeholder-color, var(--color-composebox-type-ahead));
+  pointer-events: none;
 }
 
-:host-context([searchbox-next-enabled]) #input::placeholder {
+:host-context([searchbox-next-enabled]) #input::placeholder,
+:host-context([searchbox-next-enabled]) #input:empty::before {
   font-size: var(--cr-composebox-input-placeholder-font-size, 16px);
   font-weight: 400;
 }
@@ -231,12 +258,12 @@
 
 #invisibleText {
   color: transparent;
-  white-space: pre-wrap;
+  white-space: break-spaces;
 }
 
 #ghostText {
   color: var(--color-composebox-type-ahead);
-  white-space: pre-wrap;
+  white-space: break-spaces;
 }
 
 #tabChip {
@@ -317,4 +344,58 @@
   .action-icon {
     border: var(--composebox-outline-hcm);
   }
+
+  #cancelIcon:hover:not([disabled]) {
+    --cr-icon-button-icon-size: 0;
+    background-color: Highlight;
+    forced-color-adjust: none;
+  }
+
+  #cancelIcon:hover:not([disabled])::after {
+    -webkit-mask-image: url(//resources/images/icon_clear_old.svg);
+    -webkit-mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-size: 20px;
+    background-color: HighlightText;
+    content: '';
+    inset: 0;
+    position: absolute;
+  }
+
+  :host-context([webui-rounded-icons])
+      #cancelIcon:hover:not([disabled])::after {
+    -webkit-mask-image: url(//resources/images/icon_clear.svg);
+  }
 }
+
+.aim-chip {
+  border-radius: 4px;
+  display: inline-block;
+  font-size: 14px;
+  font-weight: bold;
+  padding-inline: 2px;
+  white-space: nowrap;
+}
+
+.aim-chip:hover {
+  background-color: var(--color-composebox-aim-chip-hover-background);
+  color: var(--color-composebox-aim-chip-hover-text);
+  cursor: pointer;
+}
+
+#mirror .aim-chip {
+  background-color: transparent;
+  color: transparent;
+}
+
+#mirror .aim-chip span {
+  position: relative;
+  top: -2px;
+}
+
+:host-context([webui-rounded-icons]) {
+  #aimIcon {
+    -webkit-mask-image: url(//resources/cr_components/searchbox/icons/search_spark.svg);
+  }
+}
+

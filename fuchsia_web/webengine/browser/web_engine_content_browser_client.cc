@@ -94,13 +94,31 @@ class DevToolsManagerDelegate final : public content::DevToolsManagerDelegate {
   DevToolsManagerDelegate& operator=(const DevToolsManagerDelegate&) = delete;
 
   // content::DevToolsManagerDelegate implementation.
-  std::vector<content::BrowserContext*> GetBrowserContexts() override {
-    return main_parts_->browser_contexts();
+  std::vector<base::WeakPtr<content::BrowserContext>> GetBrowserContexts()
+      override {
+    std::vector<base::WeakPtr<content::BrowserContext>> contexts;
+    for (auto* context : main_parts_->browser_contexts()) {
+      contexts.push_back(context->GetWeakPtr());
+    }
+    return contexts;
   }
+
   content::BrowserContext* GetDefaultBrowserContext() override {
-    std::vector<content::BrowserContext*> contexts = GetBrowserContexts();
+    std::vector<content::BrowserContext*> contexts =
+        main_parts_->browser_contexts();
     return contexts.empty() ? nullptr : contexts.front();
   }
+
+  content::BrowserContext* GetBrowserContext(
+      const std::string& context_id) override {
+    for (auto* context : main_parts_->browser_contexts()) {
+      if (context->UniqueId() == context_id) {
+        return context;
+      }
+    }
+    return nullptr;
+  }
+
   content::DevToolsAgentHost::List RemoteDebuggingTargets(
       DevToolsManagerDelegate::TargetType target_type) override {
     LOG_IF(WARNING, target_type != DevToolsManagerDelegate::kFrame)
@@ -148,6 +166,7 @@ static constexpr char const*
 static constexpr char const* kAllProcessSwitchesToCopy[] = {
     // This is used by every child process in WebEngineContentClient.
     switches::kEnableContentDirectories,
+    switches::kUseSchedulerRoles,
 };
 
 }  // namespace
@@ -175,7 +194,7 @@ WebEngineContentBrowserClient::CreateDevToolsManagerDelegate() {
 }
 
 std::string WebEngineContentBrowserClient::GetProduct() {
-  return std::string(version_info::GetProductNameAndVersionForUserAgent());
+  return version_info::GetProductNameAndVersionForUserAgent();
 }
 
 std::string WebEngineContentBrowserClient::GetUserAgent() {
@@ -308,7 +327,7 @@ bool WebEngineContentBrowserClient::MayDeleteServiceWorkerRegistration(
 
 base::OnceClosure WebEngineContentBrowserClient::SelectClientCertificate(
     content::BrowserContext* browser_context,
-    int process_id,
+    content::ChildProcessId process_id,
     content::WebContents* web_contents,
     net::SSLCertRequestInfo* cert_request_info,
     net::ClientCertIdentityList client_certs,

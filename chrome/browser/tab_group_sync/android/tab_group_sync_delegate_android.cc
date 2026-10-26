@@ -5,26 +5,21 @@
 #include "chrome/browser/tab_group_sync/android/tab_group_sync_delegate_android.h"
 
 #include "base/android/jni_android.h"
-#include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "components/saved_tab_groups/public/android/tab_group_sync_conversions_bridge.h"
 #include "components/saved_tab_groups/public/android/tab_group_sync_conversions_utils.h"
 #include "components/saved_tab_groups/public/types.h"
+#include "third_party/jni_zero/default_conversions.h"
 
-// Must come after all headers that specialize FromJniType() / ToJniType().
+// Must come after headers that provide symbols used by @JniType.
 #include "chrome/browser/tab_group_sync/delegate_jni_headers/TabGroupSyncDelegate_jni.h"
 
 namespace tab_groups {
 
 TabGroupSyncDelegateAndroid::TabGroupSyncDelegateAndroid(
-    TabGroupSyncService* service,
-    ScopedJavaLocalRef<jobject> j_delegate_deps)
-    : tab_group_sync_service_(service) {
-  DCHECK(tab_group_sync_service_);
+    base::android::ScopedJavaLocalRef<jobject> j_delegate_deps) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  java_obj_.Reset(env,
-                  Java_TabGroupSyncDelegate_create(
-                      env, reinterpret_cast<int64_t>(this), j_delegate_deps));
+  java_obj_.Reset(env, Java_TabGroupSyncDelegate_create(env, j_delegate_deps));
 }
 
 TabGroupSyncDelegateAndroid::~TabGroupSyncDelegateAndroid() {
@@ -71,22 +66,16 @@ std::vector<LocalTabID> TabGroupSyncDelegateAndroid::GetLocalTabIdsForTabGroup(
 
 std::set<LocalTabID> TabGroupSyncDelegateAndroid::GetSelectedTabs() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  auto j_selected_tabs_array =
+  std::vector<int32_t> selected_tabs =
       Java_TabGroupSyncDelegate_getSelectedTabs(env, java_obj_);
-  std::vector<int> selected_tabs_vector;
-  base::android::JavaIntArrayToIntVector(env, j_selected_tabs_array,
-                                         &selected_tabs_vector);
-  return std::set<LocalTabID>(selected_tabs_vector.begin(),
-                              selected_tabs_vector.end());
+  return std::set<LocalTabID>(selected_tabs.begin(), selected_tabs.end());
 }
 
 std::u16string TabGroupSyncDelegateAndroid::GetTabTitle(
     const LocalTabID& local_tab_id) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  auto j_tab_id = ToJavaTabId(local_tab_id);
-  auto j_title =
-      Java_TabGroupSyncDelegate_getTabTitle(env, java_obj_, j_tab_id);
-  return base::android::ConvertJavaStringToUTF16(j_title);
+  return Java_TabGroupSyncDelegate_getTabTitle(env, java_obj_,
+                                               ToJavaTabId(local_tab_id));
 }
 
 std::unique_ptr<SavedTabGroup>

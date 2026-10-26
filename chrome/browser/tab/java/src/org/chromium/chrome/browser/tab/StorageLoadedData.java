@@ -28,10 +28,49 @@ public class StorageLoadedData implements Destroyable {
     public static class LoadedTabState {
         public final @TabId int tabId;
         public final TabState tabState;
+        private boolean mClaimedOrDestroyed;
 
+        /**
+         * Constructor for {@link LoadedTabState}.
+         *
+         * @param tabId The tab ID.
+         * @param tabState The loaded tab state.
+         */
         public LoadedTabState(@TabId int tabId, TabState tabState) {
             this.tabId = tabId;
             this.tabState = tabState;
+        }
+
+        /**
+         * Returns whether this loaded tab state has been claimed or destroyed.
+         *
+         * @return True if claimed or destroyed, false otherwise.
+         */
+        public boolean isClaimedOrDestroyed() {
+            return mClaimedOrDestroyed;
+        }
+
+        /**
+         * Claims the {@link TabState} for restoration. Can only be claimed once.
+         *
+         * @return The {@link TabState} if not previously claimed or destroyed, or null otherwise.
+         */
+        public @Nullable TabState claim() {
+            if (mClaimedOrDestroyed) return null;
+            mClaimedOrDestroyed = true;
+            return tabState;
+        }
+
+        /**
+         * Destroys the {@link WebContentsState} of this tab state if it has not been claimed. Safe
+         * to call multiple times.
+         */
+        public void destroy() {
+            if (!mClaimedOrDestroyed && tabState.contentsState != null) {
+                tabState.contentsState.destroy();
+                tabState.contentsState = null;
+            }
+            mClaimedOrDestroyed = true;
         }
     }
 
@@ -71,6 +110,10 @@ public class StorageLoadedData implements Destroyable {
             groupData.destroy();
         }
 
+        for (LoadedTabState loadedTabState : mLoadedTabStates) {
+            loadedTabState.destroy();
+        }
+
         assert mNativePtr != 0;
         StorageLoadedDataJni.get().destroy(mNativePtr);
         mNativePtr = 0;
@@ -105,17 +148,16 @@ public class StorageLoadedData implements Destroyable {
     }
 
     @CalledByNative
-    public static TabState createTabState(
-            int parentTabId,
-            int rootId,
+    private static TabState createTabState(
+            @TabId int parentTabId,
             long timestampMillis,
             @Nullable ByteBuffer webContentsStateBuffer,
             int webContentsStateVersion,
             long webContentsStateStringPointer,
             @Nullable @JniType("std::string") String openerAppId,
             int themeColor,
-            int launchTypeAtCreation,
-            int userAgent,
+            @TabLaunchType int launchTypeAtCreation,
+            @TabUserAgent int userAgent,
             long lastNavigationCommittedTimestampMillis,
             @Nullable Token tabGroupId,
             boolean tabHasSensitiveContent,
@@ -123,7 +165,6 @@ public class StorageLoadedData implements Destroyable {
             @Nullable @JniType("std::string") String url) {
         TabState tabState = new TabState();
         tabState.parentId = parentTabId;
-        tabState.rootId = rootId;
         tabState.timestampMillis = timestampMillis;
         if (webContentsStateBuffer != null) {
             assert webContentsStateStringPointer != 0;

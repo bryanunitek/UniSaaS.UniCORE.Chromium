@@ -23,8 +23,6 @@ std::string_view GetToastName(ToastId toast_id) {
       return "NonMilestoneUpdate";
     case ToastId::kClearBrowsingData:
       return "ClearBrowsingData";
-    case ToastId::kPlusAddressOverride:
-      return "PlusAddressOverride";
     case ToastId::kSyncEsbOn:
       return "SyncEsbOn";
     case ToastId::kSyncEsbOnWithoutActionButton:
@@ -59,8 +57,8 @@ std::string_view GetToastName(ToastId toast_id) {
       return "CopiedToClipboard";
     case ToastId::kEnhancedBundledSecuritySettings:
       return "EnhancedBundledSecuritySettings";
-    case ToastId::kAutofillAiFetchFromWalletErrorMessage:
-      return "AutofillAiFetchFromWalletErrorMessage";
+    case ToastId::kAutofillAiFetchEntityErrorMessage:
+      return "AutofillAiFetchEntityErrorMessage";
     case ToastId::kTranslate:
       return "Translate";
     case ToastId::kAutofillAiSaveToWalletErrorMessage:
@@ -107,8 +105,36 @@ std::string_view GetToastName(ToastId toast_id) {
       return "DictationError";
     case ToastId::kDictationStopped:
       return "DictationStopped";
+    case ToastId::kDictationNoMicrophoneError:
+      return "DictationNoMicrophoneError";
     case ToastId::kGlicSelectionHiddenForSite:
       return "GlicSelectionHiddenForSite";
+    case ToastId::kEnterpriseCopyWarning:
+      return "EnterpriseCopyWarning";
+    case ToastId::kEnterpriseCopyBlocked:
+      return "EnterpriseCopyBlocked";
+    case ToastId::kIndigoDeleteError:
+      return "IndigoDeleteError";
+    case ToastId::kIndigoDeleteSuccess:
+      return "IndigoDeleteSuccess";
+    case ToastId::kAtMemorySpiiFetchErrorMessage:
+      return "AtMemorySpiiFetchErrorMessage";
+    case ToastId::kEmailVerificationLoading:
+      return "EmailVerificationLoading";
+    case ToastId::kScheduledRestartOnIdle:
+      return "ScheduledRestartOnIdle";
+    case ToastId::kEmailVerificationError:
+      return "EmailVerificationError";
+    case ToastId::kAutofillAiSuggestionRemoved:
+      return "AutofillAiSuggestionRemoved";
+    case ToastId::kTtcGenericError:
+      return "TtcGenericError";
+    case ToastId::kTtcNoMicrophoneError:
+      return "TtcNoMicrophoneError";
+    case ToastId::kTabGroupFocusExited:
+      return "TabGroupFocusExited";
+    case ToastId::kEnterpriseCopyFailClosed:
+      return "EnterpriseCopyFailClosed";
   }
 
   NOTREACHED();

@@ -116,6 +116,13 @@ void ConfigFetcher::OnWellKnownFetched(
                 additional_console_error_message);
         return;
       }
+      case ParseStatus::kBlockedByConnectionAllowlist: {
+        OnError(fetch_result,
+                FederatedRequestResult::kWellKnownBlockedByConnectionAllowlist,
+                TokenStatus::kWellKnownBlockedByConnectionAllowlist,
+                additional_console_error_message);
+        return;
+      }
       case ParseStatus::kInvalidResponseError: {
         OnError(fetch_result, FederatedRequestResult::kWellKnownInvalidResponse,
                 TokenStatus::kWellKnownInvalidResponse,
@@ -135,6 +142,7 @@ void ConfigFetcher::OnWellKnownFetched(
                 additional_console_error_message);
         return;
       }
+      case ParseStatus::kUseNativeUiDelegation:
       case ParseStatus::kSuccess: {
         NOTREACHED();
       }
@@ -167,6 +175,13 @@ void ConfigFetcher::OnConfigFetched(
                 additional_console_error_message);
         return;
       }
+      case ParseStatus::kBlockedByConnectionAllowlist: {
+        OnError(fetch_result,
+                FederatedRequestResult::kConfigBlockedByConnectionAllowlist,
+                TokenStatus::kConfigBlockedByConnectionAllowlist,
+                additional_console_error_message);
+        return;
+      }
       case ParseStatus::kNoResponseError: {
         OnError(fetch_result, FederatedRequestResult::kConfigNoResponse,
                 TokenStatus::kConfigNoResponse,
@@ -188,6 +203,7 @@ void ConfigFetcher::OnConfigFetched(
       case ParseStatus::kEmptyListError: {
         NOTREACHED() << "kEmptyListError is undefined for OnConfigFetched";
       }
+      case ParseStatus::kUseNativeUiDelegation:
       case ParseStatus::kSuccess: {
         NOTREACHED();
       }

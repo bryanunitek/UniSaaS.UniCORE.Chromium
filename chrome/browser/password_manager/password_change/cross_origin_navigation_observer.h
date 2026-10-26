@@ -7,6 +7,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "url/origin.h"
 
 namespace affiliations {
 class AffiliationService;
@@ -26,6 +27,14 @@ class CrossOriginNavigationObserver : public content::WebContentsObserver {
       const content::LoadCommittedDetails& load_details) override;
   bool IsSameOrAffiliatedDomain(const GURL& url) const;
 
+#if defined(UNIT_TEST)
+  void TriggerCrossOriginNavigationForTesting() {
+    if (on_cross_origin_navigation_detected_) {
+      std::move(on_cross_origin_navigation_detected_).Run();
+    }
+  }
+#endif
+
  private:
   void OnPSLExtensionsReceived(const GURL& initial_url,
                                std::vector<std::string> psl_extension_list);
@@ -35,8 +44,8 @@ class CrossOriginNavigationObserver : public content::WebContentsObserver {
 
   const raw_ptr<content::WebContents> web_contents_;
 
-  // Host of the initial URL used during initialization.
-  std::string initial_host_;
+  // Origin of the initial URL used during initialization.
+  url::Origin initial_origin_;
 
   // PSL extension list. Necessary for converting `GURL`s into eTLD+1.
   base::flat_set<std::string> psl_extension_list_;

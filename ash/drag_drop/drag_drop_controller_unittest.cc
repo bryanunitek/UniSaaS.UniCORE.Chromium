@@ -18,6 +18,7 @@
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/splitview/split_view_types.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "ash/wm/toplevel_window_event_handler.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -45,6 +46,7 @@
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/hit_test.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
@@ -1290,6 +1292,46 @@ TEST_F(DragDropControllerTest, SetEnabled) {
   drag_drop_controller_->RemoveObserver(&observer);
 }
 
+TEST_F(DragDropControllerTest, RejectedDuringWindowDrag) {
+  TestObserver observer;
+  drag_drop_controller_->AddObserver(&observer);
+
+  std::unique_ptr<aura::Window> window(CreateTestWindowInShell(
+      {.delegate =
+           aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate(),
+       .bounds = {100, 100}}));
+
+  ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow(),
+                                     window.get());
+  generator.PressLeftButton();
+
+  auto* toplevel_window_event_handler =
+      Shell::Get()->toplevel_window_event_handler();
+  ASSERT_TRUE(toplevel_window_event_handler->AttemptToStartDrag(
+      window.get(), gfx::PointF(50, 50), HTCAPTION,
+      ::wm::WINDOW_MOVE_SOURCE_MOUSE, base::DoNothing(),
+      /*update_gesture_target=*/false,
+      /*grab_capture=*/false));
+  ASSERT_TRUE(toplevel_window_event_handler->is_drag_in_progress());
+
+  // A data drag started while a toplevel window drag owns the input stream
+  // must be rejected.
+  DragOperation op = drag_drop_controller_->StartDragAndDrop(
+      CreateDragData(/*with_image=*/false), window->GetRootWindow(),
+      window.get(), gfx::Point(5, 5), ui::DragDropTypes::DRAG_MOVE,
+      ui::mojom::DragEventSource::kMouse);
+  EXPECT_EQ(DragOperation::kNone, op);
+  EXPECT_FALSE(drag_drop_controller_->IsDragDropInProgress());
+  EXPECT_EQ(TestObserver::State::kNotInvoked, observer.state());
+  EXPECT_TRUE(toplevel_window_event_handler->is_drag_in_progress());
+
+  toplevel_window_event_handler->CompleteDragForTesting(
+      ToplevelWindowEventHandler::DragResult::SUCCESS);
+  generator.ReleaseLeftButton();
+
+  drag_drop_controller_->RemoveObserver(&observer);
+}
+
 TEST_F(DragDropControllerTest, EventTarget) {
   std::unique_ptr<aura::Window> window(CreateTestWindowInShell(
       {.delegate =
@@ -1426,8 +1468,9 @@ TEST_F(DragDropControllerTest, ToplevelWindowDragDelegate) {
     TestToplevelWindowDragDelegate delegate;
     drag_drop_controller_->set_toplevel_window_drag_delegate(&delegate);
 
-    // Press and hold left mouse button at (0,0) in the rightmost display.
-    ui::test::EventGenerator generator(window2->GetRootWindow(), {0, 0});
+    // Press and hold the left mouse button in the client area of |window2| in
+    // the rightmost display so that no window move or resize is started.
+    ui::test::EventGenerator generator(window2->GetRootWindow(), {400, 300});
     generator.PressLeftButton();
 
     auto data(std::make_unique<ui::OSExchangeData>());
@@ -1545,6 +1588,49 @@ TEST_F(DragDropControllerTest, DragImageWidgetNotCreatedIfNoImage) {
       std::move(data), window->GetRootWindow(), window, gfx::Point(5, 5),
       ui::DragDropTypes::DRAG_MOVE, ui::mojom::DragEventSource::kMouse);
   EXPECT_TRUE(GetDragImageWindow());
+}
+
+TEST_F(DragDropControllerTest, DragImageSizeAndOffsetClamped) {
+  std::unique_ptr<views::Widget> widget = CreateFramelessWidget();
+  aura::Window* window = widget->GetNativeWindow();
+
+  // Start drag with an oversized 400x200 image and an in-bounds (100, 50)
+  // offset. It should be cropped to the top-left 200x200 region with offset
+  // (100, 50).
+  auto data = std::make_unique<ui::OSExchangeData>();
+  data->SetString(u"I am being dragged");
+  gfx::ImageSkia oversized_image(gfx::ImageSkiaRep({400, 200}, 1.0f));
+  data->provider().SetDragImage(oversized_image, gfx::Vector2d(100, 50));
+
+  drag_drop_controller_->StartDragAndDrop(
+      std::move(data), window->GetRootWindow(), window, gfx::Point(300, 300),
+      ui::DragDropTypes::DRAG_MOVE, ui::mojom::DragEventSource::kMouse);
+  ASSERT_TRUE(GetDragImageWindow());
+  EXPECT_EQ((gfx::Rect{200, 250, 200, 200}),
+            GetDragImageWindow()->GetBoundsInScreen());
+  EXPECT_EQ((gfx::Size{200, 200}), GetDragImage().size());
+
+  // Update mid-drag with a 1000x2000 image and negative out-of-bounds offset.
+  // Size should crop to 200x200 and offset should clamp to (0, 0).
+  gfx::ImageSkia tall_image(gfx::ImageSkiaRep({1000, 2000}, 1.0f));
+  drag_drop_controller_->SetDragImage(tall_image, gfx::Vector2d(-500, -500));
+  EXPECT_EQ((gfx::Rect{300, 300, 200, 200}),
+            GetDragImageWindow()->GetBoundsInScreen());
+  EXPECT_EQ((gfx::Size{200, 200}), GetDragImage().size());
+
+  // Update mid-drag with a 100x80 image and positive out-of-bounds offset.
+  // Size stays 100x80 and offset clamps to (100, 80).
+  gfx::ImageSkia normal_image(gfx::ImageSkiaRep({100, 80}, 1.0f));
+  drag_drop_controller_->SetDragImage(normal_image, gfx::Vector2d(500, 500));
+  EXPECT_EQ((gfx::Rect{200, 220, 100, 80}),
+            GetDragImageWindow()->GetBoundsInScreen());
+  EXPECT_EQ((gfx::Size{100, 80}), GetDragImage().size());
+
+  DragImageWindowObserver observer;
+  GetDragImageWindow()->AddObserver(&observer);
+  drag_drop_controller_->DragCancel();
+  CompleteCancelAnimation();
+  EXPECT_EQ(gfx::Point(200, 220), observer.window_location_on_destroying());
 }
 
 TEST_F(DragDropControllerTest, ObserverNotifiedOfDestruction) {

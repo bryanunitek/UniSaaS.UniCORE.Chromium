@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <queue>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -846,12 +847,14 @@ Status WebViewImpl::SendBidiCommand(base::DictValue command,
 
 Status WebViewImpl::SendCommand(const std::string& cmd,
                                 const base::DictValue& params) {
+  WebViewImplHolder target_holder(this);
   return client_->SendCommand(cmd, params);
 }
 
 Status WebViewImpl::SendCommandFromWebSocket(const std::string& cmd,
                                              const base::DictValue& params,
                                              const int client_cmd_id) {
+  WebViewImplHolder target_holder(this);
   return client_->SendCommandFromWebSocket(cmd, params, client_cmd_id);
 }
 
@@ -859,6 +862,7 @@ Status WebViewImpl::SendCommandAndGetResult(
     const std::string& cmd,
     const base::DictValue& params,
     std::unique_ptr<base::Value>* value) {
+  WebViewImplHolder target_holder(this);
   base::DictValue result;
   Status status = client_->SendCommandAndGetResult(cmd, params, &result);
   if (status.IsError())
@@ -2018,14 +2022,17 @@ Status WebViewImpl::SetFileInputFiles(const std::string& frame,
     }
   }
 
+  const FilePathStyle file_path_style =
+      internal::GetFileInputPathStyle(*browser_info_);
+
   // Now add the new files
   for (const base::FilePath& file_path : files) {
-    if (!file_path.IsAbsolute()) {
-      return Status(kUnknownError,
+    if (!internal::IsFileInputPathAbsolute(file_path, file_path_style)) {
+      return Status(kInvalidArgument,
                     "path is not absolute: " + file_path.AsUTF8Unsafe());
     }
-    if (file_path.ReferencesParent()) {
-      return Status(kUnknownError,
+    if (internal::FileInputPathReferencesParent(file_path, file_path_style)) {
+      return Status(kInvalidArgument,
                     "path is not canonical: " + file_path.AsUTF8Unsafe());
     }
     file_list.Append(file_path.AsUTF8Unsafe());
@@ -2127,10 +2134,6 @@ Status WebViewImpl::CallAsyncFunctionInternal(
   async_args.Append(args.Clone());
   /*is_user_supplied=*/
   async_args.Append(true);
-  /*timeout=*/
-  async_args.Append(timeout.InMicrosecondsF());
-  std::unique_ptr<base::Value> tmp;
-  Timeout local_timeout(timeout);
   std::unique_ptr<base::Value> query_value;
   CallFunctionOptions options;
   options.include_shadow_root = false;
@@ -2171,8 +2174,11 @@ void WebViewImpl::SetFrame(const std::string& new_frame_id) {
 Status WebViewImpl::IsNotPendingNavigation(const std::string& frame_id,
                                            const Timeout* timeout,
                                            bool* is_not_pending) {
-  if (!frame_id.empty() && !frame_tracker_->IsKnownFrame(frame_id)) {
-    // Frame has already been destroyed.
+  // An unknown subframe may have been destroyed. The top-level frame can be
+  // temporarily absent from the tracker while its execution context is
+  // replaced, so defer to NavigationTracker for it.
+  if (!frame_id.empty() && frame_id != id_ &&
+      !frame_tracker_->IsKnownFrame(frame_id)) {
     *is_not_pending = true;
     return Status(kOk);
   }
@@ -2707,6 +2713,78 @@ WebViewImplHolder::~WebViewImplHolder() {
 }
 
 namespace internal {
+
+namespace {
+
+bool IsWindowsPathSeparator(char character) {
+  return character == '\\' || character == '/';
+}
+
+bool IsWindowsPathAbsolute(std::string_view path) {
+  if (path.size() >= 3 && base::IsAsciiAlpha(path[0]) && path[1] == ':' &&
+      IsWindowsPathSeparator(path[2])) {
+    return true;
+  }
+
+  // Match base::FilePath's Windows handling for UNC and device paths.
+  return path.size() >= 2 && IsWindowsPathSeparator(path[0]) &&
+         IsWindowsPathSeparator(path[1]);
+}
+
+bool WindowsPathReferencesParent(std::string_view path) {
+  for (std::string_view component : base::SplitStringPiece(
+           path, "\\/", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL)) {
+    // This intentionally mirrors base::FilePath::ReferencesParent() on
+    // Windows, including its treatment of components made only of dots and
+    // ASCII whitespace.
+    if (component.find("..") != std::string_view::npos &&
+        component.find_first_not_of(". \n\r\t") == std::string_view::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+FilePathStyle GetFileInputPathStyle(const BrowserInfo& browser_info) {
+  // Android versions predating the File-Path-Style metadata still use POSIX
+  // paths. Other unknown browsers retain ChromeDriver's legacy host-native
+  // behavior rather than guessing the remote path grammar.
+  return browser_info.is_android ? FilePathStyle::kPosix
+                                 : browser_info.file_path_style;
+}
+
+bool IsFileInputPathAbsolute(const base::FilePath& path,
+                             FilePathStyle file_path_style) {
+  const std::string path_utf8 = path.AsUTF8Unsafe();
+  switch (file_path_style) {
+    case FilePathStyle::kPosix:
+      return path_utf8.starts_with('/');
+    case FilePathStyle::kWindows:
+      return IsWindowsPathAbsolute(path_utf8);
+    case FilePathStyle::kUnknown:
+      return path.IsAbsolute();
+  }
+  NOTREACHED();
+}
+
+bool FileInputPathReferencesParent(const base::FilePath& path,
+                                   FilePathStyle file_path_style) {
+  const std::string path_utf8 = path.AsUTF8Unsafe();
+  switch (file_path_style) {
+    case FilePathStyle::kPosix:
+      return std::ranges::contains(
+          base::SplitStringPiece(path_utf8, "/", base::KEEP_WHITESPACE,
+                                 base::SPLIT_WANT_ALL),
+          "..");
+    case FilePathStyle::kWindows:
+      return WindowsPathReferencesParent(path_utf8);
+    case FilePathStyle::kUnknown:
+      return path.ReferencesParent();
+  }
+  NOTREACHED();
+}
 
 Status EvaluateScript(DevToolsClient* client,
                       const std::string& context_id,

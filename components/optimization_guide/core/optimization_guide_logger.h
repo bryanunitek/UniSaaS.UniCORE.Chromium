@@ -15,6 +15,7 @@
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/optimization_guide_common.mojom.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
@@ -23,8 +24,15 @@
 #include "url/gurl.h"
 
 namespace optimization_guide {
+
 class ModelExecutionInternalsPageBrowserTest;
-}
+
+// Enables debug logs for the optimization guide to be displayed in the
+// internals page.
+inline constexpr char kDebugLoggingEnabledSwitch[] =
+    "enable-optimization-guide-debug-logs";
+
+}  // namespace optimization_guide
 
 #define OPTIMIZATION_GUIDE_LOGGER(log_source, optimization_guide_logger)     \
   OptimizationGuideLogger::LogMessageBuilder(log_source, __FILE__, __LINE__, \
@@ -43,6 +51,9 @@ class OptimizationGuideLogger {
         int source_line,
         const std::string& message) = 0;
   };
+  // Capacity limit for |recent_log_messages_|.
+  static constexpr size_t kMaxRecentLogMessages = 700;
+
   static OptimizationGuideLogger* GetInstance();
   OptimizationGuideLogger();
   ~OptimizationGuideLogger();
@@ -83,6 +94,8 @@ class OptimizationGuideLogger {
         optimization_guide::proto::RequestContext request_context);
     LogMessageBuilder& operator<<(
         optimization_guide::proto::OptimizationTarget optimization_target);
+    LogMessageBuilder& operator<<(
+        optimization_guide::ModelBasedCapabilityKey feature);
 
    private:
     const optimization_guide_common::mojom::LogSource log_source_;
@@ -109,10 +122,19 @@ class OptimizationGuideLogger {
     const std::string message;
   };
 
+  // Emits a warning message to the newly added observer if any startup log
+  // messages were dropped due to buffer capacity limit.
+  void MaybeEmitBufferOverflowWarning(
+      OptimizationGuideLogger::Observer* observer);
+
   // Contains the most recent log messages. Messages are queued up only when
-  // |kDebugLoggingEnabled| command-line switch is specified. This allows the
-  // messages at startup to be saved and shown in the internals page later.
+  // |kDebugLoggingEnabledSwitch| command-line switch is specified. This allows
+  // the messages at startup to be saved and shown in the internals page later.
   base::circular_deque<LogMessage> recent_log_messages_;
+
+  // Total number of messages dropped from |recent_log_messages_| when the
+  // buffer capacity is exceeded before observers are attached.
+  size_t recent_log_messages_dropped_count_ = 0;
 
   base::ObserverList<OptimizationGuideLogger::Observer> observers_;
 

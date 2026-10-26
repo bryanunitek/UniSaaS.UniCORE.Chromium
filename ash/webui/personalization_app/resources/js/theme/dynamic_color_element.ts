@@ -98,15 +98,15 @@ export class DynamicColorElement extends WithPersonalizationStore {
     };
   }
 
-  automaticSeedColorEnabled: boolean;
-  private previousStaticColorSelected_: SkColor|null;
-  private previousColorSchemeSelected_: ColorScheme|null;
-  private staticColorSelected_: SkColor|null;
-  private colorSchemeSelected_: ColorScheme|null;
-  private staticColors_: StaticColorInfo[];
-  private sampleColorSchemes_: SampleColorScheme[];
-  private colorSchemeHighlightedButton_: CrButtonElement;
-  private staticColorHighlightedButton_: CrButtonElement;
+  declare automaticSeedColorEnabled: boolean;
+  private previousStaticColorSelected_: SkColor|null = null;
+  private previousColorSchemeSelected_: ColorScheme|null = null;
+  declare private staticColorSelected_: SkColor|null;
+  declare private colorSchemeSelected_: ColorScheme|null;
+  declare private staticColors_: StaticColorInfo[];
+  declare private sampleColorSchemes_: SampleColorScheme[];
+  declare private colorSchemeHighlightedButton_: CrButtonElement;
+  declare private staticColorHighlightedButton_: CrButtonElement;
 
   override ready() {
     super.ready();

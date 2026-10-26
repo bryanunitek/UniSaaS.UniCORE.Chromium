@@ -30,10 +30,10 @@
 #include "components/autofill/core/common/autofill_regexes.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
-#include "components/autofill/core/common/password_generation_util.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_constants.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/password_manager/core/common/password_manager_util.h"
@@ -1073,7 +1073,11 @@ void SetFields(const SignificantFields& significant_fields,
 
   if (significant_fields.password) {
     password_form->password_element = significant_fields.password->name();
-    password_form->password_value = GetFieldValue(*significant_fields.password);
+    // TODO(crbug.com/513276101): Explore adding a move friendly variant of
+    // GetFieldValue as part of remaining work to convert password to use
+    // PasswordString.
+    password_form->password_value = PasswordString(
+        std::u16string(GetFieldValue(*significant_fields.password)));
     password_form->password_element_renderer_id =
         significant_fields.password->renderer_id();
   }
@@ -1081,8 +1085,11 @@ void SetFields(const SignificantFields& significant_fields,
   if (significant_fields.new_password) {
     password_form->new_password_element =
         significant_fields.new_password->name();
-    password_form->new_password_value =
-        GetFieldValue(*significant_fields.new_password);
+    // TODO(crbug.com/513276101): Explore adding a move friendly variant of
+    // GetFieldValue as part of remaining work to convert password to use
+    // PasswordString.
+    password_form->new_password_value = PasswordString(
+        std::u16string(GetFieldValue(*significant_fields.new_password)));
     password_form->new_password_element_renderer_id =
         significant_fields.new_password->renderer_id();
   }
@@ -1229,7 +1236,7 @@ bool FieldValueIsTooShortForSaving(const FormFieldData* field) {
 
 bool FieldMaxLengthAllowsPasswordGeneration(const FormFieldData& field) {
   return field.max_length() >=
-         autofill::password_generation::kMinimumPasswordLength;
+         password_manager::constants::kMinimumPasswordLength;
 }
 
 bool ShouldContinueParsing(bool parsing_complete_with_model_predictions,

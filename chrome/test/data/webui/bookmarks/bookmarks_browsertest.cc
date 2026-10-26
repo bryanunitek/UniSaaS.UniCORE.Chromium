@@ -9,7 +9,6 @@
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
@@ -25,6 +24,13 @@ class BookmarksBrowserTest : public WebUIMochaBrowserTest {
  protected:
   BookmarksBrowserTest() {
     set_test_loader_host(chrome::kChromeUIBookmarksHost);
+  }
+
+  void SetUpOnMainThread() override {
+    WebUIMochaBrowserTest::SetUpOnMainThread();
+    bookmarks::BookmarkModel* model =
+        BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
+    bookmarks::test::WaitForBookmarkModelToLoad(model);
   }
 };
 
@@ -91,7 +97,7 @@ class BookmarksExtensionAPITest : public BookmarksBrowserTest {
  protected:
   void SetupExtensionAPITest() {
     // Add managed bookmarks.
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     bookmarks::BookmarkModel* model =
         BookmarkModelFactory::GetForBrowserContext(profile);
     bookmarks::ManagedBookmarkService* managed =
@@ -113,7 +119,7 @@ class BookmarksExtensionAPITest : public BookmarksBrowserTest {
   }
 
   void SetupExtensionAPIEditDisabledTest() {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 
     // Provide some testing data here, since bookmark editing will be disabled
     // within the extension.

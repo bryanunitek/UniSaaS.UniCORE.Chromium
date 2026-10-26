@@ -7,9 +7,6 @@ package org.chromium.chrome.browser.ui.autofill;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
-import static org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SearchItemProperties.TILE_DETAILS;
-import static org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SearchItemProperties.TILE_ICON;
-import static org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SearchItemProperties.TILE_TITLE;
 import static org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SuggestionItemProperties.DETAILS;
 import static org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SuggestionItemProperties.ICON;
 import static org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SuggestionItemProperties.IS_FLYOUT_VISIBLE;
@@ -43,16 +40,17 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.FlyoutProperties;
 import org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.HomeProperties;
 import org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.ScreenId;
-import org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SearchItemProperties;
 import org.chromium.chrome.browser.ui.autofill.AtMemoryBottomSheetProperties.SuggestionItemProperties;
 import org.chromium.chrome.browser.ui.autofill.internal.R;
 import org.chromium.components.autofill.AutofillSuggestion;
+import org.chromium.components.autofill.SuggestionType;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFactory;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
@@ -94,8 +92,8 @@ public class AtMemoryBottomSheetViewRenderTest {
     @Rule
     public final RenderTestRule mRenderTestRule =
             RenderTestRule.Builder.withPublicCorpus()
-                    .setRevision(5)
-                    .setDescription("Change the source text UI.")
+                    .setRevision(8)
+                    .setDescription("Ligatures and contextual alternates disabled in UI text")
                     .setBugComponent(Component.UI_BROWSER_AUTOFILL)
                     .build();
 
@@ -153,6 +151,7 @@ public class AtMemoryBottomSheetViewRenderTest {
 
     @Test
     @Feature({"RenderTest"})
+    @DisabledTest(message = "crbug.com/535897013")
     public void testAtMemoryBottomSheetMainScreen() throws Exception {
         ContextThemeWrapper themeWrapper =
                 new ContextThemeWrapper(mActivity, R.style.Theme_BrowserUI_DayNight);
@@ -251,6 +250,7 @@ public class AtMemoryBottomSheetViewRenderTest {
 
     @Test
     @Feature({"RenderTest"})
+    @DisabledTest(message = "Enabled after fixing crbug.com/532513498")
     public void testAtMemoryBottomSheetView_searchTile() throws Exception {
         ContextThemeWrapper themeWrapper =
                 new ContextThemeWrapper(mActivity, R.style.Theme_BrowserUI_DayNight);
@@ -263,15 +263,31 @@ public class AtMemoryBottomSheetViewRenderTest {
 
                     ModelList modelList = new ModelList();
                     PropertyModel searchTileModel =
-                            createSearchTileModel(
+                            createSuggestionModel(
                                     "flight",
                                     "Powered by Personal Intelligence with Gemini",
-                                    R.drawable.ic_spark_24dp);
+                                    R.drawable.ic_spark_24dp,
+                                    /* isFlyoutVisible= */ false);
                     modelList.add(
-                            new ListItem(HomeProperties.ItemType.SEARCH_TILE, searchTileModel));
+                            new ListItem(
+                                    HomeProperties.ItemType.SUGGESTION_WITH_NO_BACKGROUND,
+                                    searchTileModel));
+
+                    PropertyModel disclosureModel =
+                            new PropertyModel.Builder(
+                                            AtMemoryBottomSheetProperties
+                                                    .TextWithClickableLinkProperties.ALL_KEYS)
+                                    .with(
+                                            AtMemoryBottomSheetProperties
+                                                    .TextWithClickableLinkProperties.TEXT,
+                                            mActivity.getString(R.string.at_memory_ai_disclosure))
+                                    .build();
+                    modelList.add(
+                            new ListItem(
+                                    HomeProperties.ItemType.TEXT_WITH_CLICKABLE_LINK,
+                                    disclosureModel));
 
                     mView.getHomeView().setUpSheetItems(modelList);
-                    mView.getHomeView().setShowSuggestionsBackground(false);
 
                     mBottomSheetController.requestShowContent(content, false);
                 });
@@ -292,6 +308,7 @@ public class AtMemoryBottomSheetViewRenderTest {
 
     @Test
     @Feature({"RenderTest"})
+    @DisabledTest(message = "https://crbug.com/535897013")
     public void testAtMemoryBottomSheetView_zeroState() throws Exception {
         ContextThemeWrapper themeWrapper =
                 new ContextThemeWrapper(mActivity, R.style.Theme_BrowserUI_DayNight);
@@ -304,10 +321,25 @@ public class AtMemoryBottomSheetViewRenderTest {
 
                     ModelList modelList = new ModelList();
                     modelList.add(
-                            new ListItem(HomeProperties.ItemType.ZERO_STATE, new PropertyModel()));
+                            new ListItem(
+                                    HomeProperties.ItemType.ILLUSTRATION_CARD,
+                                    new PropertyModel.Builder(
+                                                    AtMemoryBottomSheetProperties
+                                                            .IllustrationCardItemProperties
+                                                            .ALL_KEYS)
+                                            .with(
+                                                    AtMemoryBottomSheetProperties
+                                                            .IllustrationCardItemProperties.TITLE,
+                                                    "Search your information")
+                                            .with(
+                                                    AtMemoryBottomSheetProperties
+                                                            .IllustrationCardItemProperties
+                                                            .SUBTITLE,
+                                                    "Check your saved information across Google"
+                                                            + " apps")
+                                            .build()));
 
                     mView.getHomeView().setUpSheetItems(modelList);
-                    mView.getHomeView().setShowSuggestionsBackground(false);
 
                     mBottomSheetController.requestShowContent(content, false);
                 });
@@ -336,17 +368,9 @@ public class AtMemoryBottomSheetViewRenderTest {
                 .build();
     }
 
-    private static PropertyModel createSearchTileModel(
-            String title, String details, int iconResId) {
-        return new PropertyModel.Builder(SearchItemProperties.ALL_KEYS)
-                .with(TILE_TITLE, title)
-                .with(TILE_DETAILS, details)
-                .with(TILE_ICON, iconResId)
-                .build();
-    }
-
     @Test
     @Feature({"RenderTest"})
+    @DisabledTest(message = "Enabled after fixing crbug.com/535894236")
     public void testAtMemoryBottomSheetFlyoutScreen() throws Exception {
         ContextThemeWrapper themeWrapper =
                 new ContextThemeWrapper(mActivity, R.style.Theme_BrowserUI_DayNight);
@@ -372,7 +396,8 @@ public class AtMemoryBottomSheetViewRenderTest {
                                                             "07-05-2032", "Issue date"),
                                                     createAutofillSuggestion(
                                                             "07-05-2032", "Expiration date"),
-                                                    createAutofillSuggestion("USA", "")))
+                                                    createAutofillSuggestion("USA", ""),
+                                                    createManageSuggestion()))
                                     .build();
                     PropertyModelChangeProcessor.create(
                             model,
@@ -387,7 +412,20 @@ public class AtMemoryBottomSheetViewRenderTest {
                 mActivity.findViewById(android.R.id.content), "at_memory_flyout_screen");
     }
 
+    private AutofillSuggestion createManageSuggestion() {
+        return new AutofillSuggestion.Builder()
+                .setLabel("Manage information")
+                .setSubLabel("")
+                .setIconId(R.drawable.ic_chrome)
+                .setSuggestionType(SuggestionType.MANAGE_AUTOFILL_AI)
+                .build();
+    }
+
     private AutofillSuggestion createAutofillSuggestion(String label, String subLabel) {
-        return new AutofillSuggestion.Builder().setLabel(label).setSubLabel(subLabel).build();
+        return new AutofillSuggestion.Builder()
+                .setLabel(label)
+                .setSubLabel(subLabel)
+                .setSuggestionType(SuggestionType.AT_MEMORY_SEARCH_RESULT)
+                .build();
     }
 }

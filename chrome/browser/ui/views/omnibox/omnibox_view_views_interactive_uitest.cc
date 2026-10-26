@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
+
 #include <stddef.h>
 
 #include <algorithm>
@@ -22,13 +24,11 @@
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/send_tab_to_self/send_tab_to_self_util.h"
 #include "chrome/browser/ssl/typed_navigation_upgrade_throttle.h"
-#include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
@@ -37,14 +37,17 @@
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/accessibility/dump_accessibility_events_views_browsertest_base.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_placeholder_util.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
-#include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -64,12 +67,10 @@
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/security_interstitials/core/omnibox_https_upgrade_metrics.h"
-#include "components/send_tab_to_self/features.h"
-#include "components/send_tab_to_self/send_tab_to_self_model.h"
-#include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
-#include "components/send_tab_to_self/stub_send_tab_to_self_sync_service.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/unified_consent/pref_names.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
@@ -78,6 +79,7 @@
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "ui/accessibility/ax_action_data.h"
@@ -90,6 +92,7 @@
 #include "ui/base/ime/mock_input_method.h"
 #include "ui/base/ime/text_edit_commands.h"
 #include "ui/base/ime/text_input_client.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
@@ -100,6 +103,7 @@
 #include "ui/views/accessibility/atomic_view_ax_tree_manager.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/textfield/textfield_test_api.h"
+#include "ui/views/controls/webview/webview.h"
 #include "ui/views/views_features.h"
 
 #if BUILDFLAG(IS_OZONE)
@@ -138,7 +142,20 @@ class OmniboxViewViewsTest : public InProcessBrowserTest {
   OmniboxViewViewsTest& operator=(const OmniboxViewViewsTest&) = delete;
 
  protected:
-  OmniboxViewViewsTest() = default;
+  OmniboxViewViewsTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {
+            omnibox::internal::kWebUIOmniboxPopup,
+            omnibox::internal::kWebUIOmniboxAimPopup,
+            // kWebUILocationBar however replaces OmniboxViewViews, so almost
+            // all tests here are inherently incompatible with it
+            features::kWebUILocationBar,
+        });
+  }
   ~OmniboxViewViewsTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -151,7 +168,7 @@ class OmniboxViewViewsTest : public InProcessBrowserTest {
     return &triggered_feature_service_;
   }
 
-  static void GetOmniboxViewForBrowser(Browser* browser,
+  static void GetOmniboxViewForBrowser(BrowserWindowInterface* browser,
                                        OmniboxView** omnibox_view) {
     BrowserWindow* window = BrowserWindow::FromBrowser(browser);
     ASSERT_TRUE(window);
@@ -212,7 +229,7 @@ class OmniboxViewViewsTest : public InProcessBrowserTest {
 
   void PressEnterAndWaitForNavigations(size_t num_expected_navigations) {
     content::TestNavigationObserver navigation_observer(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         num_expected_navigations);
     EXPECT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
                                                 false, false, false, false));
@@ -279,7 +296,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, AyncDropCallback) {
   EXPECT_TRUE(ui_test_utils::IsViewFocused(browser(), VIEW_ID_OMNIBOX));
   EXPECT_TRUE(omnibox_view_views->IsSelectAll());
   EXPECT_FALSE(
-      browser()->tab_strip_model()->GetActiveWebContents()->IsLoading());
+      browser()->GetTabStripModel()->GetActiveWebContents()->IsLoading());
 }
 
 // Flaky: https://crbug.com/41432033.
@@ -558,7 +575,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, CloseOmniboxPopupOnTextDrag) {
   AutocompleteResult& results = autocomplete_controller->internal_result_;
   ACMatches matches;
   AutocompleteMatch match(nullptr, 500, false,
-                          AutocompleteMatchType::HISTORY_TITLE);
+                          omnibox::AutocompleteMatchType::kHistoryTitle);
   match.contents = u"http://autocomplete-result/";
   match.contents_class.emplace_back(0, ACMatchClassification::URL);
   match.destination_url = GURL("http://autocomplete-result/");
@@ -568,7 +585,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, CloseOmniboxPopupOnTextDrag) {
                           TestSchemeClassifier());
   results.AppendMatches(matches);
   results.SortAndCull(
-      input, TemplateURLServiceFactory::GetForProfile(browser()->profile()),
+      input, TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()),
       triggered_feature_service(), /*is_lens_active=*/false,
       /*can_show_contextual_suggestions=*/false, /*mia_enabled=*/false,
       /*is_incognito=*/false);
@@ -618,7 +635,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, MaintainCursorAfterFocusCycle) {
   AutocompleteResult& results = autocomplete_controller->internal_result_;
   ACMatches matches;
   AutocompleteMatch match(nullptr, 500, false,
-                          AutocompleteMatchType::HISTORY_TITLE);
+                          omnibox::AutocompleteMatchType::kHistoryTitle);
   match.contents = u"http://autocomplete-result/";
   match.contents_class.emplace_back(0, ACMatchClassification::URL);
   match.destination_url = GURL("http://autocomplete-result/");
@@ -630,7 +647,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, MaintainCursorAfterFocusCycle) {
   input.set_current_url(GURL("http://autocomplete-result/"));
   results.AppendMatches(matches);
   results.SortAndCull(
-      input, TemplateURLServiceFactory::GetForProfile(browser()->profile()),
+      input, TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()),
       triggered_feature_service(), /*is_lens_active=*/false,
       /*can_show_contextual_suggestions=*/false, /*mia_enabled=*/false,
       /*is_incognito=*/false);
@@ -719,7 +736,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, FriendlyAccessibleLabel) {
   ASSERT_NO_FATAL_FAILURE(GetOmniboxViewForBrowser(browser(), &omnibox_view));
   std::u16string match_url = u"https://google.com";
   AutocompleteMatch match(nullptr, 500, false,
-                          AutocompleteMatchType::HISTORY_TITLE);
+                          omnibox::AutocompleteMatchType::kHistoryTitle);
   match.contents = match_url;
   match.contents_class.emplace_back(0, ACMatchClassification::URL);
   match.destination_url = GURL(match_url);
@@ -747,7 +764,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, FriendlyAccessibleLabel) {
                           TestSchemeClassifier());
   results.AppendMatches(matches);
   results.SortAndCull(
-      input, TemplateURLServiceFactory::GetForProfile(browser()->profile()),
+      input, TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()),
       triggered_feature_service(), /*is_lens_active=*/false,
       /*can_show_contextual_suggestions=*/false, /*mia_enabled=*/false,
       /*is_incognito=*/false);
@@ -822,7 +839,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, AccessiblePopup) {
 
   std::u16string match_url = u"https://google.com";
   AutocompleteMatch match(nullptr, 500, false,
-                          AutocompleteMatchType::HISTORY_TITLE);
+                          omnibox::AutocompleteMatchType::kHistoryTitle);
   match.contents = match_url;
   match.contents_class.emplace_back(0, ACMatchClassification::URL);
   match.destination_url = GURL(match_url);
@@ -858,7 +875,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, AccessiblePopup) {
                           TestSchemeClassifier());
   results.AppendMatches(matches);
   results.SortAndCull(
-      input, TemplateURLServiceFactory::GetForProfile(browser()->profile()),
+      input, TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()),
       triggered_feature_service(), /*is_lens_active=*/false,
       /*can_show_contextual_suggestions=*/false, /*mia_enabled=*/false,
       /*is_incognito=*/false);
@@ -891,7 +908,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DISABLED_ReloadAfterKill) {
                                            chrome::ChromeUINewTabURLAsGURL()));
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   // Kill the tab with chrome://kill
   {
     content::ScopedAllowRendererCrashes scoped_allow_renderer_crashes;
@@ -907,7 +924,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DISABLED_ReloadAfterKill) {
   // Verify the omnibox contents, URL and icon.
   EXPECT_EQ(u"", omnibox_view_views->GetText());
   EXPECT_EQ(GURL(url::kAboutBlankURL),
-            browser()->GetFeatures().location_bar_model()->GetURL());
+            LocationBarModel::From(browser())->GetURL());
 }
 
 // Omnibox un-elides and elides URL appropriately according to the Always Show
@@ -993,7 +1010,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsUIATest, AccessibleOmnibox) {
 
   std::u16string match_url = u"https://example.com";
   AutocompleteMatch match(nullptr, 500, false,
-                          AutocompleteMatchType::HISTORY_TITLE);
+                          omnibox::AutocompleteMatchType::kHistoryTitle);
   match.contents = match_url;
   match.contents_class.push_back(
       ACMatchClassification(0, ACMatchClassification::URL));
@@ -1029,7 +1046,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsUIATest, AccessibleOmnibox) {
                           TestSchemeClassifier());
   results.AppendMatches(matches);
   results.SortAndCull(
-      input, TemplateURLServiceFactory::GetForProfile(browser()->profile()),
+      input, TemplateURLServiceFactory::GetForProfile(browser()->GetProfile()),
       triggered_feature_service(), /*is_lens_active=*/false,
       /*can_show_contextual_suggestions=*/false, /*mia_enabled=*/false,
       /*is_incognito=*/false);
@@ -1121,7 +1138,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsUIATest, GetSelectionAndBounds) {
   omnibox_view_views->ConvertRectToScreen(omnibox_view_views,
                                           &bounds_in_screen);
 
-  std::vector<int32_t> offsets =
+  base::span<const int32_t> offsets =
       ax_tree_manager->GetRoot()->GetIntListAttribute(
           ax::mojom::IntListAttribute::kCharacterOffsets);
   int range_start_offset = offsets[selection_range.start()];
@@ -1204,7 +1221,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsIMETest, TextInputTypeInitRespectsIME) {
   OmniboxMockInputMethod* input_method = new OmniboxMockInputMethod();
   ui::SetUpInputMethodForTesting(input_method);
   input_method->SetInputLocaleCJK(/*is_cjk=*/true);
-  Browser* browser_2 = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* browser_2 = CreateBrowser(browser()->GetProfile());
   OmniboxView* view = nullptr;
   ASSERT_NO_FATAL_FAILURE(GetOmniboxViewForBrowser(browser_2, &view));
   OmniboxViewViews* omnibox_view_views = static_cast<OmniboxViewViews*>(view);
@@ -1256,15 +1273,15 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, MAYBE_HandleExternalProtocolURLs) {
 
     EXPECT_NE(ExternalProtocolHandler::BLOCK,
               ExternalProtocolHandler::GetBlockState(fake_protocol, nullptr,
-                                                     browser()->profile()));
+                                                     browser()->GetProfile()));
 
     // Check SWYT and UWYT suggestions
     const AutocompleteResult& result = controller->result();
     ASSERT_EQ(result.size(), 2U);
     EXPECT_EQ(result.match_at(0).type,
-              AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
+              omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
     EXPECT_EQ(result.match_at(1).type,
-              AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+              omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
 
     // Navigate to UWYT suggestion.
     ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_DOWN, false,
@@ -1273,12 +1290,12 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, MAYBE_HandleExternalProtocolURLs) {
                                                 false, false, false, false));
 
     content::WebContents* tab =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_TRUE(content::WaitForLoadStop(tab));
 
     EXPECT_EQ(ExternalProtocolHandler::BLOCK,
               ExternalProtocolHandler::GetBlockState(fake_protocol, nullptr,
-                                                     browser()->profile()));
+                                                     browser()->GetProfile()));
   };
 
   set_text_and_perform_navigation();
@@ -1351,13 +1368,13 @@ IN_PROC_BROWSER_TEST_F(
   omnibox()->SetUserText(base::UTF8ToUTF16(url.spec()), true);
   PressEnterAndWaitForNavigations(1);
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(url, contents->GetLastCommittedURL());
   EXPECT_FALSE(chrome_browser_interstitials::IsShowingInterstitial(contents));
 
   histograms.ExpectTotalCount(
       security_interstitials::omnibox_https_upgrades::kEventHistogram, 0);
-  ui_test_utils::HistoryEnumerator enumerator(browser()->profile());
+  ui_test_utils::HistoryEnumerator enumerator(browser()->GetProfile());
   EXPECT_TRUE(std::ranges::contains(enumerator.urls(), url));
 
   // Now click the omnibox. This should trigger a zero suggest request with the
@@ -1404,13 +1421,14 @@ class OmniboxViewViewsOnFocusZpsTest : public OmniboxViewViewsTest {
     OmniboxViewViewsTest::SetUpOnMainThread();
     mock_hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+            browser()->GetProfile(),
+            base::BindRepeating(&BuildMockHatsService)));
     ON_CALL(*mock_hats_service_, CanShowAnySurvey(_))
         .WillByDefault(Return(true));
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kSearchSuggestEnabled, true);
   }
 
   void TearDownOnMainThread() override { mock_hats_service_ = nullptr; }
@@ -1518,7 +1536,7 @@ class OmniboxViewViewsAIMBrowserTest : public OmniboxViewViewsTest {
         }));
   }
 
-  PrefService* prefs() { return browser()->profile()->GetPrefs(); }
+  PrefService* prefs() { return browser()->GetProfile()->GetPrefs(); }
 
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -1719,7 +1737,8 @@ class OmniboxViewViewsAIMButtonDynamicTest
  public:
   OmniboxViewViewsAIMButtonDynamicTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{omnibox::kWebUIOmniboxDynamicAiModeButton, {}}},
+        {{omnibox::kWebUIOmniboxDynamicAiModeButton,
+          {{"Omnibox_DynamicAnimation", "true"}}}},
         {lens::features::kLensOverlay});
   }
 
@@ -1772,9 +1791,17 @@ class OmniboxViewViewsPlaceholderTest : public InProcessBrowserTest {
  public:
   OmniboxViewViewsPlaceholderTest() {
     scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/
         {contextual_tasks::kContextualTasks,
          contextual_tasks::kContextualTasksForceEntryPointEligibility},
-        {});
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup,
+         // kWebUILocationBar however replaces OmniboxViewViews, so almost
+         // all tests here are inherently incompatible with it
+         features::kWebUILocationBar});
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -1802,6 +1829,10 @@ class OmniboxViewViewsPlaceholderTest : public InProcessBrowserTest {
   }
 
  protected:
+  LocationBar* location_bar() {
+    return BrowserWindow::FromBrowser(browser())->GetLocationBar();
+  }
+
   OmniboxViewViews* omnibox_view() {
     return static_cast<OmniboxViewViews*>(BrowserWindow::FromBrowser(browser())
                                               ->GetLocationBar()
@@ -1809,7 +1840,7 @@ class OmniboxViewViewsPlaceholderTest : public InProcessBrowserTest {
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:
@@ -1824,7 +1855,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
       browser(), GURL(chrome::kChromeUIContextualTasksURL)));
 
   // Verify the Contextual Tasks placeholder text should be applied.
-  EXPECT_TRUE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_TRUE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder text is set to the page title.
   std::u16string page_title = web_contents()->GetTitle();
@@ -1844,7 +1876,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
       ui_test_utils::ClickOnView(browser(), VIEW_ID_TAB_CONTAINER));
 
   // Verify the Contextual Tasks placeholder text should NOT be applied.
-  EXPECT_FALSE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_FALSE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder text is set to the default search engine.
   EXPECT_EQ(u"Search Google or type a URL",
@@ -1866,7 +1899,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
                        MAYBE_NavigationToAndFromContextualTasks) {
   // Navigate to about:blank.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
-  EXPECT_FALSE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_FALSE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder text is the default search engine.
   EXPECT_EQ(u"Search Google or type a URL",
@@ -1877,7 +1911,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
   // Navigate to the Contextual Tasks page.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL(chrome::kChromeUIContextualTasksURL)));
-  EXPECT_TRUE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_TRUE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder is set to the page title.
   EXPECT_EQ(web_contents()->GetTitle(), omnibox_view()->GetPlaceholderText());
@@ -1889,7 +1924,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
                                            chrome::ChromeUINewTabURLAsGURL()));
   ASSERT_NO_FATAL_FAILURE(
       ui_test_utils::ClickOnView(browser(), VIEW_ID_TAB_CONTAINER));
-  EXPECT_FALSE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_FALSE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder text is set to the default search engine.
   EXPECT_EQ(u"Search Google or type a URL",
@@ -1900,7 +1936,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
   // Navigate back to the Contextual Tasks page.
   web_contents()->GetController().GoBack();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents()));
-  EXPECT_TRUE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_TRUE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder is set to the page title.
   EXPECT_EQ(web_contents()->GetTitle(), omnibox_view()->GetPlaceholderText());
@@ -1910,7 +1947,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
   // Navigate forward to the New Tab Page.
   web_contents()->GetController().GoForward();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents()));
-  EXPECT_FALSE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_FALSE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
 
   // Verify the placeholder text is set to the default search engine.
   EXPECT_EQ(u"Search Google or type a URL",
@@ -1938,7 +1976,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsPlaceholderTest,
   web_contents()->UpdateTitleForEntry(entry, kNewTitle);
 
   // Verify the placeholder text is updated to the new page title.
-  EXPECT_TRUE(omnibox_view()->ShouldInstallContextualTasksPlaceholderText());
+  EXPECT_TRUE(
+      omnibox::ShouldInstallContextualTasksPlaceholderText(location_bar()));
   EXPECT_EQ(kNewTitle, web_contents()->GetTitle());
   EXPECT_EQ(kNewTitle, omnibox_view()->GetPlaceholderText());
   // Verify the display text remains empty.
@@ -1985,7 +2024,7 @@ class OmniboxViewViewsDumpAccessibilityEventsTest
     omnibox_controller()->edit_model()->SetUserText(u"example");
     AutocompleteInput input(
         u"example", metrics::OmniboxEventProto::BLANK,
-        ChromeAutocompleteSchemeClassifier(browser()->profile()));
+        ChromeAutocompleteSchemeClassifier(browser()->GetProfile()));
     input.set_omit_asynchronous_matches(true);
     omnibox_controller()->StartAutocomplete(input);
   }
@@ -2004,6 +2043,17 @@ IN_PROC_BROWSER_TEST_P(OmniboxViewViewsDumpAccessibilityEventsTest,
 
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   chrome::FocusLocationBar(browser());
+  ui_test_utils::WaitForViewFocus(browser(), VIEW_ID_OMNIBOX, true);
+  if (features::IsWebUILocationBarEnabled()) {
+    if (auto* toolbar_webview = BrowserView::GetBrowserViewForBrowser(browser())
+                                    ->toolbar()
+                                    ->GetWebUIToolbarViewForTesting()) {
+      content::WaitForAccessibilityTreeToContainNodeWithName(
+          toolbar_webview->GetWebViewForTesting()->GetWebContents(),
+          l10n_util::GetStringUTF8(IDS_ACCNAME_LOCATION));
+    }
+  }
+  WaitForPendingSerialization();
 
   EXPECT_FALSE(omnibox_controller()->IsPopupOpen());
 
@@ -2014,157 +2064,6 @@ IN_PROC_BROWSER_TEST_P(OmniboxViewViewsDumpAccessibilityEventsTest,
 
   ClosePopup();
   EXPECT_FALSE(omnibox_controller()->IsPopupOpen());
-}
-
-class OmniboxViewViewsSendTabToSelfTest : public OmniboxViewViewsTest {
- public:
-  explicit OmniboxViewViewsSendTabToSelfTest(
-      bool omnibox_context_menu_enabled = true) {
-    std::vector<base::test::FeatureRef> enabled_features;
-    std::vector<base::test::FeatureRef> disabled_features = {
-        features::kMenuSimplification, features::kDesktopGlowUp};
-    if (omnibox_context_menu_enabled) {
-      enabled_features.push_back(
-          send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2);
-    } else {
-      disabled_features.push_back(
-          send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2);
-    }
-    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
-  }
-
-  void SetUpInProcessBrowserTestFixture() override {
-    OmniboxViewViewsTest::SetUpInProcessBrowserTestFixture();
-    create_services_subscription_ =
-        BrowserContextDependencyManager::GetInstance()
-            ->RegisterCreateServicesCallbackForTesting(
-                base::BindRepeating(&OmniboxViewViewsSendTabToSelfTest::
-                                        OnWillCreateBrowserContextServices,
-                                    base::Unretained(this)));
-  }
-
-  void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
-    SendTabToSelfSyncServiceFactory::GetInstance()->SetTestingFactory(
-        context, base::BindRepeating([](content::BrowserContext* context)
-                                         -> std::unique_ptr<KeyedService> {
-          return std::make_unique<
-              send_tab_to_self::StubSendTabToSelfSyncService>();
-        }));
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  base::CallbackListSubscription create_services_subscription_;
-};
-
-class OmniboxViewViewsSendTabToSelfSubmenuEnabledTest
-    : public OmniboxViewViewsSendTabToSelfTest {
- public:
-  OmniboxViewViewsSendTabToSelfSubmenuEnabledTest()
-      : OmniboxViewViewsSendTabToSelfTest(
-            /*omnibox_context_menu_enabled=*/true) {}
-};
-
-class OmniboxViewViewsSendTabToSelfSubmenuDisabledTest
-    : public OmniboxViewViewsSendTabToSelfTest {
- public:
-  OmniboxViewViewsSendTabToSelfSubmenuDisabledTest()
-      : OmniboxViewViewsSendTabToSelfTest(
-            /*omnibox_context_menu_enabled=*/false) {}
-};
-
-// Tests that the Omnibox context menu adds "Send to Your Devices" as a submenu
-// when the kSendTabToSelfOmniboxContextMenu feature is enabled.
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsSendTabToSelfSubmenuEnabledTest,
-                       SendTabToSelfContextMenuSubmenuEnabled) {
-  auto* sync_service =
-      static_cast<send_tab_to_self::StubSendTabToSelfSyncService*>(
-          SendTabToSelfSyncServiceFactory::GetForProfile(browser()->profile()));
-  std::vector<send_tab_to_self::TargetDeviceInfo> devices;
-  devices.emplace_back("Device 1", "guid1",
-                       syncer::DeviceInfo::FormFactor::kDesktop,
-                       base::Time::Now());
-  sync_service->GetFakeSendTabToSelfModel()->SetTargetDeviceInfoSortedList(
-      devices);
-
-  OmniboxViewViews* omnibox =
-      static_cast<OmniboxViewViews*>(BrowserWindow::FromBrowser(browser())
-                                         ->GetLocationBar()
-                                         ->GetOmniboxView());
-  ui::SimpleMenuModel menu_model(nullptr);
-  menu_model.AddItem(views::Textfield::kUndo, u"Undo");
-  menu_model.AddItem(
-      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), u"Paste");
-
-  omnibox->UpdateContextMenu(&menu_model);
-
-  std::optional<size_t> index =
-      menu_model.GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
-  ASSERT_TRUE(index.has_value());
-  // Verify that the entry is added as a submenu when the feature flag is on.
-  EXPECT_EQ(menu_model.GetTypeAt(index.value()), ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_NE(menu_model.GetSubmenuModelAt(index.value()), nullptr);
-}
-
-// Tests that the Omnibox context menu adds "Send to Your Devices" as a command
-// item (legacy bubble trigger) when the kSendTabToSelfEnhancedDesktopUI feature
-// is disabled.
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsSendTabToSelfSubmenuDisabledTest,
-                       SendTabToSelfContextMenuSubmenuDisabled) {
-  auto* sync_service =
-      static_cast<send_tab_to_self::StubSendTabToSelfSyncService*>(
-          SendTabToSelfSyncServiceFactory::GetForProfile(browser()->profile()));
-  std::vector<send_tab_to_self::TargetDeviceInfo> devices;
-  devices.emplace_back("Device 1", "guid1",
-                       syncer::DeviceInfo::FormFactor::kDesktop,
-                       base::Time::Now());
-  sync_service->GetFakeSendTabToSelfModel()->SetTargetDeviceInfoSortedList(
-      devices);
-
-  OmniboxViewViews* omnibox =
-      static_cast<OmniboxViewViews*>(BrowserWindow::FromBrowser(browser())
-                                         ->GetLocationBar()
-                                         ->GetOmniboxView());
-  ui::SimpleMenuModel menu_model(nullptr);
-  menu_model.AddItem(views::Textfield::kUndo, u"Undo");
-  menu_model.AddItem(
-      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), u"Paste");
-
-  omnibox->UpdateContextMenu(&menu_model);
-
-  std::optional<size_t> index =
-      menu_model.GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
-  ASSERT_TRUE(index.has_value());
-  // Verify that the entry is added as a standard command item when the feature
-  // flag is off (surfacing legacy bubble behavior).
-  EXPECT_EQ(menu_model.GetTypeAt(index.value()), ui::MenuModel::TYPE_COMMAND);
-}
-
-// Tests that the Omnibox context menu does not add "Send to Your Devices"
-// when SendTabToSelf entry point should not be displayed (e.g. on unshareable
-// pages).
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsSendTabToSelfSubmenuEnabledTest,
-                       SendTabToSelfContextMenuNotOffered) {
-  auto* sync_service =
-      static_cast<send_tab_to_self::StubSendTabToSelfSyncService*>(
-          SendTabToSelfSyncServiceFactory::GetForProfile(browser()->profile()));
-  sync_service->SetEntryPointDisplayReason(std::nullopt);
-
-  OmniboxViewViews* omnibox =
-      static_cast<OmniboxViewViews*>(BrowserWindow::FromBrowser(browser())
-                                         ->GetLocationBar()
-                                         ->GetOmniboxView());
-  ui::SimpleMenuModel menu_model(nullptr);
-  menu_model.AddItem(views::Textfield::kUndo, u"Undo");
-  menu_model.AddItem(
-      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), u"Paste");
-
-  omnibox->UpdateContextMenu(&menu_model);
-
-  std::optional<size_t> index =
-      menu_model.GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
-  // Verify that IDC_SEND_TAB_TO_SELF is not present in the menu.
-  EXPECT_FALSE(index.has_value());
 }
 
 INSTANTIATE_TEST_SUITE_P(

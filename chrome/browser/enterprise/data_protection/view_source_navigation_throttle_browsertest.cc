@@ -9,6 +9,7 @@
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/chrome_enterprise_url_lookup_service_factory.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -69,10 +70,10 @@ class ViewSourceNavigationThrottleBrowserTest : public InProcessBrowserTest {
         policy::DMToken::CreateValidToken("test_dm_token"));
 
     // Enable real-time URL checks.
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         enterprise_connectors::kEnterpriseRealTimeUrlCheckMode,
         enterprise_connectors::REAL_TIME_CHECK_FOR_MAINFRAME_ENABLED);
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         enterprise_connectors::kEnterpriseRealTimeUrlCheckScope,
         policy::POLICY_SCOPE_MACHINE);
 
@@ -200,10 +201,9 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
                        DevToolsBlocked) {
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kDevToolsAvailability,
-      static_cast<int>(
-          policy::DeveloperToolsAvailability::kDisallowed));
+      static_cast<int>(policy::DeveloperToolsAvailability::kDisallowed));
 
   GURL url(embedded_test_server()->GetURL("/simple.html"));
   GURL view_source_url("view-source:" + url.spec());
@@ -217,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
   GURL url(embedded_test_server()->GetURL("/simple.html"));
   base::ListValue blocklist;
   blocklist.Append(url.host());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityBlocklist, std::move(blocklist));
 
   GURL view_source_url("view-source:" + url.spec());
@@ -228,14 +228,13 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
                        AllowlistedUrl) {
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kDevToolsAvailability,
-      static_cast<int>(
-          policy::DeveloperToolsAvailability::kDisallowed));
+      static_cast<int>(policy::DeveloperToolsAvailability::kDisallowed));
   GURL url(embedded_test_server()->GetURL("/simple.html"));
   base::ListValue allowlist;
   allowlist.Append(url.host());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityAllowlist, std::move(allowlist));
 
   GURL view_source_url("view-source:" + url.spec());
@@ -250,10 +249,9 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
                        DevToolsAllowed) {
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kDevToolsAvailability,
-      static_cast<int>(
-          policy::DeveloperToolsAvailability::kAllowed));
+      static_cast<int>(policy::DeveloperToolsAvailability::kAllowed));
 
   GURL url(embedded_test_server()->GetURL("/simple.html"));
   GURL view_source_url("view-source:" + url.spec());
@@ -266,13 +264,12 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
                        AllowlistedUrl_NotMatching) {
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kDevToolsAvailability,
-      static_cast<int>(
-          policy::DeveloperToolsAvailability::kDisallowed));
+      static_cast<int>(policy::DeveloperToolsAvailability::kDisallowed));
   base::ListValue allowlist;
   allowlist.Append("example.com");
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityAllowlist, std::move(allowlist));
 
   GURL url(embedded_test_server()->GetURL("/simple.html"));
@@ -287,11 +284,11 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
   GURL url(embedded_test_server()->GetURL("/simple.html"));
   base::ListValue allowlist;
   allowlist.Append(url.host());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityAllowlist, std::move(allowlist));
   base::ListValue blocklist;
   blocklist.Append(url.host());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityBlocklist, std::move(blocklist));
 
   GURL view_source_url("view-source:" + url.spec());
@@ -306,11 +303,11 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
                        NoMatchOnLists_DefaultAllowed) {
   base::ListValue allowlist;
   allowlist.Append("example.com");
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityAllowlist, std::move(allowlist));
   base::ListValue blocklist;
   blocklist.Append("something.com");
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityBlocklist, std::move(blocklist));
 
   GURL url(embedded_test_server()->GetURL("/simple.html"));
@@ -324,17 +321,16 @@ IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ViewSourceNavigationThrottleBrowserTest,
                        NoMatchOnLists_Disallowed) {
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kDevToolsAvailability,
-      static_cast<int>(
-          policy::DeveloperToolsAvailability::kDisallowed));
+      static_cast<int>(policy::DeveloperToolsAvailability::kDisallowed));
   base::ListValue allowlist;
   allowlist.Append("example.com");
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityAllowlist, std::move(allowlist));
   base::ListValue blocklist;
   blocklist.Append("something.com");
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kDeveloperToolsAvailabilityBlocklist, std::move(blocklist));
 
   GURL url(embedded_test_server()->GetURL("/simple.html"));

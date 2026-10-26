@@ -18,8 +18,8 @@
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "chrome/browser/ui/global_error/global_error_service.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
@@ -64,14 +64,14 @@ class ExtensionDisabledGlobalError final
   bool HasMenuItem() override;
   int MenuItemCommandID() override;
   std::u16string MenuItemLabel() override;
-  void ExecuteMenuItem(Browser* browser) override;
+  void ExecuteMenuItem(BrowserWindowInterface* browser) override;
   std::u16string GetBubbleViewTitle() override;
   std::vector<std::u16string> GetBubbleViewMessages() override;
   std::u16string GetBubbleViewAcceptButtonLabel() override;
   std::u16string GetBubbleViewCancelButtonLabel() override;
-  void OnBubbleViewDidClose(Browser* browser) override {}
-  void BubbleViewAcceptButtonPressed(Browser* browser) override;
-  void BubbleViewCancelButtonPressed(Browser* browser) override;
+  void OnBubbleViewDidClose(BrowserWindowInterface* browser) override {}
+  void BubbleViewAcceptButtonPressed(BrowserWindowInterface* browser) override;
+  void BubbleViewCancelButtonPressed(BrowserWindowInterface* browser) override;
   base::WeakPtr<GlobalErrorWithStandardBubble> AsWeakPtr() override;
   bool ShouldCloseOnDeactivate() const override;
   bool ShouldShowCloseButton() const override;
@@ -87,6 +87,10 @@ class ExtensionDisabledGlobalError final
   void OnExtensionUninstalled(content::BrowserContext* browser_context,
                               const Extension* extension,
                               UninstallReason reason) override;
+  void OnExtensionWillBeInstalled(content::BrowserContext* browser_context,
+                                  const Extension* extension,
+                                  bool is_update,
+                                  const std::string& old_name) override;
   void OnShutdown(ExtensionRegistry* registry) override;
 
   void RemoveGlobalError();
@@ -144,7 +148,8 @@ std::u16string ExtensionDisabledGlobalError::MenuItemLabel() {
       extension_name);
 }
 
-void ExtensionDisabledGlobalError::ExecuteMenuItem(Browser* browser) {
+void ExtensionDisabledGlobalError::ExecuteMenuItem(
+    BrowserWindowInterface* browser) {
   ShowBubbleView(browser);
 }
 
@@ -206,7 +211,7 @@ std::u16string ExtensionDisabledGlobalError::GetBubbleViewCancelButtonLabel() {
 }
 
 void ExtensionDisabledGlobalError::BubbleViewAcceptButtonPressed(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   // Delay extension reenabling so this bubble closes properly.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
@@ -224,7 +229,7 @@ void ExtensionDisabledGlobalError::BubbleViewAcceptButtonPressed(
 }
 
 void ExtensionDisabledGlobalError::BubbleViewCancelButtonPressed(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   uninstall_dialog_ = ExtensionUninstallDialog::Create(
       profile_, browser->GetWindow()->GetNativeWindow(), this);
   // Delay showing the uninstall dialog, so that this function returns
@@ -282,8 +287,20 @@ void ExtensionDisabledGlobalError::OnExtensionUninstalled(
   RemoveGlobalError();
 }
 
+void ExtensionDisabledGlobalError::OnExtensionWillBeInstalled(
+    content::BrowserContext* browser_context,
+    const Extension* extension,
+    bool is_update,
+    const std::string& old_name) {
+  if (extension->id() != extension_->id()) {
+    return;
+  }
+  RemoveGlobalError();
+}
+
 void ExtensionDisabledGlobalError::OnShutdown(ExtensionRegistry* registry) {
-  DCHECK_EQ(ExtensionRegistry::Get(profile_), registry);
+  CHECK_EQ(ExtensionRegistry::Get(profile_), registry,
+           base::NotFatalUntil::M161);
   registry_observation_.Reset();
 }
 

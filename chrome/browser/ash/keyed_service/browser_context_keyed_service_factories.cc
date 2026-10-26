@@ -22,7 +22,6 @@
 #include "chrome/browser/ash/arc/session/arc_service_launcher.h"
 #include "chrome/browser/ash/bluetooth/debug_logs_manager_factory.h"
 #include "chrome/browser/ash/boca/boca_manager_factory.h"
-#include "chrome/browser/ash/boca/on_task/locked_quiz_session_manager_factory.h"
 #include "chrome/browser/ash/boca/on_task/locked_session_window_tracker_factory.h"
 #include "chrome/browser/ash/boca/receiver/boca_receiver_service_factory.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
@@ -70,7 +69,6 @@
 #include "chrome/browser/ash/login/saml/password_sync_token_verifier_factory.h"
 #include "chrome/browser/ash/login/security_token_session_controller_factory.h"
 #include "chrome/browser/ash/login/signin/auth_error_observer_factory.h"
-#include "chrome/browser/ash/login/signin/legacy_token_handle_fetcher.h"
 #include "chrome/browser/ash/login/signin/oauth2_login_manager_factory.h"
 #include "chrome/browser/ash/login/signin/offline_signin_limiter_factory.h"
 #include "chrome/browser/ash/login/signin/signin_error_notifier_factory.h"
@@ -83,7 +81,6 @@
 #include "chrome/browser/ash/nearby/nearby_dependencies_provider.h"
 #include "chrome/browser/ash/nearby/nearby_dependencies_provider_factory.h"
 #include "chrome/browser/ash/nearby/nearby_process_manager_factory.h"
-#include "chrome/browser/ash/nearby/presence/nearby_presence_service_factory.h"
 #include "chrome/browser/ash/nearby/quick_start_connectivity_service_factory.h"
 #include "chrome/browser/ash/net/alwayson_vpn_pre_connect_url_allowlist_service_factory.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
@@ -91,8 +88,6 @@
 #include "chrome/browser/ash/platform_keys/key_permissions/key_permissions_service_factory.h"
 #include "chrome/browser/ash/platform_keys/key_permissions/user_private_token_kpm_service_factory.h"
 #include "chrome/browser/ash/platform_keys/keystore_service_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_installer_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder_factory.h"
 #include "chrome/browser/ash/printing/cups_print_job_manager_factory.h"
@@ -119,7 +114,6 @@
 #include "chrome/browser/ui/ash/glanceables/glanceables_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/global_media_controls/cast_media_notification_producer_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
-#include "chrome/browser/ui/webui/ash/settings/services/hats/os_settings_hats_manager_factory.h"
 #include "chrome/browser/ui/webui/ash/settings/services/settings_manager/os_settings_manager_factory.h"
 #include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
 
@@ -144,7 +138,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
 
   BirchKeyedServiceFactory::GetInstance();
   bluetooth::DebugLogsManagerFactory::GetInstance();
-  boca::LockedQuizSessionManagerFactory::GetInstance();
   BocaManagerFactory::GetInstance();
   BocaReceiverServiceFactory::GetInstance();
   borealis::BorealisServiceFactory::GetInstance();
@@ -204,7 +197,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   nearby::NearbyDependenciesProvider::EnsureFactoryBuilt();
   nearby::NearbyDependenciesProviderFactory::GetInstance();
   nearby::NearbyProcessManagerFactory::GetInstance();
-  nearby::presence::NearbyPresenceServiceFactory::GetInstance();
   OAuth2LoginManagerFactory::GetInstance();
   on_device_controls::AppControlsServiceFactory::GetInstance();
   OfflineSigninLimiterFactory::GetInstance();
@@ -216,8 +208,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   platform_keys::KeyPermissionsServiceFactory::GetInstance();
   platform_keys::UserPrivateTokenKeyPermissionsManagerServiceFactory::
       GetInstance();
-  plugin_vm::PluginVmInstallerFactory::GetInstance();
-  plugin_vm::PluginVmManagerFactory::GetInstance();
   policy::UserCloudPolicyManagerAsh::EnsureFactoryBuilt();
   policy::UserCloudPolicyTokenForwarderFactory::GetInstance();
   printing::print_management::PrintingManagerFactory::GetInstance();
@@ -230,7 +220,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   ScanServiceFactory::GetInstance();
   ScreenTimeControllerFactory::GetInstance();
   secure_channel::NearbyConnectorFactory::GetInstance();
-  settings::OsSettingsHatsManagerFactory::GetInstance();
   settings::OsSettingsManagerFactory::GetInstance();
   sharesheet::SharesheetServiceFactory::GetInstance();
   shortcut_ui::ShortcutsAppManagerFactory::GetInstance();
@@ -243,7 +232,6 @@ void EnsureBrowserContextKeyedServiceFactoriesBuilt() {
   SystemLiveCaptionServiceFactory::GetInstance();
   SystemWebAppManagerFactory::GetInstance();
   tether::TetherServiceFactory::GetInstance();
-  LegacyTokenHandleFetcher::EnsureFactoryBuilt();
   TtsEngineExtensionObserverChromeOSFactory::GetInstance();
   TokenHandleServiceFactory::GetInstance();
 }

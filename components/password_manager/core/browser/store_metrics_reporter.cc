@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -16,6 +17,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_feature_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -437,7 +439,7 @@ void ReportDuplicateCredentialsMetrics(const std::vector<PasswordForm>& forms) {
   for (const auto& form : forms) {
     passwords_by_realm_and_user[std::make_pair(form.signon_realm,
                                                form.username_value)]
-        .push_back(form.password_value);
+        .push_back(form.password_value.value());
   }
   // Now go over the passwords by [realm, username] - typically there should
   // be only one password each.
@@ -634,7 +636,7 @@ StoreMetricsReporter::CredentialsCount ReportAllMetrics(
          profile_store_results.value().store_results) {
       profile_store_passwords_per_signon_and_username->insert(
           std::make_pair(std::make_pair(form.signon_realm, form.username_value),
-                         form.password_value));
+                         form.password_value.value()));
     }
   }
 
@@ -645,7 +647,7 @@ StoreMetricsReporter::CredentialsCount ReportAllMetrics(
          account_store_results.value().store_results) {
       account_store_passwords_per_signon_and_username->insert(
           std::make_pair(std::make_pair(form.signon_realm, form.username_value),
-                         form.password_value));
+                         form.password_value.value()));
     }
   }
 
@@ -675,7 +677,14 @@ StoreMetricsReporter::CredentialsCount ReportAllMetrics(
 }
 
 void ReportBiometricAuthenticationBeforeFillingMetrics(PrefService* prefs) {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(features::kBiometricTouchToFill)) {
+    return;
+  }
+#endif
+  // TODO(crbug.com/358998546): use PasswordManagerSettingsService here.
   base::UmaHistogramBoolean(
       base::StrCat({kPasswordManager, ".BiometricAuthBeforeFillingEnabled2"}),
       prefs->GetBoolean(
@@ -790,13 +799,11 @@ StoreMetricsReporter::StoreMetricsReporter(
   }
 }
 
-
-
 void StoreMetricsReporter::OnGetPasswordStoreResultsOrErrorFrom(
     PasswordStoreInterface* store,
-    LoginsResultOrError results_or_error) {
-  const bool has_error =
-      std::holds_alternative<PasswordStoreBackendError>(results_or_error);
+    base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+        results_or_error) {
+  const bool has_error = !results_or_error;
   PasswordStoreResults password_store_results{
       password_manager::ToPasswordForms(
           password_manager::GetLoginsOrEmptyListOnFailure(

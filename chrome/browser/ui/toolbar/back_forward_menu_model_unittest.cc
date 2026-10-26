@@ -6,7 +6,6 @@
 
 #include <string>
 
-#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -14,12 +13,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/history/core/browser/history_service.h"
 #include "content/public/browser/back_forward_cache.h"
@@ -123,6 +118,12 @@ class BackFwdMenuModelIncognitoTest : public ChromeRenderViewHostTestHarness {
  public:
   BackFwdMenuModelIncognitoTest() = default;
 
+  void SetUp() override {
+    ChromeRenderViewHostTestHarness::SetUp();
+    SetContents(content::WebContentsTester::CreateTestWebContents(
+        profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true), nullptr));
+  }
+
   void LoadURLAndUpdateState(const char* url, const std::u16string& title) {
     NavigateAndCommit(GURL(url));
     web_contents()->UpdateTitleForEntry(controller().GetLastCommittedEntry(),
@@ -134,18 +135,14 @@ class BackFwdMenuModelIncognitoTest : public ChromeRenderViewHostTestHarness {
 };
 
 TEST_F(BackFwdMenuModelTest, BasicCase) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
 
   std::unique_ptr<BackForwardMenuModel> forward_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kForward);
+          nullptr, BackForwardMenuModel::ModelType::kForward);
   forward_model->set_test_web_contents(web_contents());
 
   EXPECT_EQ(0u, back_model->GetItemCount());
@@ -206,18 +203,14 @@ TEST_F(BackFwdMenuModelTest, BasicCase) {
 }
 
 TEST_F(BackFwdMenuModelTest, MaxItemsTest) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
 
   std::unique_ptr<BackForwardMenuModel> forward_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kForward);
+          nullptr, BackForwardMenuModel::ModelType::kForward);
   forward_model->set_test_web_contents(web_contents());
 
   // Seed the controller with 32 URLs
@@ -293,18 +286,14 @@ TEST_F(BackFwdMenuModelTest, MaxItemsTest) {
 }
 
 TEST_F(BackFwdMenuModelTest, ChapterStops) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
 
   std::unique_ptr<BackForwardMenuModel> forward_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kForward);
+          nullptr, BackForwardMenuModel::ModelType::kForward);
   forward_model->set_test_web_contents(web_contents());
 
   // Seed the controller with 32 URLs.
@@ -516,13 +505,9 @@ TEST_F(BackFwdMenuModelTest, ChapterStops) {
 }
 
 TEST_F(BackFwdMenuModelTest, EscapeLabel) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
 
   EXPECT_EQ(0u, back_model->GetItemCount());
@@ -544,13 +529,10 @@ TEST_F(BackFwdMenuModelTest, EscapeLabel) {
 
 // Test asynchronous loading of favicon from history service.
 TEST_F(BackFwdMenuModelTest, FaviconLoadTest) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
   base::RunLoop loop;
   TestBackForwardMenuDelegate delegate(loop.QuitWhenIdleClosure());
 
-  BackForwardMenuModel back_model(browser.get(),
+  BackForwardMenuModel back_model(nullptr,
                                   BackForwardMenuModel::ModelType::kBackward);
   back_model.set_test_web_contents(web_contents());
   back_model.SetMenuModelDelegate(&delegate);
@@ -593,28 +575,19 @@ TEST_F(BackFwdMenuModelTest, FaviconLoadTest) {
   SkBitmap valid_icon_bitmap = *valid_icon.GetImage().ToSkBitmap();
 
   // Verify we did not get the default favicon.
-  UNSAFE_TODO(EXPECT_NE(
-      0, memcmp(default_icon_bitmap.getPixels(), valid_icon_bitmap.getPixels(),
-                default_icon_bitmap.computeByteSize())));
+  EXPECT_FALSE(
+      gfx::test::AreBitmapsEqual(default_icon_bitmap, valid_icon_bitmap));
   // Verify we did get the expected favicon.
-  UNSAFE_TODO(EXPECT_EQ(
-      0, memcmp(new_icon_bitmap.getPixels(), valid_icon_bitmap.getPixels(),
-                new_icon_bitmap.computeByteSize())));
-
-  // Make sure the browser deconstructor doesn't have problems.
-  browser->tab_strip_model()->CloseAllTabs();
+  EXPECT_TRUE(gfx::test::AreBitmapsEqual(new_icon_bitmap, valid_icon_bitmap));
 }
 
 TEST_F(BackFwdMenuModelTest, NavigationWhenMenuShownTest) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
   base::RunLoop loop;
   TestBackForwardMenuDelegate delegate(loop.QuitWhenIdleClosure());
 
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
   back_model->SetMenuModelDelegate(&delegate);
 
@@ -638,14 +611,9 @@ TEST_F(BackFwdMenuModelTest, NavigationWhenMenuShownTest) {
 
 // Test to check the menu in Incognito mode.
 TEST_F(BackFwdMenuModelIncognitoTest, IncognitoCaseTest) {
-  Browser::CreateParams native_params(profile()->GetPrimaryOTRProfile(true),
-                                      true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
 
   back_model->set_test_web_contents(web_contents());
 
@@ -669,13 +637,9 @@ TEST_F(BackFwdMenuModelIncognitoTest, IncognitoCaseTest) {
 
 // Test the new helper functions for accessing menu sections.
 TEST_F(BackFwdMenuModelTest, MenuSections) {
-  Browser::CreateParams native_params(profile(), true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
 
   // Test empty menu - "Show Full History" should not be shown when menu is
@@ -791,14 +755,9 @@ TEST_F(BackFwdMenuModelTest, MenuSections) {
 
 // Test menu section helpers in incognito mode (no "Show Full History").
 TEST_F(BackFwdMenuModelIncognitoTest, MenuSectionsIncognito) {
-  Browser::CreateParams native_params(profile()->GetPrimaryOTRProfile(true),
-                                      true);
-  std::unique_ptr<Browser> browser(
-      CreateBrowserWithTestWindowForParams(native_params));
-
   std::unique_ptr<BackForwardMenuModel> back_model =
       std::make_unique<BackForwardMenuModel>(
-          browser.get(), BackForwardMenuModel::ModelType::kBackward);
+          nullptr, BackForwardMenuModel::ModelType::kBackward);
   back_model->set_test_web_contents(web_contents());
 
   LoadURLAndUpdateState("http://www.a.com/1", u"A1");

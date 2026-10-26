@@ -17,9 +17,11 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/omnibox/browser/fake_autocomplete_provider_client.h"
 #include "components/omnibox/browser/search_suggestion_parser.h"
+#include "components/search/ntp_features.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "components/variations/variations_ids_provider.h"
 #include "components/variations/variations_test_utils.h"
@@ -31,6 +33,7 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/omnibox_proto/input_type.pb.h"
 #include "third_party/omnibox_proto/page_vertical.pb.h"
 #include "third_party/omnibox_proto/tool_mode.pb.h"
 #include "url/gurl.h"
@@ -100,6 +103,7 @@ struct GetSuggestURLOptions {
   std::optional<std::string> page_url;
   std::optional<std::string> title;
   std::vector<omnibox::ToolMode> allowed_tools;
+  std::vector<omnibox::InputType> allowed_inputs;
   std::optional<omnibox::PageVertical> page_vertical;
 };
 
@@ -122,7 +126,7 @@ GURL GetSuggestURL(const GetSuggestURLOptions& options,
     }
   } else {
     search_terms_args.page_classification =
-        metrics::OmniboxEventProto::NTP_ZPS_PREFETCH;
+        metrics::OmniboxEventProto::NTP_ACTION_CHIPS;
     search_terms_args.request_source =
         SearchTermsData::RequestSource::NTP_ACTION_CHIPS;
 
@@ -133,6 +137,16 @@ GURL GetSuggestURL(const GetSuggestURLOptions& options,
     }
     additional_query_params.push_back(
         base::StrCat({"ats=", base::JoinString(allowed_tools_strings, ",")}));
+
+    if (!options.allowed_inputs.empty()) {
+      std::vector<std::string> allowed_inputs_strings;
+      allowed_inputs_strings.reserve(options.allowed_inputs.size());
+      for (const auto& input : options.allowed_inputs) {
+        allowed_inputs_strings.push_back(base::NumberToString(input));
+      }
+      additional_query_params.push_back(base::StrCat(
+          {"aits=", base::JoinString(allowed_inputs_strings, ",")}));
+    }
 
     if (options.title.has_value()) {
       additional_query_params.push_back(base::StrCat(
@@ -210,12 +224,26 @@ class ServiceTestContext {
       base::optional_ref<const std::u16string> title,
       base::optional_ref<const GURL> url,
       base::span<const omnibox::ToolMode> allowed_tools,
+      base::span<const omnibox::InputType> allowed_inputs,
       base::optional_ref<const omnibox::PageVertical> page_vertical,
       base::OnceCallback<
           void(RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&)>
           callback) {
-    loader_ = service_.GetActionChipSuggestions(
-        title, url, allowed_tools, page_vertical, std::move(callback));
+    loader_ = service_.GetActionChipSuggestions(title, url, allowed_tools,
+                                                allowed_inputs, page_vertical,
+                                                std::move(callback));
+  }
+
+  void GetActionChipSuggestions(
+      base::optional_ref<const std::u16string> title,
+      base::optional_ref<const GURL> url,
+      base::span<const omnibox::ToolMode> allowed_tools,
+      base::optional_ref<const omnibox::PageVertical> page_vertical,
+      base::OnceCallback<
+          void(RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&)>
+          callback) {
+    GetActionChipSuggestions(title, url, allowed_tools, /*allowed_inputs=*/{},
+                             page_vertical, std::move(callback));
   }
 
   void CancelRequest() { loader_.reset(); }
@@ -231,7 +259,7 @@ class ServiceTestContext {
 
 struct ExpectedSuggestion {
   std::u16string suggestion;
-  AutocompleteMatchType::Type type;
+  omnibox::AutocompleteMatchType type;
 };
 
 struct HappyPathTestCase {
@@ -287,9 +315,10 @@ INSTANTIATE_TEST_SUITE_P(
         HappyPathTestCase{
             kSampleSuggestionsResponse,
             {ExpectedSuggestion{u"suggestion 1",
-                                AutocompleteMatchType::SEARCH_SUGGEST},
-             ExpectedSuggestion{u"suggestion 2",
-                                AutocompleteMatchType::SEARCH_SUGGEST}}},
+                                omnibox::AutocompleteMatchType::kSearchSuggest},
+             ExpectedSuggestion{
+                 u"suggestion 2",
+                 omnibox::AutocompleteMatchType::kSearchSuggest}}},
         HappyPathTestCase{kEmptySuggestionsResponse, {}}));
 
 using GetActionChipSuggestionsHappyPathTest =
@@ -345,31 +374,75 @@ INSTANTIATE_TEST_SUITE_P(
         HappyPathTestCase{
             kSampleSuggestionsResponseWithEmptySuggestion,
             {ExpectedSuggestion{u"suggestion 1",
-                                AutocompleteMatchType::SEARCH_SUGGEST},
+                                omnibox::AutocompleteMatchType::kSearchSuggest},
              ExpectedSuggestion{u"suggestion 2",
-                                AutocompleteMatchType::SEARCH_SUGGEST},
-             ExpectedSuggestion{u"", AutocompleteMatchType::SEARCH_SUGGEST}}},
+                                omnibox::AutocompleteMatchType::kSearchSuggest},
+             ExpectedSuggestion{
+                 u"", omnibox::AutocompleteMatchType::kSearchSuggest}}},
         HappyPathTestCase{kEmptySuggestionsResponse, {}}));
 
 TEST(RemoteSuggestionsServiceSimpleTest,
-     GetDeepdiveChipSuggestionsForTabReturnsTimeoutError) {
+     GetDeepdiveChipSuggestionsForTabTimesOutAfterDefault2Seconds) {
   EnvironmentFixture env;
   ServiceTestContext context;
 
   RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult actual;
+  bool callback_called = false;
   context.GetDeepdiveChipSuggestionsForTab(
       u"title", GURL("https://example.com/"),
       base::BindLambdaForTesting(
-          [&actual,
+          [&actual, &callback_called,
            &env](RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&
                      result) {
             actual = std::move(result);
+            callback_called = true;
             env.run_loop().Quit();
           }));
 
-  env.FastForwardBy(base::Seconds(100));
+  // Should not time out after 1.5 seconds (< 2s default).
+  env.FastForwardBy(base::Milliseconds(1500));
+  EXPECT_FALSE(callback_called);
+
+  // Should time out after reaching 2 seconds.
+  env.FastForwardBy(base::Milliseconds(600));
   env.run_loop().Run();
 
+  EXPECT_TRUE(callback_called);
+  EXPECT_THAT(actual, ErrorIs(VariantWith<NetworkError>(
+                          FieldsAre(net::Error::ERR_TIMED_OUT, 0))));
+}
+
+TEST(RemoteSuggestionsServiceSimpleTest,
+     GetDeepdiveChipSuggestionsForTabReturnsTimeoutErrorWhenKillSwitchDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      ntp_features::kNtpActionChipsSuggestTimeout);
+
+  EnvironmentFixture env;
+  ServiceTestContext context;
+
+  RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult actual;
+  bool callback_called = false;
+  context.GetDeepdiveChipSuggestionsForTab(
+      u"title", GURL("https://example.com/"),
+      base::BindLambdaForTesting(
+          [&actual, &callback_called,
+           &env](RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&
+                     result) {
+            actual = std::move(result);
+            callback_called = true;
+            env.run_loop().Quit();
+          }));
+
+  // Should not time out after 1.0 second (< 1.2s fallback).
+  env.FastForwardBy(base::Milliseconds(1000));
+  EXPECT_FALSE(callback_called);
+
+  // Should time out after reaching 1.2 seconds.
+  env.FastForwardBy(base::Milliseconds(300));
+  env.run_loop().Run();
+
+  EXPECT_TRUE(callback_called);
   EXPECT_THAT(actual, ErrorIs(VariantWith<NetworkError>(
                           FieldsAre(net::Error::ERR_TIMED_OUT, 0))));
 }
@@ -560,6 +633,52 @@ TEST(RemoteSuggestionsServiceSimpleTest,
 }
 
 TEST(RemoteSuggestionsServiceSimpleTest,
+     GetActionChipSuggestionsWithAllowedInputs) {
+  EnvironmentFixture env;
+  ServiceTestContext context;
+
+  RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult actual;
+  const std::u16string title = u"page title";
+  const GURL current_url("https://example.com/");
+  const std::vector<omnibox::ToolMode> allowed_tools = {
+      omnibox::ToolMode::TOOL_MODE_IMAGE_GEN};
+  const std::vector<omnibox::InputType> allowed_inputs = {
+      omnibox::InputType::INPUT_TYPE_LENS_IMAGE,
+      omnibox::InputType::INPUT_TYPE_LENS_FILE};
+
+  context.GetActionChipSuggestions(
+      title, current_url, allowed_tools, allowed_inputs, std::nullopt,
+      base::BindLambdaForTesting(
+          [&actual,
+           &env](RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&
+                     result) {
+            actual = std::move(result);
+            env.run_loop().Quit();
+          }));
+
+  const GURL suggest_url = GetSuggestURL({.page_url = current_url.spec(),
+                                          .title = base::UTF16ToUTF8(title),
+                                          .allowed_tools = allowed_tools,
+                                          .allowed_inputs = allowed_inputs,
+                                          .page_vertical = std::nullopt},
+                                         context.client());
+
+  ASSERT_TRUE(
+      context.client().test_url_loader_factory()->IsPending(suggest_url.spec()))
+      << GeneratePendingRequestsDebugMsg(
+             *context.client().test_url_loader_factory(), suggest_url.spec());
+
+  std::string value;
+  EXPECT_TRUE(net::GetValueForKeyInQuery(suggest_url, "aits", &value));
+  EXPECT_EQ(value,
+            base::StrCat({base::NumberToString(static_cast<int>(
+                              omnibox::InputType::INPUT_TYPE_LENS_IMAGE)),
+                          ",",
+                          base::NumberToString(static_cast<int>(
+                              omnibox::InputType::INPUT_TYPE_LENS_FILE))}));
+}
+
+TEST(RemoteSuggestionsServiceSimpleTest,
      GetActionChipSuggestionsWithoutPageVertical) {
   EnvironmentFixture env;
   ServiceTestContext context;
@@ -606,11 +725,12 @@ TEST(RemoteSuggestionsServiceSimpleTest,
 }
 
 TEST(RemoteSuggestionsServiceSimpleTest,
-     GetActionChipSuggestionsReturnsTimeoutError) {
+     GetActionChipSuggestionsTimesOutAfterDefault2Seconds) {
   EnvironmentFixture env;
   ServiceTestContext context;
 
   RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult actual;
+  bool callback_called = false;
   const std::u16string title = u"title";
   const GURL url("https://example.com/");
   const std::vector<omnibox::ToolMode> allowed_tools = {
@@ -618,16 +738,62 @@ TEST(RemoteSuggestionsServiceSimpleTest,
   context.GetActionChipSuggestions(
       title, url, allowed_tools, std::nullopt,
       base::BindLambdaForTesting(
-          [&actual,
+          [&actual, &callback_called,
            &env](RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&
                      result) {
             actual = std::move(result);
+            callback_called = true;
             env.run_loop().Quit();
           }));
 
-  env.FastForwardBy(base::Seconds(100));
+  // Should not time out after 1.5 seconds (< 2s default).
+  env.FastForwardBy(base::Milliseconds(1500));
+  EXPECT_FALSE(callback_called);
+
+  // Should time out after reaching 2 seconds.
+  env.FastForwardBy(base::Milliseconds(600));
   env.run_loop().Run();
 
+  EXPECT_TRUE(callback_called);
+  EXPECT_THAT(actual, ErrorIs(VariantWith<NetworkError>(
+                          FieldsAre(net::Error::ERR_TIMED_OUT, 0))));
+}
+
+TEST(RemoteSuggestionsServiceSimpleTest,
+     GetActionChipSuggestionsReturnsTimeoutErrorWhenKillSwitchDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      ntp_features::kNtpActionChipsSuggestTimeout);
+
+  EnvironmentFixture env;
+  ServiceTestContext context;
+
+  RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult actual;
+  bool callback_called = false;
+  const std::u16string title = u"title";
+  const GURL url("https://example.com/");
+  const std::vector<omnibox::ToolMode> allowed_tools = {
+      omnibox::ToolMode::TOOL_MODE_IMAGE_GEN};
+  context.GetActionChipSuggestions(
+      title, url, allowed_tools, std::nullopt,
+      base::BindLambdaForTesting(
+          [&actual, &callback_called,
+           &env](RemoteSuggestionsServiceSimple::ActionChipSuggestionsResult&&
+                     result) {
+            actual = std::move(result);
+            callback_called = true;
+            env.run_loop().Quit();
+          }));
+
+  // Should not time out after 1.0 second (< 1.2s fallback).
+  env.FastForwardBy(base::Milliseconds(1000));
+  EXPECT_FALSE(callback_called);
+
+  // Should time out after reaching 1.2 seconds.
+  env.FastForwardBy(base::Milliseconds(300));
+  env.run_loop().Run();
+
+  EXPECT_TRUE(callback_called);
   EXPECT_THAT(actual, ErrorIs(VariantWith<NetworkError>(
                           FieldsAre(net::Error::ERR_TIMED_OUT, 0))));
 }
@@ -883,7 +1049,8 @@ TEST(RemoteSuggestionsServiceSimpleTest,
   const std::vector<omnibox::ToolMode> allowed_tools = {
       omnibox::ToolMode::TOOL_MODE_IMAGE_GEN};
   std::unique_ptr<network::SimpleURLLoader> loader =
-      service->GetActionChipSuggestions(title, url, allowed_tools, std::nullopt,
+      service->GetActionChipSuggestions(title, url, allowed_tools,
+                                        /*allowed_inputs=*/{}, std::nullopt,
                                         callback.Get());
 
   // Destroy the service.

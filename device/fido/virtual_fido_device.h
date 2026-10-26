@@ -23,8 +23,8 @@
 #include "base/observer_list_types.h"
 #include "crypto/keypair.h"
 #include "device/fido/ctap_get_assertion_request.h"
+#include "device/fido/ctap_make_credential_request.h"
 #include "device/fido/fido_device.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/large_blob.h"
 #include "device/fido/public/fido_constants.h"
 #include "device/fido/public/public_key_credential_descriptor.h"
@@ -45,30 +45,29 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
   // authenticator.
   class COMPONENT_EXPORT(DEVICE_FIDO) PrivateKey {
    public:
-    // FromPKCS8 attempts to parse |pkcs8_private_key| as an ASN.1, DER, PKCS#8
-    // private key of a supported type and returns a |PrivateKey| instance
-    // representing that key.
+    // IsAlgorithmSupported returns true if |algorithm| is a supported COSE
+    // algorithm identifier.
+    static bool IsAlgorithmSupported(int32_t algorithm);
+
+    // FromPKCS8 attempts to parse |pkcs8_private_key| as a PKCS#8 private key
+    // of a supported type and returns a |PrivateKey| instance representing that
+    // key. Returns std::nullopt if parsing fails or if the key type is
+    // unsupported.
     static std::optional<std::unique_ptr<PrivateKey>> FromPKCS8(
         base::span<const uint8_t> pkcs8_private_key);
 
-    // FreshP256Key returns a randomly generated P-256 PrivateKey.
-    static std::unique_ptr<PrivateKey> FreshP256Key();
+    // Creates a new private key for the given COSE algorithm identifier.
+    // Supports kEs256, kRs256, kEdDSA, kMlDsa44, kMlDsa65, kMlDsa87, and
+    // kInvalidForTesting.
+    explicit PrivateKey(CoseAlgorithmIdentifier algorithm);
 
-    // FreshRSAKey returns a randomly generated RSA PrivateKey.
-    static std::unique_ptr<PrivateKey> FreshRSAKey();
+    ~PrivateKey();
 
-    // FreshEd25519Key returns a randomly generated Ed25519 PrivateKey.
-    static std::unique_ptr<PrivateKey> FreshEd25519Key();
-
-    // FreshInvalidForTestingKey returns a dummy |PrivateKey| with a special
-    // algorithm number that is used to test that unknown public keys are
-    // handled correctly.
-    static std::unique_ptr<PrivateKey> FreshInvalidForTestingKey();
-
-    virtual ~PrivateKey();
+    // algorithm returns the COSE algorithm identifier for this key.
+    CoseAlgorithmIdentifier algorithm() const { return algorithm_; }
 
     // Sign returns a signature over |message|.
-    virtual std::vector<uint8_t> Sign(base::span<const uint8_t> message);
+    std::vector<uint8_t> Sign(base::span<const uint8_t> message) const;
 
     // GetX962PublicKey returns the elliptic-curve public key encoded in X9.62
     // format. Only elliptic-curve based private keys can be represented in this
@@ -76,15 +75,20 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
     std::vector<uint8_t> GetX962PublicKey() const;
 
     // GetPKCS8PrivateKey returns the private key encoded in ASN.1, DER, PKCS#8
-    // format.
+    // format. Returns an empty vector if this is an invalid key for testing.
     std::vector<uint8_t> GetPKCS8PrivateKey() const;
 
-    virtual std::unique_ptr<PublicKey> GetPublicKey() const = 0;
+    // GetPublicKey returns the device::PublicKey for this private key.
+    std::unique_ptr<PublicKey> GetPublicKey() const;
 
-   protected:
-    explicit PrivateKey(crypto::keypair::PrivateKey key);
+   private:
+    PrivateKey(std::optional<crypto::keypair::PrivateKey> key,
+               CoseAlgorithmIdentifier algorithm);
 
-    crypto::keypair::PrivateKey key_;
+    // This is only ever `nullopt` if `algorithm_` is `kInvalidForTesting`.
+    std::optional<crypto::keypair::PrivateKey> key_;
+    CoseAlgorithmIdentifier algorithm_ =
+        CoseAlgorithmIdentifier::kInvalidForTesting;
   };
 
   // Encapsulates information corresponding to one registered key on the virtual
@@ -95,7 +99,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
     RegistrationData(
         std::unique_ptr<PrivateKey> private_key,
         base::span<const uint8_t, kRpIdHashLength> application_parameter,
-        uint32_t counter);
+        std::optional<uint32_t> counter);
 
     RegistrationData(RegistrationData&& data);
     RegistrationData& operator=(RegistrationData&& other);
@@ -105,9 +109,10 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
 
     ~RegistrationData();
 
-    std::unique_ptr<PrivateKey> private_key = PrivateKey::FreshP256Key();
+    std::unique_ptr<PrivateKey> private_key =
+        std::make_unique<PrivateKey>(CoseAlgorithmIdentifier::kEs256);
     std::array<uint8_t, kRpIdHashLength> application_parameter;
-    uint32_t counter = 0;
+    std::optional<uint32_t> counter = 0;
     bool is_resident = false;
     bool backup_eligible = false;
     bool backup_state = false;
@@ -142,6 +147,9 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
     // The index of the current CMTG key in use. If this is greater or equal to
     // the count of CMTG keys, it's reset to 0.
     size_t selected_cmtg_key_index = 0;
+
+    // If true, generates a new CMTG key on the next operation.
+    bool generate_cmtg_key_on_next_operation = false;
   };
 
   using Credential = std::pair<base::span<const uint8_t>, RegistrationData*>;
@@ -160,9 +168,8 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
   // necessary in order to provide continuity between requests.
   class COMPONENT_EXPORT(DEVICE_FIDO) State : public base::RefCounted<State> {
    public:
-    using RegistrationsMap = std::map<std::vector<uint8_t>,
-                                      RegistrationData,
-                                      fido_parsing_utils::RangeLess>;
+    using RegistrationsMap =
+        std::map<std::vector<uint8_t>, RegistrationData, std::less<>>;
     using SimulatePressCallback =
         base::RepeatingCallback<bool(VirtualFidoDevice*)>;
 
@@ -215,8 +222,6 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
     // If true, the authenticator won't process the CMTG key extension, even if
     // it is supported.
     bool simulate_cmtg_key_failure = false;
-    // If true, generates a new CMTG key on the next assertion.
-    bool generate_new_cmtg_key_on_next_assertion = false;
     // default_backup_eligibility determines the default value of the
     // credential's BE (Backup Eligible) flag. This applies to both credentials
     // created by invoking the CTAP make credential command (in which case the
@@ -292,6 +297,10 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
     // received by the device.
     std::optional<CtapGetAssertionRequest> last_get_assertion_request;
 
+    // last_make_credential_request contains the last make credential request
+    // received by the device.
+    std::optional<CtapMakeCredentialRequest> last_make_credential_request;
+
     // exclude_list_history contains the exclude_list values that have been seen
     // in registration requests. This is for tests to confirm that the expected
     // sequence of requests was sent.
@@ -354,7 +363,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) VirtualFidoDevice : public FidoDevice {
     bool InjectResidentKey(base::span<const uint8_t> credential_id,
                            device::PublicKeyCredentialRpEntity rp,
                            device::PublicKeyCredentialUserEntity user,
-                           int32_t signature_counter,
+                           std::optional<uint32_t> signature_counter,
                            std::unique_ptr<PrivateKey> private_key);
 
     // Adds a resident credential with the specified values, creating a new

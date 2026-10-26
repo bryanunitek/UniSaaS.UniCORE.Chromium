@@ -3,12 +3,8 @@ kbr@chromium.org
 vasilyt@chromium.org
 vmiura@chromium.org
 zmo@chromium.org
-sunnyps@chromium.org
 blundell@chromium.org
 kylechar@chromium.org
-
-# GPU memory buffer implementations.
-per-file *gpu_memory_buffer*=dcastagna@chromium.org
 
 # Passthrough command decoder
 per-file *passthrough*=geofflang@chromium.org
@@ -22,3 +18,6 @@ rafael.cintron@microsoft.com
 
 # The extended Chrome Graphics team should be able to self-administer.
 per-file GRAPHICS_TEAM_OWNERS=file://gpu/GRAPHICS_TEAM_OWNERS
+
+# For configuration, initialization and gpuwatchdog.
+magchen@chromium.org

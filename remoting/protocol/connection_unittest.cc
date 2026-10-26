@@ -19,7 +19,6 @@
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/build_config.h"
 #include "remoting/base/constants.h"
 #include "remoting/base/fifo_buffer.h"
 #include "remoting/base/ipc_fifo_buffer.h"
@@ -32,6 +31,7 @@
 #include "remoting/protocol/fake_session.h"
 #include "remoting/protocol/fake_video_renderer.h"
 #include "remoting/protocol/fake_webrtc_audio_classes.h"
+#include "remoting/protocol/ice_config_fetcher.h"
 #include "remoting/protocol/network_settings.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "remoting/protocol/transport_context.h"
@@ -40,6 +40,7 @@
 #include "remoting/protocol/webrtc_connection_to_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 
 using ::testing::_;
@@ -81,7 +82,7 @@ class MockConnectionToHostEventCallback
               (override));
 };
 
-class TestScreenCapturer : public DesktopCapturer {
+class TestScreenCapturer : public webrtc::DesktopCapturer {
  public:
   TestScreenCapturer() = default;
   ~TestScreenCapturer() override = default;
@@ -267,7 +268,7 @@ class FakeAudioPlayer : public AudioStub {
 
 }  // namespace
 
-class ConnectionTest : public testing::Test {
+class ConnectionTest : public testing::Test, public Session::EventHandler {
  public:
   ConnectionTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
@@ -287,10 +288,26 @@ class ConnectionTest : public testing::Test {
     run_loop_->Quit();
   }
 
+  void OnSessionStateChange(Session::State state) override {
+    if (state == Session::AUTHENTICATED) {
+      if (host_connection_) {
+        host_session_->SetTransport(host_connection_->transport());
+        host_connection_->Start();
+      }
+    } else if (state == Session::CLOSED || state == Session::FAILED) {
+      if (host_connection_) {
+        ErrorCode error =
+            state == Session::CLOSED ? ErrorCode::OK : host_session_->error();
+        host_connection_->Disconnect(error, {}, FROM_HERE);
+      }
+    }
+  }
+
  protected:
   void SetUp() override {
     // Create fake sessions.
-    host_session_ = new FakeSession();
+    owned_host_session_ = std::make_unique<FakeSession>();
+    host_session_ = owned_host_session_.get();
     owned_client_session_ = std::make_unique<FakeSession>();
     client_session_ = owned_client_session_.get();
 
@@ -298,13 +315,12 @@ class ConnectionTest : public testing::Test {
     WebrtcTransport::SetDataChannelPollingIntervalForTests(base::TimeDelta());
 
     host_connection_ = std::make_unique<WebrtcConnectionToClient>(
-        base::WrapUnique(host_session_.get()),
-        TransportContext::ForTests(protocol::TransportRole::SERVER),
-        task_environment_.GetMainThreadTaskRunner());
+        /*ice_config_fetcher=*/nullptr);
     client_connection_ = std::make_unique<WebrtcConnectionToHost>();
 
     // Setup host side.
     host_connection_->SetEventHandler(&host_event_handler_);
+    host_session_->SetEventHandler(this);
     host_connection_->set_clipboard_stub(&host_clipboard_stub_);
     host_connection_->set_host_stub(&host_stub_);
     host_connection_->set_input_stub(&host_input_stub_);
@@ -319,11 +335,6 @@ class ConnectionTest : public testing::Test {
   }
 
   void Connect() {
-    {
-      testing::InSequence sequence;
-      EXPECT_CALL(host_event_handler_, OnConnectionAuthenticating());
-      EXPECT_CALL(host_event_handler_, OnConnectionAuthenticated(nullptr));
-    }
     EXPECT_CALL(host_event_handler_, OnConnectionChannelsConnected())
         .WillOnce(InvokeWithoutArgs(this, &ConnectionTest::OnHostConnected));
     EXPECT_CALL(host_event_handler_, OnRouteChange(_, _))
@@ -437,8 +448,8 @@ class ConnectionTest : public testing::Test {
   MockHostStub host_stub_;
   MockInputStub host_input_stub_;
   std::unique_ptr<ConnectionToClient> host_connection_;
-  raw_ptr<FakeSession, AcrossTasksDanglingUntriaged>
-      host_session_;  // Owned by |host_connection_|.
+  std::unique_ptr<FakeSession> owned_host_session_;
+  raw_ptr<FakeSession, AcrossTasksDanglingUntriaged> host_session_;
   bool host_connected_ = false;
 
   MockConnectionToHostEventCallback client_event_handler_;
@@ -447,9 +458,9 @@ class ConnectionTest : public testing::Test {
   FakeVideoRenderer client_video_renderer_;
   FakeAudioPlayer client_audio_player_;
   std::unique_ptr<ConnectionToHost> client_connection_;
+  std::unique_ptr<FakeSession> owned_client_session_;
   raw_ptr<FakeSession, AcrossTasksDanglingUntriaged>
       client_session_;  // Owned by |client_connection_|.
-  std::unique_ptr<FakeSession> owned_client_session_;
   bool client_connected_ = false;
 
   base::Thread video_encode_thread_;
@@ -470,30 +481,17 @@ TEST_F(ConnectionTest, RejectConnection) {
   client_session_->event_handler()->OnSessionStateChange(Session::CLOSED);
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Disconnect DISABLED_Disconnect
-#else
-#define MAYBE_Disconnect Disconnect
-#endif
-TEST_F(ConnectionTest, MAYBE_Disconnect) {
+TEST_F(ConnectionTest, Disconnect) {
   Connect();
 
   EXPECT_CALL(client_event_handler_,
               OnConnectionState(ConnectionToHost::CLOSED, ErrorCode::OK));
-  EXPECT_CALL(host_event_handler_, OnConnectionClosed(ErrorCode::OK));
 
   client_session_->Close(ErrorCode::OK, /* error_details= */ {}, FROM_HERE);
   base::RunLoop().RunUntilIdle();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Control DISABLED_Control
-#else
-#define MAYBE_Control Control
-#endif
-TEST_F(ConnectionTest, MAYBE_Control) {
+TEST_F(ConnectionTest, Control) {
   Connect();
 
   Capabilities capabilities_msg;
@@ -511,13 +509,7 @@ TEST_F(ConnectionTest, MAYBE_Control) {
   run_loop.Run();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Events DISABLED_Events
-#else
-#define MAYBE_Events Events
-#endif
-TEST_F(ConnectionTest, MAYBE_Events) {
+TEST_F(ConnectionTest, Events) {
   Connect();
 
   KeyEvent event;
@@ -535,17 +527,12 @@ TEST_F(ConnectionTest, MAYBE_Events) {
   run_loop.Run();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_Video DISABLED_Video
-#else
-#define MAYBE_Video Video
-#endif
-TEST_F(ConnectionTest, MAYBE_Video) {
+TEST_F(ConnectionTest, Video) {
   Connect();
 
   std::unique_ptr<VideoStream> video_stream =
-      host_connection_->StartVideoStream(0, CreateTestCapturer());
+      host_connection_->StartVideoStream(webrtc::kFullDesktopScreenId,
+                                         CreateTestCapturer());
 
   // Receive 5 frames.
   for (int i = 0; i < 5; ++i) {
@@ -553,15 +540,9 @@ TEST_F(ConnectionTest, MAYBE_Video) {
   }
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_VideoWithSlowSignaling DISABLED_VideoWithSlowSignaling
-#else
-#define MAYBE_VideoWithSlowSignaling VideoWithSlowSignaling
-#endif
 // Verifies that the VideoStream doesn't lose any video frames while the
 // connection is being established.
-TEST_F(ConnectionTest, MAYBE_VideoWithSlowSignaling) {
+TEST_F(ConnectionTest, VideoWithSlowSignaling) {
   // Add signaling delay to slow down connection handshake.
   host_session_->set_signaling_delay(base::Milliseconds(100));
   client_session_->set_signaling_delay(base::Milliseconds(100));
@@ -569,18 +550,13 @@ TEST_F(ConnectionTest, MAYBE_VideoWithSlowSignaling) {
   Connect();
 
   std::unique_ptr<VideoStream> video_stream =
-      host_connection_->StartVideoStream(0, CreateTestCapturer());
+      host_connection_->StartVideoStream(webrtc::kFullDesktopScreenId,
+                                         CreateTestCapturer());
 
   WaitNextVideoFrame();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_DestroyOnIncomingMessage DISABLED_DestroyOnIncomingMessage
-#else
-#define MAYBE_DestroyOnIncomingMessage DestroyOnIncomingMessage
-#endif
-TEST_F(ConnectionTest, MAYBE_DestroyOnIncomingMessage) {
+TEST_F(ConnectionTest, DestroyOnIncomingMessage) {
   Connect();
 
   KeyEvent event;
@@ -599,8 +575,7 @@ TEST_F(ConnectionTest, MAYBE_DestroyOnIncomingMessage) {
   run_loop.Run();
 }
 
-// TODO(crbug.com/40729981): Test is flaky.
-TEST_F(ConnectionTest, DISABLED_VideoStats) {
+TEST_F(ConnectionTest, VideoStats) {
   Connect();
 
   base::TimeTicks start_time = base::TimeTicks::Now();
@@ -613,7 +588,8 @@ TEST_F(ConnectionTest, DISABLED_VideoStats) {
       InputEventTimestamps{event_timestamp, start_time});
 
   std::unique_ptr<VideoStream> video_stream =
-      host_connection_->StartVideoStream(0, CreateTestCapturer());
+      host_connection_->StartVideoStream(webrtc::kFullDesktopScreenId,
+                                         CreateTestCapturer());
   video_stream->SetEventTimestampsSource(input_event_timestamps_source);
   WaitNextVideoFrame();
 
@@ -660,28 +636,24 @@ TEST_F(ConnectionTest, DISABLED_Audio) {
   client_audio_player_.Verify();
 }
 
-// Flaky on multiple platforms
-// https://crbug.com/1143671
-TEST_F(ConnectionTest, DISABLED_FirstCaptureFailed) {
+TEST_F(ConnectionTest, FirstCaptureFailed) {
   Connect();
 
   auto test_capturer = std::make_unique<TestScreenCapturer>();
   test_capturer->FailNthFrame(0);
   auto video_stream = host_connection_->StartVideoStream(
-      0, WrapTestCapturer(std::move(test_capturer)));
+      webrtc::kFullDesktopScreenId, WrapTestCapturer(std::move(test_capturer)));
 
   WaitNextVideoFrame();
 }
 
-// Flaky on multiple platforms
-// https://crbug.com/1143671
-TEST_F(ConnectionTest, DISABLED_SecondCaptureFailed) {
+TEST_F(ConnectionTest, SecondCaptureFailed) {
   Connect();
 
   auto test_capturer = std::make_unique<TestScreenCapturer>();
   test_capturer->FailNthFrame(1);
   auto video_stream = host_connection_->StartVideoStream(
-      0, WrapTestCapturer(std::move(test_capturer)));
+      webrtc::kFullDesktopScreenId, WrapTestCapturer(std::move(test_capturer)));
 
   WaitNextVideoFrame();
   WaitNextVideoFrame();

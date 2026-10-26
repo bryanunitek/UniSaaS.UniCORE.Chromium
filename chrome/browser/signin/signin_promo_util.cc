@@ -12,12 +12,14 @@
 #include "base/json/values_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/numerics/clamped_math.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/batch_upload/batch_upload_service.h"
 #include "chrome/browser/profiles/batch_upload/batch_upload_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/account_preview_data_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/webui/signin/signin_ui_error.h"
@@ -33,6 +35,7 @@
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "components/sync/base/features.h"
 #include "components/sync_bookmarks/switches.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "net/base/network_change_notifier.h"
@@ -53,7 +56,8 @@
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
-#include "components/autofill/core/browser/data_quality/addresses/profile_requirement_utils.h"
+#include "components/autofill/core/browser/data_quality/addresses/address_import_requirement_util.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/user_selectable_type.h"
@@ -78,17 +82,9 @@ constexpr int kSigninPromoDismissedThreshold = 2;
 constexpr char kAvatarButtonPromoProfileDictionary[] =
     "signin.avatar_button_promo_dict";
 
-// The following prefs are mapped to the used and shown counts of the promos
-// listed in `ProfileMenuAvatarButtonPromoInfo::Type` (Except for
-// `ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo`). Some promos can be
-// tied to an account/`GaiaId` (through
-// `SigninPrefs::GetOrCreateAvatarButtonPromoCountDictionary()` dictionary), or
-// to the Profile directly through `kAvatarButtonPromoProfileDictionary`
-// dictionary). Some prefs can also be mapped to both at the same time, in this
-// case we use the same pref, but it will depend on which dictionary it will be
-// stored.
-//
-// The following prefs are only attached to a `GaiaId`.
+// Profile-level keys stored under `kAvatarButtonPromoProfileDictionary` when
+// no account is present (`gaia.empty()`). When an account is present,
+// `SigninPrefs` is used instead.
 constexpr std::string_view kAvatarButtonHistorySyncPromoShownCount =
     "AvatarButtonHistorySyncPromoShownCount";
 constexpr std::string_view kAvatarButtonHistorySyncPromoUsedCount =
@@ -107,7 +103,6 @@ constexpr std::string_view
 constexpr std::string_view
     kAvatarButtonBatchUploadWindows10DepreciationPromoUsedCount =
         "AvatarButtonBatchUploadWindows10DepreciationPromoUsedCount";
-// The following prefs can be attached to a `GaiaId` or the Profile.
 constexpr std::string_view kAvatarButtonSigninPromoShownCount =
     "AvatarButtonSigninPromoShownCount";
 constexpr std::string_view kAvatarButtonSigninPromoUsedCount =
@@ -115,7 +110,7 @@ constexpr std::string_view kAvatarButtonSigninPromoUsedCount =
 constexpr std::string_view kAvatarButtonSigninPromoLastShownTime =
     "AvatarButtonSigninPromoLastShownTime";
 
-std::string_view GetAvatarButtonPromoShownKey(
+std::string_view GetProfileAvatarButtonPromoShownKey(
     ProfileMenuAvatarButtonPromoInfo::Type promo_type) {
   switch (promo_type) {
     case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
@@ -128,14 +123,12 @@ std::string_view GetAvatarButtonPromoShownKey(
         kBatchUploadWindows10DepreciationPromo:
       CHECK(switches::IsSigninWindows10DepreciationState());
       return kAvatarButtonBatchUploadWindows10DepreciationPromoShownCount;
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
-      NOTREACHED() << "SyncPromo uses the SigninPrefs values directly";
     case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
       return kAvatarButtonSigninPromoShownCount;
   }
 }
 
-std::string_view GetAvatarButtonPromoUsedKey(
+std::string_view GetProfileAvatarButtonPromoUsedKey(
     ProfileMenuAvatarButtonPromoInfo::Type promo_type) {
   switch (promo_type) {
     case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
@@ -148,42 +141,8 @@ std::string_view GetAvatarButtonPromoUsedKey(
         kBatchUploadWindows10DepreciationPromo:
       CHECK(switches::IsSigninWindows10DepreciationState());
       return kAvatarButtonBatchUploadWindows10DepreciationPromoUsedCount;
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
-      NOTREACHED() << "SyncPromo uses the SigninPrefs values directly";
     case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
       return kAvatarButtonSigninPromoUsedCount;
-  }
-}
-
-// Returns the Gaia tied dictionary or the global profile dictionary for the
-// promo prefs.
-base::DictValue& GetPromoDictionary(PrefService& pref_service,
-                                    SigninPrefs& signin_prefs,
-                                    const GaiaId& gaia) {
-  if (gaia.empty()) {
-    return ScopedDictPrefUpdate(pref_service,
-                                kAvatarButtonPromoProfileDictionary)
-        .Get();
-  }
-  return signin_prefs.GetOrCreateAvatarButtonPromoCountDictionary(gaia);
-}
-
-// May return `std::nullopt` when the `promo_type` does not depend on the shown
-// time of the promo.
-std::optional<std::string_view> MaybeGetLastShownTimePref(
-    ProfileMenuAvatarButtonPromoInfo::Type promo_type) {
-  switch (promo_type) {
-    case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::
-        kBatchUploadWindows10DepreciationPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
-      // Those promos do not need to record the shown time pref as deciding to
-      // show the promo does not depend on it.
-      return std::nullopt;
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
-      return kAvatarButtonSigninPromoLastShownTime;
   }
 }
 
@@ -195,10 +154,10 @@ base::TimeDelta GetMinimumThresholdSinceLastShownTime(
     case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
     case ProfileMenuAvatarButtonPromoInfo::Type::
         kBatchUploadWindows10DepreciationPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
       NOTREACHED() << "The promo does not support shown time checking.";
     case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
-      return switches::kSigninPromoOnAvatarPillDelayForNextPromoAllowed.Get();
+      return AvatarButtonPromoManager::
+          kSigninPromoMinimumDelayForNextPromoAllowed;
   }
 }
 
@@ -210,7 +169,6 @@ base::TimeDelta GetMinimumThresholdSinceLastEventTime(
     case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
     case ProfileMenuAvatarButtonPromoInfo::Type::
         kBatchUploadWindows10DepreciationPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
       NOTREACHED() << "The promo does not support last event time checking.";
     case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
       // Explicitly uses the same value as the threshold last shown time to
@@ -229,7 +187,6 @@ std::optional<base::Time> MaybeGetLastExternalEventTime(
     case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
     case ProfileMenuAvatarButtonPromoInfo::Type::
         kBatchUploadWindows10DepreciationPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
       // These promos does not support external event time checking.
       return std::nullopt;
     case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
@@ -250,33 +207,69 @@ struct PromoUsageInfo {
 };
 
 PromoUsageInfo GetPromoUsageInfo(
-    PrefService& pref_service,
-    SigninPrefs& signin_prefs,
+    const PrefService& pref_service,
+    const SigninPrefs& signin_prefs,
     ProfileMenuAvatarButtonPromoInfo::Type promo_type,
     GaiaId gaia) {
-  if (promo_type == ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo) {
-    CHECK(switches::IsAvatarSyncPromoFeatureEnabled());
-    return {
-        .shown_count = signin_prefs.GetSyncPromoIdentityPillShownCount(gaia),
-        .used_count = signin_prefs.GetSyncPromoIdentityPillUsedCount(gaia)};
+  if (gaia.empty()) {
+    const base::DictValue& promo_dict =
+        pref_service.GetDict(kAvatarButtonPromoProfileDictionary);
+    PromoUsageInfo usage_info{
+        .shown_count =
+            promo_dict.FindInt(GetProfileAvatarButtonPromoShownKey(promo_type))
+                .value_or(0),
+        .used_count =
+            promo_dict.FindInt(GetProfileAvatarButtonPromoUsedKey(promo_type))
+                .value_or(0)};
+    if (promo_type == ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo) {
+      if (const base::Value* last_shown_time =
+              promo_dict.Find(kAvatarButtonSigninPromoLastShownTime)) {
+        usage_info.last_shown_time = base::ValueToTime(*last_shown_time);
+      }
+    }
+    return usage_info;
   }
 
-  std::string_view shown_key = GetAvatarButtonPromoShownKey(promo_type);
-  std::string_view used_key = GetAvatarButtonPromoUsedKey(promo_type);
-  base::DictValue& promo_dict =
-      GetPromoDictionary(pref_service, signin_prefs, gaia);
-
-  PromoUsageInfo usage_info{
-      .shown_count = promo_dict.FindInt(shown_key).value_or(0),
-      .used_count = promo_dict.FindInt(used_key).value_or(0)};
-
-  if (std::optional<std::string_view> last_shown_time_pref =
-          MaybeGetLastShownTimePref(promo_type);
-      last_shown_time_pref.has_value()) {
-    if (base::Value* last_shown_time =
-            promo_dict.Find(last_shown_time_pref.value())) {
-      usage_info.last_shown_time = base::ValueToTime(*last_shown_time);
-    }
+  PromoUsageInfo usage_info;
+  switch (promo_type) {
+    case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
+      usage_info.shown_count =
+          signin_prefs.GetAvatarButtonHistorySyncPromoShownCount(gaia);
+      usage_info.used_count =
+          signin_prefs.GetAvatarButtonHistorySyncPromoUsedCount(gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo:
+      usage_info.shown_count =
+          signin_prefs.GetAvatarButtonBatchUploadPromoShownCount(gaia);
+      usage_info.used_count =
+          signin_prefs.GetAvatarButtonBatchUploadPromoUsedCount(gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
+      usage_info.shown_count =
+          signin_prefs.GetAvatarButtonBatchUploadBookmarkPromoShownCount(gaia);
+      usage_info.used_count =
+          signin_prefs.GetAvatarButtonBatchUploadBookmarkPromoUsedCount(gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::
+        kBatchUploadWindows10DepreciationPromo:
+      CHECK(switches::IsSigninWindows10DepreciationState());
+      usage_info.shown_count =
+          signin_prefs
+              .GetAvatarButtonBatchUploadWindows10DepreciationPromoShownCount(
+                  gaia);
+      usage_info.used_count =
+          signin_prefs
+              .GetAvatarButtonBatchUploadWindows10DepreciationPromoUsedCount(
+                  gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
+      usage_info.shown_count =
+          signin_prefs.GetAvatarButtonSigninPromoShownCount(gaia);
+      usage_info.used_count =
+          signin_prefs.GetAvatarButtonSigninPromoUsedCount(gaia);
+      usage_info.last_shown_time =
+          signin_prefs.GetAvatarButtonSigninPromoLastShownTime(gaia);
+      break;
   }
 
   usage_info.last_external_event_time =
@@ -294,6 +287,7 @@ bool IsAllowedByPromoFrequency(Profile& profile,
     case SignInPromoType::kBookmark:
     case SignInPromoType::kExtension:
     case SignInPromoType::kSendTabToSelf:
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
       // No specific frequency exists for this promo type.
       return true;
     case SignInPromoType::kSearchAIMode:
@@ -338,13 +332,15 @@ bool WasPreviouslySyncingWithPrimaryAccount(Profile* profile) {
 ProfileMenuAvatarButtonPromoInfo
 ComputeProfileMenuAvatarButtonPromoInfoWithBatchUploadResult(
     Profile* profile,
+    bool allow_batch_upload_promos,
     std::map<syncer::DataType, syncer::LocalDataDescription> local_map_result) {
-  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
-
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
-  if (base::FeatureList::IsEnabled(switches::kSigninPromoOnAvatarPill) &&
-      !identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+  if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+    // Do not promote signing in if a sign in cannot be offered at all.
+    if (!CanOfferSignInForPromos(CHECK_DEREF(profile))) {
+      return {};
+    }
     return {.type = ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo,
             .local_data_count = 0u};
   }
@@ -356,23 +352,46 @@ ComputeProfileMenuAvatarButtonPromoInfoWithBatchUploadResult(
         return current_count + local_data.second.local_data_models.size();
       });
 
-  // Batch Upload promo: Windows 10 depreciation promo.
-  if (local_data_count > 0 && switches::IsSigninWindows10DepreciationState()) {
-    return {.type = ProfileMenuAvatarButtonPromoInfo::Type::
-                kBatchUploadWindows10DepreciationPromo,
-            .local_data_count = local_data_count};
-  }
-
-  // Batch Upload Bookmarks promo: for users that have local bookmarks and were
-  // previously syncing with the current primary account.
-  if (WasPreviouslySyncingWithPrimaryAccount(profile)) {
-    if (auto it = local_map_result.find(syncer::BOOKMARKS);
-        it != local_map_result.end() && !it->second.local_data_models.empty()) {
-      return {.type = ProfileMenuAvatarButtonPromoInfo::Type::
-                  kBatchUploadBookmarksPromo,
-              .local_data_count = local_data_count};
+  if (allow_batch_upload_promos) {
+    BatchUploadService* batch_upload =
+        BatchUploadServiceFactory::GetForProfile(profile);
+    // The 3 batch upload promos (`kBatchUploadPromo`,
+    // `kBatchUploadBookmarksPromo`, and
+    // `kBatchUploadWindows10DepreciationPromo`) originate from the Avatar
+    // button and behave the same regarding batch upload eligibility. In
+    // `BatchUploadService`, all avatar promo entry points share the same
+    // eligibility logic. Therefore, they can all rely on
+    // `kProfileMenuPrimaryButtonActionFromAvatarPromo` here.
+    if (batch_upload &&
+        !batch_upload->CanShowPromo(
+            BatchUploadService::EntryPoint::
+                kProfileMenuPrimaryButtonActionFromAvatarPromo)) {
+      allow_batch_upload_promos = false;
     }
   }
+
+  if (allow_batch_upload_promos) {
+    // Batch Upload promo: Windows 10 depreciation promo.
+    if (local_data_count > 0 &&
+        switches::IsSigninWindows10DepreciationState()) {
+      return {.type = ProfileMenuAvatarButtonPromoInfo::Type::
+                  kBatchUploadWindows10DepreciationPromo,
+              .local_data_count = local_data_count};
+    }
+
+    // Batch Upload Bookmarks promo: for users that have local bookmarks and
+    // were previously syncing with the current primary account.
+    if (WasPreviouslySyncingWithPrimaryAccount(profile)) {
+      if (auto it = local_map_result.find(syncer::BOOKMARKS);
+          it != local_map_result.end() &&
+          !it->second.local_data_models.empty()) {
+        return {.type = ProfileMenuAvatarButtonPromoInfo::Type::
+                    kBatchUploadBookmarksPromo,
+                .local_data_count = local_data_count};
+      }
+    }
+  }
+
   // History sync promo.
   if (signin_util::ShouldShowHistorySyncOptinScreen(*profile) ==
           signin_util::ShouldShowHistorySyncOptinResult::kShow &&
@@ -382,10 +401,12 @@ ComputeProfileMenuAvatarButtonPromoInfoWithBatchUploadResult(
             .local_data_count = local_data_count};
   }
 
-  // Regular Batch Upload promo: for users that have any local data type.
-  if (local_data_count > 0) {
-    return {.type = ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo,
-            .local_data_count = local_data_count};
+  if (allow_batch_upload_promos) {
+    // Regular Batch Upload promo: for users that have any local data type.
+    if (local_data_count > 0) {
+      return {.type = ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo,
+              .local_data_count = local_data_count};
+    }
   }
 
   // No promo.
@@ -405,6 +426,10 @@ syncer::DataType GetDataTypeFromSignInPromoType(SignInPromoType type) {
     case SignInPromoType::kSearchAIMode:
       // Search AI Mode sign-in promo is not related to any synced data type.
       NOTREACHED();
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
+      // Composebox Drive context menu option sign-in promo is not related to
+      // any synced data type.
+      NOTREACHED();
     case SignInPromoType::kSendTabToSelf:
       return syncer::SEND_TAB_TO_SELF;
   }
@@ -421,6 +446,10 @@ bool PromoTypeHasSyncableData(SignInPromoType type) {
     case SignInPromoType::kSearchAIMode:
       // Search AI Mode sign-in promo is not related to any synced data type.
       return false;
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
+      // Composebox Drive context menu option sign-in promo is not related to
+      // any synced data type.
+      return false;
   }
   NOTREACHED();
 }
@@ -432,9 +461,7 @@ int GetAddressPromoShownCount(Profile& profile, const GaiaId& gaia_id) {
   }
 
   return profile.GetPrefs()->GetInteger(
-      base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)
-          ? prefs::kAddressSignInPromoShownCountPerProfileForLimitsExperiment
-          : prefs::kAddressSignInPromoShownCountPerProfile);
+      prefs::kAddressSignInPromoShownCountPerProfile);
 }
 
 int GetPasswordPromoShownCount(Profile& profile, const GaiaId& gaia_id) {
@@ -444,9 +471,7 @@ int GetPasswordPromoShownCount(Profile& profile, const GaiaId& gaia_id) {
   }
 
   return profile.GetPrefs()->GetInteger(
-      base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)
-          ? prefs::kPasswordSignInPromoShownCountPerProfileForLimitsExperiment
-          : prefs::kPasswordSignInPromoShownCountPerProfile);
+      prefs::kPasswordSignInPromoShownCountPerProfile);
 }
 
 int GetSearchAIModePromoShownCount(Profile& profile, const GaiaId& gaia_id) {
@@ -466,61 +491,42 @@ int GetBookmarkPromoShownCount(Profile& profile, const GaiaId& gaia_id) {
   }
 
   return profile.GetPrefs()->GetInteger(
-      base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)
-          ? prefs::kBookmarkSignInPromoShownCountPerProfileForLimitsExperiment
-          : prefs::kBookmarkSignInPromoShownCountPerProfile);
+      prefs::kBookmarkSignInPromoShownCountPerProfile);
 }
 
 int GetContextualPromoDismissCountPerSignedOutProfile(Profile& profile,
                                                       SignInPromoType type) {
-  if (ShouldUseAutofillSignInPromoLimits(type)) {
-    return profile.GetPrefs()->GetInteger(
-        prefs::kAutofillSignInPromoDismissCountPerProfile);
-  }
-
   switch (type) {
     case SignInPromoType::kAddress:
-      return profile.GetPrefs()->GetInteger(
-          prefs::kAddressSignInPromoDismissCountPerProfileForLimitsExperiment);
     case SignInPromoType::kPassword:
-      return profile.GetPrefs()->GetInteger(
-          prefs::kPasswordSignInPromoDismissCountPerProfileForLimitsExperiment);
     case SignInPromoType::kBookmark:
       return profile.GetPrefs()->GetInteger(
-          prefs::kBookmarkSignInPromoDismissCountPerProfileForLimitsExperiment);
-    case SignInPromoType::kExtension:
-    case SignInPromoType::kSendTabToSelf:
-      NOTREACHED();
+          prefs::kAutofillSignInPromoDismissCountPerProfile);
     case SignInPromoType::kSearchAIMode:
       return profile.GetPrefs()->GetInteger(
           prefs::kSearchAIModeSignInPromoDismissCountPerProfile);
+    case SignInPromoType::kExtension:
+    case SignInPromoType::kSendTabToSelf:
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
+      NOTREACHED();
   }
 }
 
 int GetContextualPromoDismissCountPerAccount(Profile& profile,
                                              SignInPromoType type,
                                              const GaiaId& gaia_id) {
-  if (ShouldUseAutofillSignInPromoLimits(type)) {
-    return SigninPrefs(*profile.GetPrefs())
-        .GetAutofillSigninPromoDismissCount(gaia_id);
-  }
-
   switch (type) {
     case SignInPromoType::kAddress:
-      return SigninPrefs(*profile.GetPrefs())
-          .GetAddressSigninPromoDismissCount(gaia_id);
     case SignInPromoType::kPassword:
+    case SignInPromoType::kBookmark:
       return SigninPrefs(*profile.GetPrefs())
-          .GetPasswordSigninPromoDismissCount(gaia_id);
+          .GetAutofillSigninPromoDismissCount(gaia_id);
     case SignInPromoType::kSearchAIMode:
       return SigninPrefs(*profile.GetPrefs())
           .GetSearchAIModeSigninPromoDismissCount(gaia_id);
-      NOTREACHED();
-    case SignInPromoType::kBookmark:
-      return SigninPrefs(*profile.GetPrefs())
-          .GetBookmarkSigninPromoDismissCount(gaia_id);
     case SignInPromoType::kExtension:
     case SignInPromoType::kSendTabToSelf:
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
       NOTREACHED();
   }
 }
@@ -530,48 +536,44 @@ bool ShouldShowPromoBasedOnImpressionOrDismissalCount(Profile& profile,
   // Footer sign in promos are always shown.
   if (type == signin::SignInPromoType::kExtension ||
       type == signin::SignInPromoType::kSendTabToSelf ||
+      type == signin::SignInPromoType::kComposeboxDriveContextMenuOption ||
       (type == signin::SignInPromoType::kBookmark &&
        !base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp))) {
     return true;
   }
 
   AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
-      IdentityManagerFactory::GetForProfile(&profile));
+      IdentityManagerFactory::GetForProfile(&profile),
+      AccountPreviewDataServiceFactory::GetForProfile(&profile));
 
   int show_count = 0;
   switch (type) {
     case SignInPromoType::kAddress:
-      show_count = GetAddressPromoShownCount(profile, account.gaia);
+      show_count = GetAddressPromoShownCount(profile, account.GetGaiaId());
       break;
     case SignInPromoType::kPassword:
-      show_count = GetPasswordPromoShownCount(profile, account.gaia);
+      show_count = GetPasswordPromoShownCount(profile, account.GetGaiaId());
       break;
     case SignInPromoType::kSearchAIMode:
-      show_count = GetSearchAIModePromoShownCount(profile, account.gaia);
+      show_count = GetSearchAIModePromoShownCount(profile, account.GetGaiaId());
       break;
     case SignInPromoType::kBookmark:
       if (!base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp)) {
         NOTREACHED();
       }
-      show_count = GetBookmarkPromoShownCount(profile, account.gaia);
+      show_count = GetBookmarkPromoShownCount(profile, account.GetGaiaId());
       break;
     case SignInPromoType::kExtension:
     case SignInPromoType::kSendTabToSelf:
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
       NOTREACHED();
   }
 
   int dismiss_count =
-      account.gaia.empty()
+      account.GetGaiaId().empty()
           ? GetContextualPromoDismissCountPerSignedOutProfile(profile, type)
           : GetContextualPromoDismissCountPerAccount(profile, type,
-                                                     account.gaia);
-
-  if (base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment) &&
-      type != SignInPromoType::kSearchAIMode) {
-    return show_count < switches::kContextualSigninPromoShownThreshold.Get() &&
-           dismiss_count <
-               switches::kContextualSigninPromoDismissedThreshold.Get();
-  }
+                                                     account.GetGaiaId());
 
   // Don't show the promo again if:
   // - it has already been shown `kSigninPromoShownThreshold` times for its
@@ -582,7 +584,7 @@ bool ShouldShowPromoBasedOnImpressionOrDismissalCount(Profile& profile,
   // which is currently not met.
   return show_count < kSigninPromoShownThreshold &&
          dismiss_count < kSigninPromoDismissedThreshold &&
-         IsAllowedByPromoFrequency(profile, type, account.gaia);
+         IsAllowedByPromoFrequency(profile, type, account.GetGaiaId());
 }
 
 bool IsDataTypeManagedByPolicy(const syncer::SyncService* sync_service,
@@ -642,22 +644,15 @@ bool ShouldShowSignInPromoCommon(Profile& profile, SignInPromoType type) {
   // Consider original profile even if an off-the-record profile was
   // passed to this method as sign-in state is only defined for the
   // primary profile.
-  Profile* original_profile = profile.GetOriginalProfile();
+  Profile& original_profile = CHECK_DEREF(profile.GetOriginalProfile());
 
   // Don't show for supervised child profiles.
-  if (original_profile->IsChild()) {
+  if (original_profile.IsChild()) {
     return false;
   }
 
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(original_profile);
-  AccountInfo promo_account =
-      signin_ui_util::GetSingleAccountForPromos(identity_manager);
-
   // Don't show if sign in can't be offered (ex: signin disallowed).
-  if (!CanOfferSignin(original_profile, promo_account.gaia, promo_account.email,
-                      /*allow_account_from_other_profile=*/true)
-           .IsOk()) {
+  if (!CanOfferSignInForPromos(original_profile)) {
     return false;
   }
 
@@ -783,6 +778,15 @@ bool ShouldShowBookmarkSignInPromo(Profile& profile) {
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 }
 
+bool ShouldShowComposeboxDriveContextMenuOptionSignInPromo(Profile& profile) {
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  return ShouldShowSignInPromoCommon(
+      profile, SignInPromoType::kComposeboxDriveContextMenuOption);
+#else
+  return false;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+}
+
 bool IsBubbleSigninPromo(signin_metrics::AccessPoint access_point) {
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   return access_point == signin_metrics::AccessPoint::kPasswordBubble ||
@@ -790,6 +794,10 @@ bool IsBubbleSigninPromo(signin_metrics::AccessPoint access_point) {
          (base::FeatureList::IsEnabled(
               switches::kEnableSearchAIModeSigninPromo) &&
           access_point == signin_metrics::AccessPoint::kSearchAIModeBubble) ||
+         (base::FeatureList::IsEnabled(
+              omnibox::kComposeboxDriveContextMenuOptionSigninPromo) &&
+          access_point == signin_metrics::AccessPoint::
+                              kComposeboxDriveContextMenuOptionBubble) ||
          (base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp) &&
           access_point == signin_metrics::AccessPoint::kBookmarkBubble);
 #else
@@ -841,6 +849,8 @@ SignInPromoType GetSignInPromoTypeFromAccessPoint(
       return SignInPromoType::kExtension;
     case signin_metrics::AccessPoint::kSendTabToSelfPromo:
       return SignInPromoType::kSendTabToSelf;
+    case signin_metrics::AccessPoint::kComposeboxDriveContextMenuOptionBubble:
+      return SignInPromoType::kComposeboxDriveContextMenuOption;
     default:
       NOTREACHED();
   }
@@ -853,26 +863,19 @@ void RecordSignInPromoShown(signin_metrics::AccessPoint access_point,
   CHECK(!profile->IsOffTheRecord());
 
   AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
-      IdentityManagerFactory::GetForProfile(profile));
+      IdentityManagerFactory::GetForProfile(profile),
+      AccountPreviewDataServiceFactory::GetForProfile(profile));
   SignInPromoType promo_type = GetSignInPromoTypeFromAccessPoint(access_point);
 
   // Record the pref per profile if there is no account present.
-  if (account.gaia.empty()) {
+  if (account.GetGaiaId().empty()) {
     const char* pref_name;
     switch (promo_type) {
       case SignInPromoType::kPassword:
-        pref_name =
-            base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)
-                ? prefs::
-                      kPasswordSignInPromoShownCountPerProfileForLimitsExperiment
-                : prefs::kPasswordSignInPromoShownCountPerProfile;
+        pref_name = prefs::kPasswordSignInPromoShownCountPerProfile;
         break;
       case SignInPromoType::kAddress:
-        pref_name =
-            base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)
-                ? prefs::
-                      kAddressSignInPromoShownCountPerProfileForLimitsExperiment
-                : prefs::kAddressSignInPromoShownCountPerProfile;
+        pref_name = prefs::kAddressSignInPromoShownCountPerProfile;
         break;
       case SignInPromoType::kSearchAIMode:
         pref_name = prefs::kSearchAIModeSignInPromoShownCountPerProfile;
@@ -884,14 +887,11 @@ void RecordSignInPromoShown(signin_metrics::AccessPoint access_point,
         if (!base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp)) {
           return;
         }
-        pref_name =
-            base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)
-                ? prefs::
-                      kBookmarkSignInPromoShownCountPerProfileForLimitsExperiment
-                : prefs::kBookmarkSignInPromoShownCountPerProfile;
+        pref_name = prefs::kBookmarkSignInPromoShownCountPerProfile;
         break;
       case SignInPromoType::kExtension:
       case SignInPromoType::kSendTabToSelf:
+      case SignInPromoType::kComposeboxDriveContextMenuOption:
         return;
     }
 
@@ -905,34 +905,30 @@ void RecordSignInPromoShown(signin_metrics::AccessPoint access_point,
   switch (promo_type) {
     case SignInPromoType::kPassword:
       SigninPrefs(*profile->GetPrefs())
-          .IncrementPasswordSigninPromoImpressionCount(account.gaia);
+          .IncrementPasswordSigninPromoImpressionCount(account.GetGaiaId());
       return;
     case SignInPromoType::kAddress:
       SigninPrefs(*profile->GetPrefs())
-          .IncrementAddressSigninPromoImpressionCount(account.gaia);
+          .IncrementAddressSigninPromoImpressionCount(account.GetGaiaId());
       return;
     case SignInPromoType::kSearchAIMode:
       SigninPrefs(*profile->GetPrefs())
-          .IncrementSearchAIModeSigninPromoImpressionCount(account.gaia);
+          .IncrementSearchAIModeSigninPromoImpressionCount(account.GetGaiaId());
       SigninPrefs(*profile->GetPrefs())
-          .SetSearchAIModeSigninPromoLastImpressionTime(account.gaia,
+          .SetSearchAIModeSigninPromoLastImpressionTime(account.GetGaiaId(),
                                                         base::Time::Now());
       return;
     case SignInPromoType::kBookmark:
       if (base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp)) {
         SigninPrefs(*profile->GetPrefs())
-            .IncrementBookmarkSigninPromoImpressionCount(account.gaia);
+            .IncrementBookmarkSigninPromoImpressionCount(account.GetGaiaId());
       }
       return;
     case SignInPromoType::kExtension:
     case SignInPromoType::kSendTabToSelf:
+    case SignInPromoType::kComposeboxDriveContextMenuOption:
       return;
   }
-}
-
-bool ShouldUseAutofillSignInPromoLimits(signin::SignInPromoType promo_type) {
-  return promo_type != signin::SignInPromoType::kSearchAIMode &&
-         !base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment);
 }
 
 void RecordAvatarButtonPromoAcceptedAtPromoShownCount(
@@ -945,10 +941,6 @@ void RecordAvatarButtonPromoAcceptedAtPromoShownCount(
   std::string_view promo_type_suffix;
   // LINT.IfChange(AvatarPillPromoType)
   switch (promo_type) {
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
-      CHECK(switches::IsAvatarSyncPromoFeatureEnabled());
-      promo_type_suffix = "Sync";
-      break;
     case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
       promo_type_suffix = "HistorySync";
       break;
@@ -978,60 +970,61 @@ void RecordAvatarButtonPromoAcceptedAtPromoShownCount(
       /*exclusive_max=*/user_education::features::GetNewBadgeShowCount() + 1);
 }
 
+bool CanOfferSignInForPromos(Profile& profile) {
+  const AccountInfo promo_account = signin_ui_util::GetSingleAccountForPromos(
+      IdentityManagerFactory::GetForProfile(&profile),
+      AccountPreviewDataServiceFactory::GetForProfile(&profile));
+  return CanOfferSignin(&profile, promo_account.GetGaiaId(),
+                        promo_account.GetEmail(),
+                        /*allow_account_from_other_profile=*/true)
+      .IsOk();
+}
+
 void ComputeProfileMenuAvatarButtonPromoInfo(
     Profile& profile,
-    base::OnceCallback<void(ProfileMenuAvatarButtonPromoInfo)>
-        result_callback) {
-  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
-    BatchUploadService* batch_upload =
-        BatchUploadServiceFactory::GetForProfile(&profile);
-    if (!batch_upload) {
-      std::move(result_callback).Run(ProfileMenuAvatarButtonPromoInfo{});
-      return;
-    }
-
-    // Note: `GetLocalDataDescriptionsForAvailableTypes()` will return no data
-    // if the SyncService is not initialized.
-    batch_upload->GetLocalDataDescriptionsForAvailableTypes(
-        base::BindOnce(
-            &ComputeProfileMenuAvatarButtonPromoInfoWithBatchUploadResult,
-            &profile)
-            .Then(std::move(result_callback)));
+    base::OnceCallback<void(ProfileMenuAvatarButtonPromoInfo)> result_callback,
+    bool allow_batch_upload_promos) {
+  BatchUploadService* batch_upload =
+      BatchUploadServiceFactory::GetForProfile(&profile);
+  if (!batch_upload) {
+    std::move(result_callback).Run(ProfileMenuAvatarButtonPromoInfo{});
     return;
   }
 
-  // This promo is only possible if `syncer::kReplaceSyncPromosWithSignInPromos`
-  // is disabled, as it promotes Sync.
-  if (switches::IsAvatarSyncPromoFeatureEnabled() &&
-      signin_util::ShouldShowAvatarSyncPromo(&profile)) {
-    std::move(result_callback)
-        .Run(ProfileMenuAvatarButtonPromoInfo{
-            .type = ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo,
-            .local_data_count = 0});
-    return;
-  }
-
-  // `profile` is not eligible to any promo.
-  std::move(result_callback).Run(ProfileMenuAvatarButtonPromoInfo());
+  // Note: `GetLocalDataDescriptionsForAvailableTypes()` will return no data
+  // if the SyncService is not initialized.
+  batch_upload->GetLocalDataDescriptionsForAvailableTypes(
+      base::BindOnce(
+          &ComputeProfileMenuAvatarButtonPromoInfoWithBatchUploadResult,
+          &profile, allow_batch_upload_promos)
+          .Then(std::move(result_callback)));
 }
 
 AvatarButtonPromoManager::AvatarButtonPromoManager(
     signin::IdentityManager* identity_manager,
+    signin::AccountPreviewDataService* account_preview_data_service,
+    BatchUploadService* batch_upload_service,
     PrefService* pref_service)
     : AvatarButtonPromoManager(
           identity_manager,
+          account_preview_data_service,
+          batch_upload_service,
           pref_service,
           user_education::features::GetNewBadgeShowCount(),
           user_education::features::GetNewBadgeFeatureUsedCount()) {}
 
 AvatarButtonPromoManager::AvatarButtonPromoManager(
     signin::IdentityManager* identity_manager,
+    signin::AccountPreviewDataService* account_preview_data_service,
+    BatchUploadService* batch_upload_service,
     PrefService* pref_service,
     int max_shown_count,
     int max_used_count)
     : identity_manager_(identity_manager),
       signin_prefs_(std::make_unique<SigninPrefs>(CHECK_DEREF(pref_service))),
       pref_service_(pref_service),
+      account_preview_data_service_(account_preview_data_service),
+      batch_upload_service_(batch_upload_service),
       max_shown_count_(max_shown_count),
       max_used_count_(max_used_count) {
   CHECK(identity_manager_);
@@ -1060,12 +1053,35 @@ bool AvatarButtonPromoManager::ShouldShowPromo(
   CHECK(signin_prefs_);
   CHECK(identity_manager_);
 
-  const AccountInfo account =
-      signin_ui_util::GetSingleAccountForPromos(identity_manager_);
+  const AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
+      identity_manager_, account_preview_data_service_);
+
+  switch (promo_type) {
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo:
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
+    case ProfileMenuAvatarButtonPromoInfo::Type::
+        kBatchUploadWindows10DepreciationPromo:
+      // The 3 batch upload promos originate from the Avatar button and behave
+      // the same regarding batch upload eligibility. In `BatchUploadService`,
+      // all avatar promo entry points share the same eligibility logic.
+      // Therefore, they can all rely on
+      // `kProfileMenuPrimaryButtonActionFromAvatarPromo` here.
+      if (batch_upload_service_ &&
+          !batch_upload_service_->CanShowPromo(
+              BatchUploadService::EntryPoint::
+                  kProfileMenuPrimaryButtonActionFromAvatarPromo)) {
+        return false;
+      }
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
+    case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
+      break;
+  }
+
   auto [promo_shown_count, promo_used_count, promo_last_shown_time,
         last_external_event_time] =
       GetPromoUsageInfo(*pref_service_.get(), *signin_prefs_.get(), promo_type,
-                        account.gaia);
+                        account.GetGaiaId());
 
   // Only check the `promo_last_shown_time` for eligible `promo_type`.
   if (promo_last_shown_time.has_value() &&
@@ -1092,28 +1108,48 @@ void AvatarButtonPromoManager::RecordPromoShown(
   CHECK(identity_manager_);
   CHECK(IsSigninStateAlignedWithPromoType(promo_type));
 
-  const AccountInfo account =
-      signin_ui_util::GetSingleAccountForPromos(identity_manager_);
-  if (promo_type == ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo) {
-    CHECK(switches::IsAvatarSyncPromoFeatureEnabled());
-    signin_prefs_->IncrementSyncPromoIdentityPillShownCount(account.gaia);
+  const GaiaId gaia = signin_ui_util::GetSingleAccountForPromos(
+                          identity_manager_, account_preview_data_service_)
+                          .GetGaiaId();
+  if (gaia.empty()) {
+    ScopedDictPrefUpdate promo_dict(*pref_service_,
+                                    kAvatarButtonPromoProfileDictionary);
+    if (promo_type == ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo) {
+      promo_dict->Set(kAvatarButtonSigninPromoLastShownTime,
+                      base::TimeToValue(base::Time::Now()));
+    }
+    std::string_view shown_key =
+        GetProfileAvatarButtonPromoShownKey(promo_type);
+    int new_count =
+        base::ClampAdd(promo_dict->FindInt(shown_key).value_or(0), 1);
+    promo_dict->Set(shown_key, new_count);
     return;
   }
 
-  base::DictValue& promo_dict = GetPromoDictionary(
-      *pref_service_.get(), *signin_prefs_.get(), account.gaia);
-
-  // Only update the last shown time if the `promo_type` supports it.
-  if (std::optional<std::string_view> last_shown_time_pref =
-          MaybeGetLastShownTimePref(promo_type);
-      last_shown_time_pref.has_value()) {
-    promo_dict.Set(last_shown_time_pref.value(),
-                   base::TimeToValue(base::Time::Now()));
+  switch (promo_type) {
+    case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
+      signin_prefs_->IncrementAvatarButtonHistorySyncPromoShownCount(gaia);
+      return;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo:
+      signin_prefs_->IncrementAvatarButtonBatchUploadPromoShownCount(gaia);
+      return;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
+      signin_prefs_->IncrementAvatarButtonBatchUploadBookmarkPromoShownCount(
+          gaia);
+      return;
+    case ProfileMenuAvatarButtonPromoInfo::Type::
+        kBatchUploadWindows10DepreciationPromo:
+      CHECK(switches::IsSigninWindows10DepreciationState());
+      signin_prefs_
+          ->IncrementAvatarButtonBatchUploadWindows10DepreciationPromoShownCount(
+              gaia);
+      return;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
+      signin_prefs_->SetAvatarButtonSigninPromoLastShownTime(gaia,
+                                                             base::Time::Now());
+      signin_prefs_->IncrementAvatarButtonSigninPromoShownCount(gaia);
+      return;
   }
-
-  std::string_view shown_key = GetAvatarButtonPromoShownKey(promo_type);
-  int new_conut = promo_dict.FindInt(shown_key).value_or(0) + 1;
-  promo_dict.Set(shown_key, new_conut);
 }
 
 GaiaId AvatarButtonPromoManager::RecordPromoUsed(
@@ -1123,20 +1159,42 @@ GaiaId AvatarButtonPromoManager::RecordPromoUsed(
   CHECK(identity_manager_);
   CHECK(IsSigninStateAlignedWithPromoType(promo_type));
 
-  const AccountInfo account =
-      signin_ui_util::GetSingleAccountForPromos(identity_manager_);
-  if (promo_type == ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo) {
-    CHECK(switches::IsAvatarSyncPromoFeatureEnabled());
-    signin_prefs_->IncrementSyncPromoIdentityPillUsedCount(account.gaia);
-    return account.gaia;
+  const GaiaId gaia = signin_ui_util::GetSingleAccountForPromos(
+                          identity_manager_, account_preview_data_service_)
+                          .GetGaiaId();
+  if (gaia.empty()) {
+    ScopedDictPrefUpdate promo_dict(*pref_service_,
+                                    kAvatarButtonPromoProfileDictionary);
+    std::string_view used_key = GetProfileAvatarButtonPromoUsedKey(promo_type);
+    int new_count =
+        base::ClampAdd(promo_dict->FindInt(used_key).value_or(0), 1);
+    promo_dict->Set(used_key, new_count);
+    return gaia;
   }
 
-  base::DictValue& promo_dict = GetPromoDictionary(
-      *pref_service_.get(), *signin_prefs_.get(), account.gaia);
-  std::string_view used_key = GetAvatarButtonPromoUsedKey(promo_type);
-  int new_conut = promo_dict.FindInt(used_key).value_or(0) + 1;
-  promo_dict.Set(used_key, new_conut);
-  return account.gaia;
+  switch (promo_type) {
+    case ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo:
+      signin_prefs_->IncrementAvatarButtonHistorySyncPromoUsedCount(gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadPromo:
+      signin_prefs_->IncrementAvatarButtonBatchUploadPromoUsedCount(gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
+      signin_prefs_->IncrementAvatarButtonBatchUploadBookmarkPromoUsedCount(
+          gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::
+        kBatchUploadWindows10DepreciationPromo:
+      CHECK(switches::IsSigninWindows10DepreciationState());
+      signin_prefs_
+          ->IncrementAvatarButtonBatchUploadWindows10DepreciationPromoUsedCount(
+              gaia);
+      break;
+    case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
+      signin_prefs_->IncrementAvatarButtonSigninPromoUsedCount(gaia);
+      break;
+  }
+  return gaia;
 }
 
 bool AvatarButtonPromoManager::ArePromotionsEnabled() const {
@@ -1154,7 +1212,6 @@ bool AvatarButtonPromoManager::IsSigninStateAlignedWithPromoType(
     case ProfileMenuAvatarButtonPromoInfo::Type::kBatchUploadBookmarksPromo:
     case ProfileMenuAvatarButtonPromoInfo::Type::
         kBatchUploadWindows10DepreciationPromo:
-    case ProfileMenuAvatarButtonPromoInfo::Type::kSyncPromo:
       return signed_in_state == signin_util::SignedInState::kSignedIn;
     case ProfileMenuAvatarButtonPromoInfo::Type::kSigninPromo:
       return signed_in_state == signin_util::SignedInState::kSignedOut ||
@@ -1176,6 +1233,8 @@ void AvatarButtonPromoManager::OnIdentityManagerShutdown(
   // `Browser` + `TestingProfile` (where the `PrefService` is owned by the
   // profile itself).
   pref_service_ = nullptr;
+  account_preview_data_service_ = nullptr;
+  batch_upload_service_ = nullptr;
   signin_prefs_.reset();
 }
 

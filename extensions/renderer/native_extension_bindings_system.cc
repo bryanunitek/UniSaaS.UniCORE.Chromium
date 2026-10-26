@@ -5,6 +5,7 @@
 #include "extensions/renderer/native_extension_bindings_system.h"
 
 #include <algorithm>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -34,9 +35,11 @@
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
 #include "extensions/common/mojom/frame.mojom.h"
+#include "extensions/common/mojom/host_id.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
 #include "extensions/common/utils/extension_utils.h"
+#include "extensions/renderer/api/web_request_event_handling_tracker.h"
 #include "extensions/renderer/api_activity_logger.h"
 #include "extensions/renderer/bindings/api_binding_bridge.h"
 #include "extensions/renderer/bindings/api_binding_hooks.h"
@@ -72,6 +75,7 @@
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-cppgc.h"
 #include "v8/include/v8-isolate.h"
+#include "v8/include/v8-microtask-queue.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-primitive.h"
 #include "v8/include/v8-template.h"
@@ -84,14 +88,11 @@ namespace {
 
 constexpr char kBindingsSystemPerContextKey[] = "extension_bindings_system";
 
-// Returns true if the given |api| is a "prefixed" api of the |root_api|; that
-// is, if the api begins with the root.
-// For example, 'app.runtime' is a prefixed api of 'app'.
-// This is designed to be used as a utility when iterating over a sorted map, so
-// assumes that |api| is lexicographically greater than |root_api|.
+// Returns true if `api` begins with `root_api` followed by a period. For
+// example, 'app.runtime' is a prefixed API of 'app'.
 bool IsPrefixedAPI(std::string_view api, std::string_view root_api) {
-  CHECK_GT(api, root_api);
-  return base::StartsWith(api, root_api, base::CompareCase::SENSITIVE) &&
+  return api.size() > root_api.size() &&
+         base::StartsWith(api, root_api, base::CompareCase::SENSITIVE) &&
          api[root_api.size()] == '.';
 }
 
@@ -134,28 +135,55 @@ v8::Local<v8::Object> GetOrCreateGlobalObjectProperty(
   // Ensure that the creation context for any new chrome object is |context|.
   v8::Context::Scope context_scope(context);
 
-  // TODO(devlin): This is a little silly. We expect that this may do the wrong
-  // thing if the window has set some other `object_name` (as in the case of
-  // script doing 'window.object_name = true'), but we don't really handle it.
-  // It could also throw exceptions or have unintended side effects.
-  // On the one hand, anyone writing that code is probably asking for trouble.
-  // On the other, it'd be nice to avoid. I wonder if we can?
+  // Blink uses `kScoped` microtasks policy; instantiate a scope here so that
+  // V8 operations during context initialization do not trip microtask DCHECKs.
+  v8::MicrotasksScope microtasks_scope(
+      context, v8::MicrotasksScope::kDoNotRunMicrotasks);
+
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::String> object_string =
-      gin::StringToSymbol(v8::Isolate::GetCurrent(), object_name);
-  v8::Local<v8::Value> object_value;
-  if (!context->Global()->Get(context, object_string).ToLocal(&object_value)) {
+      gin::StringToSymbol(isolate, object_name);
+
+  // Retrieve the property descriptor rather than using a direct `Get` to avoid
+  // executing any user-defined getters or accessors on the global object.
+  v8::Local<v8::Value> descriptor_value;
+  if (!context->Global()
+           ->GetOwnPropertyDescriptor(context, object_string)
+           .ToLocal(&descriptor_value)) {
+    return v8::Local<v8::Object>();
+  }
+
+  v8::Local<v8::Value> property_value;
+  if (descriptor_value->IsUndefined()) {
+    property_value = v8::Undefined(isolate);
+  } else if (descriptor_value->IsObject()) {
+    v8::Local<v8::Object> descriptor = descriptor_value.As<v8::Object>();
+    v8::Local<v8::String> value_string = gin::StringToSymbol(isolate, "value");
+    v8::Maybe<bool> has_value =
+        descriptor->HasRealNamedProperty(context, value_string);
+    // Only inspect the property value if this is a data descriptor. Accessor
+    // descriptors (with getter/setter) will not have a "value" property, and we
+    // must not invoke user accessors or use them for extension bindings.
+    if (!has_value.IsJust() || !has_value.FromJust()) {
+      return v8::Local<v8::Object>();
+    }
+    if (!descriptor->Get(context, value_string).ToLocal(&property_value)) {
+      return v8::Local<v8::Object>();
+    }
+  } else {
     return v8::Local<v8::Object>();
   }
 
   v8::Local<v8::Object> requested_object;
-  if (object_value->IsUndefined()) {
-    requested_object = v8::Object::New(v8::Isolate::GetCurrent());
+  if (property_value->IsUndefined()) {
+    requested_object = v8::Object::New(isolate);
     v8::Maybe<bool> success = context->Global()->CreateDataProperty(
         context, object_string, requested_object);
-    if (!success.IsJust() || !success.FromJust())
+    if (!success.IsJust() || !success.FromJust()) {
       return v8::Local<v8::Object>();
-  } else if (object_value->IsObject()) {
-    v8::Local<v8::Object> obj = object_value.As<v8::Object>();
+    }
+  } else if (property_value->IsObject()) {
+    v8::Local<v8::Object> obj = property_value.As<v8::Object>();
     // The creation context of the `object_name` property could be different if
     // a different context (such as the parent of an about:blank iframe)
     // assigned it. Since in this case we know that the `object_name` object is
@@ -167,8 +195,9 @@ v8::Local<v8::Object> GetOrCreateGlobalObjectProperty(
     // object we construct, and check if it's present. Unfortunately, we need to
     // a) track down each place we create the object (it's not just in
     // extensions) and also see how much that would break.
-    if (obj->GetCreationContextChecked() == context)
+    if (obj->GetCreationContextChecked(isolate) == context) {
       requested_object = obj;
+    }
   }
 
   return requested_object;
@@ -226,7 +255,7 @@ bool IsAPIFeatureAvailable(v8::Local<v8::Context> context,
 // specific feature.
 v8::Local<v8::Object> CreateRootBinding(v8::Local<v8::Context> context,
                                         ScriptContext* script_context,
-                                        const std::string& name,
+                                        std::string_view name,
                                         APIBindingsSystem* bindings_system) {
   APIBindingHooks* hooks = nullptr;
   v8::Local<v8::Object> binding_object =
@@ -264,7 +293,7 @@ v8::Local<v8::Object> CreateFullBinding(
     ScriptContext* script_context,
     APIBindingsSystem* bindings_system,
     const FeatureProvider* api_feature_provider,
-    const std::string& root_name) {
+    std::string_view root_name) {
   const FeatureMap& features = api_feature_provider->GetAllFeatures();
   auto lower = features.lower_bound(root_name);
   CHECK(lower != features.end());
@@ -281,7 +310,7 @@ v8::Local<v8::Object> CreateFullBinding(
             *feature, CheckAliasStatus::NOT_ALLOWED)) {
       // If this feature is an alias for a different API, use the other binding
       // as the basis for the API contents.
-      const std::string& source_name =
+      const std::string_view source_name =
           feature->source().empty() ? root_name : feature->source();
       root_binding = CreateRootBinding(context, script_context, source_name,
                                        bindings_system);
@@ -289,10 +318,8 @@ v8::Local<v8::Object> CreateFullBinding(
     ++lower;
   }
 
-  // Look for any bindings that would be on the same object. Any of these would
-  // start with the same base name (e.g. 'app') + '.' (since '.' is < x for any
-  // absl::ascii_isalpha(x)).
-  std::string upper = root_name + static_cast<char>('.' + 1);
+  // Look for bindings nested below the root API. These start with the same base
+  // name followed by a period, such as 'app.runtime' for 'app'.
   std::string_view last_binding_name;
   // The following loop is a little painful because we have crazy binding names
   // and syntaxes. The way this works is as follows:
@@ -319,7 +346,8 @@ v8::Local<v8::Object> CreateFullBinding(
   // have strings.
   // On the upside, most APIs are not prefixed at all, and this loop is never
   // entered.
-  for (auto iter = lower; iter != features.end() && iter->first < upper;
+  for (auto iter = lower;
+       iter != features.end() && IsPrefixedAPI(iter->first, root_name);
        ++iter) {
     if (iter->second->IsInternal())
       continue;
@@ -340,7 +368,7 @@ v8::Local<v8::Object> CreateFullBinding(
 
     v8::Local<v8::Object> nested_binding =
         CreateFullBinding(context, script_context, bindings_system,
-                          api_feature_provider, std::string(binding_name));
+                          api_feature_provider, binding_name);
     // It's possible that we don't create a binding if no features or
     // prefixed features are available to the context.
     if (nested_binding.IsEmpty())
@@ -388,8 +416,7 @@ bool CanWebpageContextConnectExternally(ScriptContext* context) {
   for (const auto& extension :
        *RendererExtensionRegistry::Get()->GetMainThreadExtensionSet()) {
     const ExternallyConnectableInfo* info =
-        static_cast<const ExternallyConnectableInfo*>(
-            extension->GetManifestData(manifest_keys::kExternallyConnectable));
+        extension->GetManifestData<ExternallyConnectableInfo>();
     if (info && info->matches.MatchesURL(context->url())) {
       return true;
     }
@@ -505,6 +532,9 @@ NativeExtensionBindingsSystem::NativeExtensionBindingsSystem(
     std::unique_ptr<IPCMessageSender> ipc_message_sender)
     : delegate_(delegate),
       ipc_message_sender_(std::move(ipc_message_sender)),
+      web_request_event_handling_tracker_(
+          std::make_unique<WebRequestEventHandlingTracker>(
+              ipc_message_sender_.get())),
       api_system_(
           base::BindRepeating(&GetAPISchema),
           base::BindRepeating(&IsAPIFeatureAvailable),
@@ -613,17 +643,16 @@ void NativeExtensionBindingsSystem::UpdateBindingsForContext(
   // WebUI script contexts, currently it is not.
   bool set_accessor_on_browser = false;
   const Extension* extension = context->extension();
-  //  Create if this is an MV3+ extension script context.
-  if (extension && extension->manifest_version() >= 3 &&
-      chrome_manifest_urls::GetDevToolsPage(extension).is_empty()) {
+  // Create `browser` accessor if this is an extension script context.
+  if (extension && extension->is_extension()) {
     set_accessor_on_browser = true;
   } else if (is_webpage &&
              (CanWebpageContextConnectExternally(context) ||
               base::FeatureList::IsEnabled(
                   extensions_features::kExtensionBrowserNamespaceOnWebPages))) {
-    //  Create if this is a web page and it can communicate with an extension
-    //  (meaning it will have an extension API enabled for it) or we've
-    //  explicitly enabled it for webpages.
+    // Create `browser` accessor if this is a web page and it can communicate
+    // with an extension (meaning it will have an extension API enabled for it)
+    // or we've explicitly enabled it for webpages.
     set_accessor_on_browser = true;
   }
 
@@ -820,10 +849,60 @@ void NativeExtensionBindingsSystem::DispatchEventInContext(
     const base::ListValue& event_args,
     const mojom::EventFilteringInfoPtr& filtering_info,
     ScriptContext* context) {
+  // If the context is for an extension frame that is in the BackForwardCache,
+  // drop the event. Content scripts, however, are part of the web page
+  // lifecycle and have events queued by the renderer task runner while cached
+  // (see ExtensionBackForwardCacheBrowserTest.StorageCallbackEvicts).
+  if (context->web_frame() && context->web_frame()->IsInBackForwardCache() &&
+      (context->context_type() == mojom::ContextType::kPrivilegedExtension ||
+       context->context_type() == mojom::ContextType::kUnprivilegedExtension)) {
+    return;
+  }
+
+  // Per-context webRequest events need special handling: register the context
+  // before the event runs in it, so that a report during the dispatch finds
+  // the pending entry. `blocking_dispatch` is nullopt for every other event.
+  // TODO(crbug.com/494684626): Move this out of the generic dispatch path;
+  // see DidDispatchEvent().
+  const ExtensionId& extension_id = context->GetExtensionID();
+  std::optional<WebRequestEventHandlingTracker::DispatchInfo>
+      blocking_dispatch =
+          WebRequestEventHandlingTracker::GetBlockingDispatchInfo(
+              extension_id.empty() ? std::nullopt : std::optional(extension_id),
+              event_name, event_args);
+  if (blocking_dispatch && HasEventListenerInContext(event_name, context)) {
+    web_request_event_handling_tracker_->ExpectReportFrom(*context,
+                                                          *blocking_dispatch);
+  }
+
   v8::HandleScope handle_scope(context->isolate());
   v8::Context::Scope context_scope(context->v8_context());
   api_system_.FireEventInContext(event_name, context->v8_context(), event_args,
                                  filtering_info.Clone());
+}
+
+void NativeExtensionBindingsSystem::DidDispatchEvent(
+    const mojom::HostID& host_id,
+    const std::string& event_name,
+    const base::ListValue& event_args) {
+  // For blocking per-context webRequest events, the browser awaits the
+  // completion signal, even if no context had a matching listener. Once every
+  // listener was notified, the completion signal waits only for the pending
+  // context reports (and goes out at once if there are none).
+  // `blocking_dispatch` is nullopt for every other event.
+  std::optional<ExtensionId> extension_id;
+  if (host_id.type == mojom::HostID::HostType::kExtensions &&
+      !host_id.id.empty()) {
+    extension_id = host_id.id;
+  }
+  std::optional<WebRequestEventHandlingTracker::DispatchInfo>
+      blocking_dispatch =
+          WebRequestEventHandlingTracker::GetBlockingDispatchInfo(
+              std::move(extension_id), event_name, event_args);
+  if (blocking_dispatch) {
+    web_request_event_handling_tracker_->OnAllListenersNotified(
+        *blocking_dispatch);
+  }
 }
 
 bool NativeExtensionBindingsSystem::HasEventListenerInContext(
@@ -898,9 +977,10 @@ void NativeExtensionBindingsSystem::BindingAccessor(
   // See https://crbug.com/41375376.
   v8::Context::Scope context_scope(context);
 
-  // We use info.Data() to store a real name here instead of using the provided
-  // one to handle any weirdness from the caller (non-existent strings, etc).
-  v8::Local<v8::String> api_name = info.Data().As<v8::String>();
+  // We use info.DataV2() to store a real name here instead of using the
+  // provided one to handle any weirdness from the caller (non-existent
+  // strings, etc).
+  v8::Local<v8::String> api_name = info.DataV2().As<v8::String>();
   v8::Local<v8::Object> binding = GetAPIHelper(context, api_name);
   if (!binding.IsEmpty())
     info.GetReturnValue().Set(binding);
@@ -914,7 +994,7 @@ void NativeExtensionBindingsSystem::ThrowDeveloperModeRestrictedError(
       isolate,
       base::StringPrintf(
           "The '%s' API is only available for users in developer mode.",
-          gin::V8ToString(isolate, info.Data()).c_str()))));
+          gin::V8ToString(isolate, info.DataV2().As<v8::Value>()).c_str()))));
   return;
 }
 

@@ -7,6 +7,7 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/user_metrics.h"
@@ -22,8 +23,8 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service_desktop.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/survey_config.h"
@@ -35,7 +36,6 @@
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -46,6 +46,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "net/base/url_util.h"
 #include "net/dns/mock_host_resolver.h"
 
 namespace {
@@ -98,9 +100,10 @@ class HatsServiceBrowserTestBase : public policy::PolicyTest {
 
   Profile* profile() { return chrome_test_utils::GetProfile(this); }
 
-  HatsServiceDesktop* GetHatsService(Browser* browser = nullptr) {
+  HatsServiceDesktop* GetHatsService(
+      BrowserWindowInterface* browser = nullptr) {
     Profile* profile =
-        browser ? browser->GetProfile() : this->browser()->profile();
+        browser ? browser->GetProfile() : this->browser()->GetProfile();
     HatsServiceDesktop* service = static_cast<HatsServiceDesktop*>(
         HatsServiceFactory::GetForProfile(profile, true));
     return service;
@@ -110,7 +113,7 @@ class HatsServiceBrowserTestBase : public policy::PolicyTest {
     scoped_metrics_consent_.emplace(consent);
   }
 
-  bool HatsNextDialogCreated(Browser* browser = nullptr) {
+  bool HatsNextDialogCreated(BrowserWindowInterface* browser = nullptr) {
     return GetHatsService(browser)->hats_next_dialog_exists_for_testing();
   }
 
@@ -118,7 +121,7 @@ class HatsServiceBrowserTestBase : public policy::PolicyTest {
   // param may be used to mock the survey in another browser too. Returns the
   // trigger to use when launching the survey.
   std::string MockSurveyWithRequestedBrowserType(
-      Browser* other_browser,
+      BrowserWindowInterface* other_browser,
       hats::SurveyConfig::RequestedBrowserType requested_browser_type) {
     for (HatsServiceDesktop* service :
          {GetHatsService(), GetHatsService(other_browser)}) {
@@ -173,8 +176,8 @@ class HatsServiceProbabilityOne : public HatsServiceBrowserTestBase {
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
     // Set the profile creation time to be old enough to ensure triggering.
-    browser()->profile()->SetCreationTimeForTesting(base::Time::Now() -
-                                                    base::Days(45));
+    browser()->GetProfile()->SetCreationTimeForTesting(base::Time::Now() -
+                                                       base::Days(45));
   }
 
   void TearDownOnMainThread() override {
@@ -182,6 +185,37 @@ class HatsServiceProbabilityOne : public HatsServiceBrowserTestBase {
   }
 };
 
+class HatsServiceDefaultProductSpecificDataDisabled
+    : public HatsServiceProbabilityOne {
+ protected:
+  HatsServiceDefaultProductSpecificDataDisabled() {
+    feature_list_.InitAndDisableFeature(
+        features::kHappinessTrackingSurveysDefaultProductSpecificData);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Launches the Settings survey and returns the Product Specific Data that the
+// resulting HaTS Next dialog sends to the HaTS wrapper website.
+base::DictValue LaunchSurveyAndGetProductSpecificData(
+    HatsServiceDesktop* hats_service) {
+  content::WebContentsAddedObserver web_contents_added_observer;
+  hats_service->LaunchSurvey(kHatsSurveyTriggerSettings);
+
+  const GURL survey_url =
+      web_contents_added_observer.GetWebContents()->GetVisibleURL();
+  std::string product_specific_data_json;
+  EXPECT_TRUE(net::GetValueForKeyInQuery(survey_url, "product_specific_data",
+                                         &product_specific_data_json))
+      << survey_url;
+  std::optional<base::DictValue> product_specific_data =
+      base::JSONReader::ReadDict(product_specific_data_json,
+                                 base::JSON_PARSE_RFC);
+  EXPECT_TRUE(product_specific_data.has_value()) << product_specific_data_json;
+  return std::move(product_specific_data).value_or(base::DictValue());
+}
 
 }  // namespace
 
@@ -202,7 +236,7 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne, NoShowConsentNotGiven) {
   GetHatsService()->LaunchSurvey(kHatsSurveyTriggerSettings);
   EXPECT_FALSE(HatsNextDialogCreated());
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   GetHatsService(incognito_browser)->LaunchSurvey(kHatsSurveyTriggerSettings);
   EXPECT_FALSE(HatsNextDialogCreated(incognito_browser));
 }
@@ -243,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
   GetHatsService()->LaunchSurvey(kHatsSurveyTriggerSettings);
   EXPECT_FALSE(HatsNextDialogCreated());
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   auto trigger = MockSurveyWithRequestedBrowserType(
       incognito_browser, hats::SurveyConfig::RequestedBrowserType::kIncognito);
   GetHatsService(incognito_browser)->LaunchSurvey(trigger);
@@ -328,8 +362,8 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne, ProfileTooYoungToShow) {
   SetMetricsConsent(true);
   base::HistogramTester histogram_tester;
   // Set creation time to only 15 days.
-  browser()->profile()->SetCreationTimeForTesting(base::Time::Now() -
-                                                  base::Days(15));
+  browser()->GetProfile()->SetCreationTimeForTesting(base::Time::Now() -
+                                                     base::Days(15));
   GetHatsService()->LaunchSurvey(kHatsSurveyTriggerSettings);
   histogram_tester.ExpectUniqueSample(
       kHatsShouldShowSurveyReasonHistogram,
@@ -340,8 +374,8 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne, ProfileTooYoungToShow) {
 IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne, ProfileOldEnoughToShow) {
   SetMetricsConsent(true);
   // Set creation time to 31 days. This is just past the threshold.
-  browser()->profile()->SetCreationTimeForTesting(base::Time::Now() -
-                                                  base::Days(31));
+  browser()->GetProfile()->SetCreationTimeForTesting(base::Time::Now() -
+                                                     base::Days(31));
   GetHatsService()->LaunchSurvey(kHatsSurveyTriggerSettings);
   EXPECT_TRUE(HatsNextDialogCreated());
 }
@@ -350,7 +384,7 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
                        ProfileJustCreatedAnyAgeRequirementShow) {
   SetMetricsConsent(true);
   // Simulate a brand new profile.
-  browser()->profile()->SetCreationTimeForTesting(base::Time::Now());
+  browser()->GetProfile()->SetCreationTimeForTesting(base::Time::Now());
   // Launch the survey with kAnyAge requirement.
   GetHatsService()->LaunchSurvey(MockSurveyWithProfileAgeRequirement(
       hats::SurveyConfig::ProfileAgeRequirement::kAnyAge));
@@ -363,7 +397,7 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
   base::HistogramTester histogram_tester;
 
   // A regular survey should not be shown in incognito
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   GetHatsService(incognito_browser)->LaunchSurvey(kHatsSurveyTriggerSettings);
   histogram_tester.ExpectUniqueSample(
       kHatsShouldShowSurveyReasonHistogram,
@@ -376,7 +410,7 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
   SetMetricsConsent(true);
   base::HistogramTester histogram_tester;
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   auto trigger = MockSurveyWithRequestedBrowserType(
       incognito_browser, hats::SurveyConfig::RequestedBrowserType::kIncognito);
 
@@ -395,12 +429,12 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
 IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne, IncognitoModeDisabledNoShow) {
   SetMetricsConsent(true);
   // Disable incognito mode for this profile.
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = browser()->GetProfile()->GetPrefs();
   pref_service->SetInteger(
       policy::policy_prefs::kIncognitoModeAvailability,
       static_cast<int>(policy::IncognitoModeAvailability::kDisabled));
   EXPECT_EQ(policy::IncognitoModeAvailability::kDisabled,
-            IncognitoModePrefs::GetAvailability(pref_service));
+            IncognitoModePrefs::GetAvailability(browser()->GetProfile()));
 
   GetHatsService()->LaunchSurvey(kHatsSurveyTriggerSettings);
   EXPECT_FALSE(HatsNextDialogCreated());
@@ -690,7 +724,7 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
   // Clear any existing survey metadata.
   GetHatsService()->SetSurveyMetadataForTesting({});
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   auto trigger = MockSurveyWithRequestedBrowserType(
       incognito_browser, hats::SurveyConfig::RequestedBrowserType::kIncognito);
 
@@ -758,4 +792,36 @@ IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
       HatsService::LaunchError::kSurveyInProgress);
 
   EXPECT_TRUE(failure_called.Wait());
+}
+
+// Check that the Chrome channel and version are sent to the HaTS wrapper
+// website as Product Specific Data by default.
+IN_PROC_BROWSER_TEST_F(HatsServiceProbabilityOne,
+                       AddsDefaultProductSpecificData) {
+  SetMetricsConsent(true);
+
+  base::DictValue product_specific_data =
+      LaunchSurveyAndGetProductSpecificData(GetHatsService());
+
+  EXPECT_TRUE(HatsNextDialogCreated());
+  EXPECT_TRUE(product_specific_data.FindString(
+      HatsServiceDesktop::kChromeChannelPsdKey));
+  const std::string* version = product_specific_data.FindString(
+      HatsServiceDesktop::kChromeVersionPsdKey);
+  ASSERT_TRUE(version);
+  EXPECT_EQ(*version, version_info::GetVersionNumber());
+}
+
+IN_PROC_BROWSER_TEST_F(HatsServiceDefaultProductSpecificDataDisabled,
+                       DoesNotAddDefaultProductSpecificData) {
+  SetMetricsConsent(true);
+
+  base::DictValue product_specific_data =
+      LaunchSurveyAndGetProductSpecificData(GetHatsService());
+
+  EXPECT_TRUE(HatsNextDialogCreated());
+  EXPECT_FALSE(
+      product_specific_data.contains(HatsServiceDesktop::kChromeChannelPsdKey));
+  EXPECT_FALSE(
+      product_specific_data.contains(HatsServiceDesktop::kChromeVersionPsdKey));
 }

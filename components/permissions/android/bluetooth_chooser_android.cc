@@ -13,6 +13,7 @@
 #include "components/permissions/permission_util.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/render_frame_host.h"
+#include "device/base/public/cpp/string_util.h"
 #include "ui/android/window_android.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -128,8 +129,9 @@ void BluetoothChooserAndroid::AddOrUpdateDevice(
     bool is_paired,
     int signal_strength_level) {
   Java_BluetoothChooserDialog_addOrUpdateDevice(
-      AttachCurrentThread(), java_dialog_, device_id, device_name,
-      is_gatt_connected, signal_strength_level);
+      AttachCurrentThread(), java_dialog_, device_id,
+      device::ContainStringForDisplay(device_name), is_gatt_connected,
+      signal_strength_level);
 }
 
 void BluetoothChooserAndroid::OnDialogFinished(
@@ -187,10 +189,9 @@ BluetoothChooserAndroid::CreateForTesting(
 
 void BluetoothChooserAndroid::OpenURL(const char* url) {
   web_contents_->OpenURL(
-      content::OpenURLParams(GURL(url), content::Referrer(),
-                             WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-                             false /* is_renderer_initiated */),
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(url), WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_AUTO_TOPLEVEL),
       /*navigation_handle_callback=*/{});
 }
 

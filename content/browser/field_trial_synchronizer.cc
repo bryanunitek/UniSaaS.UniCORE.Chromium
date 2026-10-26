@@ -40,7 +40,7 @@ void NotifyAllRenderersOfFieldTrial(const std::string& field_trial_name,
                                     bool is_overridden) {
   // To iterate over RenderProcessHosts, or to send messages to the hosts, we
   // need to be on the UI thread.
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   // Low anonymity or overridden field trials must not be written to persistent
   // data, otherwise they might end up being logged in metrics.
@@ -77,7 +77,7 @@ void NotifyAllRenderersOfFieldTrial(const std::string& field_trial_name,
 // static
 void FieldTrialSynchronizer::CreateInstance() {
   // Only 1 instance is allowed per process.
-  DCHECK(!g_instance);
+  CHECK(!g_instance, base::NotFatalUntil::M160);
   g_instance = new FieldTrialSynchronizer();
 }
 
@@ -87,7 +87,7 @@ FieldTrialSynchronizer::FieldTrialSynchronizer() {
   // anonymity property for more fine-grained access).
   bool success = base::FieldTrialListIncludingLowAnonymity::AddObserver(this);
   // Ensure the observer was actually registered.
-  DCHECK(success);
+  CHECK(success, base::NotFatalUntil::M160);
 
   variations::VariationsIdsProvider::GetInstance()->AddObserver(this);
   base::RuntimeFieldTrialOverrides::GetInstance()->AddObserver(this);
@@ -116,7 +116,7 @@ void FieldTrialSynchronizer::OnFieldTrialGroupFinalized(
 void FieldTrialSynchronizer::NotifyAllRenderersOfVariationsHeader() {
   // To iterate over RenderProcessHosts, or to send messages to the hosts, we
   // need to be on the UI thread.
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   absl::flat_hash_set<BrowserContext*> browser_contexts;
   for (RenderProcessHost::iterator it(RenderProcessHost::AllHostsIterator());
        !it.IsAtEnd(); it.Advance()) {
@@ -176,16 +176,16 @@ void FieldTrialSynchronizer::VariationIdsHeaderUpdated() {
 }
 
 void FieldTrialSynchronizer::OnRuntimeFieldTrialOverride(
-    const base::RuntimeFieldTrialOverrides::RuntimeOverrideInfo& override_info,
+    const base::RuntimeFieldTrialInfo& override_info,
     std::string_view previous_override_trial_name) {
   // Runtime FieldTrial Overrides only happen on the main/UI thread.
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   // When an override is applied, the overridden trial and/or the previous
   // override should be removed from the persistent data.
-  if (override_info.overridden_trial) {
+  if (override_info.overridden_trial()) {
     metrics::GlobalPersistentSystemProfile::GetInstance()->RemoveFieldTrial(
-        override_info.overridden_trial->trial_name());
+        override_info.overridden_trial()->trial_name());
   }
   if (!previous_override_trial_name.empty()) {
     // Note that if a `previous_override_trial_name` is specified, we don't need
@@ -195,15 +195,18 @@ void FieldTrialSynchronizer::OnRuntimeFieldTrialOverride(
         previous_override_trial_name);
   }
 
-  // Add the new override to the persistent data. This must be done after the
-  // previous override is removed, since the `previous_override_trial_name` may
-  // be the same name as the new override (in which case, if the order was
-  // reversed, the new override would be removed immediately after being added).
-  metrics::GlobalPersistentSystemProfile::GetInstance()->AddFieldTrial(
-      override_info.trial_name, override_info.group_name);
+  // Note: The new override will be added to the persistent data when it is
+  // activated via OnRuntimeFieldTrialOverrideActivated().
 
   // TODO(crbug.com/482449878): Notify renderers of the new override for
   // reporting purposes (e.g. crash keys).
+}
+
+void FieldTrialSynchronizer::OnRuntimeFieldTrialOverrideActivated(
+    const base::RuntimeFieldTrialInfo& override_info) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  metrics::GlobalPersistentSystemProfile::GetInstance()->AddFieldTrial(
+      override_info.trial_name(), override_info.group_name());
 }
 
 // static

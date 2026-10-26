@@ -75,7 +75,6 @@ class CC_EXPORT LayerTreeSettings {
   base::TimeDelta scrollbar_fade_duration;
   base::TimeDelta scrollbar_thinning_duration;
   float idle_thickness_scale = 0.4f;
-  bool scrollbar_flash_after_any_scroll_update = false;
   bool scrollbar_flash_once_after_scroll_update = false;
   bool scrollbar_flash_once_visible_on_viewport = false;
   bool scrollbar_flash_when_mouse_enter = false;
@@ -243,9 +242,8 @@ class CC_EXPORT LayerTreeSettings {
   // Whether the unbounded element API is enabled.
   bool enable_unbounded_element = false;
 
-  // Performance Scroll Timing API: enables compositor-thread scroll
-  // tracking. Mirrors the `ScrollPerformanceTiming` Blink runtime-enabled
-  // feature.
+  // Whether to collect the compositor-side scroll metadata reported by the
+  // Performance Scroll Timing API.
   bool enable_scroll_performance_timing = false;
 };
 

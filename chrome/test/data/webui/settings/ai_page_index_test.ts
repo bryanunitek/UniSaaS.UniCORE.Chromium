@@ -6,9 +6,8 @@ import 'chrome://settings/settings.js';
 import 'chrome://settings/lazy_load.js';
 
 import type {SettingsAiPageIndexElement} from 'chrome://settings/settings.js';
-import {CrSettingsPrefs, loadTimeData, resetRouterForTesting, Router, routes} from 'chrome://settings/settings.js';
+import {loadTimeData, PrefService, resetRouterForTesting, Router, routes} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertGT, assertTrue} from 'chrome://webui-test/chai_assert.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 suite('AiPageIndex', function() {
@@ -16,13 +15,12 @@ suite('AiPageIndex', function() {
 
   async function createAiPageIndex(): Promise<void> {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    const settingsPrefs = document.createElement('settings-prefs');
-    document.body.appendChild(settingsPrefs);
-    await CrSettingsPrefs.initialized;
+    await PrefService.getInstance().whenInitialized();
     index = document.createElement('settings-ai-page-index');
-    index.prefs = settingsPrefs.prefs!;
     document.body.appendChild(index);
-    return flushTasks();
+    // Wait for deferred route switching in currentRouteChanged(), which is
+    // scheduled in a microtask.
+    return microtasksFinished();
   }
 
   function assertActiveViews(ids: string[]) {
@@ -39,9 +37,12 @@ suite('AiPageIndex', function() {
       showComposeControl: true,
       showHistorySearchControl: true,
       showGlicSettings: true,
+      showGeicSettings: true,
       enableAiModeSearchSetting: true,
       actorLoginFederatedLoginSupportEnabled: true,
       showAiSuggestionsControl: true,
+      showInlineCueMenuControl: true,
+      showDictationControl: true,
     });
     resetRouterForTesting();
     return createAiPageIndex();
@@ -52,6 +53,7 @@ suite('AiPageIndex', function() {
       'aiInfoCard',
       'aiModeSearch',
       'glic',
+      'geic',
       'parent',
     ];
 
@@ -70,6 +72,10 @@ suite('AiPageIndex', function() {
     await microtasksFinished();
     assertActiveViews(['compose']);
 
+    Router.getInstance().navigateTo(routes.GEMINI_ENTERPRISE);
+    await microtasksFinished();
+    assertActiveViews(['geminiEnterprise']);
+
     Router.getInstance().navigateTo(routes.GEMINI);
     await microtasksFinished();
     assertActiveViews(['gemini']);
@@ -81,6 +87,14 @@ suite('AiPageIndex', function() {
     Router.getInstance().navigateTo(routes.AI_SUGGESTIONS);
     await microtasksFinished();
     assertActiveViews(['aiSuggestions']);
+
+    Router.getInstance().navigateTo(routes.INLINE_CUE_MENU);
+    await microtasksFinished();
+    assertActiveViews(['inlineCueMenu']);
+
+    Router.getInstance().navigateTo(routes.DICTATION);
+    await microtasksFinished();
+    assertActiveViews(['dictation']);
   });
 
   test('aiFeaturesSectionVisibility', async function() {
@@ -108,6 +122,18 @@ suite('AiPageIndex', function() {
         !!index.$.viewManager.querySelector('#aiModeSearch[slot=view]'));
   });
 
+  test('geicSectionVisibility', async function() {
+    assertTrue(!!index.$.viewManager.querySelector('#geic[slot=view]'));
+
+    loadTimeData.overrideValues({
+      showAiPage: true,
+      showGeicSettings: false,
+    });
+    resetRouterForTesting();
+    await createAiPageIndex();
+    assertFalse(!!index.$.viewManager.querySelector('#geic[slot=view]'));
+  });
+
   test('glicSectionVisibility', async function() {
     assertTrue(!!index.$.viewManager.querySelector('#glic[slot=view]'));
 
@@ -120,12 +146,26 @@ suite('AiPageIndex', function() {
     assertFalse(!!index.$.viewManager.querySelector('#glic[slot=view]'));
   });
 
+  test('dictationSectionVisibility', async function() {
+    assertTrue(!!index.$.viewManager.querySelector('#dictation[slot=view]'));
+
+    loadTimeData.overrideValues({
+      showAiPage: true,
+      showDictationControl: false,
+    });
+    resetRouterForTesting();
+    await createAiPageIndex();
+    assertFalse(!!index.$.viewManager.querySelector('#dictation[slot=view]'));
+  });
+
   // Test that the child views are properly annotated.
   test('DataParentViewId', function() {
     const childViewsId = [
       'historySearch',
       'compose',
       'aiSuggestions',
+      'inlineCueMenu',
+      'dictation',
     ];
     for (const id of childViewsId) {
       assertTrue(!!index.$.viewManager.querySelector(
@@ -134,11 +174,14 @@ suite('AiPageIndex', function() {
 
     assertTrue(!!index.$.viewManager.querySelector(
         '#gemini[slot=view][data-parent-view-id=glic]'));
+
+    assertTrue(!!index.$.viewManager.querySelector(
+        '#geminiEnterprise[slot=view][data-parent-view-id=geic]'));
     assertTrue(!!index.$.viewManager.querySelector(
         '#geminiLoginPermissions[slot=view][data-parent-view-id=gemini]'));
   });
 
-  // Minimal (non-exhaustive) tests to ensure SearchableViewContainerMixin is
+  // Minimal (non-exhaustive) tests to ensure SearchableViewContainerMixinLit is
   // inherited correctly.
   test('Search', async function() {
     function assertVisibleViews(visible: string[], hidden: string[]) {
@@ -159,14 +202,14 @@ suite('AiPageIndex', function() {
     assertVisibleViews(['parent'], ['glic']);
 
     // Case2: Results only in the "Glic" card.
-    result = await index.searchContents('keyboard shortcut');
+    result = await index.searchContents('takeaways');
     assertFalse(result.canceled);
     assertGT(result.matchCount, 0);
     assertFalse(result.wasClearSearch);
     assertVisibleViews(['glic'], ['parent']);
 
-    // Case3: Results only in both "AI Innovations" and "Glic" card.
-    result = await index.searchContents('a');
+    // Case3: Results in both "AI Innovations" and "Glic" card.
+    result = await index.searchContents('keyboard shortcut');
     assertFalse(result.canceled);
     assertGT(result.matchCount, 0);
     assertFalse(result.wasClearSearch);

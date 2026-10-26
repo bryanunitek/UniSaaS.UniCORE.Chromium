@@ -72,20 +72,6 @@ using FederatedApiPermissionStatus =
     FederatedIdentityApiPermissionContextDelegate::PermissionStatus;
 using LoginState = IdentityRequestAccount::LoginState;
 
-// static
-std::unique_ptr<UserInfoRequest> UserInfoRequest::Create(
-    std::unique_ptr<IdpNetworkRequestManager> network_manager,
-    FederatedIdentityPermissionContextDelegate* permission_delegate,
-    FederatedIdentityApiPermissionContextDelegate* api_permission_delegate,
-    RenderFrameHost* render_frame_host,
-    blink::mojom::IdentityProviderConfigPtr provider) {
-  std::unique_ptr<UserInfoRequest> request =
-      base::WrapUnique<UserInfoRequest>(new UserInfoRequest(
-          std::move(network_manager), permission_delegate,
-          api_permission_delegate, render_frame_host, std::move(provider)));
-  return request;
-}
-
 UserInfoRequest::~UserInfoRequest() {
   CompleteWithError(UserInfoRequestResult::kUnhandledRequest);
 }
@@ -105,7 +91,7 @@ UserInfoRequest::UserInfoRequest(
       origin_(render_frame_host->GetLastCommittedOrigin()),
       perfetto_track_(CreatePerfettoTrackForFedCM(this)) {
   RenderFrameHost* main_frame = render_frame_host->GetMainFrame();
-  DCHECK(main_frame->IsInPrimaryMainFrame());
+  CHECK(main_frame->IsInPrimaryMainFrame(), base::NotFatalUntil::M158);
   embedding_origin_ = main_frame->GetLastCommittedOrigin();
 
   RenderFrameHost* parent_frame = render_frame_host->GetParentOrOuterDocument();
@@ -163,7 +149,7 @@ void UserInfoRequest::SetCallbackAndStart(
   }
 
   // ConfigFetcher is stored as a member so that it is destroyed when
-  // Request is destroyed.
+  // RequestHandler is destroyed.
   config_fetcher_ = std::make_unique<ConfigFetcher>(*render_frame_host_,
                                                     network_manager_.get());
   // TODO(crbug.com/390626180): It seems ok to ignore the well-known checks in
@@ -213,18 +199,20 @@ void UserInfoRequest::OnAllConfigAndWellKnownFetched(
 void UserInfoRequest::OnAccountsResponseReceived(
     FetchStatus fetch_status,
     IdpNetworkRequestManager::AccountsResponse accounts) {
+  // Speculative guard: UpdateIdpSigninStatus may destroy |this| via observer
+  // callbacks. See crbug.com/548340637.
+  base::WeakPtr<UserInfoRequest> weak_this = weak_ptr_factory_.GetWeakPtr();
   UpdateIdpSigninStatusForAccountsEndpointResponse(
       idp_config_url_, fetch_status, does_idp_have_failing_signin_status_,
       permission_delegate_);
+  if (!weak_this) {
+    return;
+  }
 
   if (fetch_status.parse_status != ParseStatus::kSuccess) {
     CompleteWithError(UserInfoRequestResult::kInvalidAccountsResponse);
     return;
   }
-
-  GetPageData(render_frame_host_->GetPage())
-      ->SetUserInfoAccountsResponseTime(idp_config_url_,
-                                        base::TimeTicks::Now());
 
   IdentityRequestAccount::ComputeIdpClaimedLoginStates(client_id_,
                                                        accounts.accounts);
@@ -247,7 +235,7 @@ void UserInfoRequest::OnAccountsResponseReceived(
 
 void UserInfoRequest::MaybeReturnAccounts(
     const std::vector<scoped_refptr<IdentityRequestAccount>>& accounts) {
-  DCHECK(!accounts.empty());
+  CHECK(!accounts.empty(), base::NotFatalUntil::M158);
 
   bool has_returning_accounts = false;
   for (const auto& account : accounts) {
@@ -345,7 +333,7 @@ void UserInfoRequest::CompleteWithError(UserInfoRequestResult error) {
 }
 
 void UserInfoRequest::AddDevToolsIssue(UserInfoRequestResult error) {
-  DCHECK_NE(error, UserInfoRequestResult::kSuccess);
+  CHECK_NE(error, UserInfoRequestResult::kSuccess, base::NotFatalUntil::M158);
 
   auto details = blink::mojom::InspectorIssueDetails::New();
   auto user_info_request_details =

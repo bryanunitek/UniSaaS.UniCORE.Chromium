@@ -24,12 +24,13 @@
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
-#include "chrome/browser/apps/icon_standardizer.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/intent_picker_tab_helper.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
@@ -47,6 +48,7 @@
 #include "chrome/browser/ui/views/web_apps/web_app_install_intro_view.h"
 #include "chrome/browser/ui/views/web_apps/web_app_install_options_view.h"
 #include "chrome/browser/ui/views/web_apps/web_app_install_progress_view.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/ui/web_applications/web_app_info_image_source.h"
 #include "chrome/browser/web_applications/model/dialog_image_info.h"
@@ -63,6 +65,7 @@
 #include "components/feature_engagement/public/tracker.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/webapps/browser/installable/ml_install_operation_tracker.h"
 #include "components/webapps/common/constants.h"
@@ -71,16 +74,25 @@
 #include "content/public/browser/web_contents_user_data.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "ui/base/class_property.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/text_elider.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/focus/focus_manager.h"
+#include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
@@ -94,6 +106,13 @@
 #include "components/metrics/structured/structured_events.h"  // nogncheck
 #include "components/metrics/structured/structured_metrics_client.h"  // nogncheck
 #endif
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
+#include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
+#endif
+
+DEFINE_UI_CLASS_PROPERTY_TYPE(base::OneShotTimer*)
 
 namespace web_app {
 
@@ -127,6 +146,17 @@ std::ostream& operator<<(std::ostream& os, InstallOsType type) {
 }
 
 namespace {
+
+// Startup grace period before layout-based autoclosing. Allows async geometry
+// updates from the app shim to settle before deciding whether to autoclose this
+// dialog based on its bounds.
+constexpr base::TimeDelta kAppShimGracePeriod = base::Seconds(2);
+base::TimeDelta g_app_shim_grace_period = kAppShimGracePeriod;
+
+// Lets API-driven tests access the real timer through the dialog widget.
+DEFINE_UI_CLASS_PROPERTY_KEY(base::OneShotTimer*,
+                             kAppShimGraceTimerKey,
+                             nullptr)
 
 #if BUILDFLAG(IS_CHROMEOS)
 namespace cros_events = metrics::structured::events::v2::cr_os_events;
@@ -186,41 +216,10 @@ NewPageActionHighlight(content::WebContents& web_contents) {
     return std::nullopt;
   }
 
-  if (IsPageActionMigrated(PageActionIconType::kPwaInstall)) {
-    tabs::TabFeatures* tab_features = tab->GetTabFeatures();
-    CHECK(tab_features);
+  tabs::TabFeatures* tab_features = tab->GetTabFeatures();
+  CHECK(tab_features);
 
-    return tab_features->page_action_controller()->AddActivity(
-        kActionInstallPwa);
-  }
-
-  // TODO(crbug.com/425953501): We shouldn't be using this. Once
-  // `ToolbarButtonProvider` is migrated to `BrowserWindowInterface`, we can
-  // use that directly.
-  Browser* browser =
-      tab->GetBrowserWindowInterface()->GetBrowserForMigrationOnly();
-
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  if (!browser_view) {
-    return std::nullopt;
-  }
-
-  ToolbarButtonProvider* toolbar_button_provider =
-      browser_view->toolbar_button_provider();
-  if (!toolbar_button_provider) {
-    return std::nullopt;
-  }
-
-  views::Button* install_icon =
-      toolbar_button_provider->GetPageActionViewInterface(kActionInstallPwa)
-          ->GetIconLabelBubbleViewNotMigrated();
-
-  if (install_icon) {
-    // TODO(crbug.com/40841129): move this to dialog->SetHighlightedElement.
-    return install_icon->AddAnchorHighlight();
-  }
-
-  return std::nullopt;
+  return tab_features->page_action_controller()->AddActivity(kActionInstallPwa);
 }
 
 }  // namespace
@@ -248,15 +247,30 @@ WebAppInstallFlowDialogDelegate::WebAppInstallFlowDialogDelegate(
       page_action_highlight_(NewPageActionHighlight(CHECK_DEREF(web_contents))),
       progress_delay_(std::move(progress_delay)) {
   CHECK(install_info_);
+  app_id_ = GenerateAppIdFromManifestId(install_info_->manifest_id());
   CHECK(install_tracker_);
   CHECK(prefs_);
   CHECK(progress_delay_);
 }
 
-WebAppInstallFlowDialogDelegate::~WebAppInstallFlowDialogDelegate() = default;
+WebAppInstallFlowDialogDelegate::~WebAppInstallFlowDialogDelegate() {
+  if (dialog_widget_) {
+    dialog_widget_->ClearProperty(kAppShimGraceTimerKey);
+  }
+  MaybeRestoreFocusToInstallPageAction();
+}
 
 bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
-  CHECK(dialog_model());
+  CHECK(dialog_model() && dialog_model()->host());
+
+  // During the grace period, a clipped dialog may remain open while bounds
+  // settle. Block advancement during this period if the layout is unsafe.
+  if (use_app_shim_workaround_ && app_shim_grace_timer_.IsRunning() &&
+      (current_step_ == InstallDialogStep::kInstallDialog ||
+       current_step_ == InstallDialogStep::kInstallerOptions) &&
+      (!dialog_widget_ || !IsDialogLayoutSafe(dialog_widget_.get()))) {
+    return false;
+  }
 
   // Update install dialog step.
   switch (current_step_) {
@@ -264,6 +278,7 @@ bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
       // The installer options view is not available on other OSes apart from
       // Windows, Mac and ChromeOS, so skip that here.
       if (os_type_ == InstallOsType::kOther) {
+        MeasureAcceptUserActionsForInstallDialog();
         current_step_ = InstallDialogStep::kProgress;
       } else {
         current_step_ = InstallDialogStep::kInstallerOptions;
@@ -271,6 +286,7 @@ bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
       break;
 
     case InstallDialogStep::kInstallerOptions:
+      MeasureAcceptUserActionsForInstallDialog();
       current_step_ = InstallDialogStep::kProgress;
       break;
 
@@ -279,13 +295,37 @@ bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
       break;
 
     case InstallDialogStep::kSuccessful:
+      // Record this action because clicking the "Open tab in app" button on
+      // this success step opens the newly installed app.
+      base::RecordAction(base::UserMetricsAction("WebAppDialogOpenedApp"));
       base::UmaHistogramEnumeration(
-          "WebApp.InstallConfirmation.CloseReason",
-          views::Widget::ClosedReason::kAcceptButtonClicked);
+          "WebApp.InstallFlow.SuccessStepAction",
+          InstallFlowSuccessStepAction::kOpenAppClicked);
       if (reparent_closure_) {
         std::move(reparent_closure_).Run();
       }
       return true;
+  }
+
+  // Clear focus before updating buttons and views.
+  // This ensures that:
+  // 1) A fresh focus event fires when a button is focused again on the next
+  //    step.
+  // 2) Hiding dialog buttons on the Progress step does not cause FocusManager
+  //    to advance focus to another view in the browser.
+  // Additionally, only clear focus when it is within the dialog so we do not
+  // take focus away if the user moved focus elsewhere in the browser (e.g. the
+  // omnibox).
+  auto* host =
+      static_cast<views::BubbleDialogModelHost*>(dialog_model()->host());
+  if (views::Widget* widget = host->GetWidget()) {
+    if (views::FocusManager* focus_manager = widget->GetFocusManager()) {
+      views::View* focused_view = focus_manager->GetFocusedView();
+      if (focused_view && widget->GetRootView() &&
+          widget->GetRootView()->Contains(focused_view)) {
+        focus_manager->ClearFocus();
+      }
+    }
   }
 
   // Actions based on the new current_step_
@@ -305,7 +345,6 @@ bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
 
     case InstallDialogStep::kProgress: {
       // Trigger the installation.
-      // TODO(crbug.com/508383640): Clean up metrics usage for new install flow.
       OnAccept();
 
       progress_delay_->Start(
@@ -330,8 +369,11 @@ bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
       ui::DialogModel::Button* cancel_button =
           dialog_model()->GetButtonByUniqueId(kCancelButtonId);
       if (cancel_button) {
-        dialog_model()->SetButtonLabel(cancel_button,
-                                       l10n_util::GetStringUTF16(IDS_CLOSE));
+        dialog_model()->SetButtonLabel(
+            cancel_button,
+            os_type_ == InstallOsType::kMac
+                ? l10n_util::GetStringUTF16(IDS_DOWNLOAD_LINK_SHOW)
+                : l10n_util::GetStringUTF16(IDS_CLOSE));
       }
       dialog_model()->SetVisible(kInstallButton, true);
       dialog_model()->SetVisible(kCancelButtonId, true);
@@ -349,16 +391,32 @@ bool WebAppInstallFlowDialogDelegate::AdvanceToNextStepOrClose() {
                              current_step_ == InstallDialogStep::kSuccessful);
 
   UpdateDialogTitleAndHeader(current_step_);
+  UpdateFocusAndAnnounceStep(current_step_);
   return false;
 }
 
 void WebAppInstallFlowDialogDelegate::OnLearnMoreButtonClicked() {
-  web_contents()->OpenURL(
-      content::OpenURLParams(
-          GURL(chrome::kInstallDialogFlowLearnMoreURL), content::Referrer(),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB, ui::PAGE_TRANSITION_LINK,
-          /*is_renderer_initiated=*/false),
-      base::DoNothing());
+  // "Learn more" dismisses the install prompt. The dialog must be closed before
+  // the help page is opened: opening it in a new foreground tab hides the tab
+  // that triggered the install, which makes the pending install command abort
+  // itself as cancelled before the dialog's own close can decline the install
+  // through `callback_`. The page's BeforeInstallPromptEvent.userChoice would
+  // then never resolve.
+  //
+  // Closing the dialog synchronously runs the dialog's close action (declining
+  // the install command via `callback_`) and destroys `this`. Cache the
+  // WebContents pointer beforehand as accessing `web_contents()` later would
+  // be an use-after-free.
+  base::WeakPtr<content::WebContents> contents = web_contents()->GetWeakPtr();
+  CloseDialogAsIgnored();
+
+  if (contents) {
+    contents->OpenURL(
+        content::OpenURLParams::CreateBrowserInitiated(
+            GURL(chrome::kInstallDialogFlowLearnMoreURL),
+            WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK),
+        base::DoNothing());
+  }
 }
 
 void WebAppInstallFlowDialogDelegate::OnAccept() {
@@ -373,7 +431,6 @@ void WebAppInstallFlowDialogDelegate::OnAccept() {
         options_view_->IsAddDesktopShortcutChecked();
   }
 
-  MeasureAcceptUserActionsForInstallDialog();
   if (iph_state_ == PwaInProductHelpState::kShown) {
     webapps::AppId app_id =
         GenerateAppIdFromManifestId(install_info_->manifest_id());
@@ -419,6 +476,9 @@ void WebAppInstallFlowDialogDelegate::OnAccept() {
   CHECK(install_tracker_);
   install_tracker_->ReportResult(webapps::MlInstallUserResponse::kAccepted);
   received_user_response_ = true;
+  base::UmaHistogramEnumeration(
+      "WebApp.InstallConfirmation.CloseReason",
+      views::Widget::ClosedReason::kAcceptButtonClicked);
 
   bool should_auto_respond_for_test = false;
   InstallDialogTestResponse auto_response =
@@ -443,22 +503,26 @@ void WebAppInstallFlowDialogDelegate::OnAccept() {
 }
 
 void WebAppInstallFlowDialogDelegate::OnCancel() {
-  CHECK(install_tracker_);
-  install_tracker_->ReportResult(webapps::MlInstallUserResponse::kCancelled);
-  received_user_response_ = true;
-  base::UmaHistogramEnumeration(
-      "WebApp.InstallConfirmation.CloseReason",
-      views::Widget::ClosedReason::kCancelButtonClicked);
+  if (!received_user_response_) {
+    CHECK(install_tracker_);
+    install_tracker_->ReportResult(webapps::MlInstallUserResponse::kCancelled);
+    received_user_response_ = true;
+    base::UmaHistogramEnumeration(
+        "WebApp.InstallConfirmation.CloseReason",
+        views::Widget::ClosedReason::kCancelButtonClicked);
+  }
   MeasureMetricsOnDialogClose(/*was_closed_by_user_action=*/true);
 }
 
 void WebAppInstallFlowDialogDelegate::OnClose() {
-  CHECK(install_tracker_);
-  install_tracker_->ReportResult(webapps::MlInstallUserResponse::kIgnored);
-  received_user_response_ = true;
-  base::UmaHistogramEnumeration(
-      "WebApp.InstallConfirmation.CloseReason",
-      views::Widget::ClosedReason::kCloseButtonClicked);
+  if (!received_user_response_) {
+    CHECK(install_tracker_);
+    install_tracker_->ReportResult(webapps::MlInstallUserResponse::kIgnored);
+    received_user_response_ = true;
+    base::UmaHistogramEnumeration(
+        "WebApp.InstallConfirmation.CloseReason",
+        views::Widget::ClosedReason::kCloseButtonClicked);
+  }
   MeasureMetricsOnDialogClose(/*was_closed_by_user_action=*/true);
 }
 
@@ -466,6 +530,7 @@ void WebAppInstallFlowDialogDelegate::OnDestroyed() {
   if (received_user_response_) {
     return;
   }
+  CHECK(install_tracker_);
   install_tracker_->ReportResult(webapps::MlInstallUserResponse::kIgnored);
   base::UmaHistogramEnumeration("WebApp.InstallConfirmation.CloseReason",
                                 views::Widget::ClosedReason::kUnspecified);
@@ -493,6 +558,9 @@ void WebAppInstallFlowDialogDelegate::OnTextFieldChangedMaybeUpdateButton(
 void WebAppInstallFlowDialogDelegate::OnWidgetBoundsChanged(
     views::Widget* widget,
     const gfx::Rect& new_bounds) {
+  if (use_app_shim_workaround_ && app_shim_grace_timer_.IsRunning()) {
+    return;
+  }
   if (IsWidgetCurrentSizeSmallerThanPreferredSize(
           widget, GetMaxAllowedShrinkage(dialog_type_))) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -502,19 +570,79 @@ void WebAppInstallFlowDialogDelegate::OnWidgetBoundsChanged(
   }
 }
 
+bool WebAppInstallFlowDialogDelegate::IsDialogLayoutSafe(
+    views::Widget* widget) const {
+  // Give the widget a chance to recover to potentially safe bounds before we
+  // check its layout.
+  widget->LayoutRootViewIfNecessary();
+
+  if (widget->GetWindowBoundsInScreen() == gfx::Rect(0, 0, 1, 1) ||
+      IsWidgetCurrentSizeSmallerThanPreferredSize(
+          widget, GetMaxAllowedShrinkage(dialog_type_))) {
+    return false;
+  }
+
+  // Only check the intro step's title and origin here. Other steps rely on the
+  // size checks above.
+  if (current_step_ != InstallDialogStep::kInstallDialog) {
+    return true;
+  }
+
+  views::View* contents_view = widget->GetContentsView();
+  auto* tracker = views::ElementTrackerViews::GetInstance();
+  const ui::ElementContext context =
+      views::ElementTrackerViews::GetContextForWidget(widget);
+
+  auto is_fully_visible = [contents_view](views::View* view) {
+    return view && contents_view->Contains(view) && view->IsDrawn() &&
+           !view->size().IsEmpty() &&
+           view->GetVisibleBounds() == view->GetLocalBounds();
+  };
+
+  return is_fully_visible(tracker->GetFirstMatchingView(
+             kSimpleInstallDialogAppTitle, context,
+             /*require_visible=*/true)) &&
+         is_fully_visible(tracker->GetFirstMatchingView(
+             kSimpleInstallDialogAppInfoLabel, context,
+             /*require_visible=*/true));
+}
+
+void WebAppInstallFlowDialogDelegate::OnAppShimGraceExpired() {
+  if (!dialog_widget_) {
+    return;
+  }
+  if (!IsDialogLayoutSafe(dialog_widget_.get())) {
+    CloseDialogAsIgnored();
+  }
+}
+
+base::AutoReset<base::TimeDelta>
+WebAppInstallFlowDialogDelegate::SetAppShimGracePeriodForTesting(
+    base::TimeDelta period) {
+  CHECK_IS_TEST();
+  CHECK(!period.is_negative());
+  return base::AutoReset<base::TimeDelta>(&g_app_shim_grace_period, period);
+}
+
+base::OneShotTimer&
+WebAppInstallFlowDialogDelegate::GetAppShimGraceTimerForTesting(
+    views::Widget* widget) {
+  CHECK_IS_TEST();
+  CHECK(widget);
+  return CHECK_DEREF(widget->GetProperty(kAppShimGraceTimerKey));
+}
+
 void WebAppInstallFlowDialogDelegate::CloseDialogAsIgnored() {
   if (!dialog_model() || !dialog_model()->host()) {
     return;
   }
-  CHECK(install_tracker_);
-  install_tracker_->ReportResult(webapps::MlInstallUserResponse::kIgnored);
   dialog_model()->host()->Close();
 }
 
 void WebAppInstallFlowDialogDelegate::MeasureMetricsOnDialogClose(
     bool was_closed_by_user_action) {
   if (was_closed_by_user_action) {
-    MeasureCancelUserActionsForInstallDialog();
+    MeasureCloseUserActionsForInstallDialog();
     base::UmaHistogramEnumeration("WebApp.InstallFlow.DropOffStep",
                                   current_step_);
   }
@@ -543,46 +671,76 @@ void WebAppInstallFlowDialogDelegate::MeasureMetricsOnDialogClose(
 
 void WebAppInstallFlowDialogDelegate::
     MeasureAcceptUserActionsForInstallDialog() {
-  const char* accept_dialog_metric_name = nullptr;
+  std::string accept_dialog_metric_name;
   switch (dialog_type_) {
     case InstallDialogType::kDetailed:
-      accept_dialog_metric_name = "WebAppDetailedInstallAccepted";
+      accept_dialog_metric_name = "WebAppDetailedDialogAccepted";
       break;
     case InstallDialogType::kSimple:
-      accept_dialog_metric_name = "WebAppInstallAccepted";
+      accept_dialog_metric_name = "WebAppSimpleDialogAccepted";
       break;
     case InstallDialogType::kDiy:
-      accept_dialog_metric_name = "WebAppDiyInstallAccepted";
+      accept_dialog_metric_name = "WebAppDiyDialogAccepted";
       break;
   }
-  base::RecordAction(base::UserMetricsAction(accept_dialog_metric_name));
+  base::RecordAction(
+      base::UserMetricsAction(accept_dialog_metric_name.c_str()));
 }
 
 void WebAppInstallFlowDialogDelegate::
-    MeasureCancelUserActionsForInstallDialog() {
-  const char* cancel_dialog_metric_name = nullptr;
+    MeasureCloseUserActionsForInstallDialog() {
+  bool is_cancelled = (current_step_ == InstallDialogStep::kInstallDialog ||
+                       current_step_ == InstallDialogStep::kInstallerOptions);
+
+  std::string metric_name;
   switch (dialog_type_) {
     case InstallDialogType::kDetailed:
-      cancel_dialog_metric_name = "WebAppDetailedInstallCancelled";
+      metric_name = is_cancelled ? "WebAppDetailedDialogCancelled"
+                                 : "WebAppDetailedDialogClosed";
       break;
     case InstallDialogType::kSimple:
-      cancel_dialog_metric_name = "WebAppInstallCancelled";
+      metric_name = is_cancelled ? "WebAppSimpleDialogCancelled"
+                                 : "WebAppSimpleDialogClosed";
       break;
     case InstallDialogType::kDiy:
-      cancel_dialog_metric_name = "WebAppDiyInstallCancelled";
+      metric_name =
+          is_cancelled ? "WebAppDiyDialogCancelled" : "WebAppDiyDialogClosed";
       break;
   }
-  base::RecordAction(base::UserMetricsAction(cancel_dialog_metric_name));
+  base::RecordAction(base::UserMetricsAction(metric_name.c_str()));
 }
 
+// On generic steps/OSes, this triggers standard cancellation of Install Dialog.
+// On macOS during the Success step, this button is relabeled to "Show in
+// Finder", which triggers an async lookup to reveal the app bundle before the
+// dialog closes.
 void WebAppInstallFlowDialogDelegate::OnCancelOrCloseClicked() {
   if (current_step_ == InstallDialogStep::kSuccessful) {
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
     IntentPickerTabHelper* helper =
-        IntentPickerTabHelper::FromWebContents(web_contents());
+        tab ? IntentPickerTabHelper::From(tab) : nullptr;
     if (helper) {
       helper->MaybeShowIntentPickerIcon();
     }
+
+    if (os_type_ == InstallOsType::kMac) {
+#if BUILDFLAG(IS_MAC)
+      internals::GetShortcutIOTaskRunner()->PostTask(
+          FROM_HERE, base::BindOnce(&RevealAppShimInFinder, app_id_));
+#endif
+      base::RecordAction(
+          base::UserMetricsAction("WebAppInstallDialogShowInFinderClicked"));
+      base::UmaHistogramEnumeration(
+          "WebApp.InstallFlow.SuccessStepAction",
+          InstallFlowSuccessStepAction::kShowInFinderClicked);
+    } else {
+      base::UmaHistogramEnumeration(
+          "WebApp.InstallFlow.SuccessStepAction",
+          InstallFlowSuccessStepAction::kCloseClicked);
+    }
   }
+
   OnCancel();
 }
 
@@ -617,6 +775,64 @@ void WebAppInstallFlowDialogDelegate::UpdateDialogTitleAndHeader(
   // Clear the header for all subsequent steps.
   if (host->GetBubbleFrameView()) {
     host->GetBubbleFrameView()->SetHeaderView(nullptr);
+  }
+}
+
+void WebAppInstallFlowDialogDelegate::UpdateFocusAndAnnounceStep(
+    InstallDialogStep step) {
+  CHECK(dialog_model() && dialog_model()->host());
+  auto* host =
+      static_cast<views::BubbleDialogModelHost*>(dialog_model()->host());
+  views::Widget* widget = host->GetWidget();
+
+  switch (step) {
+    case InstallDialogStep::kInstallDialog:
+      NOTREACHED();
+    case InstallDialogStep::kInstallerOptions:
+      if (widget && widget->GetRootView()) {
+        widget->GetRootView()->GetViewAccessibility().AnnouncePolitely(
+            l10n_util::GetStringUTF16(dialog_type() == InstallDialogType::kDiy
+                                          ? IDS_DIY_APP_INSTALL_DIALOG_TITLE
+                                          : IDS_INSTALL_PWA_DIALOG_TITLE));
+      }
+      if (views::View* cancel_button = host->GetCancelButton()) {
+        cancel_button->RequestFocus();
+      }
+      break;
+    case InstallDialogStep::kProgress:
+      if (widget && widget->GetRootView()) {
+        widget->GetRootView()->GetViewAccessibility().AnnouncePolitely(
+            l10n_util::GetStringUTF16(IDS_INSTALL_PWA_DIALOG_INSTALLING));
+      }
+      break;
+    case InstallDialogStep::kSuccessful:
+      if (widget && widget->GetRootView()) {
+        widget->GetRootView()->GetViewAccessibility().AnnouncePolitely(
+            l10n_util::GetStringUTF16(IDS_WEB_APP_INSTALL_SUCCESS_TITLE));
+      }
+      // Only move focus to the primary button if focus was not moved outside
+      // the dialog (e.g. to the omnibox) during the progress step. If the
+      // top-level widget is inactive, update the stored focus view instead of
+      // calling `RequestFocus()` so we do not activate the browser window.
+      if (views::FocusManager* focus_manager =
+              widget ? widget->GetFocusManager() : nullptr) {
+        views::View* focused_view = focus_manager->GetFocusedView();
+        if (!focused_view) {
+          focused_view = focus_manager->GetStoredFocusView();
+        }
+        if (!focused_view || (widget->GetRootView() &&
+                              widget->GetRootView()->Contains(focused_view))) {
+          if (views::View* ok_button = host->GetOkButton()) {
+            views::Widget* top_level_widget = widget->GetTopLevelWidget();
+            if (top_level_widget && !top_level_widget->IsActive()) {
+              focus_manager->SetStoredFocusView(ok_button);
+            } else {
+              ok_button->RequestFocus();
+            }
+          }
+        }
+      }
+      break;
   }
 }
 
@@ -669,11 +885,9 @@ void WebAppInstallFlowDialogDelegate::
       success && reparent_closure) {
     std::move(reparent_closure).Run();
   } else {
-    // Decline/Cancel the dialog. Note: Since we are in mock testing and
-    // bypassing standard step transitions, closing the dialog this way
-    // results in metric close reasons of
-    // `views::Widget::ClosedReason::kCancelButtonClicked`. This is expected and
-    // does not affect functional browser tests.
+    // Close the dialog after installation completes when auto-accepting without
+    // launching. Since `OnAccept()` already recorded `kAcceptButtonClicked`,
+    // calling `DeclineForTesting()` here only dismisses the widget.
     DeclineForTesting();  // IN-TEST
   }
 }
@@ -755,6 +969,19 @@ WebAppInstallFlowDialogDelegate::Show(
       std::move(callback), std::move(iph_state), prefs, tracker, install_type,
       os_type, std::move(progress_delay));
   auto delegate_weak_ptr = delegate->AsWeakPtr();
+#if BUILDFLAG(IS_MAC)
+  // Enable the app-shim workaround only for simple dialogs in standalone
+  // macOS app windows. Explicitly scope this to the simple dialog, as web
+  // install does not currently support the other dialog types, and
+  // crbug.com/572892450 tracks the all-up fix for all types.
+  if (install_type == InstallDialogType::kSimple &&
+      os_type == InstallOsType::kMac) {
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents);
+    delegate->use_app_shim_workaround_ =
+        tab && AppBrowserController::IsWebApp(tab->GetBrowserWindowInterface());
+  }
+#endif  // BUILDFLAG(IS_MAC)
 
   // kInstallDialog
   auto intro_view = WebAppInstallIntroView::Create(
@@ -902,8 +1129,19 @@ WebAppInstallFlowDialogDelegate::Show(
 
   views::Widget* widget = constrained_window::ShowWebModalDialogViews(
       dialog.release(), web_contents);
-  if (IsWidgetCurrentSizeSmallerThanPreferredSize(
-          widget, GetMaxAllowedShrinkage(install_type))) {
+  if (delegate_weak_ptr->use_app_shim_workaround_) {
+    // The app shim can report pre-banner bounds after the final size is set.
+    // Intentionally defer layout-based autoclosing until the grace period
+    // expires.
+    delegate_weak_ptr->dialog_widget_ = widget->GetWeakPtr();
+    widget->SetProperty(kAppShimGraceTimerKey,
+                        &delegate_weak_ptr->app_shim_grace_timer_);
+    delegate_weak_ptr->app_shim_grace_timer_.Start(
+        FROM_HERE, g_app_shim_grace_period,
+        base::BindOnce(&WebAppInstallFlowDialogDelegate::OnAppShimGraceExpired,
+                       delegate_weak_ptr));
+  } else if (IsWidgetCurrentSizeSmallerThanPreferredSize(
+                 widget, GetMaxAllowedShrinkage(install_type))) {
     delegate_weak_ptr->CloseDialogAsIgnored();
     return nullptr;
   }

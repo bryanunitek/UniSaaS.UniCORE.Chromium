@@ -43,9 +43,12 @@ class WebTestBackgroundFetchDelegate : public BackgroundFetchDelegate {
                    const std::string& method,
                    const GURL& url,
                    ::network::mojom::CredentialsMode credentials_mode,
+                   ::network::mojom::RequestMode request_mode,
                    const net::NetworkTrafficAnnotationTag& traffic_annotation,
                    const net::HttpRequestHeaders& headers,
-                   bool has_request_body) override;
+                   bool has_request_body,
+                   scoped_refptr<network::SharedURLLoaderFactory>
+                       url_loader_factory) override;
   void Abort(const std::string& job_unique_id) override;
   void MarkJobComplete(const std::string& job_unique_id) override;
   void UpdateUI(const std::string& job_unique_id,

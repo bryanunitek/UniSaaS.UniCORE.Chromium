@@ -17,7 +17,7 @@ class PLATFORM_EXPORT IIRFilter final {
   // The maximum IIR filter order.  This also limits the number of feedforward
   // coefficients.  The maximum number of coefficients is 20 according to the
   // spec.
-  const static size_t kMaxOrder = 19;
+  static constexpr size_t kMaxOrder = 19;
   IIRFilter(const AudioDoubleArray* feedforward_coef,
             const AudioDoubleArray* feedback_coef);
   ~IIRFilter();
@@ -58,7 +58,7 @@ class PLATFORM_EXPORT IIRFilter final {
   // values should be stored.  xBuffer[bufferIndex] corresponds to x[n], the
   // current x input value and yBuffer[bufferIndex] is where y[n], the current
   // output value.
-  int buffer_index_;
+  int buffer_index_ = 0;
 
   // Coefficients of the IIR filter.  To minimize storage, these point to the
   // arrays given in the constructor.

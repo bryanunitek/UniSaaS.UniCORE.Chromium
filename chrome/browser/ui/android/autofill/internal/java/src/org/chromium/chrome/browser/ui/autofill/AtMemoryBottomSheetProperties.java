@@ -12,10 +12,11 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.ReadableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableObjectPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
-import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableIntDefPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.lang.annotation.Retention;
@@ -29,7 +30,8 @@ class AtMemoryBottomSheetProperties {
     static final WritableBooleanPropertyKey VISIBLE = new WritableBooleanPropertyKey();
 
     // Reflects which screen is currently displayed (main vs flyout).
-    static final WritableIntPropertyKey CURRENT_SCREEN = new WritableIntPropertyKey();
+    static final WritableIntDefPropertyKey<ScreenId> CURRENT_SCREEN =
+            new WritableIntDefPropertyKey<>(ScreenId.HOME_SCREEN);
 
     static final PropertyKey[] ALL_KEYS = {VISIBLE, CURRENT_SCREEN};
 
@@ -49,50 +51,55 @@ class AtMemoryBottomSheetProperties {
         // Indicates whether the bottom sheet dialog should display a loading state.
         static final WritableBooleanPropertyKey IS_LOADING = new WritableBooleanPropertyKey();
 
+        // Initial value for the search bar. The previous query is preserved for a specific
+        // timeframe after the sheet is closed.
+        static final WritableObjectPropertyKey<String> SEARCH_BAR_INITIAL_VALUE =
+                new WritableObjectPropertyKey<>();
+
         static final ReadableObjectPropertyKey<AtMemorySearchBarView.Delegate> SEARCH_BAR_DELEGATE =
                 new ReadableObjectPropertyKey<>();
-
-        // Indicates whether the bottom sheet dialog should display the suggestions background.
-        static final WritableBooleanPropertyKey SHOW_SUGGESTIONS_BACKGROUND =
-                new WritableBooleanPropertyKey();
 
         // Items to be displayed in the bottom sheet (only for home screen).
         static final ReadableObjectPropertyKey<ModelList> SHEET_ITEMS =
                 new ReadableObjectPropertyKey<>();
 
-        // Indicates whether the first-run notice onboarding banner should be visible.
-        static final WritableBooleanPropertyKey IS_NOTICE_VISIBLE =
-                new WritableBooleanPropertyKey();
-
-        // Invoked when the user acknowledges the onboarding notice.
-        static final ReadableObjectPropertyKey<Runnable> NOTICE_OK_CLICK_LISTENER =
-                new ReadableObjectPropertyKey<>();
-
-        // Invoked when the user clicks on the "Settings" link in the onboarding notice.
-        static final ReadableObjectPropertyKey<Runnable> NOTICE_SETTINGS_CLICK_LISTENER =
-                new ReadableObjectPropertyKey<>();
-
         static final PropertyKey[] ALL_KEYS = {
-            IS_LOADING,
-            SEARCH_BAR_DELEGATE,
-            SHOW_SUGGESTIONS_BACKGROUND,
-            SHEET_ITEMS,
-            IS_NOTICE_VISIBLE,
-            NOTICE_OK_CLICK_LISTENER,
-            NOTICE_SETTINGS_CLICK_LISTENER
+            IS_LOADING, SEARCH_BAR_INITIAL_VALUE, SEARCH_BAR_DELEGATE, SHEET_ITEMS
         };
 
-        @IntDef({ItemType.SEARCH_TILE, ItemType.SUGGESTION, ItemType.ZERO_STATE})
+        @IntDef({
+            ItemType.SUGGESTION,
+            ItemType.SUGGESTION_WITH_NO_BACKGROUND,
+            ItemType.ILLUSTRATION_CARD,
+            ItemType.NOTICE,
+            ItemType.TEXT_WITH_CLICKABLE_LINK,
+            ItemType.TITLE
+        })
         @Retention(RetentionPolicy.SOURCE)
         @interface ItemType {
-            /** A search tile (used to start a new search). */
-            int SEARCH_TILE = 0;
-
             /** A section containing suggestions. */
-            int SUGGESTION = 1;
+            int SUGGESTION = 0;
 
-            /** A section containing no results. */
-            int ZERO_STATE = 2;
+            /** A section containing suggestions with no background card. */
+            int SUGGESTION_WITH_NO_BACKGROUND = 1;
+
+            /** A section containing an illustration card (e.g. zero state or status message). */
+            int ILLUSTRATION_CARD = 2;
+
+            /** A section containing onboarding notice. */
+            int NOTICE = 3;
+
+            /** A section containing text with a clickable link. */
+            int TEXT_WITH_CLICKABLE_LINK = 4;
+
+            /** A section containing a title. */
+            int TITLE = 5;
+        }
+
+        /** Delegate to request search UI actions (e.g. hiding keyboard or clearing focus). */
+        public interface SearchDelegate {
+            /** Hides the keyboard and clears focus from the search area. */
+            void hideKeyboardAndClearFocus();
         }
 
         private HomeProperties() {}
@@ -109,18 +116,52 @@ class AtMemoryBottomSheetProperties {
         // Invoked when the back button is clicked in the flyout screen.
         static final ReadableObjectPropertyKey<Runnable> ON_BACK_CLICKED =
                 new ReadableObjectPropertyKey<>();
-        // Invoked when the manage button is clicked in the flyout screen.
-        static final ReadableObjectPropertyKey<Runnable> ON_MANAGE_CLICKED =
-                new ReadableObjectPropertyKey<>();
         // Invoked when an autofill suggestion is clicked in the flyout screen.
         static final WritableObjectPropertyKey<Callback<Integer>> ON_SUGGESTION_CLICKED =
                 new WritableObjectPropertyKey<>();
 
         static final PropertyKey[] ALL_KEYS = {
-            TITLE, SUGGESTIONS, ON_BACK_CLICKED, ON_MANAGE_CLICKED, ON_SUGGESTION_CLICKED
+            TITLE, SUGGESTIONS, ON_BACK_CLICKED, ON_SUGGESTION_CLICKED
         };
 
         private FlyoutProperties() {}
+    }
+
+    /** Properties for the illustration card item displayed within the home screen. */
+    static class IllustrationCardItemProperties {
+        // Title to be displayed on the illustration card.
+        static final ReadableObjectPropertyKey<@Nullable String> TITLE =
+                new ReadableObjectPropertyKey<>();
+        // Subtitle to be displayed on the illustration card.
+        static final ReadableObjectPropertyKey<@Nullable String> SUBTITLE =
+                new ReadableObjectPropertyKey<>();
+        // Titles that are cycled through in zero state, in order and starting at a random one,
+        // after the default title is shown.
+        static final ReadableObjectPropertyKey<List<String>> ROTATING_PLACEHOLDERS =
+                new ReadableObjectPropertyKey<>();
+
+        static final PropertyKey[] ALL_KEYS = {TITLE, SUBTITLE, ROTATING_PLACEHOLDERS};
+
+        private IllustrationCardItemProperties() {}
+    }
+
+    /** Properties for the notice item displayed within the home screen. */
+    static class NoticeItemProperties {
+        // Indicates whether logging is allowed.
+        static final ReadableBooleanPropertyKey IS_LOGGING_ALLOWED =
+                new ReadableBooleanPropertyKey();
+        // Invoked when the user acknowledges the onboarding notice.
+        static final ReadableObjectPropertyKey<Runnable> ON_OK_CLICKED =
+                new ReadableObjectPropertyKey<>();
+        // Invoked when the user clicks on the "Settings" link in the onboarding notice.
+        static final ReadableObjectPropertyKey<Runnable> ON_SETTINGS_CLICKED =
+                new ReadableObjectPropertyKey<>();
+
+        static final PropertyKey[] ALL_KEYS = {
+            IS_LOGGING_ALLOWED, ON_OK_CLICKED, ON_SETTINGS_CLICKED
+        };
+
+        private NoticeItemProperties() {}
     }
 
     /** Properties for the suggestion items displayed within the home screen. */
@@ -141,39 +182,55 @@ class AtMemoryBottomSheetProperties {
         // Indicates whether the flyout arrow and divider should be visible.
         static final WritableBooleanPropertyKey IS_FLYOUT_VISIBLE =
                 new WritableBooleanPropertyKey();
+        // Resource ID for trailing icon in the suggestion item (0 if hidden).
+        static final ReadableIntPropertyKey TRAILING_ICON_ID = new ReadableIntPropertyKey();
+        // Indicates whether the suggestion item should be deactivated.
+        static final ReadableBooleanPropertyKey APPLY_DEACTIVATED_STYLE =
+                new ReadableBooleanPropertyKey();
+        // Indicates whether the suggestion should show the loading indicator.
+        static final ReadableBooleanPropertyKey IS_LOADING = new ReadableBooleanPropertyKey();
+        // Indicates the flyout content description.
+        static final ReadableObjectPropertyKey<String> FLYOUT_CONTENT_DESCRIPTION =
+                new ReadableObjectPropertyKey<>();
 
         static final PropertyKey[] ALL_KEYS = {
-            ICON, TITLE, DETAILS, ON_SUGGESTION_CLICKED, ON_FLYOUT_CLICKED, IS_FLYOUT_VISIBLE
+            ICON,
+            TRAILING_ICON_ID,
+            TITLE,
+            DETAILS,
+            ON_SUGGESTION_CLICKED,
+            ON_FLYOUT_CLICKED,
+            IS_FLYOUT_VISIBLE,
+            APPLY_DEACTIVATED_STYLE,
+            IS_LOADING,
+            FLYOUT_CONTENT_DESCRIPTION
         };
 
         private SuggestionItemProperties() {}
     }
 
-    /** Properties for the search tile displayed within the bottom sheet. */
-    static class SearchItemProperties {
-        // Icon to be displayed in the search tile.
-        static final ReadableIntPropertyKey TILE_ICON = new ReadableIntPropertyKey();
-        // Title to be displayed in the search tile.
-        static final WritableObjectPropertyKey<@Nullable String> TILE_TITLE =
-                new WritableObjectPropertyKey<>();
-        // Details to be displayed in the search tile.
-        static final ReadableObjectPropertyKey<String> TILE_DETAILS =
-                new ReadableObjectPropertyKey<>();
-        // Invoked when the search tile is clicked.
-        static final ReadableObjectPropertyKey<Runnable> ON_TILE_CLICKED =
+    /** Properties for title item displayed within the home screen. */
+    static class TitleItemProperties {
+        // Title to be displayed in the title item.
+        static final ReadableObjectPropertyKey<@Nullable String> TITLE =
                 new ReadableObjectPropertyKey<>();
 
-        /** Delegate for the search tile to request UI actions. */
-        interface Delegate {
-            /** Hides the keyboard and clears focus from the search area. */
-            void hideKeyboardAndClearFocus();
-        }
+        static final PropertyKey[] ALL_KEYS = {TITLE};
 
-        static final PropertyKey[] ALL_KEYS = {
-            TILE_ICON, TILE_TITLE, TILE_DETAILS, ON_TILE_CLICKED
-        };
+        private TitleItemProperties() {}
+    }
 
-        private SearchItemProperties() {}
+    /** Properties for text items with clickable link displayed within the home screen. */
+    static class TextWithClickableLinkProperties {
+        // Text to be displayed with clickable link formatting.
+        static final ReadableObjectPropertyKey<String> TEXT = new ReadableObjectPropertyKey<>();
+        // Invoked when the link in the text is clicked.
+        static final ReadableObjectPropertyKey<Runnable> ON_LINK_CLICKED =
+                new ReadableObjectPropertyKey<>();
+
+        static final PropertyKey[] ALL_KEYS = {TEXT, ON_LINK_CLICKED};
+
+        private TextWithClickableLinkProperties() {}
     }
 
     private AtMemoryBottomSheetProperties() {}

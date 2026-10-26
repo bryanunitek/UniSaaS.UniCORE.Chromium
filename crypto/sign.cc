@@ -45,6 +45,10 @@ bool CanUseKeyForSignatureKind(SignatureKind kind,
       return id == EVP_PKEY_ED25519 && mode == kOneShot;
     case MLDSA_44:
       return id == EVP_PKEY_ML_DSA_44 && mode == kOneShot;
+    case MLDSA_65:
+      return id == EVP_PKEY_ML_DSA_65 && mode == kOneShot;
+    case MLDSA_87:
+      return id == EVP_PKEY_ML_DSA_87 && mode == kOneShot;
   }
 
   return false;
@@ -69,6 +73,8 @@ const EVP_MD* DigestForSignatureKind(SignatureKind kind) {
       return EVP_sha512();
     case ED25519:
     case MLDSA_44:
+    case MLDSA_65:
+    case MLDSA_87:
       return nullptr;
   }
 }
@@ -133,13 +139,17 @@ Signer::Signer(SignatureKind kind, crypto::keypair::PrivateKey key)
       EVP_DigestSignInit(sign_context_.get(), &pkctx, md, nullptr, key.key()));
   ConfigurePkeyCtx(pkctx, kind);
 }
+Signer::Signer(Signer&&) = default;
+Signer& Signer::operator=(Signer&&) = default;
 Signer::~Signer() = default;
 
 void Signer::Update(base::span<const uint8_t> data) {
+  CHECK(sign_context_);
   CHECK(EVP_DigestSignUpdate(sign_context_.get(), data.data(), data.size()));
 }
 
 std::vector<uint8_t> Signer::Finish() {
+  CHECK(sign_context_);
   OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
   size_t len = 0;
@@ -149,6 +159,7 @@ std::vector<uint8_t> Signer::Finish() {
   std::vector<uint8_t> signature(len);
   CHECK(EVP_DigestSignFinal(sign_context_.get(), signature.data(), &len));
   signature.resize(len);
+  sign_context_.reset();
   return signature;
 }
 
@@ -167,9 +178,12 @@ Verifier::Verifier(SignatureKind kind,
                              key.key()));
   ConfigurePkeyCtx(pkctx, kind);
 }
+Verifier::Verifier(Verifier&&) = default;
+Verifier& Verifier::operator=(Verifier&&) = default;
 Verifier::~Verifier() = default;
 
 void Verifier::Update(base::span<const uint8_t> data) {
+  CHECK(verify_context_);
   OpenSSLErrStackTracer err_tracer(FROM_HERE);
   CHECK_EQ(
       EVP_DigestVerifyUpdate(verify_context_.get(), data.data(), data.size()),
@@ -177,9 +191,11 @@ void Verifier::Update(base::span<const uint8_t> data) {
 }
 
 bool Verifier::Finish() {
+  CHECK(verify_context_);
   OpenSSLErrStackTracer err_tracer(FROM_HERE);
   int rv = EVP_DigestVerifyFinal(verify_context_.get(), signature_.data(),
                                  signature_.size());
+  verify_context_.reset();
   return rv == 1;
 }
 

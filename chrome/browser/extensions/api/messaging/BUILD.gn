@@ -27,7 +27,14 @@ source_set("messaging") {
       "native_messaging_policy_handler.h",
     ]
 
-    if (!is_android) {
+    if (is_android) {
+      sources += [
+        "android/native_message_android_port.cc",
+        "android/native_message_android_port.h",
+        "android/native_messaging_manager.cc",
+        "android/native_messaging_manager.h",
+      ]
+    } else {
       sources += [
         "launch_context.cc",
         "launch_context.h",
@@ -35,6 +42,7 @@ source_set("messaging") {
         "native_message_process_host.h",
         "native_messaging_launch_from_native.cc",
         "native_messaging_launch_from_native.h",
+        "native_messaging_logging.h",
         "native_process_launcher.cc",
         "native_process_launcher.h",
       ]
@@ -78,13 +86,17 @@ source_set("messaging") {
     "//chrome/common/extensions",
     "//components/infobars/content",
     "//components/infobars/core",
+    "//components/keyed_service/core",
     "//components/policy/core/browser",
     "//components/prefs",
     "//components/strings:components_strings",
+    "//components/tabs:public",
     "//url",
   ]
 
-  if (!is_android) {
+  if (is_android) {
+    deps += [ "//chrome/browser/extensions/api/messaging/android:jni_headers" ]
+  } else {
     deps += [ "//components/keep_alive_registry" ]
   }
 
@@ -100,14 +112,10 @@ source_set("messaging") {
 
   if (is_win) {
     deps += [
-      "//chrome/browser/win:isolated_browser_support",
+      "//chrome/browser/win/isolated_browser:isolated_browser_support",
       "//components/app_launch_prefetch",
       "//ui/views",
     ]
-  }
-
-  if (is_android) {
-    deps += [ "android" ]
   }
 }
 
@@ -182,7 +190,6 @@ source_set("platform_browser_tests") {
     "//base/test:test_support",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ssl",
-    "//chrome/browser/ui",
     "//chrome/test:test_support",
     "//components/embedder_support",
     "//components/infobars/content",
@@ -192,6 +199,10 @@ source_set("platform_browser_tests") {
     "//extensions/common",
     "//testing/gtest",
   ]
+
+  if (!is_android) {
+    deps += [ "//chrome/browser/ui:browser_commands" ]
+  }
 }
 
 if (!is_android) {
@@ -201,7 +212,7 @@ if (!is_android) {
 
     sources = [
       "message_tracker_browsertest.cc",
-      "native_messaging_apitest.cc",
+      "native_messaging_apitest_desktop.cc",
     ]
 
     deps = [
@@ -210,9 +221,11 @@ if (!is_android) {
       "//base",
       "//base/test:test_support",
       "//chrome/browser/profiles:profile",
-      "//chrome/browser/ui",
+      "//chrome/browser/ui:browser_window_header",
+      "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/startup",
       "//chrome/test:test_support",
+      "//components/infobars/content",
       "//extensions:test_support",
       "//extensions/browser",
       "//extensions/common",
@@ -222,6 +235,29 @@ if (!is_android) {
     if (enable_background_mode) {
       deps += [ "//chrome/browser/background/extensions" ]
     }
+  }
+}
+
+if (enable_desktop_android_extensions) {
+  source_set("android_browsertests") {
+    testonly = true
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+    sources = [ "native_messaging_apitest_android.cc" ]
+
+    deps = [
+      ":messaging",
+      ":test_support",
+      "//base",
+      "//base/test:test_support",
+      "//chrome/browser/extensions",
+      "//chrome/test:test_support",
+      "//content/test:test_support",
+      "//extensions:test_support",
+      "//extensions/browser",
+      "//extensions/common",
+      "//testing/gtest",
+    ]
   }
 }
 

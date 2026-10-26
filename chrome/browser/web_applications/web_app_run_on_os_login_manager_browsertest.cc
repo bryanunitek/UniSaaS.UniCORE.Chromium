@@ -6,30 +6,28 @@
 
 #include <vector>
 
+#include "ash/public/cpp/notification_utils.h"
 #include "base/auto_reset.h"
+#include "base/check_deref.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/to_string.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/notifications/notification_handler.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/startup/first_run_service.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_run_on_os_login_notification.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_constants.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/fake_iwa_runtime_data_provider_mixin.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_test_update_server.h"
@@ -47,14 +45,19 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/user.h"
 #include "components/webapps/common/web_app_id.h"
-#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_runtime_data_provider.h"
 #include "components/webapps/isolated_web_apps/test_support/signing_keys.h"
+#include "components/webapps/isolated_web_apps/types/isolated_web_app_policy_constants.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "ui/message_center/message_center.h"
+#include "ui/message_center/public/cpp/notification.h"
 
 using testing::_;
 using testing::AllOf;
@@ -107,7 +110,7 @@ class RunOnOsLoginTestHandlerMixin : public InProcessBrowserTestMixin {
             WebAppRunOnOsLoginManager::SkipStartupForTesting())) {}
 
   void SetUpOnMainThread() override {
-    profile_ = test_base_->browser()->profile();
+    profile_ = test_base_->browser()->GetProfile();
     provider_ = WebAppProvider::GetForTest(profile_);
     InProcessBrowserTestMixin::SetUpOnMainThread();
   }
@@ -182,17 +185,13 @@ class RunOnOsLoginTestHandlerMixin : public InProcessBrowserTestMixin {
   IsolatedWebAppTestUpdateServer iwa_test_server_;
 };
 
-class WebAppRunOnOsLoginManagerBrowserTest
-    : public WebAppBrowserTestBase,
-      public NotificationDisplayService::Observer {
+class WebAppRunOnOsLoginManagerBrowserTest : public WebAppBrowserTestBase {
  public:
   WebAppRunOnOsLoginManagerBrowserTest()
       : skip_preinstalled_web_app_startup_(
             PreinstalledWebAppManager::SkipStartupForTesting()) {}
 
   void SetUpOnMainThread() override {
-    notification_tester_ = std::make_unique<NotificationDisplayServiceTester>(
-        /*profile=*/profile());
     mock_tracker_ = std::make_unique<MockNetworkConnectionTracker>();
     WebAppBrowserTestBase::SetUpOnMainThread();
     content::SetNetworkConnectionTrackerForTesting(
@@ -208,23 +207,14 @@ class WebAppRunOnOsLoginManagerBrowserTest
     WebAppBrowserTestBase::TearDownOnMainThread();
   }
 
-  // NotificationDisplayService::Observer:
-  MOCK_METHOD(void,
-              OnNotificationDisplayed,
-              (const message_center::Notification&,
-               const NotificationCommon::Metadata* const),
-              (override));
-  MOCK_METHOD(void,
-              OnNotificationClosed,
-              (const std::string& notification_id),
-              (override));
-
-  void OnNotificationDisplayServiceDestroyed(
-      NotificationDisplayService* service) override {
-    notification_observation_.Reset();
+ protected:
+  std::string GetRunOnOsLoginNotificationId() {
+    const user_manager::User& user = CHECK_DEREF(
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile()));
+    return ash::CreateUserScopedNotificationId(kRunOnOsLoginNotificationId,
+                                               user.username_hash());
   }
 
- protected:
   void AddForceInstalledApp(const std::string& manifest_id,
                             const std::string& app_name) {
     const webapps::AppId app_id = web_app::GenerateAppIdFromManifestId(
@@ -257,10 +247,6 @@ class WebAppRunOnOsLoginManagerBrowserTest
 
   std::unique_ptr<MockNetworkConnectionTracker> mock_tracker_;
   base::AutoReset<bool> skip_preinstalled_web_app_startup_;
-  std::unique_ptr<NotificationDisplayServiceTester> notification_tester_;
-  base::ScopedObservation<NotificationDisplayService,
-                          WebAppRunOnOsLoginManagerBrowserTest>
-      notification_observation_{this};
   RunOnOsLoginTestHandlerMixin run_on_os_login_handler_{&mixin_host_, this};
 };
 
@@ -281,9 +267,8 @@ IN_PROC_BROWSER_TEST_F(
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
   // Should have 2 browsers: normal and app.
-  ASSERT_EQ(
-      2u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   BrowserWindowInterface* app_browser = FindAppBrowser(GURL(kTestApp));
   ASSERT_TRUE(app_browser);
@@ -306,9 +291,8 @@ IN_PROC_BROWSER_TEST_F(
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
   // Should have 2 browsers: normal and app.
-  ASSERT_EQ(
-      2u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* app_browser = FindAppBrowser(GURL(kTestApp));
 
   ASSERT_TRUE(app_browser);
@@ -330,9 +314,8 @@ IN_PROC_BROWSER_TEST_F(WebAppRunOnOsLoginManagerBrowserTest,
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Should have only the normal browser as there is no network.
-  ASSERT_EQ(
-      1u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   // Simulate the network coming back.
   mock_tracker_->OnNetworkChanged(
@@ -340,9 +323,8 @@ IN_PROC_BROWSER_TEST_F(WebAppRunOnOsLoginManagerBrowserTest,
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
   // Should have 2 browsers: normal and app.
-  ASSERT_EQ(
-      2u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* app_browser = FindAppBrowser(GURL(kTestApp));
 
   ASSERT_TRUE(app_browser);
@@ -355,13 +337,13 @@ IN_PROC_BROWSER_TEST_F(
       connection_changed_callback;
   EXPECT_CALL(*mock_tracker_, GetConnectionType(_, _))
       .WillRepeatedly(
-          DoAll([&connection_changed_callback](
-                    net::NetworkChangeNotifier::ConnectionType*,
-                    base::OnceCallback<void(
-                        net::NetworkChangeNotifier::ConnectionType)> callback) {
+          [&connection_changed_callback](
+              net::NetworkChangeNotifier::ConnectionType*,
+              base::OnceCallback<void(
+                  net::NetworkChangeNotifier::ConnectionType)> callback) {
             connection_changed_callback = std::move(callback);
             return false;
-          }));
+          });
 
   AddForceInstalledApp(kTestApp, kTestAppName);
   run_on_os_login_handler_.AddRoolApp(kTestApp, kRunWindowed);
@@ -371,9 +353,8 @@ IN_PROC_BROWSER_TEST_F(
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Should have only the normal browser as there is no network.
-  ASSERT_EQ(
-      1u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   // Asynchronously notify that there is a network connection
   std::move(connection_changed_callback)
@@ -381,9 +362,8 @@ IN_PROC_BROWSER_TEST_F(
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
   // Should have 2 browsers: normal and app.
-  ASSERT_EQ(
-      2u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* app_browser = FindAppBrowser(GURL(kTestApp));
 
   ASSERT_TRUE(app_browser);
@@ -396,13 +376,13 @@ IN_PROC_BROWSER_TEST_F(
       connection_changed_callback;
   EXPECT_CALL(*mock_tracker_, GetConnectionType(_, _))
       .WillRepeatedly(
-          DoAll([&connection_changed_callback](
-                    net::NetworkChangeNotifier::ConnectionType*,
-                    base::OnceCallback<void(
-                        net::NetworkChangeNotifier::ConnectionType)> callback) {
+          [&connection_changed_callback](
+              net::NetworkChangeNotifier::ConnectionType*,
+              base::OnceCallback<void(
+                  net::NetworkChangeNotifier::ConnectionType)> callback) {
             connection_changed_callback = std::move(callback);
             return false;
-          }));
+          });
 
   AddForceInstalledApp(kTestApp, kTestAppName);
   run_on_os_login_handler_.AddRoolApp(kTestApp, kRunWindowed);
@@ -412,9 +392,8 @@ IN_PROC_BROWSER_TEST_F(
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Should have only the normal browser as there is no network.
-  ASSERT_EQ(
-      1u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   // Asynchronously notify that the device is connected.
   std::move(connection_changed_callback)
@@ -422,9 +401,8 @@ IN_PROC_BROWSER_TEST_F(
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Should have only the normal browser as there is no network.
-  ASSERT_EQ(
-      1u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   // Simulate the network coming back.
   mock_tracker_->OnNetworkChanged(
@@ -432,9 +410,8 @@ IN_PROC_BROWSER_TEST_F(
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
   // Should have 2 browsers: normal and app.
-  ASSERT_EQ(
-      2u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* app_browser = FindAppBrowser(GURL(kTestApp));
 
   ASSERT_TRUE(app_browser);
@@ -483,32 +460,27 @@ IN_PROC_BROWSER_TEST_P(WebAppRunOnOsLoginNotificationBrowserTest,
 
   // Should have `number_of_rool_apps` + 1 browsers: normal and
   // `number_of_rool_apps` apps.
-  ASSERT_EQ(
-      test_params.number_of_rool_apps + 1,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(test_params.number_of_rool_apps + 1,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
 
-  bool notification_shown = base::test::RunUntil([&]() {
-    return notification_tester_->GetNotification(kRunOnOsLoginNotificationId)
-        .has_value();
-  });
+  const std::string notification_id = GetRunOnOsLoginNotificationId();
+  auto* message_center = message_center::MessageCenter::Get();
+  message_center::Notification* notification = nullptr;
   // Should have notification
-  ASSERT_TRUE(notification_shown);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    notification = message_center->FindNotificationById(notification_id);
+    return notification != nullptr;
+  }));
 
-  message_center::Notification notification =
-      notification_tester_->GetNotification(kRunOnOsLoginNotificationId)
-          .value();
-  EXPECT_THAT(
-      notification,
-      AllOf(Property(&message_center::Notification::id, Eq("run_on_os_login")),
-            Property(&message_center::Notification::notifier_id,
-                     Field(&message_center::NotifierId::id,
-                           Eq("run_on_os_login_notifier")))));
+  EXPECT_THAT(*notification,
+              Property(&message_center::Notification::notifier_id,
+                       Field(&message_center::NotifierId::id,
+                             Eq("run_on_os_login_notifier"))));
 
   // Clicking on notification should open "chrome://management" on default
   // browser.
-  notification_tester_->SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                      kRunOnOsLoginNotificationId, std::nullopt,
-                                      std::nullopt);
+  message_center->ClickOnNotification(notification_id);
   ui_test_utils::WaitUntilBrowserBecomeActive(browser());
 
   content::WebContents* active_contents =
@@ -541,33 +513,29 @@ IN_PROC_BROWSER_TEST_P(WebAppRunOnOsLoginNotificationBrowserTest,
   run_on_os_login_handler_.RunOsLogin();
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
-  bool notification_shown = base::test::RunUntil([&]() {
-    return notification_tester_->GetNotification(kRunOnOsLoginNotificationId)
-        .has_value();
-  });
+  const std::string notification_id = GetRunOnOsLoginNotificationId();
+  message_center::Notification* notification = nullptr;
   // Should have notification
-  ASSERT_TRUE(notification_shown);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    notification = message_center::MessageCenter::Get()->FindNotificationById(
+        notification_id);
+    return notification != nullptr;
+  }));
 
   // Should have `number_of_rool_apps` + 1 browsers: normal and
   // `number_of_rool_apps` apps.
-  ASSERT_EQ(
-      GetParam().number_of_rool_apps + 1,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(GetParam().number_of_rool_apps + 1,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
 
-  message_center::Notification notification =
-      notification_tester_->GetNotification(kRunOnOsLoginNotificationId)
-          .value();
-
-  EXPECT_THAT(
-      notification,
-      AllOf(Property(&message_center::Notification::id, Eq("run_on_os_login")),
-            Property(&message_center::Notification::notifier_id,
-                     Field(&message_center::NotifierId::id,
-                           Eq("run_on_os_login_notifier"))),
-            Property(&message_center::Notification::title,
-                     Eq(test_params.expected_notification_title)),
-            Property(&message_center::Notification::message,
-                     Eq(test_params.expected_notification_message))));
+  EXPECT_THAT(*notification,
+              AllOf(Property(&message_center::Notification::notifier_id,
+                             Field(&message_center::NotifierId::id,
+                                   Eq("run_on_os_login_notifier"))),
+                    Property(&message_center::Notification::title,
+                             Eq(test_params.expected_notification_title)),
+                    Property(&message_center::Notification::message,
+                             Eq(test_params.expected_notification_message))));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -761,9 +729,8 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppRunOnOsLoginManagerBrowserTest,
   run_on_os_login_handler_.WaitForRunOnOsLogin();
 
   // Should have 2 browsers: normal and app.
-  ASSERT_EQ(
-      2u,
-      ProfileBrowserCollection::GetForProfile(browser()->profile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* app_browser = FindAppBrowser(GURL(manifest_id));
 
   ASSERT_TRUE(app_browser);

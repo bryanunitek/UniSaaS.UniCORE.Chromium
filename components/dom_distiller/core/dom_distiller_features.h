@@ -28,19 +28,13 @@ inline constexpr int kReadabilityHeuristicMinScore = 100;
 inline constexpr int kReadabilityHeuristicMinContentLength = 200;
 #endif
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kReaderModeSupportNewFonts);
-#endif
+BASE_DECLARE_FEATURE(kSyncReaderForAccessibility);
 
 #if BUILDFLAG(IS_ANDROID)
 // Feature declarations below -- alphabetical order.
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
 BASE_DECLARE_FEATURE(kReaderModeBlurTransitionAnimation);
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kReaderModeDelayBottomSheetPeek);
-COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
-BASE_DECLARE_FEATURE(kReaderModeDistillInApp);
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)
 BASE_DECLARE_FEATURE(kReaderModeDelayBottomSheetPeek);
 COMPONENT_EXPORT(DOM_DISTILLER_FEATURES)

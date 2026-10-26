@@ -154,7 +154,7 @@ public class AnrCollector {
             RecordHistogram.recordEnumeratedHistogram(
                     ANR_SKIPPED_UMA,
                     AnrSkippedReason.FILESYSTEM_READ_FAILURE,
-                    AnrSkippedReason.MAX_VALUE);
+                    AnrSkippedReason.MAX_VALUE + 1);
             return null;
         }
 
@@ -164,7 +164,9 @@ public class AnrCollector {
             // can't be be confident which version this ANR happened on. This would
             // happen if we ANRed before Chrome had set the process state summary.
             RecordHistogram.recordEnumeratedHistogram(
-                    ANR_SKIPPED_UMA, AnrSkippedReason.MISSING_VERSION, AnrSkippedReason.MAX_VALUE);
+                    ANR_SKIPPED_UMA,
+                    AnrSkippedReason.MISSING_VERSION,
+                    AnrSkippedReason.MAX_VALUE + 1);
             return null;
         }
         return new Pair<>(anr, processStateSummaryBytes);
@@ -220,7 +222,9 @@ public class AnrCollector {
                 anrFiles.add(buildId);
                 anrFiles.add(variationsString);
                 RecordHistogram.recordEnumeratedHistogram(
-                        ANR_SKIPPED_UMA, AnrSkippedReason.NOT_SKIPPED, AnrSkippedReason.MAX_VALUE);
+                        ANR_SKIPPED_UMA,
+                        AnrSkippedReason.NOT_SKIPPED,
+                        AnrSkippedReason.MAX_VALUE + 1);
             }
         }
         return anrFiles;
@@ -314,7 +318,7 @@ public class AnrCollector {
             RecordHistogram.recordEnumeratedHistogram(
                     ANR_SKIPPED_UMA,
                     AnrSkippedReason.FILESYSTEM_WRITE_FAILURE,
-                    AnrSkippedReason.MAX_VALUE);
+                    AnrSkippedReason.MAX_VALUE + 1);
             return null;
         }
     }
@@ -431,7 +435,7 @@ public class AnrCollector {
         }
         // Sort the ANR variations files by their last modified time. The files at the beginning of
         // the array have smaller unix time which means they are older.
-        Arrays.sort(variationsFiles, Comparator.comparing(File::lastModified));
+        Arrays.sort(variationsFiles, Comparator.comparingLong(File::lastModified));
         int remainingFilesCount = variationsFiles.length;
         for (File variationsFile : variationsFiles) {
             if (!variationsFile.equals(curAnrVariationsFile)) {

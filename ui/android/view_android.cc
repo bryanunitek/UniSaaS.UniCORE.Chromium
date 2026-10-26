@@ -14,6 +14,7 @@
 #include "base/memory/raw_ptr.h"
 #include "cc/slim/layer.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
+#include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/android/event_forwarder.h"
 #include "ui/android/ui_android_features.h"
@@ -28,6 +29,7 @@
 #include "ui/events/android/motion_event_android.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
@@ -56,14 +58,14 @@ ViewAndroid::ScopedAnchorView::ScopedAnchorView(
   DCHECK(!jdelegate.is_null() || jview.is_null());
 }
 
-ViewAndroid::ScopedAnchorView::ScopedAnchorView() { }
+ViewAndroid::ScopedAnchorView::ScopedAnchorView() {}
 
 ViewAndroid::ScopedAnchorView::ScopedAnchorView(ScopedAnchorView&& other) {
   TransferViewAndDelegateFrom(other);
 }
 
-ViewAndroid::ScopedAnchorView&
-ViewAndroid::ScopedAnchorView::operator=(ScopedAnchorView&& other) {
+ViewAndroid::ScopedAnchorView& ViewAndroid::ScopedAnchorView::operator=(
+    ScopedAnchorView&& other) {
   if (this != &other) {
     TransferViewAndDelegateFrom(other);
   }
@@ -119,6 +121,9 @@ ViewAndroid::ViewAndroid(LayoutType layout_type)
 ViewAndroid::ViewAndroid() : ViewAndroid(LayoutType::kNormal) {}
 
 ViewAndroid::~ViewAndroid() {
+  while (!active_iters_.empty()) {
+    active_iters_.head()->value()->ViewDestroyed();
+  }
   RemoveAllChildren(GetWindowAndroid() != nullptr);
   observer_list_.Notify(&ViewAndroidObserver::OnViewAndroidDestroyed);
   observer_list_.Clear();
@@ -162,16 +167,18 @@ void ViewAndroid::AddChild(ViewAndroid* child) {
       << "Some view tree path will have more than one event forwarder "
          "if the child is added.";
 
-  // The new child goes to the top, which is the end of the list.
-  children_.push_back(child);
-  if (child->parent_)
+  // Detach first since RemoveFromParent() may be reentrant.
+  if (child->parent_) {
     child->RemoveFromParent();
+  }
+  children_.push_back(child);
   child->parent_ = this;
 
   // Empty physical backing size need not propagating down since it can
   // accidentally overwrite the valid ones in the children.
-  if (!physical_size_.IsEmpty())
+  if (!physical_size_.IsEmpty()) {
     child->OnPhysicalBackingSizeChanged(physical_size_);
+  }
 
   child->OnControlsResizeViewChanged(controls_resize_view_);
 
@@ -183,15 +190,17 @@ void ViewAndroid::AddChild(ViewAndroid* child) {
     child->DispatchOnSizeChanged();
   }
 
-  if (GetWindowAndroid())
+  if (GetWindowAndroid()) {
     child->OnAttachedToWindow();
+  }
 }
 
 // static
 bool ViewAndroid::RootPathHasEventForwarder(ViewAndroid* view) {
   while (view) {
-    if (view->has_event_forwarder())
+    if (view->has_event_forwarder()) {
       return true;
+    }
     view = view->parent_;
   }
 
@@ -200,12 +209,14 @@ bool ViewAndroid::RootPathHasEventForwarder(ViewAndroid* view) {
 
 // static
 bool ViewAndroid::SubtreeHasEventForwarder(ViewAndroid* view) {
-  if (view->has_event_forwarder())
+  if (view->has_event_forwarder()) {
     return true;
+  }
 
-  for (ViewAndroid* child : view->children_) {
-    if (SubtreeHasEventForwarder(child))
+  for (ScopedChildrenIter it(view); ViewAndroid* child = it.GetNext();) {
+    if (SubtreeHasEventForwarder(child)) {
       return true;
+    }
   }
   return false;
 }
@@ -216,8 +227,10 @@ void ViewAndroid::MoveToFront(ViewAndroid* child) {
   CHECK(it != children_.end());
 
   // Top element is placed at the end of the list.
-  if (*it != children_.back())
+  if (*it != children_.back()) {
+    StepIteratorsOver(it);
     children_.splice(children_.end(), children_, it);
+  }
 }
 
 void ViewAndroid::MoveToBack(ViewAndroid* child) {
@@ -226,20 +239,24 @@ void ViewAndroid::MoveToBack(ViewAndroid* child) {
   CHECK(it != children_.end());
 
   // Bottom element is placed at the beginning of the list.
-  if (*it != children_.front())
+  if (*it != children_.front()) {
+    StepIteratorsOver(it);
     children_.splice(children_.begin(), children_, it);
+  }
 }
 
 void ViewAndroid::RemoveFromParent() {
-  if (parent_)
+  if (parent_) {
     parent_->RemoveChild(this);
+  }
 }
 
 ViewAndroid::ScopedAnchorView ViewAndroid::AcquireAnchorView() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return ViewAndroid::ScopedAnchorView();
+  }
 
   return ViewAndroid::ScopedAnchorView(
       env, Java_ViewAndroidDelegate_acquireView(env, delegate), delegate);
@@ -249,11 +266,12 @@ void ViewAndroid::SetAnchorRect(const JavaRef<jobject>& anchor,
                                 const gfx::RectF& bounds_dip) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
 
   float dip_scale = GetDipScale();
-  int left_margin = std::round(bounds_dip.x() * dip_scale);
+  int left_margin = std::round(content_offset_x() + bounds_dip.x() * dip_scale);
   // Note that content_offset() is in CSS scale and bounds_dip is in DIP scale
   // (i.e., CSS pixels * page scale factor), but the height of browser control
   // is not affected by page scale factor. Thus, content_offset() in CSS scale
@@ -268,8 +286,9 @@ void ViewAndroid::SetAnchorRect(const JavaRef<jobject>& anchor,
 ScopedJavaLocalRef<jobject> ViewAndroid::GetContainerView() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return nullptr;
+  }
 
   return Java_ViewAndroidDelegate_getContainerView(env, delegate);
 }
@@ -277,8 +296,9 @@ ScopedJavaLocalRef<jobject> ViewAndroid::GetContainerView() {
 gfx::Point ViewAndroid::GetLocationOfContainerViewInWindow() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return gfx::Point();
+  }
 
   gfx::Point result(
       Java_ViewAndroidDelegate_getXLocationOfContainerViewInWindow(env,
@@ -292,8 +312,9 @@ gfx::Point ViewAndroid::GetLocationOfContainerViewInWindow() {
 gfx::PointF ViewAndroid::GetLocationOnScreen(float x, float y) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return gfx::PointF();
+  }
 
   float loc_x = Java_ViewAndroidDelegate_getXLocationOnScreen(env, delegate);
   float loc_y = Java_ViewAndroidDelegate_getYLocationOnScreen(env, delegate);
@@ -301,13 +322,20 @@ gfx::PointF ViewAndroid::GetLocationOnScreen(float x, float y) {
 }
 
 void ViewAndroid::RemoveAllChildren(bool attached_to_window) {
-  auto it = children_.begin();
-  while (it != children_.end()) {
-    if (attached_to_window)
-      (*it)->OnDetachedFromWindow();
-    (*it)->parent_ = nullptr;
-    // erase returns a new iterator for the element following the ereased one.
-    it = children_.erase(it);
+  while (!children_.empty()) {
+    ViewAndroid* child = children_.front();
+    if (attached_to_window) {
+      child->OnDetachedFromWindow();
+    }
+    // If the callback destroyed, unlinked, or reparented `child`, it is no
+    // longer in `children_` and must not be dereferenced.
+    auto it = std::ranges::find(children_, child);
+    if (it != children_.end()) {
+      CHECK_EQ(child->parent_, this);
+      child->parent_ = nullptr;
+      StepIteratorsOver(it);
+      children_.erase(it);
+    }
   }
 }
 
@@ -315,11 +343,14 @@ void ViewAndroid::RemoveChild(ViewAndroid* child) {
   DCHECK(child);
   DCHECK_EQ(child->parent_, this);
 
-  if (GetWindowAndroid())
+  if (GetWindowAndroid()) {
     child->OnDetachedFromWindow();
+  }
   std::list<raw_ptr<ViewAndroid, CtnExperimental>>::iterator it =
       std::ranges::find(children_, child);
   CHECK(it != children_.end());
+
+  StepIteratorsOver(it);
   children_.erase(it);
   child->parent_ = nullptr;
 }
@@ -335,16 +366,18 @@ void ViewAndroid::RemoveObserver(ViewAndroidObserver* observer) {
 void ViewAndroid::RequestDisallowInterceptTouchEvent() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_requestDisallowInterceptTouchEvent(env, delegate);
 }
 
 void ViewAndroid::RequestUnbufferedDispatch(const MotionEventAndroid& event) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_requestUnbufferedDispatch(env, delegate,
                                                      event.GetJavaObject());
 }
@@ -358,6 +391,27 @@ void ViewAndroid::SetTooltip(const std::u16string& text) {
   Java_ViewAndroidDelegate_setTooltipText(env, delegate, text);
 }
 
+void ViewAndroid::SetTooltipFromKeyboard(const std::u16string& text,
+                                         const gfx::Rect& bounds) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
+  if (delegate.is_null()) {
+    return;
+  }
+  Java_ViewAndroidDelegate_setTooltipFromKeyboard(
+      env, delegate, text, bounds.x(), bounds.y(), bounds.width(),
+      bounds.height());
+}
+
+void ViewAndroid::ClearTooltipFromKeyboard() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
+  if (delegate.is_null()) {
+    return;
+  }
+  Java_ViewAndroidDelegate_clearTooltipFromKeyboard(env, delegate);
+}
+
 void ViewAndroid::SetCopyOutputCallback(CopyViewCallback callback) {
   copy_view_callback_ = std::move(callback);
 }
@@ -369,22 +423,23 @@ void ViewAndroid::SetHitTestCallback(HitTestCallback callback) {
 // If view does not support copy request, return back the request.
 std::unique_ptr<viz::CopyOutputRequest> ViewAndroid::MaybeRequestCopyOfView(
     std::unique_ptr<viz::CopyOutputRequest> request) {
-  if (copy_view_callback_.is_null())
+  if (copy_view_callback_.is_null()) {
     return request;
+  }
   copy_view_callback_.Run(std::move(request));
   return nullptr;
 }
 
 void ViewAndroid::OnAttachedToWindow() {
   observer_list_.Notify(&ViewAndroidObserver::OnAttachedToWindow);
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->OnAttachedToWindow();
   }
 }
 
 void ViewAndroid::OnDetachedFromWindow() {
   observer_list_.Notify(&ViewAndroidObserver::OnDetachedFromWindow);
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->OnDetachedFromWindow();
   }
 }
@@ -398,8 +453,9 @@ const ScopedJavaLocalRef<jobject> ViewAndroid::GetViewAndroidDelegate(
   const ScopedJavaLocalRef<jobject> delegate =
       Java_ViewAndroidDelegate_getDelegate(env,
                                            reinterpret_cast<intptr_t>(this));
-  if (!delegate.is_null())
+  if (!delegate.is_null()) {
     return delegate;
+  }
 
   return parent_ ? parent_->GetViewAndroidDelegate(env) : delegate;
 }
@@ -415,16 +471,18 @@ void ViewAndroid::SetLayer(scoped_refptr<cc::slim::Layer> layer) {
 bool ViewAndroid::HasFocus() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return false;
+  }
   return Java_ViewAndroidDelegate_hasFocus(env, delegate);
 }
 
 void ViewAndroid::RequestFocus() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_requestFocus(env, delegate);
 }
 
@@ -436,8 +494,9 @@ bool ViewAndroid::StartDragAndDrop(const JavaRef<jobject>& jshadow_image,
                                    int32_t drag_obj_rect_height) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return false;
+  }
   WindowAndroid* window_android = GetWindowAndroid();
   return Java_ViewAndroidDelegate_startDragAndDrop(
       env, delegate, jshadow_image, jdrop_data,
@@ -449,15 +508,48 @@ bool ViewAndroid::StartDragAndDrop(const JavaRef<jobject>& jshadow_image,
 void ViewAndroid::OnCursorChanged(const Cursor& cursor) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   if (cursor.type() == mojom::CursorType::kCustom) {
-    const SkBitmap& bitmap = cursor.custom_bitmap();
-    const gfx::Point& hotspot = cursor.custom_hotspot();
+    SkBitmap bitmap = cursor.custom_bitmap();
+    gfx::Point hotspot = cursor.custom_hotspot();
     if (bitmap.drawsNothing()) {
       Java_ViewAndroidDelegate_onCursorChanged(
           env, delegate, static_cast<int>(mojom::CursorType::kPointer));
       return;
+    }
+    // Android's PointerIcon.create() renders raw pixels without a scale
+    // factor, so rescale the bitmap and hotspot to the view's DIP scale.
+    float dip_scale = GetDipScale();
+    if (!std::isfinite(dip_scale) || dip_scale <= 0.f) {
+      dip_scale = 1.f;
+    }
+    const float rescale = dip_scale / cursor.image_scale_factor();
+    if (!std::isfinite(rescale) || rescale <= 0.f) {
+      Java_ViewAndroidDelegate_onCursorChanged(
+          env, delegate, static_cast<int>(mojom::CursorType::kPointer));
+      return;
+    }
+    if (rescale != 1.f) {
+      const gfx::Size scaled_size = gfx::ScaleToCeiledSize(
+          gfx::Size(bitmap.width(), bitmap.height()), rescale);
+      if (scaled_size.IsEmpty()) {
+        Java_ViewAndroidDelegate_onCursorChanged(
+            env, delegate, static_cast<int>(mojom::CursorType::kPointer));
+        return;
+      }
+      bitmap = skia::ImageOperations::Resize(
+          bitmap, skia::ImageOperations::RESIZE_BETTER, scaled_size.width(),
+          scaled_size.height());
+      if (bitmap.drawsNothing()) {
+        Java_ViewAndroidDelegate_onCursorChanged(
+            env, delegate, static_cast<int>(mojom::CursorType::kPointer));
+        return;
+      }
+      hotspot = gfx::ScaleToRoundedPoint(hotspot, rescale);
+      hotspot.SetToMin(gfx::Point(bitmap.width() - 1, bitmap.height() - 1));
+      hotspot.SetToMax(gfx::Point(0, 0));
     }
     ScopedJavaLocalRef<jobject> java_bitmap = gfx::ConvertToJavaBitmap(bitmap);
     Java_ViewAndroidDelegate_onCursorChangedToCustom(env, delegate, java_bitmap,
@@ -471,8 +563,9 @@ void ViewAndroid::OnCursorChanged(const Cursor& cursor) {
 void ViewAndroid::NotifyHoverActionStylusWritable(bool stylus_writable) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_notifyHoverActionStylusWritable(env, delegate,
                                                            stylus_writable);
 }
@@ -480,8 +573,9 @@ void ViewAndroid::NotifyHoverActionStylusWritable(bool stylus_writable) {
 void ViewAndroid::OnBackgroundColorChanged(unsigned int color) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_onBackgroundColorChanged(env, delegate, color);
 }
 
@@ -492,8 +586,9 @@ void ViewAndroid::OnControlsChanged(float top_controls_offset,
                                     float bottom_controls_min_height_offset) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_onControlsChanged(
       env, delegate, std::round(top_controls_offset),
       std::round(top_content_offset),
@@ -505,17 +600,20 @@ void ViewAndroid::OnControlsChanged(float top_controls_offset,
 int ViewAndroid::GetViewportInsetBottom() {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return 0;
+  }
   return Java_ViewAndroidDelegate_getViewportInsetBottom(env, delegate);
 }
 
 void ViewAndroid::OnBrowserControlsHeightChanged() {
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnBrowserControlsHeightChanged();
-  for (ViewAndroid* child : children_) {
-    if (child->match_parent())
+  }
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->match_parent()) {
       child->OnBrowserControlsHeightChanged();
+    }
   }
 }
 
@@ -523,8 +621,9 @@ void ViewAndroid::OnVerticalScrollDirectionChanged(bool direction_up,
                                                    float current_scroll_ratio) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
-  if (delegate.is_null())
+  if (delegate.is_null()) {
     return;
+  }
   Java_ViewAndroidDelegate_onVerticalScrollDirectionChanged(
       env, delegate, direction_up, current_scroll_ratio);
 }
@@ -556,43 +655,50 @@ void ViewAndroid::OnSizeChangedInternal(const gfx::Size& size_device_px) {
   bounds_dips_.set_size(gfx::Size(std::ceil(size_device_px.width() / scale),
                                   std::ceil(size_device_px.height() / scale)));
 
-  for (ViewAndroid* child : children_) {
-    if (child->match_parent())
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->match_parent()) {
       child->OnSizeChangedInternal(size_device_px);
+    }
   }
 }
 
 void ViewAndroid::DispatchOnSizeChanged() {
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnSizeChanged();
-  for (ViewAndroid* child : children_) {
-    if (child->match_parent())
+  }
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->match_parent()) {
       child->DispatchOnSizeChanged();
+    }
   }
 }
 
 void ViewAndroid::OnPhysicalBackingSizeChanged(
     const gfx::Size& size,
     std::optional<base::TimeDelta> deadline_override) {
-  if (physical_size_ == size)
+  if (physical_size_ == size) {
     return;
+  }
   physical_size_ = size;
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnPhysicalBackingSizeChanged(deadline_override);
+  }
 
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->OnPhysicalBackingSizeChanged(size, deadline_override);
   }
 }
 
 void ViewAndroid::OnControlsResizeViewChanged(bool controls_resize_view) {
-  if (controls_resize_view == controls_resize_view_)
+  if (controls_resize_view == controls_resize_view_) {
     return;
+  }
   controls_resize_view_ = controls_resize_view;
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnControlsResizeViewChanged();
+  }
 
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->OnControlsResizeViewChanged(controls_resize_view);
   }
 }
@@ -602,7 +708,7 @@ void ViewAndroid::DispatchWindowPositionChange() {
     event_handler_->OnWindowPositionChanged();
   }
 
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->DispatchWindowPositionChange();
   }
 }
@@ -677,66 +783,77 @@ bool ViewAndroid::SendGestureEventToHandler(EventHandlerAndroid* handler,
 }
 
 bool ViewAndroid::OnGenericMotionEvent(const MotionEventAndroid& event) {
-  if (event_handler_ && event_handler_->OnGenericMotionEvent(event))
+  if (event_handler_ && event_handler_->OnGenericMotionEvent(event)) {
     return true;
+  }
 
-  for (ViewAndroid* child : children_) {
-    if (child->OnGenericMotionEvent(event))
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->OnGenericMotionEvent(event)) {
       return true;
+    }
   }
   return false;
 }
 
 bool ViewAndroid::OnKeyUp(const KeyEventAndroid& event) {
-  if (event_handler_ && event_handler_->OnKeyUp(event))
+  if (event_handler_ && event_handler_->OnKeyUp(event)) {
     return true;
+  }
 
-  for (ViewAndroid* child : children_) {
-    if (child->OnKeyUp(event))
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->OnKeyUp(event)) {
       return true;
+    }
   }
   return false;
 }
 
 bool ViewAndroid::DispatchKeyEvent(const KeyEventAndroid& event) {
-  if (event_handler_ && event_handler_->DispatchKeyEvent(event))
+  if (event_handler_ && event_handler_->DispatchKeyEvent(event)) {
     return true;
+  }
 
-  for (ViewAndroid* child : children_) {
-    if (child->DispatchKeyEvent(event))
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->DispatchKeyEvent(event)) {
       return true;
+    }
   }
   return false;
 }
 
 bool ViewAndroid::ScrollBy(float delta_x, float delta_y) {
-  if (event_handler_ && event_handler_->ScrollBy(delta_x, delta_y))
+  if (event_handler_ && event_handler_->ScrollBy(delta_x, delta_y)) {
     return true;
+  }
 
-  for (ViewAndroid* child : children_) {
-    if (child->ScrollBy(delta_x, delta_y))
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->ScrollBy(delta_x, delta_y)) {
       return true;
+    }
   }
   return false;
 }
 
 bool ViewAndroid::ScrollTo(float x, float y) {
-  if (event_handler_ && event_handler_->ScrollTo(x, y))
+  if (event_handler_ && event_handler_->ScrollTo(x, y)) {
     return true;
+  }
 
-  for (ViewAndroid* child : children_) {
-    if (child->ScrollTo(x, y))
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
+    if (child->ScrollTo(x, y)) {
       return true;
+    }
   }
   return false;
 }
 
 void ViewAndroid::NotifyVirtualKeyboardOverlayRect(
     const gfx::Rect& keyboard_rect) {
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->NotifyVirtualKeyboardOverlayRect(keyboard_rect);
+  }
 
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->NotifyVirtualKeyboardOverlayRect(keyboard_rect);
   }
 }
@@ -745,7 +862,7 @@ void ViewAndroid::ShowInterestInElement(int nodeID) {
   if (event_handler_) {
     event_handler_->ShowInterestInElement(nodeID);
   }
-  for (ViewAndroid* child : children_) {
+  for (ScopedChildrenIter it(this); ViewAndroid* child = it.GetNext();) {
     child->ShowInterestInElement(nodeID);
   }
 }
@@ -760,12 +877,14 @@ bool ViewAndroid::HitTest(EventHandlerCallback<E> handler_callback,
 
   if (event_handler_) {
     if (bounds_dips_.origin().IsOrigin()) {  // (x, y) == (0, 0)
-      if (handler_callback.Run(event_handler_.get(), event))
+      if (handler_callback.Run(event_handler_.get(), event)) {
         return true;
+      }
     } else {
       std::unique_ptr<E> e(event.CreateFor(point));
-      if (handler_callback.Run(event_handler_.get(), *e))
+      if (handler_callback.Run(event_handler_.get(), *e)) {
         return true;
+      }
     }
   }
 
@@ -775,10 +894,13 @@ bool ViewAndroid::HitTest(EventHandlerCallback<E> handler_callback,
     gfx::Point int_point = gfx::ToFlooredPoint(offset_point);
 
     // Match from back to front for hit testing.
-    for (ViewAndroid* child : base::Reversed(children_)) {
+    for (ScopedChildrenIter it(this,
+                               ScopedChildrenIter::IterationType::kReverse);
+         ViewAndroid* child = it.GetNext();) {
       bool matched = child->match_parent();
-      if (!matched)
+      if (!matched) {
         matched = child->bounds_dips_.Contains(int_point);
+      }
       if (matched && child->HitTest(handler_callback, event, offset_point)) {
         return true;
       }
@@ -811,6 +933,64 @@ void ViewAndroid::OnPointerLockRelease() {
 bool ViewAndroid::IsCheckHitEligible() const {
   return !base::FeatureList::IsEnabled(kCheckHitEligibility) ||
          hit_test_callback_.is_null() || hit_test_callback_.Run();
+}
+
+void ViewAndroid::ReportScrollJankStats(uint32_t total_frames,
+                                        uint32_t janky_frames) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> delegate(GetViewAndroidDelegate(env));
+  if (delegate.is_null()) {
+    return;
+  }
+  Java_ViewAndroidDelegate_reportScrollJankStats(env, delegate, total_frames,
+                                                 janky_frames);
+}
+
+ViewAndroid::ScopedChildrenIter::ScopedChildrenIter(ViewAndroid* view,
+                                                    IterationType type)
+    : view_(view),
+      type_(type),
+      it_(type == IterationType::kForward ? view->children_.begin()
+                                          : view->children_.end()) {
+  CHECK(view_);
+  view_->active_iters_.Append(this);
+}
+
+ViewAndroid::ScopedChildrenIter::~ScopedChildrenIter() {
+  if (view_) {
+    RemoveFromList();
+  }
+}
+
+ViewAndroid* ViewAndroid::ScopedChildrenIter::GetNext() {
+  if (!view_) {
+    return nullptr;
+  }
+
+  // Forward leaves `it_` past the element just returned, so erasing that
+  // element cannot invalidate it. Reverse leaves `it_` on the element just
+  // returned, and relies on StepIteratorsOver() to move it off before an
+  // erase or splice.
+  if (type_ == IterationType::kForward) {
+    return it_ == view_->children_.end() ? nullptr : *it_++;
+  }
+
+  return it_ == view_->children_.begin() ? nullptr : *--it_;
+}
+
+void ViewAndroid::ScopedChildrenIter::ViewDestroyed() {
+  view_ = nullptr;
+  RemoveFromList();
+}
+
+void ViewAndroid::StepIteratorsOver(
+    std::list<raw_ptr<ViewAndroid, CtnExperimental>>::iterator child_it) {
+  for (auto* node = active_iters_.head(); node != active_iters_.end();
+       node = node->next()) {
+    if (node->value()->it_ == child_it) {
+      ++node->value()->it_;
+    }
+  }
 }
 
 }  // namespace ui

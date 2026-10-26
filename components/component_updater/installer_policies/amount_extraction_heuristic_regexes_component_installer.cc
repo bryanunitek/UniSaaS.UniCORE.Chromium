@@ -4,7 +4,13 @@
 
 #include "components/component_updater/installer_policies/amount_extraction_heuristic_regexes_component_installer.h"
 
+#include <stdint.h>
+
+#include <array>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -17,7 +23,7 @@
 namespace component_updater {
 namespace {
 
-const base::FilePath::CharType
+constexpr base::FilePath::CharType
     kAmountExtractionHeuristicRegexesBinaryPbFileName[] =
         FILE_PATH_LITERAL("heuristic_regexes.binarypb");
 
@@ -121,8 +127,7 @@ AmountExtractionHeuristicRegexesInstallerPolicy::GetRelativeInstallDir() const {
 
 void AmountExtractionHeuristicRegexesInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kAmountExtractionHeuristicRegexesPublicKeySHA256),
-               std::end(kAmountExtractionHeuristicRegexesPublicKeySHA256));
+  hash->assign_range(kAmountExtractionHeuristicRegexesPublicKeySHA256);
 }
 
 std::string AmountExtractionHeuristicRegexesInstallerPolicy::GetName() const {

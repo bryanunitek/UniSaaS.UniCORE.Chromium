@@ -117,7 +117,6 @@ source_set("util") {
   deps = [
     "//base",
     "//components/tab_groups",
-    "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/web_state_list",
     "//ios/web/public",
     "//ios/web/public/session/proto",
@@ -157,6 +156,7 @@ source_set("unit_tests") {
     "//ios/chrome/browser/sessions/model:test_support",
     "//ios/chrome/browser/shared/coordinator/scene:scene_state_header",
     "//ios/chrome/browser/shared/model/browser",
+    "//ios/chrome/browser/shared/model/browser/test:test_support",
     "//ios/chrome/browser/shared/model/profile/test",
     "//ios/chrome/browser/shared/model/web_state_list",
     "//ios/chrome/browser/signin/model:authentication_service_factory",

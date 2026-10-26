@@ -14,6 +14,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/numeric/int128.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
+#include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl_bigint.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_internals.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_test_sequence_callback.h"
@@ -510,7 +511,7 @@ TEST(NativeValueTraitsImplTest, PassAsSpanResizable) {
 
     ASSERT_TRUE(v8_object->IsArrayBufferView());
     EXPECT_TRUE(v8_object.As<v8::ArrayBufferView>()
-                    ->Buffer()
+                    ->GetBuffer()
                     ->IsResizableByUserJavaScript());
     DummyExceptionStateForTesting exception_state;
     std::ignore = NativeValueTraits<PassAsSpanShared>::ArgumentValue(
@@ -524,7 +525,6 @@ TEST(NativeValueTraitsImplTest, PassAsSpanResizable) {
 
     ASSERT_TRUE(v8_object->IsSharedArrayBuffer());
     EXPECT_TRUE(v8_object.As<v8::SharedArrayBuffer>()
-                    ->GetBackingStore()
                     ->IsResizableByUserJavaScript());
     DummyExceptionStateForTesting exception_state;
     std::ignore = NativeValueTraits<PassAsSpanShared>::ArgumentValue(
@@ -583,6 +583,42 @@ TEST(NativeValueTraitsImplTest, PassAsSpanMissingOpt) {
                     scope.GetIsolate(), 0, v8::Undefined(scope.GetIsolate()),
                     exception_state),
                 testing::Eq(std::nullopt));
+  }
+}
+
+TEST(NativeValueTraitsImplTest, IDLOptionalObject) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+  v8::Isolate* isolate = scope.GetIsolate();
+  {
+    NonThrowableExceptionState exception_state;
+    ScriptObject result =
+        NativeValueTraits<IDLOptional<IDLObject>>::ArgumentValue(
+            isolate, 0, v8::Undefined(isolate), exception_state);
+    EXPECT_TRUE(result.IsEmpty());
+  }
+  {
+    NonThrowableExceptionState exception_state;
+    v8::Local<v8::Object> object = v8::Object::New(isolate);
+    ScriptObject result =
+        NativeValueTraits<IDLOptional<IDLObject>>::ArgumentValue(
+            isolate, 0, object, exception_state);
+    ASSERT_FALSE(result.IsEmpty());
+    EXPECT_EQ(result.V8Object(), object);
+  }
+  {
+    DummyExceptionStateForTesting exception_state;
+    ScriptObject result =
+        NativeValueTraits<IDLOptional<IDLObject>>::ArgumentValue(
+            isolate, 0, v8::Null(isolate), exception_state);
+    EXPECT_TRUE(exception_state.HadException());
+    EXPECT_TRUE(result.IsEmpty());
+  }
+  {
+    DummyExceptionStateForTesting exception_state;
+    NativeValueTraits<IDLOptional<IDLObject>>::ArgumentValue(
+        isolate, 0, v8::Number::New(isolate, 42), exception_state);
+    EXPECT_TRUE(exception_state.HadException());
   }
 }
 

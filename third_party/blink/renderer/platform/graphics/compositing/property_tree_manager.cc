@@ -25,27 +25,6 @@
 
 namespace blink {
 
-PropertyTreeManager::EffectState::EffectState(const CurrentEffectState& other)
-    : effect(other.effect),
-      clip(other.clip),
-      transform(other.transform),
-      effect_id(other.effect_id),
-      may_be_2d_axis_misaligned_to_render_surface(
-          other.may_be_2d_axis_misaligned_to_render_surface),
-      contained_by_non_render_surface_synthetic_rounded_clip(
-          other.contained_by_non_render_surface_synthetic_rounded_clip) {}
-
-PropertyTreeManager::CurrentEffectState::CurrentEffectState(
-    const EffectState& other)
-    : effect(other.effect),
-      clip(other.clip),
-      transform(other.transform),
-      effect_id(other.effect_id),
-      may_be_2d_axis_misaligned_to_render_surface(
-          other.may_be_2d_axis_misaligned_to_render_surface),
-      contained_by_non_render_surface_synthetic_rounded_clip(
-          other.contained_by_non_render_surface_synthetic_rounded_clip) {}
-
 PropertyTreeManager::PropertyTreeManager(PropertyTreeManagerClient& client,
                                          cc::PropertyTrees& property_trees,
                                          cc::Layer& root_layer,
@@ -129,7 +108,7 @@ bool PropertyTreeManager::DirectlyUpdateCompositedOpacityValue(
   auto& cc_effect = property_trees->effect_tree_mutable().MutableNode(cc_id);
 
   cc_effect.opacity = effect.Opacity();
-  cc_effect.effect_changed = true;
+  cc_effect.SetEffectChanged(cc::DamageReason::kUntracked);
   property_trees->effect_tree_mutable().set_needs_update(true);
   host.SetNeedsCommit();
   return true;
@@ -227,6 +206,28 @@ bool PropertyTreeManager::DirectlyUpdatePageScaleTransform(
   return true;
 }
 
+namespace {
+void UpdateCcScrollingContentsCullRect(
+    cc::ScrollTree& scroll_tree,
+    const ScrollPaintPropertyNode& scroll_node) {
+  gfx::Rect cull_rect = scroll_node.ScrollingContentsCullRect();
+  if (cull_rect.Contains(scroll_node.ContentsRect())) {
+    scroll_tree.ClearScrollingContentsCullRect(
+        scroll_node.GetCompositorElementId());
+  } else {
+    scroll_tree.SetScrollingContentsCullRect(
+        scroll_node.GetCompositorElementId(), cull_rect);
+  }
+}
+}  // namespace
+
+void PropertyTreeManager::DirectlyUpdateScrollingContentsCullRect(
+    cc::LayerTreeHost& host,
+    const ScrollPaintPropertyNode& scroll) {
+  UpdateCcScrollingContentsCullRect(
+      host.property_trees()->scroll_tree_mutable(), scroll);
+}
+
 void PropertyTreeManager::DirectlySetScrollOffset(
     cc::LayerTreeHost& host,
     CompositorElementId element_id,
@@ -248,29 +249,31 @@ void PropertyTreeManager::DropCompositorScrollDeltaNextCommit(
   host.DropActiveScrollDeltaNextCommit(element_id);
 }
 
-uint32_t PropertyTreeManager::NonCompositedMainThreadRepaintReasons(
+cc::MainThreadRepaintReasons
+PropertyTreeManager::NonCompositedMainThreadRepaintReasons(
     const TransformPaintPropertyNode& scroll_translation) const {
   if (scroll_translation.ScrollNode()->GetCompositedScrollingPreference() ==
       CompositedScrollingPreference::kNotPreferred) {
-    return cc::MainThreadScrollingReason::kPreferNonCompositedScrolling;
+    return {cc::MainThreadRepaintReason::kPreferNonCompositedScrolling};
   }
   if (RuntimeEnabledFeatures::RasterInducingScrollEnabled() &&
       !client_.ShouldForceMainThreadRepaint(scroll_translation)) {
-    return cc::MainThreadScrollingReason::kNotScrollingOnMain;
+    return {};
   }
-  return cc::MainThreadScrollingReason::kNotOpaqueForTextAndLCDText;
+  return {cc::MainThreadRepaintReason::kNotOpaqueForTextAndLCDText};
 }
 
-uint32_t PropertyTreeManager::GetMainThreadRepaintReasons(
+cc::MainThreadRepaintReasons PropertyTreeManager::GetMainThreadRepaintReasons(
     const cc::LayerTreeHost& host,
     const ScrollPaintPropertyNode& scroll) {
   const auto* property_trees = host.property_trees();
   int cc_node_id = scroll.CcNodeId(property_trees->sequence_number());
-  return cc_node_id != cc::kInvalidPropertyNodeId
-             ? property_trees->scroll_tree()
-                   .Node(cc_node_id)
-                   .main_thread_repaint_reasons
-             : cc::MainThreadScrollingReason::kPreferNonCompositedScrolling;
+  if (cc_node_id != cc::kInvalidPropertyNodeId) {
+    return property_trees->scroll_tree()
+        .Node(cc_node_id)
+        .main_thread_repaint_reasons;
+  }
+  return {cc::MainThreadRepaintReason::kPreferNonCompositedScrolling};
 }
 
 bool PropertyTreeManager::UsesCompositedScrolling(
@@ -575,18 +578,20 @@ int PropertyTreeManager::EnsureCompositorTransformNode(
   // If this transform is a scroll offset translation, create the associated
   // compositor scroll property node and adjust the compositor transform node's
   // scroll offset.
-  if (transform_node.ScrollNode()) {
+  if (const auto* scroll_node = transform_node.ScrollNode()) {
     compositor_node.scrolls = true;
     compositor_node.should_be_snapped = true;
     int scroll_id = EnsureCompositorScrollNode(transform_node);
-    cc::ScrollNode& scroll_node = scroll_tree_.MutableNode(scroll_id);
-    scroll_node.transform_id = id;
-    scroll_node.is_composited =
+    cc::ScrollNode& compositor_scroll_node =
+        scroll_tree_.MutableNode(scroll_id);
+    compositor_scroll_node.transform_id = id;
+    compositor_scroll_node.is_composited =
         client_.NeedsCompositedScrolling(transform_node);
-    if (!scroll_node.is_composited) {
-      scroll_node.main_thread_repaint_reasons |=
-          NonCompositedMainThreadRepaintReasons(transform_node);
+    if (!compositor_scroll_node.is_composited) {
+      compositor_scroll_node.main_thread_repaint_reasons.PutAll(
+          NonCompositedMainThreadRepaintReasons(transform_node));
     }
+    UpdateCcScrollingContentsCullRect(scroll_tree_, *scroll_node);
   }
 
   compositor_node.visible_frame_element_id =
@@ -697,10 +702,11 @@ int PropertyTreeManager::EnsureCompositorScrollNodeInternal(
   compositor_node.is_composited = false;
   compositor_node.main_thread_repaint_reasons =
       scroll_node.GetMainThreadRepaintReasons();
-  CHECK_EQ(compositor_node.main_thread_repaint_reasons,
-           scroll_tree_.GetMainThreadRepaintReasons(compositor_node));
 
   scroll_node.SetCcNodeId(new_sequence_number_, id);
+  if (scroll_node.NodeChanged() != PaintPropertyChangeType::kUnchanged) {
+    root_layer_.SetNeedsCommit();
+  }
   return id;
 }
 
@@ -965,15 +971,15 @@ std::optional<gfx::RRectF> PropertyTreeManager::ShaderBasedRRect(
     return std::nullopt;
   }
 
-  auto WidthAndHeightAreTheSame = [](const gfx::SizeF& size) {
+  auto width_and_height_are_the_same = [](const gfx::SizeF& size) {
     return size.width() == size.height();
   };
 
   const FloatRoundedRect::Radii& radii = clip.PaintClipRect().GetRadii();
-  if (!WidthAndHeightAreTheSame(radii.TopLeft()) ||
-      !WidthAndHeightAreTheSame(radii.TopRight()) ||
-      !WidthAndHeightAreTheSame(radii.BottomRight()) ||
-      !WidthAndHeightAreTheSame(radii.BottomLeft())) {
+  if (!width_and_height_are_the_same(radii.TopLeft()) ||
+      !width_and_height_are_the_same(radii.TopRight()) ||
+      !width_and_height_are_the_same(radii.BottomRight()) ||
+      !width_and_height_are_the_same(radii.BottomLeft())) {
     return std::nullopt;
   }
 
@@ -1362,8 +1368,11 @@ void PropertyTreeManager::PopulateCcEffectNode(
     effect_node.filters = filter->AsCcFilterOperations();
   }
   effect_node.double_sided = !transform.IsBackfaceHidden();
-  effect_node.effect_changed =
-      effect.NodeChanged() != PaintPropertyChangeType::kUnchanged;
+  if (effect.NodeChanged() != PaintPropertyChangeType::kUnchanged) {
+    effect_node.SetEffectChanged(cc::DamageReason::kUntracked);
+  } else {
+    effect_node.ClearEffectChanged();
+  }
 
   effect_node.view_transition_element_resource_id =
       effect.ViewTransitionElementResourceId();
@@ -1462,14 +1471,19 @@ void PropertyTreeManager::UpdatePixelMovingFilterClipExpanders() {
 
 void PropertyTreeManager::
     EnsureCompositorNodesForAnchorPositionAdjustmentContainers(
-        const StackScrollTranslationVector& scroll_translations) {
+        const StackTransformPaintPropertyNodeVector& transforms) {
   if (anchor_position_adjustment_container_ids_.empty()) {
     return;
   }
-  for (auto& scroll_translation : scroll_translations) {
-    if (anchor_position_adjustment_container_ids_.Contains(
-            scroll_translation->ScrollNode()->GetCompositorElementId())) {
-      EnsureCompositorScrollAndTransformNode(*scroll_translation);
+  for (auto& transform : transforms) {
+    if (auto* scroll = transform->ScrollNode()) {
+      if (anchor_position_adjustment_container_ids_.Contains(
+              scroll->GetCompositorElementId())) {
+        EnsureCompositorScrollAndTransformNode(*transform);
+      }
+    } else if (anchor_position_adjustment_container_ids_.Contains(
+                   transform->GetCompositorElementId())) {
+      EnsureCompositorTransformNode(*transform);
     }
   }
 }

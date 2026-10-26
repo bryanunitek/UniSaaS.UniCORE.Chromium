@@ -249,7 +249,7 @@ void FieldsetLayoutAlgorithm::LayoutLegend(BlockNode& legend) {
 
   auto legend_space = CreateConstraintSpaceForLegend(
       legend, ChildAvailableSize(), percentage_size);
-  const LayoutResult* result = legend.Layout(legend_space, GetBreakToken());
+  const LayoutResult* result = legend.Layout(legend_space);
 
   // Legends are monolithic, so abortions are not expected.
   DCHECK_EQ(result->Status(), LayoutResult::kSuccess);
@@ -318,19 +318,12 @@ BreakStatus FieldsetLayoutAlgorithm::LayoutFieldsetContent(
     const BlockBreakToken* content_break_token,
     LogicalSize adjusted_padding_box_size,
     bool has_legend) {
-  const EarlyBreak* early_break_in_child = nullptr;
-  if (early_break_) [[unlikely]] {
-    if (IsEarlyBreakTarget(*early_break_, container_builder_,
-                           fieldset_content)) {
-      container_builder_.AddBreakBeforeChild(fieldset_content,
-                                             kBreakAppealPerfect,
-                                             /* is_forced_break */ false);
-      ConsumeRemainingFragmentainerSpace();
-      return BreakStatus::kContinue;
-    } else {
-      early_break_in_child =
-          EnterEarlyBreakInChild(fieldset_content, *early_break_);
-    }
+  if (early_break_ &&
+      IsEarlyBreakTarget(*early_break_, container_builder_, fieldset_content)) {
+    container_builder_.AddBreakBeforeChild(
+        fieldset_content, kBreakAppealPerfect, /*is_forced_break=*/false);
+    ConsumeRemainingFragmentainerSpace();
+    return BreakStatus::kContinue;
   }
 
   const LayoutResult* result = nullptr;
@@ -343,14 +336,16 @@ BreakStatus FieldsetLayoutAlgorithm::LayoutFieldsetContent(
         Style().LogicalMaxHeight());
   }
 
+  FragmentationLayoutInput fragmentation = GetFragmentationLayoutInputForChild(
+      fieldset_content, content_break_token);
+
   // If we are past the block-end and had previously laid out the content with a
   // block-size limitation, skip the normal layout call and apply the block-size
   // limitation for all future fragments.
   if (!is_past_end || max_content_block_size == LayoutUnit::Max()) {
     auto child_space = CreateConstraintSpaceForFieldsetContent(
         fieldset_content, adjusted_padding_box_size, intrinsic_block_size_);
-    result = fieldset_content.Layout(child_space, content_break_token,
-                                     early_break_in_child);
+    result = fieldset_content.Layout(child_space, fragmentation);
   }
 
   // If the following conditions meet, the content should be laid out with
@@ -387,8 +382,7 @@ BreakStatus FieldsetLayoutAlgorithm::LayoutFieldsetContent(
       adjusted_padding_box_size.block_size = max_content_block_size;
       auto adjusted_child_space = CreateConstraintSpaceForFieldsetContent(
           fieldset_content, adjusted_padding_box_size, intrinsic_block_size_);
-      result = fieldset_content.Layout(
-          adjusted_child_space, content_break_token, early_break_in_child);
+      result = fieldset_content.Layout(adjusted_child_space, fragmentation);
     }
   }
   DCHECK(result);
@@ -443,7 +437,7 @@ void FieldsetLayoutAlgorithm::ConsumeRemainingFragmentainerSpace() {
 }
 
 MinMaxSizesResult FieldsetLayoutAlgorithm::ComputeMinMaxSizes(
-    const MinMaxSizesFloatInput&) {
+    const MinMaxSizesInput& input) {
   MinMaxSizesResult result;
 
   bool has_inline_size_containment = Node().ShouldApplyInlineSizeContainment();
@@ -466,7 +460,8 @@ MinMaxSizesResult FieldsetLayoutAlgorithm::ComputeMinMaxSizes(
       builder.SetAvailableBlockSize(kIndefiniteSize);
       const auto space = builder.ToConstraintSpace();
 
-      result = ComputeMinAndMaxContentContribution(Style(), legend, space);
+      result =
+          ComputeMinAndMaxContentContribution(Style(), legend, space, input);
       result.sizes +=
           ComputeMarginsFor(space, legend.Style(), GetConstraintSpace())
               .InlineSum();
@@ -484,11 +479,23 @@ MinMaxSizesResult FieldsetLayoutAlgorithm::ComputeMinMaxSizes(
     DCHECK(content);
     MinMaxConstraintSpaceBuilder builder(GetConstraintSpace(), Style(), content,
                                          /* is_new_fc */ true);
-    builder.SetAvailableBlockSize(kIndefiniteSize);
+    LayoutUnit available_block_size = kIndefiniteSize;
+    // A rendered legend may reduce the available block-size. We can't
+    // determine its block-size until we know the fieldset's inline-size.
+    if (!Node().GetRenderedLegend()) {
+      available_block_size =
+          ShrinkLogicalSize(border_box_size_, Borders()).block_size;
+      // Track block-size dependence even while the block-size is indefinite.
+      builder.SetBlockAutoBehavior(AutoSizeBehavior::kStretchExplicit);
+    }
+    builder.SetAvailableBlockSize(available_block_size);
+    // Resolve percentage padding as for the fieldset itself.
+    builder.SetPercentageResolutionSize(
+        GetConstraintSpace().PercentageResolutionSize());
     const auto space = builder.ToConstraintSpace();
 
     MinMaxSizesResult content_result =
-        ComputeMinAndMaxContentContribution(Style(), content, space);
+        ComputeMinAndMaxContentContribution(Style(), content, space, input);
     content_result.sizes +=
         ComputeMarginsFor(space, content.Style(), GetConstraintSpace())
             .InlineSum();

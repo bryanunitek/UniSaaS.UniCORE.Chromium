@@ -11,8 +11,6 @@ import android.content.Context;
 import android.graphics.drawable.ShapeDrawable;
 import android.text.style.ImageSpan;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -21,7 +19,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -39,8 +37,9 @@ import org.chromium.chrome.browser.omnibox.suggestions.basic.BasicSuggestionProc
 import org.chromium.chrome.browser.omnibox.suggestions.basic.SuggestionViewProperties;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.chrome.tab_ui.R;
-import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
@@ -56,7 +55,6 @@ import java.util.function.Supplier;
 
 /** Tests for {@link TabGroupSuggestionProcessor}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @DisableFeatures({TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS})
 public class TabGroupSuggestionProcessorUnitTest {
     private static final String SYNC_ID = "sync_id";
@@ -64,30 +62,34 @@ public class TabGroupSuggestionProcessorUnitTest {
     private static final String TITLE = "My Group";
     private static final String DESCRIPTION = JUnitTestGURLs.URL_1.getSpec();
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    private @Mock SuggestionHost mSuggestionHost;
-    private @Mock OmniboxImageSupplier mImageSupplier;
-    private @Mock UrlBarEditingTextStateProvider mTextProvider;
-    private @Mock Supplier<Tab> mTabSupplier;
-    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
-    private @Mock BookmarkState mBookmarkState;
-    private @Mock OmniboxActionDelegate mActionDelegate;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private OmniboxImageSupplier mImageSupplier;
+    @Mock private UrlBarEditingTextStateProvider mTextProvider;
+    @Mock private Supplier<Tab> mTabSupplier;
+    @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
+    @Mock private BookmarkState mBookmarkState;
+    @Mock private OmniboxActionDelegate mActionDelegate;
 
     private Context mContext;
     private TabGroupSuggestionProcessor mProcessor;
     private AutocompleteMatch mSuggestion;
     private PropertyModel mModel;
     private AutocompleteInput mInput;
+    private OmniboxResourceProvider mResourceProvider;
 
     @Before
     public void setUp() {
         mContext = ContextUtils.getApplicationContext();
         mContext.setTheme(R.style.Theme_BrowserUI_DayNight);
+        mResourceProvider = new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
 
         AutocompleteUIContext uiContext =
                 new AutocompleteUIContext(
                         mContext,
+                        mResourceProvider,
                         mSuggestionHost,
                         mTextProvider,
                         mImageSupplier,
@@ -98,12 +100,10 @@ public class TabGroupSuggestionProcessorUnitTest {
                         mActionDelegate);
         mProcessor = new TabGroupSuggestionProcessor(uiContext);
         mInput = new AutocompleteInput();
-        OmniboxResourceProvider.disableCachesForTesting();
     }
 
     @After
     public void tearDown() {
-        OmniboxResourceProvider.reenableCachesForTesting();
         mInput.reset();
     }
 
@@ -121,9 +121,8 @@ public class TabGroupSuggestionProcessorUnitTest {
     }
 
     @Test
-    @SmallTest
     public void testPopulateModelTabGroupSuggestions() {
-        mInput.setPageClassification(PageClassification.ANDROID_HUB_VALUE);
+        mInput.setPageClassification(PageClassification.ANDROID_HUB);
 
         createTabGroupSuggestion(OmniboxSuggestionType.TAB_GROUP);
         assertEquals(

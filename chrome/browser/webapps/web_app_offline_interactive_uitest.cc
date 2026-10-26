@@ -8,24 +8,29 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/metrics/crc32.h"
+#include "base/strings/string_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_icon_waiter.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_isolated_world_ids.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/webapps/browser/test/service_worker_registration_waiter.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
@@ -76,7 +81,7 @@ class WebAppOfflineTestBase : public InProcessBrowserTest {
         OsIntegrationTestOverrideImpl::OverrideForTesting();
   }
   void TearDownOnMainThread() override {
-    test::UninstallAllWebApps(browser()->profile());
+    test::UninstallAllWebApps(browser()->GetProfile());
     {
       base::ScopedAllowBlockingForTesting allow_blocking;
       override_registration_.reset();
@@ -89,7 +94,7 @@ class WebAppOfflineTestBase : public InProcessBrowserTest {
     GURL target_url(embedded_test_server()->GetURL(relative_url));
     web_app::NavigateViaLinkClickToURLAndWait(browser(), target_url);
     webapps::AppId app_id = web_app::test::InstallPwaForCurrentUrl(browser());
-    WebAppIconWaiter(browser()->profile(), app_id).Wait();
+    WebAppIconWaiter(browser()->GetProfile(), app_id).Wait();
     std::unique_ptr<content::URLLoaderInterceptor> interceptor =
         content::URLLoaderInterceptor::SetupRequestFailForURL(
             target_url, net::ERR_INTERNET_DISCONNECTED);
@@ -105,11 +110,11 @@ class WebAppOfflineTestBase : public InProcessBrowserTest {
                              std::string_view relative_url) {
     GURL target_url(embedded_test_server()->GetURL(relative_url));
     web_app::ServiceWorkerRegistrationWaiter registration_waiter(
-        browser()->profile(), target_url);
+        browser()->GetProfile(), target_url);
     web_app::NavigateViaLinkClickToURLAndWait(browser(), target_url);
     registration_waiter.AwaitRegistration();
     webapps::AppId app_id = web_app::test::InstallPwaForCurrentUrl(browser());
-    WebAppIconWaiter(browser()->profile(), app_id).Wait();
+    WebAppIconWaiter(browser()->GetProfile(), app_id).Wait();
     std::unique_ptr<content::URLLoaderInterceptor> interceptor =
         content::URLLoaderInterceptor::SetupRequestFailForURL(
             target_url, net::ERR_INTERNET_DISCONNECTED);
@@ -170,7 +175,7 @@ class WebAppOfflinePageTest : public base::test::WithFeatureOverride,
 IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflinePageIsDisplayed) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ExpectUniqueSample(net::ERR_INTERNET_DISCONNECTED, 0);
   StartWebAppAndDisconnect(web_contents, "/banners/no-sw-with-colors.html");
 
@@ -187,7 +192,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest,
                        WebAppOfflineWithEmptyServiceWorker) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ExpectUniqueSample(net::ERR_INTERNET_DISCONNECTED, 0);
   StartPwaAndDisconnect(web_contents, "/banners/background-color.html");
 
@@ -203,7 +208,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest,
 IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineWithServiceWorker) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ExpectUniqueSample(net::ERR_INTERNET_DISCONNECTED, 0);
   StartPwaAndDisconnect(web_contents, "/banners/theme-color.html");
 
@@ -218,7 +223,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineWithServiceWorker) {
 IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflinePageIconShowing) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   StartWebAppAndDisconnect(web_contents,
                            "/banners/no_sw_fetch_handler_test_page.html");
   WaitForLoadStop(web_contents);
@@ -283,12 +288,64 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflinePageIconShowing) {
       base::span(static_cast<const uint8_t*>(bitmap.pixmap().addr()),
                  bitmap.computeByteSize()));
   EXPECT_EQ(1504857296u, base::Crc32(0, image_bytes));
+
+  EXPECT_TRUE(
+      EvalJs(
+          web_contents,
+          "Object.getOwnPropertyDescriptor(globalThis, 'icon') !== undefined",
+          content::EXECUTE_SCRIPT_DEFAULT_OPTIONS,
+          ISOLATED_WORLD_ID_CHROME_INTERNAL)
+          .ExtractBool());
+  EXPECT_FALSE(
+      EvalJs(
+          web_contents,
+          "Object.getOwnPropertyDescriptor(globalThis, 'icon') !== undefined",
+          content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, ISOLATED_WORLD_ID_EXTENSIONS)
+          .ExtractBool());
+}
+
+IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest,
+                       SubframeErrorDoesNotAffectMainFrame) {
+  EXPECT_TRUE(embedded_test_server()->Start());
+
+  const GURL pwa_url =
+      embedded_test_server()->GetURL("/banners/no-sw-with-colors.html");
+  web_app::NavigateViaLinkClickToURLAndWait(browser(), pwa_url);
+  webapps::AppId app_id = web_app::test::InstallPwaForCurrentUrl(browser());
+  WebAppIconWaiter(browser()->GetProfile(), app_id).Wait();
+
+  std::unique_ptr<content::URLLoaderInterceptor> interceptor =
+      content::URLLoaderInterceptor::SetupRequestFailForURL(
+          pwa_url, net::ERR_INTERNET_DISCONNECTED);
+
+  const GURL outer_url =
+      embedded_test_server()->GetURL("/banners/iframe_with_icon.html");
+  content::WebContents* web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), outer_url));
+  content::WaitForLoadStop(web_contents);
+  EXPECT_EQ(web_contents->GetPrimaryMainFrame()->GetLastCommittedURL(),
+            outer_url);
+
+  std::string img_src = content::EvalJs(web_contents->GetPrimaryMainFrame(),
+                                        "document.getElementById('icon').src")
+                            .ExtractString();
+  EXPECT_FALSE(base::StartsWith(img_src, "data:image/png;base64,"));
+
+  const bool icon_own_prop =
+      content::EvalJs(web_contents->GetPrimaryMainFrame(),
+                      "Object.getOwnPropertyDescriptor(globalThis, 'icon') "
+                      "!== undefined",
+                      content::EXECUTE_SCRIPT_DEFAULT_OPTIONS,
+                      ISOLATED_WORLD_ID_EXTENSIONS)
+          .ExtractBool();
+  EXPECT_FALSE(icon_own_prop);
 }
 
 IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineMetricsNavigation) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ExpectUniqueSample(net::ERR_INTERNET_DISCONNECTED, 0);
   StartWebAppAndDisconnect(web_contents, "/banners/no-sw-with-colors.html");
 
@@ -315,7 +372,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineMetricsNavigation) {
 IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineMetricsBackOnline) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ExpectUniqueSample(net::ERR_INTERNET_DISCONNECTED, 0);
   StartWebAppAndDisconnect(web_contents, "/banners/no-sw-with-colors.html");
 
@@ -348,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineMetricsBackOnline) {
 IN_PROC_BROWSER_TEST_P(WebAppOfflinePageTest, WebAppOfflineMetricsPwaClosing) {
   ASSERT_TRUE(embedded_test_server()->Start());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ExpectUniqueSample(net::ERR_INTERNET_DISCONNECTED, 0);
   webapps::AppId app_id =
       StartWebAppAndDisconnect(web_contents, "/banners/no-sw-with-colors.html");
@@ -447,7 +504,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflineDarkModeTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   StartWebAppAndDisconnect(web_contents, "/banners/no-sw-with-colors.html");
 
@@ -509,7 +566,7 @@ IN_PROC_BROWSER_TEST_P(WebAppOfflineDarkModeTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   StartPwaAndDisconnect(web_contents,
                         "/banners/manifest_test_page_empty_fetch_handler.html");
   if (GetColorScheme() == blink::mojom::PreferredColorScheme::kDark) {

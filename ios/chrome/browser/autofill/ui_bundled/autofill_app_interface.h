@@ -64,6 +64,18 @@ enum CreditCardSaveManagerObserverEvent : int {
 // Returns the name of the sample profile.
 + (NSString*)exampleProfileName;
 
+// Returns the street address of the sample profile.
++ (NSString*)exampleProfileAddress;
+
+// Returns the city of the sample profile.
++ (NSString*)exampleProfileCity;
+
+// Returns the state of the sample profile.
++ (NSString*)exampleProfileState;
+
+// Returns the zip code of the sample profile.
++ (NSString*)exampleProfileZip;
+
 // Removes the locally stored credit cards.
 + (void)clearCreditCardStore;
 
@@ -83,6 +95,12 @@ enum CreditCardSaveManagerObserverEvent : int {
 
 // Returns the CVC of the first saved local credit card.
 + (NSString*)firstLocalCreditCardCvc;
+
+// Returns the cardholder name of the sample local credit card.
++ (NSString*)exampleCreditCardName;
+
+// Returns the credit card number of the sample local credit card.
++ (NSString*)exampleCreditCardNumber;
 
 // Saves a masked credit card that requires CVC to be used.
 // Returns the `card.NetworkAndLastFourDigits` of the card used in the UIs.
@@ -154,6 +172,7 @@ enum CreditCardSaveManagerObserverEvent : int {
 // Triggers the Autofill AI save entity bubble.
 + (void)showAutofillAiSaveEntityBubble;
 
+
 // Saves a Redress Number entity with the given name and number. Returns the
 // UUID of the created entity. Because entities are saved asynchronously, it is
 // not immediately available to be retrieved from the EntityDataManager.
@@ -180,6 +199,9 @@ enum CreditCardSaveManagerObserverEvent : int {
 
 // Wait until a form is cached in the AutofillManager.
 + (BOOL)waitForFormToBeCachedInMainFrame;
+
+// Sets the network connection type to offline (CONNECTION_NONE) or resets it.
++ (void)setNetworkConnectionOffline:(BOOL)offline;
 
 @end
 

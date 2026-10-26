@@ -8,7 +8,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_base_content.h"
-#include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "content/public/browser/render_frame_host.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -29,11 +28,15 @@ class OmniboxPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
 
  public:
   OmniboxPopupWebUIContent() = delete;
+  // Subclasses pass false for `set_content_url` and call `SetContentURL()`
+  // themselves. Loading here would build a WebContents before their overrides
+  // (e.g. `EscClosesUI()`) are in place, only for their own load to replace it.
   OmniboxPopupWebUIContent(OmniboxPopupPresenterBase* presenter,
                            LocationBar* location_bar,
                            OmniboxController* controller,
                            bool include_location_bar_cutout,
-                           bool wants_focus);
+                           bool wants_focus,
+                           bool set_content_url);
   OmniboxPopupWebUIContent(const OmniboxPopupWebUIContent&) = delete;
   OmniboxPopupWebUIContent& operator=(const OmniboxPopupWebUIContent&) = delete;
   ~OmniboxPopupWebUIContent() override;
@@ -53,11 +56,11 @@ class OmniboxPopupWebUIContent : public OmniboxPopupWebUIBaseContent {
   void Clear() override;
   void OnContextMenuClosed() override;
 
- protected:
-  std::string_view GetMetricPrefix() const override;
-
   // Returns the WebUI Omnibox Handler. Can return null.
   OmniboxPopupHandler* popup_handler();
+
+ protected:
+  std::string_view GetMetricPrefix() const override;
 
  private:
   // Indicate whether this WebUI content wants to receive activation and focus.

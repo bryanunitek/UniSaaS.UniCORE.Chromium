@@ -25,8 +25,8 @@ FrameNode::Visibility GetFrameNodeVisibility(FrameNodeImpl* frame_node,
     return FrameNode::Visibility::kNotVisible;
   }
 
-  // Only frame nodes that are current can be visible.
-  if (!frame_node->IsCurrent()) {
+  // Only frame nodes that are active can be visible.
+  if (!frame_node->IsActive()) {
     return FrameNode::Visibility::kNotVisible;
   }
 
@@ -119,24 +119,8 @@ void FrameVisibilityDecorator::OnBeforeFrameNodeAdded(
       frame_node_impl, IsPageUserVisible(pending_page_node)));
 }
 
-void FrameVisibilityDecorator::OnCurrentFrameChanged(
-    const FrameNode* previous_frame_node,
-    const FrameNode* current_frame_node) {
-  if (base::FeatureList::IsEnabled(features::kSeamlessRenderFrameSwap)) {
-    if (current_frame_node) {
-      OnFramePropertyChanged(current_frame_node);
-    }
-    if (previous_frame_node) {
-      OnFramePropertyChanged(previous_frame_node);
-    }
-  } else {
-    if (previous_frame_node) {
-      OnFramePropertyChanged(previous_frame_node);
-    }
-    if (current_frame_node) {
-      OnFramePropertyChanged(current_frame_node);
-    }
-  }
+void FrameVisibilityDecorator::OnIsActiveChanged(const FrameNode* frame_node) {
+  OnFramePropertyChanged(frame_node);
 }
 
 void FrameVisibilityDecorator::OnViewportIntersectionChanged(
@@ -153,7 +137,9 @@ void FrameVisibilityDecorator::OnPageUserVisibilityChanged(
   PageNodeImpl* page_node_impl = PageNodeImpl::FromNode(page_node);
 
   // A page can sometimes have no main frame.
-  FrameNodeImpl* main_frame_node = page_node_impl->main_frame_node();
+  // TODO(crbug.com/540481427): Fenced frames aren't handled here since
+  // UpdateFrameTreeVisibility only recurses into child frames.
+  FrameNodeImpl* main_frame_node = page_node_impl->primary_main_frame_node();
   if (!main_frame_node) {
     return;
   }

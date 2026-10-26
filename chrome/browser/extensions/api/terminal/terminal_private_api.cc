@@ -5,6 +5,7 @@
 #include "chrome/browser/extensions/api/terminal/terminal_private_api.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/constants/webui_url_constants.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "base/command_line.h"
@@ -25,7 +27,6 @@
 #include "base/json/json_writer.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
@@ -54,7 +55,6 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/terminal_private.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
@@ -110,13 +110,13 @@ const char kSwitchContainerFeatures[] = "container_features";
 const char kCwdTerminalIdPrefix[] = "terminal_id:";
 
 // Prefs that we read and observe.
-static const base::NoDestructor<std::vector<std::string>> kPrefsReadAllowList{{
+constexpr auto kPrefsReadAllowList = std::to_array<std::string_view>({
     ash::prefs::kAccessibilitySpokenFeedbackEnabled,
     crostini::prefs::kCrostiniEnabled,
     guest_os::prefs::kGuestOsTerminalSettings,
     crostini::prefs::kTerminalSshAllowedByPolicy,
     guest_os::prefs::kGuestOsContainers,
-}};
+});
 
 void CloseTerminal(const std::string& terminal_id,
                    base::OnceCallback<void(bool)> callback) {
@@ -221,10 +221,11 @@ void NotifyProcessOutput(content::BrowserContext* browser_context,
     return;
   }
 
-  base::ListValue args;
-  args.Append(terminal_id);
-  args.Append(output_type);
-  args.Append(base::Value(base::as_byte_span(output)));
+  scoped_refptr<extensions::EventArgs> args =
+      base::MakeRefCounted<extensions::EventArgs>();
+  args->data.Append(terminal_id);
+  args->data.Append(output_type);
+  args->data.Append(base::Value(base::as_byte_span(output)));
 
   content::RenderProcessHost* rph =
       content::RenderProcessHost::FromID(render_process_host_id);
@@ -253,10 +254,10 @@ void PrefChanged(Profile* profile, const std::string& pref_name) {
   if (!event_router) {
     return;
   }
-  base::ListValue args;
+  auto args = base::MakeRefCounted<extensions::EventArgs>();
   base::DictValue prefs;
   prefs.Set(pref_name, profile->GetPrefs()->GetValue(pref_name).Clone());
-  args.Append(std::move(prefs));
+  args->data.Append(std::move(prefs));
   auto event = std::make_unique<extensions::Event>(
       extensions::events::TERMINAL_PRIVATE_ON_PREF_CHANGED,
       terminal_private::OnPrefChanged::kEventName, std::move(args));
@@ -272,7 +273,7 @@ TerminalPrivateAPI::TerminalPrivateAPI(content::BrowserContext* context)
       pref_change_registrar_(std::make_unique<PrefChangeRegistrar>()) {
   Profile* profile = Profile::FromBrowserContext(context);
   pref_change_registrar_->Init(profile->GetPrefs());
-  for (const auto& pref : *kPrefsReadAllowList) {
+  for (const auto& pref : kPrefsReadAllowList) {
     pref_change_registrar_->Add(pref,
                                 base::BindRepeating(&PrefChanged, profile));
   }
@@ -318,11 +319,11 @@ TerminalPrivateOpenTerminalProcessFunction::OpenProcess(
 
   // Passing --crosh-command overrides any JS process name.
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kCroshCommand)) {
+  if (command_line->HasSwitch(ash::switches::kCroshCommand)) {
     OpenProcess(
         user_id_hash,
         base::CommandLine(base::FilePath(
-            command_line->GetSwitchValueASCII(switches::kCroshCommand))));
+            command_line->GetSwitchValueASCII(ash::switches::kCroshCommand))));
 
   } else if (process_name == kCroshName) {
     // Ensure crosh is allowed before starting terminal.
@@ -492,7 +493,7 @@ void TerminalPrivateOpenTerminalProcessFunction::OnGetVshSession(
 void TerminalPrivateOpenTerminalProcessFunction::OpenProcess(
     const std::string& user_id_hash,
     base::CommandLine cmdline) {
-  DCHECK(!cmdline.argv().empty());
+  CHECK(!cmdline.argv().empty(), base::NotFatalUntil::M161);
 
   content::WebContents* caller_contents = GetSenderWebContents();
   if (!caller_contents) {
@@ -812,7 +813,7 @@ ExtensionFunction::ResponseAction TerminalPrivateGetPrefsFunction::Run() {
 
   for (const auto& path : params->paths) {
     // Ignore non-allowed paths.
-    if (!std::ranges::contains(*kPrefsReadAllowList, path)) {
+    if (!std::ranges::contains(kPrefsReadAllowList, path)) {
       LOG(WARNING) << "Ignoring non-allowed GetPrefs path=" << path;
       continue;
     }
@@ -830,6 +831,14 @@ TerminalPrivateSetPrefsFunction::~TerminalPrivateSetPrefsFunction() = default;
 ExtensionFunction::ResponseAction TerminalPrivateSetPrefsFunction::Run() {
   std::optional<SetPrefs::Params> params = SetPrefs::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
+
+  // The writable prefs below belong to the Terminal System Web App and drive
+  // browser-side state such as shelf shortcut menu items, so writes from any
+  // other context are rejected.
+  if (extension() || source_url().DeprecatedGetOriginAsURL() !=
+                         ash::kChromeUIUntrustedTerminalURL) {
+    return RespondNow(Error("Unsupported context"));
+  }
 
   PrefService* service =
       Profile::FromBrowserContext(browser_context())->GetPrefs();

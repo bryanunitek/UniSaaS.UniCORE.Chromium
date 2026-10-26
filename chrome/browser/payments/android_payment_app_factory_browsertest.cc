@@ -17,6 +17,8 @@
 namespace payments {
 namespace {
 
+using IconInstall = test::PaymentAppInstallUtil::IconInstall;
+
 struct [[maybe_unused]] ScopedTestSupport {
 #if BUILDFLAG(IS_CHROMEOS)
   // Invoking Play Billing on Chrome OS requires initializing the overlay
@@ -30,6 +32,16 @@ class AndroidPaymentAppFactoryTest
  public:
   AndroidPaymentAppFactoryTest() {
     feature_list_.InitAndEnableFeature(features::kAppStoreBilling);
+#if !BUILDFLAG(IS_CHROMEOS)
+    // On non-ChromeOS platforms, AndroidAppCommunicationStub is used and
+    // AndroidPaymentAppFactory discovers zero Android payment apps. Tests that
+    // request both Play Billing and a Web payment method (such as
+    // IgnoreOtherPaymentAppsInTwaWhenHaveAppStoreBilling) fall back to the
+    // installed service worker payment app. Because the test service worker
+    // completes without opening a window or capturing user interaction,
+    // bypassing user interaction is needed for a headless service worker.
+    SetBypassUserInteractionForTesting();
+#endif
   }
 
   ~AndroidPaymentAppFactoryTest() override = default;
@@ -52,11 +64,11 @@ IN_PROC_BROWSER_TEST_F(AndroidPaymentAppFactoryTest,
   GURL service_worker_javascript_file_url =
       https_server()->GetURL("a.com", "/alicepay.test/app1/app.js");
   ASSERT_TRUE(
-      PaymentAppInstallUtil::InstallPaymentAppForPaymentMethodIdentifier(
-          *GetActiveWebContents(),
+      test::PaymentAppInstallUtil::InstallPaymentAppForPaymentMethodIdentifier(
+          *GetActiveWebContents()->GetPrimaryMainFrame(),
           service_worker_javascript_file_url,
           /*payment_method_identifier=*/"https://play.google.com/billing",
-          PaymentAppInstallUtil::IconInstall::kWithIcon));
+          IconInstall::kWithIcon));
 
   NavigateTo("b.com", "/can_make_payment_checker.html");
   ASSERT_EQ("false", content::EvalJs(

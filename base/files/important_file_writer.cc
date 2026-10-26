@@ -14,6 +14,7 @@
 #include <utility>
 #include <variant>
 
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
@@ -27,7 +28,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -36,8 +36,10 @@
 #include "base/threading/platform_thread.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/threading/thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace base {
 
@@ -70,6 +72,18 @@ enum class ReplaceResult {
   // ReplaceFile never succeeded, even after retries.
   kFailure = 2,
   kMaxValue = kFailure
+};
+
+// Result of an attempted restore in
+// ImportantFileWriter::RestoreMissingFileIfNeeded(), recorded to
+// ImportantFile.MissingFileRestoreResult.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class MissingFileRestoreResult {
+  kNoCandidate = 0,
+  kFailed = 1,
+  kRestored = 2,
+  kMaxValue = kRestored,
 };
 
 void UmaHistogramReplaceResultWithSuffix(std::string_view histogram_suffix,
@@ -193,6 +207,35 @@ bool ImportantFileWriter::WriteFileAtomically(
   return WriteFileAtomicallyImpl(path, data, histogram_suffix,
                                  /*from_instance=*/false,
                                  BindRepeating(&ReplaceFile));
+}
+
+// static
+void ImportantFileWriter::RestoreMissingFileIfNeeded(
+    const FilePath& file_path,
+    std::string_view histogram_suffix) {
+  if (PathExists(file_path)) {
+    return;
+  }
+
+  MissingFileRestoreResult result = MissingFileRestoreResult::kNoCandidate;
+  std::optional<FilePath> latest_temp_file =
+      GetLatestTemporaryFileWithNamePrefix(file_path.DirName(),
+                                           file_path.BaseName().value());
+  if (latest_temp_file.has_value()) {
+    result = Move(*latest_temp_file, file_path)
+                 ? MissingFileRestoreResult::kRestored
+                 : MissingFileRestoreResult::kFailed;
+  }
+
+  constexpr char kHistogramName[] = "ImportantFile.MissingFileRestoreResult";
+  if (histogram_suffix.empty()) {
+    UmaHistogramEnumeration(kHistogramName, result);
+  } else {
+    UmaHistogramEnumeration(
+        base::JoinString({kHistogramName, histogram_suffix}, "."), result);
+  }
+  UmaHistogramEnumeration(base::JoinString({kHistogramName, "All"}, "."),
+                          result);
 }
 
 // static
@@ -359,7 +402,10 @@ bool ImportantFileWriter::WriteFileAtomicallyImpl(
     ::SetLastError(last_error);
 #endif
     DPLOG(WARNING) << "Failed to replace " << path << " with " << tmp_file_path;
-    DeleteTmpFileWithRetry(File(), tmp_file_path);
+    // Preserve the temp file as a recovery candidate if the target is missing.
+    if (PathExists(path)) {
+      DeleteTmpFileWithRetry(File(), tmp_file_path);
+    }
   }
 
   const TimeDelta write_duration = TimeTicks::Now() - write_start;
@@ -371,7 +417,7 @@ bool ImportantFileWriter::WriteFileAtomicallyImpl(
 
 ImportantFileWriter::ImportantFileWriter(
     const FilePath& path,
-    scoped_refptr<SequencedTaskRunner> task_runner,
+    TaskRunnerOrBlockCurrentSequence task_runner,
     std::string_view histogram_suffix)
     : ImportantFileWriter(path,
                           std::move(task_runner),
@@ -380,7 +426,7 @@ ImportantFileWriter::ImportantFileWriter(
 
 ImportantFileWriter::ImportantFileWriter(
     const FilePath& path,
-    scoped_refptr<SequencedTaskRunner> task_runner,
+    TaskRunnerOrBlockCurrentSequence task_runner,
     TimeDelta interval,
     std::string_view histogram_suffix)
     : path_(path),
@@ -388,7 +434,13 @@ ImportantFileWriter::ImportantFileWriter(
       commit_interval_(interval),
       histogram_suffix_(histogram_suffix),
       replace_file_callback_(BindRepeating(&ReplaceFile)) {
-  DCHECK(task_runner_);
+  std::visit(absl::Overload{
+                 [](const scoped_refptr<SequencedTaskRunner>& task_runner) {
+                   DCHECK(task_runner);
+                 },
+                 [](BlockCurrentSequenceTag) { AssertBlockingAllowed(); },
+             },
+             task_runner_);
   ImportantFileWriterCleaner::AddDirectory(path.DirName());
 }
 
@@ -423,27 +475,35 @@ void ImportantFileWriter::WriteNowWithBackgroundDataProducer(
     BackgroundDataProducerCallback background_data_producer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  OnceClosure write_task = BindOnce(&ProduceAndWriteStringToFileAtomically,
-                                    path_, std::move(background_data_producer),
-                                    std::move(before_next_write_callback_),
-                                    std::move(after_next_write_callback_),
-                                    replace_file_callback_, histogram_suffix_);
-  if (!task_runner_->PostTask(
-          FROM_HERE, MakeCriticalClosure("ImportantFileWriter::WriteNow",
-                                         std::move(write_task),
-                                         /*is_immediate=*/true))) {
-    // Posting the task to background message loop is not expected
-    // to fail.
-    NOTREACHED();
-  }
+  OnceClosure write_task =
+      MakeCriticalClosure("ImportantFileWriter::WriteNow",
+                          BindOnce(&ProduceAndWriteStringToFileAtomically,
+                                   path_, std::move(background_data_producer),
+                                   std::move(before_next_write_callback_),
+                                   std::move(after_next_write_callback_),
+                                   replace_file_callback_, histogram_suffix_),
+                          /*is_immediate=*/true);
   ClearPendingWrite();
+
+  std::visit(
+      absl::Overload{
+          [&write_task](const scoped_refptr<SequencedTaskRunner>& task_runner) {
+            // Failing to post highlights an ordering problem between a desired
+            // write and the destination sequence's shutdown.
+            CHECK(task_runner->PostTask(FROM_HERE, std::move(write_task)));
+          },
+          [&write_task](BlockCurrentSequenceTag) {
+            std::move(write_task).Run();
+          },
+      },
+      task_runner_);
 }
 
 void ImportantFileWriter::ScheduleWrite(DataSerializer* serializer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   DCHECK(serializer);
-  serializer_.emplace<DataSerializer*>(serializer);
+  serializer_.emplace<raw_ptr<DataSerializer>>(serializer);
 
   if (!timer().IsRunning()) {
     timer().Start(
@@ -455,9 +515,11 @@ void ImportantFileWriter::ScheduleWrite(DataSerializer* serializer) {
 void ImportantFileWriter::ScheduleWriteWithBackgroundDataSerializer(
     BackgroundDataSerializer* serializer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(
+      std::holds_alternative<scoped_refptr<SequencedTaskRunner>>(task_runner_));
 
   DCHECK(serializer);
-  serializer_.emplace<BackgroundDataSerializer*>(serializer);
+  serializer_.emplace<raw_ptr<BackgroundDataSerializer>>(serializer);
 
   if (!timer().IsRunning()) {
     timer().Start(
@@ -473,9 +535,9 @@ void ImportantFileWriter::DoScheduledWrite() {
   const TimeTicks serialization_start = TimeTicks::Now();
   BackgroundDataProducerCallback data_producer_for_background_sequence;
 
-  if (std::holds_alternative<DataSerializer*>(serializer_)) {
+  if (std::holds_alternative<raw_ptr<DataSerializer>>(serializer_)) {
     std::optional<std::string> data;
-    data = std::get<DataSerializer*>(serializer_)->SerializeData();
+    data = std::get<raw_ptr<DataSerializer>>(serializer_)->SerializeData();
     if (!data) {
       DLOG(WARNING) << "Failed to serialize data to be saved in "
                     << path_.value();
@@ -496,7 +558,7 @@ void ImportantFileWriter::DoScheduledWrite() {
         std::move(data).value());
   } else {
     data_producer_for_background_sequence =
-        std::get<BackgroundDataSerializer*>(serializer_)
+        std::get<raw_ptr<BackgroundDataSerializer>>(serializer_)
             ->GetSerializedDataProducerForBackgroundSequence();
 
     DCHECK(data_producer_for_background_sequence);

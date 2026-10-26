@@ -6,48 +6,48 @@
 
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/attestation_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/key_persistence_delegate.h"
-#include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/key_persistence_delegate_factory.h"
 #include "chrome/browser/enterprise/connectors/device_trust/signals/signals_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/enterprise/device_trust/core/attestation/attestation_service.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"
+#include "components/enterprise/device_trust/core/device_trust_service.h"
 #include "components/enterprise/device_trust/core/signals/signals_service.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "content/public/browser/browser_context.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#if !BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/browser_attestation_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/device_attester.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/profile_attester.h"
 #include "chrome/browser/enterprise/identifiers/profile_id_service_factory.h"
 #include "chrome/browser/enterprise/signals/signals_aggregator_factory.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
-#include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
+#include "components/enterprise/device_trust/core/attestation/browser_attestation_service.h"
+#include "components/enterprise/device_trust/core/attestation/device_attester.h"
+#include "components/enterprise/device_trust/core/attestation/profile_attester.h"
+#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/profile_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
 #include "chrome/browser/enterprise/connectors/device_trust/ash/ash_attestation_policy_observer.h"
 #include "chrome/browser/enterprise/connectors/device_trust/attestation/ash/ash_attestation_service_impl.h"
 #include "chrome/browser/enterprise/connectors/device_trust/attestation/ash/flex_attester.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/browser_attestation_service.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "components/enterprise/device_trust/core/attestation/browser_attestation_service.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
@@ -57,7 +57,7 @@ bool IsProfileManaged(Profile* profile) {
   return management_service && management_service->IsManaged();
 }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#if !BUILDFLAG(IS_CHROMEOS)
 policy::CloudPolicyStore* GetUserCloudPolicyStore(Profile* profile) {
   policy::CloudPolicyManager* user_policy_manager =
       profile->GetCloudPolicyManager();
@@ -69,7 +69,7 @@ policy::CloudPolicyStore* GetUserCloudPolicyStore(Profile* profile) {
   }
   return nullptr;
 }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace
 
@@ -105,17 +105,20 @@ DeviceTrustServiceFactory::DeviceTrustServiceFactory()
               // TODO(crbug.com/41488885): Check if this service is needed for
               // Ash Internals.
               .WithAshInternals(ProfileSelection::kOwnInstance)
+              // Gated by kEnterpriseIsolatedModeMilestone2 in
+              // BuildServiceInstanceForBrowserContext().
+              .WithIsolatedMode(ProfileSelection::kOwnInstance)
               .Build()) {
   DependsOn(DeviceTrustConnectorServiceFactory::GetInstance());
   DependsOn(policy::ManagementServiceFactory::GetInstance());
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#if !BUILDFLAG(IS_CHROMEOS)
   // Depends on this service via the SignalsService having a dependency on it.
   DependsOn(enterprise_signals::SignalsAggregatorFactory::GetInstance());
   // Depends on this service via the ProfileAttester having a dependency on it
   // which is used to construct the BrowserAttestationService.
   DependsOn(enterprise::ProfileIdServiceFactory::GetInstance());
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
 bool DeviceTrustServiceFactory::ServiceIsNULLWhileTesting() const {
@@ -128,6 +131,12 @@ std::unique_ptr<KeyedService>
 DeviceTrustServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   auto* profile = Profile::FromBrowserContext(context);
+
+  if (profile->IsEnterpriseIsolatedModeProfile() &&
+      !base::FeatureList::IsEnabled(
+          enterprise_isolated_mode::kEnterpriseIsolatedModeMilestone2)) {
+    return nullptr;
+  }
 
   if (!IsProfileManaged(profile)) {
     // Return nullptr since the current management configuration isn't

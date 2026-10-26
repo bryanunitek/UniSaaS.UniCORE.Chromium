@@ -75,7 +75,6 @@ DeviceInfo::DeviceInfo(
     const std::string& full_hardware_class,
     base::Time last_updated_timestamp,
     base::TimeDelta pulse_interval,
-    bool send_tab_to_self_receiving_enabled,
     SendTabReceivingType send_tab_to_self_receiving_type,
     const std::optional<SharingInfo>& sharing_info,
     const std::optional<PhoneAsASecurityKeyInfo>& paask_info,
@@ -87,7 +86,9 @@ DeviceInfo::DeviceInfo(
         desktop_to_ios_promo_receiving_types,
     GlicExperimentalTriggeringState glic_experimental_triggering_state,
     std::optional<int> glic_experimental_triggering_version,
-    std::optional<std::string> android_os_build_fingerprint_prefix)
+    base::flat_set<std::string> glic_experimental_triggering_capabilities,
+    std::optional<std::string> android_os_build_fingerprint_prefix,
+    std::optional<PersonalContextInfo> personal_context_info)
     : guid_(guid),
       client_name_(client_name),
       chrome_version_(chrome_version),
@@ -104,7 +105,6 @@ DeviceInfo::DeviceInfo(
           std::move(android_os_build_fingerprint_prefix)),
       last_updated_timestamp_(last_updated_timestamp),
       pulse_interval_(pulse_interval),
-      send_tab_to_self_receiving_enabled_(send_tab_to_self_receiving_enabled),
       send_tab_to_self_receiving_type_(send_tab_to_self_receiving_type),
       sharing_info_(sharing_info),
       paask_info_(paask_info),
@@ -117,7 +117,10 @@ DeviceInfo::DeviceInfo(
           desktop_to_ios_promo_receiving_types),
       glic_experimental_triggering_state_(glic_experimental_triggering_state),
       glic_experimental_triggering_version_(
-          glic_experimental_triggering_version) {}
+          glic_experimental_triggering_version),
+      glic_experimental_triggering_capabilities_(
+          std::move(glic_experimental_triggering_capabilities)),
+      personal_context_info_(std::move(personal_context_info)) {}
 
 DeviceInfo::DeviceInfo(const DeviceInfo& other) = default;
 
@@ -188,10 +191,6 @@ base::TimeDelta DeviceInfo::pulse_interval() const {
   return pulse_interval_;
 }
 
-bool DeviceInfo::send_tab_to_self_receiving_enabled() const {
-  return send_tab_to_self_receiving_enabled_;
-}
-
 DeviceInfo::SendTabReceivingType DeviceInfo::send_tab_to_self_receiving_type()
     const {
   return send_tab_to_self_receiving_type_;
@@ -215,6 +214,11 @@ std::optional<int> DeviceInfo::glic_experimental_triggering_version() const {
   return glic_experimental_triggering_version_;
 }
 
+const base::flat_set<std::string>&
+DeviceInfo::glic_experimental_triggering_capabilities() const {
+  return glic_experimental_triggering_capabilities_;
+}
+
 const std::optional<std::string>& DeviceInfo::server_determined_model_name()
     const {
   return server_determined_model_name_;
@@ -227,6 +231,11 @@ const std::optional<DeviceInfo::SharingInfo>& DeviceInfo::sharing_info() const {
 const std::optional<DeviceInfo::PhoneAsASecurityKeyInfo>&
 DeviceInfo::paask_info() const {
   return paask_info_;
+}
+
+const std::optional<DeviceInfo::PersonalContextInfo>&
+DeviceInfo::personal_context_info() const {
+  return personal_context_info_;
 }
 
 const std::string& DeviceInfo::fcm_registration_token() const {
@@ -249,10 +258,6 @@ void DeviceInfo::set_public_id(const std::string& id) {
 void DeviceInfo::set_full_hardware_class(
     const std::string& full_hardware_class) {
   full_hardware_class_ = full_hardware_class;
-}
-
-void DeviceInfo::set_send_tab_to_self_receiving_enabled(bool new_value) {
-  send_tab_to_self_receiving_enabled_ = new_value;
 }
 
 void DeviceInfo::set_send_tab_to_self_receiving_type(
@@ -279,6 +284,11 @@ void DeviceInfo::set_glic_experimental_triggering_version(
   glic_experimental_triggering_version_ = version;
 }
 
+void DeviceInfo::set_glic_experimental_triggering_capabilities(
+    const base::flat_set<std::string>& capabilities) {
+  glic_experimental_triggering_capabilities_ = capabilities;
+}
+
 void DeviceInfo::set_sharing_info(
     const std::optional<SharingInfo>& sharing_info) {
   sharing_info_ = sharing_info;
@@ -287,6 +297,11 @@ void DeviceInfo::set_sharing_info(
 void DeviceInfo::set_paask_info(
     std::optional<PhoneAsASecurityKeyInfo>&& paask_info) {
   paask_info_ = std::move(paask_info);
+}
+
+void DeviceInfo::set_personal_context_info(
+    std::optional<PersonalContextInfo> personal_context_info) {
+  personal_context_info_ = std::move(personal_context_info);
 }
 
 void DeviceInfo::set_client_name(const std::string& client_name) {

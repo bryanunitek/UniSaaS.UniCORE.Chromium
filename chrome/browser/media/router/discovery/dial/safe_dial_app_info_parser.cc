@@ -17,9 +17,10 @@ namespace media_router {
 namespace {
 
 DialAppState ParseDialAppState(const std::string& app_state) {
-  if (base::ToLowerASCII(app_state) == "running") {
+  if (base::EqualsCaseInsensitiveASCII(app_state, "running")) {
     return DialAppState::kRunning;
-  } else if (base::ToLowerASCII(app_state) == "stopped") {
+  }
+  if (base::EqualsCaseInsensitiveASCII(app_state, "stopped")) {
     return DialAppState::kStopped;
   }
   return DialAppState::kUnknown;
@@ -100,7 +101,7 @@ SafeDialAppInfoParser::~SafeDialAppInfoParser() = default;
 
 void SafeDialAppInfoParser::Parse(const std::string& xml_text,
                                   ParseCallback callback) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M161);
   GetDataDecoder().ParseXml(
       xml_text, data_decoder::mojom::XmlParser::WhitespaceBehavior::kIgnore,
       base::BindOnce(&SafeDialAppInfoParser::OnXmlParsingDone,

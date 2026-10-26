@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
@@ -43,9 +42,6 @@ class BrowserAccessibilityManager;
 // Web.
 class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
     : public AXPlatformNodeDelegate {
-  // TODO(b/498205735): Remove once hardening protections are no longer needed.
-  ADVANCED_MEMORY_SAFETY_CHECKS();
-
  public:
   // Creates a platform specific BrowserAccessibility. Ownership passes to the
   // caller.
@@ -102,6 +98,25 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
 
   BrowserAccessibility* PlatformGetParent() const;
 
+  // Returns true when this node needs an AXPlatformNode to represent it.
+  //
+  // Only an ignored node may return false. `AXPlatformNodeDelegate` walks the
+  // tree through `gfx::NativeViewAccessible`, and a node with no platform node
+  // gives none. The walk stops at such a node instead of stepping over it, thus
+  // it loses the children and the later siblings of that node. The unignored
+  // walk behind this delegate never gives an ignored node, thus only an ignored
+  // node is safe with no platform node.
+  //
+  // TODO(crbug.com/540914690): Take the platform node away from every ignored
+  // node, and then remove this function. The rule becomes universal at that
+  // point, thus no caller needs to ask.
+  virtual bool ShouldHavePlatformNode() const;
+
+  // Creates or destroys this node's AXPlatformNode so that it exists exactly
+  // when ShouldHavePlatformNode() is true. Subclasses that own a platform node
+  // must override this, and must tolerate not owning one.
+  virtual void UpdatePlatformNode() {}
+
   // The following methods are virtual so that they can be overridden on Mac to
   // take into account the "extra Mac nodes".
   //
@@ -122,9 +137,11 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
     using pointer = BrowserAccessibility*;
     using reference = BrowserAccessibility&;
 
+    PlatformChildIterator();
     PlatformChildIterator(const BrowserAccessibility* parent,
                           BrowserAccessibility* child);
     PlatformChildIterator(const PlatformChildIterator& it);
+    PlatformChildIterator& operator=(const PlatformChildIterator& it);
     ~PlatformChildIterator() override;
     PlatformChildIterator& operator++() override;
     // Postfix increment/decrement can't be overrides. See comment in
@@ -139,7 +156,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
     BrowserAccessibility* operator->() const override;
 
    private:
-    raw_ptr<const BrowserAccessibility> parent_;
+    raw_ptr<const BrowserAccessibility> parent_ = nullptr;
     AXNode::ChildIteratorBase<BrowserAccessibility,
                               &BrowserAccessibility::PlatformGetNextSibling,
                               &BrowserAccessibility::PlatformGetPreviousSibling,
@@ -155,15 +172,10 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
         : parent_(parent) {}
     PlatformChildrenRange(const PlatformChildrenRange&) = default;
 
-    PlatformChildIterator begin() { return parent_->PlatformChildrenBegin(); }
-    PlatformChildIterator end() { return parent_->PlatformChildrenEnd(); }
-
-    std::reverse_iterator<PlatformChildIterator> rbegin() {
-      return std::reverse_iterator(parent_->PlatformChildrenEnd());
+    PlatformChildIterator begin() const {
+      return parent_->PlatformChildrenBegin();
     }
-    std::reverse_iterator<PlatformChildIterator> rend() {
-      return std::reverse_iterator(parent_->PlatformChildrenBegin());
-    }
+    PlatformChildIterator end() const { return parent_->PlatformChildrenEnd(); }
 
    private:
     const raw_ptr<const BrowserAccessibility> parent_;
@@ -434,6 +446,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
   bool ShouldIgnoreHoveredStateForTesting() override;
   bool IsOffscreen() const override;
   bool IsWebContent() const override;
+  bool IsTopLevelWebContentRoot() const override;
   bool HasVisibleCaretOrSelection() const override;
   std::vector<AXPlatformNode*> GetSourceNodesForReverseRelations(
       ax::mojom::IntAttribute attr) override;
@@ -486,7 +499,10 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibility
   // errors are present.
   TextAttributeMap GetSpellingAndGrammarAttributes() const;
 
-  std::string SubtreeToStringHelper(size_t level) override;
+  std::string SubtreeToStringHelper(size_t level,
+                                    bool stop_at_document) override;
+
+  BrowserAccessibility* ToBrowserAccessibility() override;
 
   // The UIA tree formatter needs access to GetUniqueId() to identify the
   // starting point for tree dumps.

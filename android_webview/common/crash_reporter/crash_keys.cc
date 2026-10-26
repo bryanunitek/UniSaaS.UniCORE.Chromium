@@ -20,6 +20,8 @@ const char kContextLossReason[] = "context-loss-reason";
 
 const char kSupportLibraryWebkitVersion[] = "androidx-webkit-version";
 
+const char kSkippedDataDirLock[] = "skipped-data-dir-lock";
+
 // clang-format off
 const char* const kWebViewCrashKeyAllowList[] = {
     kAppPackageName,
@@ -28,6 +30,7 @@ const char* const kWebViewCrashKeyAllowList[] = {
     kAndroidSdkInt,
     kContextLossReason,
     kSupportLibraryWebkitVersion,
+    kSkippedDataDirLock,
 
     // process type
     "ptype",
@@ -48,6 +51,8 @@ const char* const kWebViewCrashKeyAllowList[] = {
     "gr-context-type",
     "oop_read_failure",
     "gpu-gl-error-message",
+    "skia-compile-error",
+    "skia-error-shader",
 
     // components/viz
     "viz_deserialization",
@@ -225,6 +230,9 @@ const char* const kWebViewCrashKeyAllowList[] = {
     // crbug.com/456871291
     "BadHistogramArgs-name",
     "BadHistogramArgs-validity",
+
+    // crbug.com/542413274
+    "MismatchedHistogramArgs-name",
 
     // crbug.com/40260662
     "PersistentSampleMap-corrupted",

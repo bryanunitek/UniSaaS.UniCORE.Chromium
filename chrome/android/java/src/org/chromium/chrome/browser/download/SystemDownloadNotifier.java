@@ -169,17 +169,16 @@ public class SystemDownloadNotifier implements DownloadNotifier {
      * Add a new notification to be handled. If there is currently a posted task to handle pending
      * notifications, adding the new notification to the pending queue. Otherwise, process the
      * notification immediately and post a task to handle incoming ones.
+     *
      * @param notificationInfo Notification to be displayed.
      */
-    void addPendingNotification(NotificationInfo notificationInfo) {
+    private void addPendingNotification(NotificationInfo notificationInfo) {
         ThrottlingNotificationScheduler.getInstance()
                 .addPendingNotificationTask(
                         new PendingNotificationTask(
                                 notificationInfo.mInfo.getContentId(),
                                 notificationInfo.mPriority,
-                                () -> {
-                                    updateNotification(notificationInfo);
-                                }));
+                                () -> updateNotification(notificationInfo)));
     }
 
     /**

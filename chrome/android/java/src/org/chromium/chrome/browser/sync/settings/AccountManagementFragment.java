@@ -44,6 +44,7 @@ import org.chromium.chrome.browser.signin.services.ProfileDataCache;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninManager.SignInStateObserver;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
+import org.chromium.chrome.browser.sync.SyncSettingsUtils;
 import org.chromium.chrome.browser.sync.ui.PassphraseDialogFragment;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.signin.SignOutCoordinator;
@@ -63,6 +64,7 @@ import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SignoutReason;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.sync.UserActionableError;
+import org.chromium.components.trusted_vault.SecurityDomainId;
 import org.chromium.components.trusted_vault.TrustedVaultClient;
 import org.chromium.components.trusted_vault.TrustedVaultUserActionTriggerForUMA;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -176,7 +178,8 @@ public class AccountManagementFragment extends ChromeBaseSettingsFragment
         if (mPrimaryAccount == null || accounts.isEmpty()) {
             // The AccountManagementFragment can only be shown when the user is signed in. If the
             // user is signed out, exit the fragment.
-            SettingsNavigationFactory.createSettingsNavigation().finishCurrentSettings(this);
+            SettingsNavigationFactory.createSettingsNavigation(requireActivity())
+                    .finishCurrentSettings(this);
             return;
         }
 
@@ -237,6 +240,7 @@ public class AccountManagementFragment extends ChromeBaseSettingsFragment
                                 assertNonNull(assumeNonNull(mSnackbarManagerSupplier).get()),
                                 SignoutReason.USER_CLICKED_SIGNOUT_SETTINGS,
                                 /* showConfirmDialog= */ false,
+                                /* offerDataDeletionChoice= */ false,
                                 CallbackUtils.emptyRunnable());
                         return true;
                     });
@@ -332,7 +336,8 @@ public class AccountManagementFragment extends ChromeBaseSettingsFragment
                                             IdentityServicesProvider.get()
                                                     .getIdentityManager(getProfile()))
                                     .hasPrimaryAccount();
-                            SyncSettingsUtils.openGoogleMyAccount(getActivity());
+                            SyncSettingsUtils.openGoogleMyAccount(
+                                    getContext(), getCustomTabLauncher());
                         }));
 
         return manageYourGoogleAccountPreference;
@@ -371,7 +376,8 @@ public class AccountManagementFragment extends ChromeBaseSettingsFragment
 
                                 // Return to the last opened tab if triggered from the content area.
                                 if (mGaiaServiceType != GAIAServiceType.GAIA_SERVICE_TYPE_NONE) {
-                                    SettingsNavigationFactory.createSettingsNavigation()
+                                    SettingsNavigationFactory.createSettingsNavigation(
+                                                    requireActivity())
                                             .finishCurrentSettings(this);
                                 }
                             });
@@ -489,11 +495,11 @@ public class AccountManagementFragment extends ChromeBaseSettingsFragment
         // done even if the user cancelled the flow (i.e. resultCode != RESULT_OK) because it's
         // harmless to issue a redundant notifyKeysChanged().
         if (requestCode == REQUEST_CODE_TRUSTED_VAULT_KEY_RETRIEVAL) {
-            TrustedVaultClient.get()
+            TrustedVaultClient.get(SecurityDomainId.CHROME_SYNC)
                     .notifyKeysChanged(TrustedVaultUserActionTriggerForUMA.SETTINGS);
         }
         if (requestCode == REQUEST_CODE_TRUSTED_VAULT_RECOVERABILITY_DEGRADED) {
-            TrustedVaultClient.get().notifyRecoverabilityChanged();
+            TrustedVaultClient.get(SecurityDomainId.CHROME_SYNC).notifyRecoverabilityChanged();
         }
     }
 
@@ -542,7 +548,7 @@ public class AccountManagementFragment extends ChromeBaseSettingsFragment
         Bundle arguments = new Bundle();
         arguments.putInt(SHOW_GAIA_SERVICE_TYPE_EXTRA, serviceType);
         SettingsNavigation settingsNavigation =
-                SettingsNavigationFactory.createSettingsNavigation();
+                SettingsNavigationFactory.createSettingsNavigation(context);
         settingsNavigation.startSettings(
                 context, AccountManagementFragment.class, arguments, /* addToBackStack= */ true);
     }

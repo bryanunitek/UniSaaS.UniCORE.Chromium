@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -52,9 +53,11 @@ class PhoneNumber : public FormGroup {
 
   explicit PhoneNumber(const AutofillProfile* profile);
   PhoneNumber(const PhoneNumber& number);
+  PhoneNumber(PhoneNumber&& number) noexcept;
   ~PhoneNumber() override;
 
   PhoneNumber& operator=(const PhoneNumber& number);
+  PhoneNumber& operator=(PhoneNumber&& number) noexcept;
   bool operator==(const PhoneNumber& other) const;
 
   void set_profile(const AutofillProfile* profile) { profile_ = profile; }
@@ -63,14 +66,13 @@ class PhoneNumber : public FormGroup {
   void GetMatchingTypes(std::u16string_view text,
                         std::string_view app_locale,
                         FieldTypeSet* matching_types) const override;
-  using FormGroup::GetInfo;
-  std::u16string GetInfo(const AutofillType& type,
+  std::u16string GetInfo(FieldType type,
                          std::string_view app_locale) const override;
   std::u16string GetRawInfo(FieldType type) const override;
   void SetRawInfoWithVerificationStatus(FieldType type,
                                         std::u16string_view value,
                                         VerificationStatus status) override;
-  bool SetInfoWithVerificationStatus(const AutofillType& type,
+  bool SetInfoWithVerificationStatus(FieldType type,
                                      std::u16string_view value,
                                      std::string_view app_locale,
                                      const VerificationStatus status) override;
@@ -79,19 +81,29 @@ class PhoneNumber : public FormGroup {
   // The class used to combine home phone parts into a whole number.
   class PhoneCombineHelper {
    public:
+    static PhoneCombineHelper FromObservedValues(
+        const base::flat_map<FieldType, std::u16string>& observed_values);
+
     PhoneCombineHelper();
+    PhoneCombineHelper(const PhoneCombineHelper&);
+    PhoneCombineHelper(PhoneCombineHelper&&);
+    PhoneCombineHelper& operator=(const PhoneCombineHelper&);
+    PhoneCombineHelper& operator=(PhoneCombineHelper&&);
     ~PhoneCombineHelper();
 
     // Processes the `value` accordingly given a phone number `field_type`.
     void SetInfo(FieldType field_type, std::u16string_view value);
 
-    // Parses the number built up from pieces stored via SetInfo() according to
-    // the specified `profile`'s country code, falling back to the given
-    // `app_locale` if the `profile` has no associated country code.  Returns
-    // true if parsing was successful, false otherwise.
-    bool ParseNumber(const AutofillProfile& profile,
-                     std::string_view app_locale,
-                     std::u16string* value) const;
+    // Parses the number built up from pieces stored via `SetInfo()` according
+    // to the given two-letter region code and returns it as a string in
+    // international format if it is a valid phone number. The region code
+    // should be one of the values returned by `autofill::GetCountryCodes()`.
+    std::optional<std::u16string> ParseNumber(const std::string& region) const;
+
+    // Parses the combined phone number and returns the region to which it
+    // belongs. The region code is the two-letter string according to ISO-3166
+    // that represents the country of the phone number.
+    std::optional<std::u16string> GetRegionCode() const;
 
     // Returns true if both `phone_` and `whole_number_` are empty.
     bool IsEmpty() const;
@@ -116,8 +128,7 @@ class PhoneNumber : public FormGroup {
   // FormGroup:
   FieldTypeSet GetSupportedTypes() const override;
 
-  // Updates the cached parsed number if the profile's region has changed
-  // since the last time the cache was updated.
+  // Updates the cached parsed number if the number has changed substantially.
   void UpdateCacheIfNeeded(std::string_view app_locale) const;
 
   // The phone number.

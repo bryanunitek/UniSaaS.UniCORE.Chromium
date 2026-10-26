@@ -9,7 +9,6 @@
 #include "base/containers/map_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/optional_util.h"
-#include "build/build_config.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_metrics_helper.h"
@@ -27,13 +26,8 @@
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
 #include "components/webapps/browser/features.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
 #include "url/origin.h"
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/web_applications/web_app_system_web_app_delegate_map_utils.h"
-#endif
 
 class Profile;
 
@@ -42,13 +36,6 @@ namespace web_app {
 ManifestUpdateManager::ManifestUpdateManager() = default;
 
 ManifestUpdateManager::~ManifestUpdateManager() = default;
-
-#if BUILDFLAG(IS_CHROMEOS)
-void ManifestUpdateManager::SetSystemWebAppDelegateMap(
-    const ash::SystemWebAppDelegateMap* system_web_apps_delegate_map) {
-  system_web_apps_delegate_map_ = system_web_apps_delegate_map;
-}
-#endif
 
 void ManifestUpdateManager::SetProvider(base::PassKey<WebAppProvider>,
                                         WebAppProvider& provider) {
@@ -90,51 +77,49 @@ void ManifestUpdateManager::OnManifestSeenOnPrimaryPage(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(blink::features::kWebAppMigrationApi)) {
-    if (!manifest->migrate_from.empty()) {
-      provider_->scheduler().ScheduleWebAppInstallFromMigrateFromField(
-          web_contents.GetWeakPtr(), manifest.Clone(), base::DoNothing());
+  if (!manifest->migrate_from.empty()) {
+    provider_->scheduler().ScheduleWebAppInstallFromMigrateFromField(
+        web_contents.GetWeakPtr(), manifest.Clone(), base::DoNothing());
 
-      WebAppTabHelper* tab_helper =
-          WebAppTabHelper::FromWebContents(&web_contents);
-      if (tab_helper && tab_helper->window_app_id().has_value()) {
-        const webapps::AppId& window_app_id = *tab_helper->window_app_id();
-        for (const auto& migrate_from : manifest->migrate_from) {
-          std::optional<webapps::ManifestId> migrate_from_manifest_id =
-              webapps::ManifestId::Create(migrate_from->id);
-          if (!migrate_from_manifest_id.has_value()) {
-            continue;
-          }
-          if (GenerateAppIdFromManifestId(*migrate_from_manifest_id) ==
-                  window_app_id &&
-              migrate_from->install_url.has_value()) {
-            std::optional<base::Time> previous_time_for_silent_icon_update =
-                base::OptionalFromPtr(base::FindOrNull(
-                    update_check_for_silent_updates_, window_app_id));
-            provider_->scheduler().FetchManifestAndUpdate(
-                *migrate_from->install_url, *migrate_from_manifest_id,
-                previous_time_for_silent_icon_update,
-                /*force_trusted_silent_update=*/false,
-                base::BindOnce(&ManifestUpdateManager::
-                                   OnMigrationFetchManifestAndUpdateComplete,
-                               weak_factory_.GetWeakPtr(), window_app_id));
-          }
+    WebAppTabHelper* tab_helper =
+        WebAppTabHelper::FromWebContents(&web_contents);
+    if (tab_helper && tab_helper->window_app_id().has_value()) {
+      const webapps::AppId& window_app_id = *tab_helper->window_app_id();
+      for (const auto& migrate_from : manifest->migrate_from) {
+        std::optional<webapps::ManifestId> migrate_from_manifest_id =
+            webapps::ManifestId::Create(migrate_from->id);
+        if (!migrate_from_manifest_id.has_value()) {
+          continue;
+        }
+        if (GenerateAppIdFromManifestId(*migrate_from_manifest_id) ==
+                window_app_id &&
+            migrate_from->install_url.has_value()) {
+          std::optional<base::Time> previous_time_for_silent_icon_update =
+              base::OptionalFromPtr(base::FindOrNull(
+                  update_check_for_silent_updates_, window_app_id));
+          provider_->scheduler().FetchManifestAndUpdate(
+              *migrate_from->install_url, *migrate_from_manifest_id,
+              previous_time_for_silent_icon_update,
+              /*force_trusted_silent_update=*/false,
+              base::BindOnce(&ManifestUpdateManager::
+                                 OnMigrationFetchManifestAndUpdateComplete,
+                             weak_factory_.GetWeakPtr(), window_app_id));
         }
       }
     }
-    if (manifest->migrate_to &&
-        provider_->registrar_unsafe().AppMatches(
-            GenerateAppIdFromManifest(*manifest),
-            WebAppFilter::CanAppInstallTargetMigrationApp())) {
-      std::optional<webapps::ManifestId> source_manifest_id =
-          webapps::ManifestId::Create(manifest->id);
-      std::optional<webapps::ManifestId> target_manifest_id =
-          webapps::ManifestId::Create(manifest->migrate_to->id);
-      CHECK(source_manifest_id.has_value() && target_manifest_id.has_value());
-      provider_->scheduler().ScheduleInstallMigrateToApp(
-          *source_manifest_id, *target_manifest_id,
-          manifest->migrate_to->install_url, base::DoNothing());
-    }
+  }
+  if (manifest->migrate_to &&
+      provider_->registrar_unsafe().AppMatches(
+          GenerateAppIdFromManifest(*manifest),
+          WebAppFilter::CanAppInstallTargetMigrationApp())) {
+    std::optional<webapps::ManifestId> source_manifest_id =
+        webapps::ManifestId::Create(manifest->id);
+    std::optional<webapps::ManifestId> target_manifest_id =
+        webapps::ManifestId::Create(manifest->migrate_to->id);
+    CHECK(source_manifest_id.has_value() && target_manifest_id.has_value());
+    provider_->scheduler().ScheduleInstallMigrateToApp(
+        *source_manifest_id, *target_manifest_id,
+        manifest->migrate_to->install_url, base::DoNothing());
   }
 
   TriggerManifestUpdateProcess(web_contents, app_id);

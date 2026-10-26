@@ -59,33 +59,36 @@ void LayoutTableColumn::Trace(Visitor* visitor) const {
 void LayoutTableColumn::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   if (diff.HasDifference()) {
     if (LayoutTable* table = Table()) {
       if (old_style && diff.NeedsNormalPaintInvalidation()) {
         // Regenerate table borders if needed
-        if (!old_style->BorderVisuallyEqual(StyleRef()))
+        if (!old_style->BorderVisuallyEqual(new_style)) {
           table->GridBordersChanged();
+        }
         // Table paints column background. Tell table to repaint.
-        if (StyleRef().HasBackground() || old_style->HasBackground())
+        if (new_style.HasBackground() || old_style->HasBackground()) {
           table->SetBackgroundNeedsFullPaintInvalidation();
+        }
       }
       if (diff.NeedsFullLayout()) {
         table->SetIntrinsicLogicalWidthsDirty();
         if (old_style &&
             TableTypes::CreateColumn(*old_style,
                                      /* default_inline_size */ std::nullopt,
-                                     table->StyleRef().IsFixedTableLayout()) !=
-                TableTypes::CreateColumn(
-                    StyleRef(), /* default_inline_size */ std::nullopt,
-                    table->StyleRef().IsFixedTableLayout())) {
+                                     table->Style().IsFixedTableLayout()) !=
+                TableTypes::CreateColumn(new_style,
+                                         /* default_inline_size */ std::nullopt,
+                                         table->Style().IsFixedTableLayout())) {
           table->GridBordersChanged();
         }
       }
     }
   }
-  LayoutBox::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBox::StyleDidChange(diff, old_style, new_style, style_change_context);
 }
 
 void LayoutTableColumn::ImageChanged(WrappedImagePtr, CanDeferInvalidation) {
@@ -101,8 +104,9 @@ void LayoutTableColumn::InsertedIntoTree() {
   LayoutBox::InsertedIntoTree();
   LayoutTable* table = Table();
   DCHECK(table);
-  if (StyleRef().HasBackground())
+  if (Style().HasBackground()) {
     table->SetBackgroundNeedsFullPaintInvalidation();
+  }
   table->TableGridStructureChanged();
 }
 
@@ -111,8 +115,9 @@ void LayoutTableColumn::WillBeRemovedFromTree() {
   LayoutBox::WillBeRemovedFromTree();
   LayoutTable* table = Table();
   DCHECK(table);
-  if (StyleRef().HasBackground())
+  if (Style().HasBackground()) {
     table->SetBackgroundNeedsFullPaintInvalidation();
+  }
   table->TableGridStructureChanged();
 }
 
@@ -151,20 +156,18 @@ LayoutTable* LayoutTableColumn::Table() const {
 
 void LayoutTableColumn::UpdateFromElement() {
   NOT_DESTROYED();
-  unsigned old_span = span_;
-  if (const auto* tc = DynamicTo<HTMLTableColElement>(GetNode())) {
-    span_ = tc->span();
-  } else {
-    span_ = 1;
+  const auto* col_element = DynamicTo<HTMLTableColElement>(GetNode());
+  const unsigned old_span = span_;
+  span_ = col_element ? col_element->span() : 1u;
+  if (span_ == old_span) {
+    return;
   }
-  if (span_ != old_span && Style() && Parent()) {
+  if (LayoutTable* table = Table()) {
     SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
         layout_invalidation_reason::kAttributeChanged);
-    if (LayoutTable* table = Table()) {
-      table->GridBordersChanged();
-      if (StyleRef().HasBackground() || TableHasColumnsWithBackground(table)) {
-        table->SetBackgroundNeedsFullPaintInvalidation();
-      }
+    table->GridBordersChanged();
+    if (Style().HasBackground() || TableHasColumnsWithBackground(table)) {
+      table->SetBackgroundNeedsFullPaintInvalidation();
     }
   }
 }
@@ -177,7 +180,7 @@ PhysicalSize LayoutTableColumn::StitchedSize() const {
     return PhysicalSize();
   }
 
-  WritingDirectionMode direction = StyleRef().GetWritingDirection();
+  WritingDirectionMode direction = Style().GetWritingDirection();
 
   LogicalSize size;
   bool found_geometries = false;
@@ -199,7 +202,7 @@ PhysicalSize LayoutTableColumn::StitchedSize() const {
 
       found_geometries = true;
       size.inline_size = geometry.inline_size;
-      size.block_size -= table->StyleRef().TableBorderSpacing().block_size * 2;
+      size.block_size -= table->Style().TableBorderSpacing().block_size * 2;
     }
 
     size.block_size +=
@@ -208,7 +211,7 @@ PhysicalSize LayoutTableColumn::StitchedSize() const {
          fragment.Borders().ConvertToLogical(direction).BlockSum());
   }
 
-  return ToPhysicalSize(size, table->StyleRef().GetWritingMode());
+  return ToPhysicalSize(size, table->Style().GetWritingMode());
 }
 
 PhysicalOffset LayoutTableColumn::PhysicalLocation() const {
@@ -270,7 +273,8 @@ PhysicalRect LayoutTableColumn::BoundingBoxRelativeToFirstFragment() const {
 void LayoutTableColumn::QuadsInAncestorInternal(
     Vector<gfx::QuadF>& quads,
     const LayoutBoxModelObject* ancestor,
-    MapCoordinatesFlags mode) const {
+    MapCoordinatesFlags mode,
+    BoxQuadType) const {
   NOT_DESTROYED();
   // Offset from the root fragmentation context to the first synthesized table
   // column fragment. When mapping to ancestors, it's all about the offsets from
@@ -315,7 +319,7 @@ void LayoutTableColumn::ForAllSynthesizedFragments(
   DCHECK(table);
   DCHECK_GT(table->PhysicalFragmentCount(), 0u);
 
-  WritingDirectionMode writing_direction = StyleRef().GetWritingDirection();
+  WritingDirectionMode writing_direction = Style().GetWritingDirection();
   LayoutTableColumn* parent_colgroup = nullptr;
   if (IsColumn()) {
     parent_colgroup = DynamicTo<LayoutTableColumn>(Parent());
@@ -417,7 +421,7 @@ void LayoutTableColumn::ForAllSynthesizedFragments(
                                  .ConvertToLogical(writing_direction);
       logical_rect.offset.inline_offset +=
           decorations.inline_start +
-          table->StyleRef().TableBorderSpacing().inline_size;
+          table->Style().TableBorderSpacing().inline_size;
     }
 
     WritingModeConverter container_converter(writing_direction, container_size);

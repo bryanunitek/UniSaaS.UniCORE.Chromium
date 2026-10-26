@@ -5,7 +5,7 @@
 import("//chrome/common/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions)
+assert(enable_extensions_core)
 assert(is_chromeos)
 
 source_set("enterprise_platform_keys") {
@@ -13,8 +13,6 @@ source_set("enterprise_platform_keys") {
     "enterprise_platform_keys_api.cc",
     "enterprise_platform_keys_api.h",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [
     "//build:chromeos_buildflags",

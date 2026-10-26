@@ -98,19 +98,25 @@ PermissionUpdateMessageController::GetPermissionUpdateUiResourcesId(
         } else if (content_settings_type ==
                    ContentSettingsType::HAND_TRACKING) {
           message_id = IDS_MESSAGE_MISSING_HAND_TRACKING_PERMISSION_TEXT;
+        } else if (content_settings_type ==
+                       ContentSettingsType::LOCAL_NETWORK_ACCESS ||
+                   content_settings_type ==
+                       ContentSettingsType::LOCAL_NETWORK) {
+          message_id = IDS_MESSAGE_MISSING_LOCAL_NETWORK_PERMISSION_TEXT;
         } else {
           NOTREACHED();
         }
         break;
       case IDS_MESSAGE_MISSING_CAMERA_PERMISSION_TEXT:
-        DCHECK(content_settings_type == ContentSettingsType::MEDIASTREAM_MIC);
+        CHECK(content_settings_type == ContentSettingsType::MEDIASTREAM_MIC,
+              base::NotFatalUntil::M162);
         return std::make_tuple(
             IDR_ANDROID_MESSAGE_PERMISSION_VIDEOCAM,
             IDS_MESSAGE_MISSING_MICROPHONE_CAMERA_PERMISSION_TITLE,
             IDS_MESSAGE_MISSING_MICROPHONE_CAMERA_PERMISSIONS_TEXT);
       case IDS_MESSAGE_MISSING_MICROPHONE_PERMISSION_TEXT:
-        DCHECK(content_settings_type ==
-               ContentSettingsType::MEDIASTREAM_CAMERA);
+        CHECK(content_settings_type == ContentSettingsType::MEDIASTREAM_CAMERA,
+              base::NotFatalUntil::M162);
         return std::make_tuple(
             IDR_ANDROID_MESSAGE_PERMISSION_VIDEOCAM,
             IDS_MESSAGE_MISSING_MICROPHONE_CAMERA_PERMISSION_TITLE,
@@ -125,6 +131,10 @@ PermissionUpdateMessageController::GetPermissionUpdateUiResourcesId(
       return std::make_tuple(IDR_ANDROID_INFOBAR_GEOLOCATION,
                              IDS_MESSAGE_MISSING_LOCATION_PERMISSION_TITLE,
                              IDS_MESSAGE_MISSING_LOCATION_PERMISSION_TEXT);
+    case IDS_MESSAGE_MISSING_LOCAL_NETWORK_PERMISSION_TEXT:
+      return std::make_tuple(IDR_ANDROID_INFOBAR_LOCAL_NETWORK,
+                             IDS_MESSAGE_MISSING_LOCAL_NETWORK_PERMISSION_TITLE,
+                             IDS_MESSAGE_MISSING_LOCAL_NETWORK_PERMISSION_TEXT);
     case IDS_MESSAGE_MISSING_MICROPHONE_PERMISSION_TEXT:
       return std::make_tuple(IDR_ANDROID_INFOBAR_MEDIA_STREAM_MIC,
                              IDS_MESSAGE_MISSING_MICROPHONE_PERMISSION_TITLE,

@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/xlink_names.h"
 #include "third_party/blink/renderer/core/xml_names.h"
 #include "third_party/blink/renderer/core/xmlns_names.h"
+#include "third_party/blink/renderer/platform/heap/thread_state_scopes.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
 #include "third_party/blink/renderer/platform/wtf/static_constructors.h"
@@ -36,12 +37,13 @@ namespace blink {
 struct SameSizeAsQualifiedNameImpl
     : public RefCounted<SameSizeAsQualifiedNameImpl> {
   unsigned bitfield;
+  uint32_t bloom_filter;
   void* pointers[4];
 };
 
-ASSERT_SIZE(QualifiedName::QualifiedNameImpl, SameSizeAsQualifiedNameImpl);
+ASSERT_SIZE(QualifiedNameImpl, SameSizeAsQualifiedNameImpl);
 
-using QualifiedNameCache = HashSet<QualifiedName::QualifiedNameImpl*>;
+using QualifiedNameCache = HashSet<QualifiedNameImpl*>;
 
 static QualifiedNameCache& GetQualifiedNameCache() {
   // This code is lockless and thus assumes it all runs on one thread!
@@ -50,25 +52,43 @@ static QualifiedNameCache& GetQualifiedNameCache() {
   return *g_name_cache;
 }
 
+scoped_refptr<QualifiedNameImpl> QualifiedNameImpl::Create(
+    StringImpl* prefix,
+    StringImpl* local_name,
+    StringImpl* namespace_uri,
+    bool is_static) {
+  if (is_static) {
+    // Static QualifiedNameImpl objects are process-lifetime singletons with
+    // refcounting disabled. Disable LSan to prevent false-positive leak
+    // reports on exit when shutting down without running destructors
+    // (matching StringImpl::CreateStatic).
+    LEAK_SANITIZER_DISABLED_SCOPE;
+    return base::AdoptRef(
+        new QualifiedNameImpl(prefix, local_name, namespace_uri, is_static));
+  }
+  return base::AdoptRef(
+      new QualifiedNameImpl(prefix, local_name, namespace_uri, is_static));
+}
+
 struct QNameComponentsTranslator {
-  static unsigned GetHash(const QualifiedNameData& data) {
+  static uint32_t GetHash(const QualifiedNameData& data) {
     return HashComponents(data.components_);
   }
-  static bool Equal(QualifiedName::QualifiedNameImpl* name,
-                    const QualifiedNameData& data) {
+  static bool Equal(QualifiedNameImpl* name, const QualifiedNameData& data) {
     return data.components_.prefix_ == name->prefix_.Impl() &&
            data.components_.local_name_ == name->local_name_.Impl() &&
            data.components_.namespace_ == name->namespace_.Impl();
   }
-  static void Store(QualifiedName::QualifiedNameImpl*& location,
+  static void Store(QualifiedNameImpl*& location,
                     const QualifiedNameData& data,
-                    unsigned) {
+                    uint32_t hash_code) {
     const QualifiedNameComponents& components = data.components_;
-    auto name = QualifiedName::QualifiedNameImpl::Create(
-        components.prefix_, components.local_name_, components.namespace_,
-        data.is_static_);
+    auto name =
+        QualifiedNameImpl::Create(components.prefix_, components.local_name_,
+                                  components.namespace_, data.is_static_);
     name->AddRef();
     location = name.get();
+    DCHECK_EQ(HashTraits<QualifiedNameImpl*>::GetHash(location), hash_code);
   }
 };
 
@@ -103,7 +123,7 @@ QualifiedName::QualifiedName(const AtomicString& p,
 
 QualifiedName::~QualifiedName() = default;
 
-QualifiedName::QualifiedNameImpl::~QualifiedNameImpl() {
+QualifiedNameImpl::~QualifiedNameImpl() {
   GetQualifiedNameCache().erase(this);
 }
 
@@ -133,7 +153,12 @@ const AtomicString& QualifiedName::LocalNameUpperSlow() const {
   return impl_->local_name_upper_;
 }
 
-unsigned QualifiedName::QualifiedNameImpl::ComputeHash() const {
+uint32_t QualifiedName::BloomFilterSlow() const {
+  impl_->bloom_filter_ = Element::FilterForString(LocalNameUpper());
+  return impl_->bloom_filter_;
+}
+
+uint32_t QualifiedNameImpl::ComputeHash() const {
   QualifiedNameComponents components = {prefix_.Impl(), local_name_.Impl(),
                                         namespace_.Impl()};
   return HashComponents(components);
@@ -176,6 +201,6 @@ QualifiedNameWithHash::QualifiedNameWithHash(const AtomicString& prefix,
                                              const AtomicString& namespace_uri,
                                              bool is_static)
     : QualifiedName(prefix, local_name, namespace_uri, is_static),
-      bloom_filter(Element::FilterForAttribute(*this)) {}
+      bloom_filter(BloomFilter()) {}
 
 }  // namespace blink

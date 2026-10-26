@@ -7,11 +7,15 @@ package org.chromium.chrome.browser.tasks.tab_management;
 import static android.view.KeyEvent.KEYCODE_PAGE_DOWN;
 import static android.view.KeyEvent.KEYCODE_PAGE_UP;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import android.view.KeyEvent;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -101,7 +105,7 @@ public class TabKeyEventHandlerUnitTest {
                 mTabModel,
                 /* moveSingleTab= */ false);
 
-        verify(mTabModel).moveRelatedTabs(tab.getId(), 2);
+        verify(mTabModel).moveTab(tab.getId(), 2);
     }
 
     @Test
@@ -114,7 +118,88 @@ public class TabKeyEventHandlerUnitTest {
                 mTabModel,
                 /* moveSingleTab= */ false);
 
-        verify(mTabModel).moveRelatedTabs(tab.getId(), 0);
+        verify(mTabModel).moveTab(tab.getId(), 0);
+    }
+
+    @Test
+    public void testMoveBackwardGroupedTab() {
+        List<Tab> group = addTabGroup();
+        Tab tab = group.get(0);
+        addTab();
+
+        TabKeyEventHandler.onPageKeyEvent(
+                new TabKeyEventData(tab.getId(), KEYCODE_PAGE_DOWN),
+                mTabModel,
+                /* moveSingleTab= */ false);
+
+        verify(mTabModel).moveGroupToIndex(tab.getTabGroupId(), 2);
+    }
+
+    @Test
+    public void testReorderTab_MoveForward() {
+        addTab();
+        Tab tab1 = addTab();
+
+        TabKeyEventHandler.reorderTab(
+                mTabModel, tab1.getId(), /* toPrevious= */ true, /* moveSingleTab= */ true);
+
+        verify(mTabModel).moveTab(tab1.getId(), 0);
+    }
+
+    @Test
+    public void testReorderTab_MoveBackward() {
+        Tab tab0 = addTab();
+        addTab();
+
+        TabKeyEventHandler.reorderTab(
+                mTabModel, tab0.getId(), /* toPrevious= */ false, /* moveSingleTab= */ true);
+
+        verify(mTabModel).moveTab(tab0.getId(), 1);
+    }
+
+    @Test
+    public void testIsCtrlDpadReorderEvent() {
+        KeyEvent ctrlUp =
+                new KeyEvent(
+                        0,
+                        0,
+                        KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_DPAD_UP,
+                        0,
+                        KeyEvent.META_CTRL_ON);
+        KeyEvent ctrlDown =
+                new KeyEvent(
+                        0,
+                        0,
+                        KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_DPAD_DOWN,
+                        0,
+                        KeyEvent.META_CTRL_ON);
+        KeyEvent nonCtrlUp =
+                new KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP, 0, 0);
+        KeyEvent ctrlPageUp =
+                new KeyEvent(
+                        0,
+                        0,
+                        KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_PAGE_UP,
+                        0,
+                        KeyEvent.META_CTRL_ON);
+
+        assertTrue(TabKeyEventHandler.isCtrlDpadReorderEvent(ctrlUp));
+        assertTrue(TabKeyEventHandler.isCtrlDpadReorderEvent(ctrlDown));
+        assertFalse(TabKeyEventHandler.isCtrlDpadReorderEvent(nonCtrlUp));
+        assertFalse(TabKeyEventHandler.isCtrlDpadReorderEvent(ctrlPageUp));
+    }
+
+    @Test
+    public void testIsMovePrevious() {
+        KeyEvent dpadUp = new KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP, 0, 0);
+        KeyEvent dpadDown =
+                new KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN, 0, 0);
+
+        assertTrue(TabKeyEventHandler.isMovePrevious(dpadUp));
+        assertFalse(TabKeyEventHandler.isMovePrevious(dpadDown));
     }
 
     private Tab addTab() {
@@ -125,7 +210,6 @@ public class TabKeyEventHandlerUnitTest {
         int index = mTabCount++;
         when(mTabModel.indexOf(tab)).thenReturn(index);
         when(mTabModel.getTabAt(index)).thenReturn(tab);
-        when(mTabModel.getRelatedTabList(tabId)).thenReturn(List.of(tab));
         return tab;
     }
 
@@ -138,8 +222,7 @@ public class TabKeyEventHandlerUnitTest {
         when(tab1.getTabGroupId()).thenReturn(tabGroupId);
 
         List<Tab> tabs = List.of(tab0, tab1);
-        when(mTabModel.getRelatedTabList(tab0.getId())).thenReturn(tabs);
-        when(mTabModel.getRelatedTabList(tab1.getId())).thenReturn(tabs);
+        when(mTabModel.getTabsInGroup(tabGroupId)).thenReturn(tabs);
         return tabs;
     }
 }

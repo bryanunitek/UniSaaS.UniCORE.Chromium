@@ -14,8 +14,10 @@ import android.content.res.Resources;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewStub;
 import android.widget.ImageButton;
 import android.widget.TextView;
@@ -25,27 +27,37 @@ import androidx.annotation.VisibleForTesting;
 import androidx.core.graphics.Insets;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
+import org.chromium.chrome.browser.tabmodel.TabCreator;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.back_button.BackButtonCoordinator;
+import org.chromium.chrome.browser.toolbar.extensions.ExtensionsToolbarCoordinator;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
 import org.chromium.chrome.browser.toolbar.reload_button.ReloadButtonCoordinator;
 import org.chromium.chrome.browser.toolbar.top.NavigationPopup;
 import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
+import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskFeatureKey;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.chrome.browser.web_app_header.R;
 import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
@@ -56,11 +68,13 @@ import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.components.webapps.WebappsUtils;
 import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.ui.base.ActivityWindowAndroid;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
-import org.chromium.ui.display.DisplayAndroid;
-import org.chromium.ui.display.DisplayUtil;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+import org.chromium.ui.util.AttrUtils;
 import org.chromium.ui.util.TokenHolder;
 import org.chromium.ui.widget.ChromeImageButton;
 import org.chromium.url.GURL;
@@ -79,8 +93,9 @@ import java.util.function.Supplier;
  */
 @NullMarked
 @RequiresApi(api = Build.VERSION_CODES.VANILLA_ICE_CREAM)
-public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
-        implements DesktopWindowStateManager.AppHeaderObserver,
+public class WebAppHeaderLayoutCoordinator
+        implements TabObserver,
+                DesktopWindowStateManager.AppHeaderObserver,
                 WebAppHeaderDelegate,
                 BrowserControlsStateProvider.Observer,
                 ThemeColorProvider.TintObserver {
@@ -89,8 +104,8 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     private static final int ANIMATION_PAUSE_DELAY_MS = 2500;
     private static final int ANIMATION_DURATION_MS = 800;
 
-    private int mHeaderControlButtonWidthDp;
-    private int mHeaderButtonPaddingDp;
+    private int mHeaderControlButtonWidthPx;
+    private int mHeaderButtonPaddingPx;
 
     private @Nullable WebAppHeaderLayoutMediator mMediator;
     private @Nullable WebAppHeaderLayout mView;
@@ -107,6 +122,24 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     private final NavigationPopup.HistoryDelegate mHistoryDelegate;
     private int mUIControlsMinWidthPx;
     private int mAppHeaderUnoccludedWidthPx;
+    // The least width the app name needs to be worth showing, including its horizontal margins;
+    // 0 if there is no app name. Short names must fit in full; long names may be ellipsized down
+    // to web_app_header_app_name_min_width.
+    private int mAppNameWidthPx;
+    private int mAppNameMarginsPx;
+    private int mAppNameMaxWidthPx;
+    private int mButtonBottomInsetPx;
+
+    // The right-aligned controls change width after construction (origin text arrives on
+    // navigation, extensions toolbar inflates), so re-evaluate the app name whenever they do.
+    private final View.OnLayoutChangeListener mRightControlsLayoutListener =
+            (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (right - left == oldRight - oldLeft) return;
+                // Changing visibility or max width inside a layout pass would requestLayout()
+                // mid-layout, so defer.
+                v.post(this::updateAppNameVisibility);
+            };
+
     private final Callback<Integer> mOnUnoccludedWidthCallback;
     private final SettableNonNullObservableSupplier<Boolean> mControlsEnabledSupplier =
             ObservableSuppliers.createNonNull(true);
@@ -128,15 +161,26 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     private final @Nullable String mClientPackageName;
     private @Nullable ChromeImageButton mToggleButtonView;
     private @Nullable TextView mAppOriginView;
+    private @Nullable TextView mAppNameView;
     private @Nullable String mAppOrigin;
+    private @Nullable Tab mObservedTab;
     private final Callback<@Nullable Tab> mOnTabUpdate;
     private final BrowserServicesIntentDataProvider mBrowserServicesIntentDataProvider;
+    private final OneshotSupplier<ChromeAndroidTask> mChromeAndroidTaskSupplier;
+    private final TabModelSelector mTabModelSelector;
+    private final TabCreator mTabCreator;
+    private final ModalDialogManager mModalDialogManager;
+    private @Nullable ExtensionsToolbarCoordinator mExtensionsToolbarCoordinator;
+    private boolean mIsDestroyed;
 
     /**
      * Creates an instance of {@link WebAppHeaderLayoutCoordinator}.
      *
      * @param viewStub a stub in which web app header will be inflated into.
      * @param desktopWindowStateManager a class that notifies about desktop windowing state changes.
+     * @param tabCreator a {@link TabCreator} used by the extensions toolbar to open external URLs
+     *     (e.g., Chrome Web Store or extension management) in a standard browser window rather than
+     *     inside the web app.
      */
     public WebAppHeaderLayoutCoordinator(
             Activity activity,
@@ -154,7 +198,11 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
                     browserStateBrowserControlsVisibilityDelegate,
             WindowAndroid activityWindowAndroid,
             Runnable requestRenderRunnable,
-            @Nullable String clientPackageName) {
+            @Nullable String clientPackageName,
+            OneshotSupplier<ChromeAndroidTask> chromeAndroidTaskSupplier,
+            TabModelSelector tabModelSelector,
+            TabCreator tabCreator,
+            ModalDialogManager modalDialogManager) {
         assert browserServicesIntentDataProvider.isWebApkActivity()
                 || browserServicesIntentDataProvider.isTrustedWebActivity();
 
@@ -165,6 +213,10 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         mDisabledControlsHolder = new TokenHolder(this::updateControlsEnabledState);
         mScrimManager = scrimManager;
         mSetHeaderAsOverlayCallback = setHeaderAsOverlayCallback;
+        mChromeAndroidTaskSupplier = chromeAndroidTaskSupplier;
+        mTabModelSelector = tabModelSelector;
+        mTabCreator = tabCreator;
+        mModalDialogManager = modalDialogManager;
 
         mBrowserControlsStateProvider = browserControlsStateProvider;
         mBrowserControlsStateProvider.addObserver(this);
@@ -193,6 +245,11 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
 
         mTabSupplier = tabSupplier;
         mThemeColorProvider = themeColorProvider;
+        mThemeColorProvider.addTintObserver(this);
+        onTintChanged(
+                mThemeColorProvider.getTint(),
+                mThemeColorProvider.getActivityFocusTint(),
+                mThemeColorProvider.getBrandedColorScheme());
         mIncognitoStateProvider = new IncognitoStateProvider();
 
         mOnUnoccludedWidthCallback = this::onUnoccludedWidthChanged;
@@ -215,8 +272,15 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     }
 
     private void onTabUpdate(@Nullable Tab tab) {
-        if (tab != null) {
-            tab.addObserver(this);
+        if (mObservedTab == tab) {
+            return;
+        }
+        if (mObservedTab != null) {
+            mObservedTab.removeObserver(this);
+        }
+        mObservedTab = tab;
+        if (mObservedTab != null) {
+            mObservedTab.addObserver(this);
         }
     }
 
@@ -224,16 +288,21 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         if (mView != null) return;
 
         mView = (WebAppHeaderLayout) mViewStub.inflate();
-        mHeaderControlButtonWidthDp =
-                mView.getResources().getDimensionPixelSize(R.dimen.header_button_width);
-        mHeaderButtonPaddingDp =
+        int headerButtonSize =
+                AttrUtils.getDimensionPixelSize(mView.getContext(), R.attr.webAppHeaderButtonSize);
+        if (headerButtonSize == -1) {
+            headerButtonSize =
+                    mView.getResources().getDimensionPixelSize(R.dimen.header_button_size);
+        }
+
+        mHeaderControlButtonWidthPx = headerButtonSize;
+        mHeaderButtonPaddingPx =
                 mView.getResources().getDimensionPixelSize(R.dimen.header_button_padding);
         final var model = new PropertyModel.Builder(WebAppHeaderLayoutProperties.ALL_KEYS).build();
         final int headerMinHeight =
                 mView.getResources().getDimensionPixelSize(R.dimen.web_app_header_min_height);
-        final int headerButtonHeight =
-                mView.getResources().getDimensionPixelSize(R.dimen.header_button_height);
 
+        PropertyModelChangeProcessor.create(model, mView, WebAppHeaderLayoutViewBinder::bind);
         mMediator =
                 new WebAppHeaderLayoutMediator(
                         model,
@@ -244,33 +313,39 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
                         this::collectControlPositions,
                         mThemeColorProvider,
                         headerMinHeight,
-                        headerButtonHeight,
+                        headerButtonSize,
                         mDisplayMode,
-                        mSetHeaderAsOverlayCallback,
+                        this::onHeaderAsOverlayChanged,
                         mClientPackageName);
-        PropertyModelChangeProcessor.create(model, mView, WebAppHeaderLayoutViewBinder::bind);
 
         // Initial visibility state must be initialized after mediator is initialized.
         onAndroidControlsVisibilityChanged(
                 mBrowserControlsStateProvider.getAndroidControlsVisibility());
 
-        if (mIsTWA && mClientPackageName != null) {
-            // Show origin only for TWA Installer installed apps.
-            // TODO: WebappsUtils.isTwaInstallerPackage is an async call, so if navigation finishes
-            // before this completes, we might miss showing the origin on the first navigation
-            WebappsUtils.isTwaInstallerPackage(
-                    mClientPackageName,
-                    (isTwaInstallerPackage) -> {
-                        if (isTwaInstallerPackage) {
-                            assert mView != null;
-                            mAppOriginView = (TextView) mView.findViewById(R.id.origin);
-                        }
-                    });
+        if (mIsTWA) {
+            // Show origin for Android large form factors for TWAs.
+            if (ChromeFeatureList.sDesktopAndroidTWADisclosures.isEnabled()
+                    && DeviceFormFactor.isWindowOnTablet(mActivityWindowAndroid)) {
+                mAppOriginView = (TextView) mView.findViewById(R.id.origin);
+            } else if (mClientPackageName != null) {
+                // Show origin only for TWA Installer installed apps.
+                // TODO(crbug.com/545324369): Remove this code once the
+                // DESKTOP_ANDROID_TWA_DISCLOSURES feature flag is enabled by default,
+                // in which case, we will no longer have to worry about the
+                // installer package check.
+                WebappsUtils.isTwaInstallerPackage(
+                        mClientPackageName,
+                        (isTwaInstallerPackage) -> {
+                            if (isTwaInstallerPackage) {
+                                assert mView != null;
+                                mAppOriginView = (TextView) mView.findViewById(R.id.origin);
+                            }
+                        });
+            }
         }
 
-        mMediator
-                .getUnoccludedWidthSupplier()
-                .addSyncObserverAndPostIfNonNull(mOnUnoccludedWidthCallback);
+        initAppName();
+
         if (mDisplayMode == DisplayMode.MINIMAL_UI) {
             initMinUiControls();
         }
@@ -280,9 +355,147 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         }
 
         initMenuButton();
-
+        mMediator.setOnButtonBottomInsetChanged(this::onButtonBottomInsetChanged);
         // Determine width of initialized UI controls.
         mUIControlsMinWidthPx = calculateUIControlsMinWidth();
+        // Registered after controls and mUIControlsMinWidthPx are
+        // initialized so the initial width check updates control visibility.
+        mMediator
+                .getUnoccludedWidthSupplier()
+                .addSyncObserverAndPostIfNonNull(mOnUnoccludedWidthCallback);
+    }
+
+    /**
+     * Whether the app name feature is enabled for this header. The header only exists in desktop
+     * windowing, so no additional form-factor check is needed; whether the name actually fits is
+     * decided per-layout by {@link #updateAppNameVisibility()}.
+     */
+    private boolean shouldShowAppName() {
+        return ChromeFeatureList.sDesktopAndroidWebAppHeaderAppName.isEnabled();
+    }
+
+    /**
+     * Shows the web app's name at the start of the header. WebAPKs already carry the name in their
+     * intent extras; for TWAs the client app's label is loaded off the UI thread, since resolving
+     * it may read the client APK from disk. The view stays gone until a name is known.
+     */
+    private void initAppName() {
+        assert mView != null;
+
+        if (!shouldShowAppName()) return;
+
+        if (mBrowserServicesIntentDataProvider.isWebApkActivity()) {
+            setAppName(WebAppHeaderUtils.getWebApkName(mBrowserServicesIntentDataProvider));
+            return;
+        }
+
+        if (mClientPackageName == null) return;
+        WebAppHeaderUtils.getTwaAppName(mClientPackageName, this::onClientAppLabelLoaded);
+    }
+
+    /**
+     * Applies the label resolved by {@link WebAppHeaderUtils#getTwaAppName}. Runs on the UI thread
+     * like the rest of this class, but asynchronously, so the coordinator may already have been
+     * destroyed by the time it runs.
+     */
+    private void onClientAppLabelLoaded(@Nullable CharSequence label) {
+        if (mIsDestroyed || mView == null) return;
+        setAppName(label);
+    }
+
+    /** Binds the label to the app-name view and computes its width and visibility. */
+    private void setAppName(@Nullable CharSequence label) {
+        assert mView != null;
+        if (TextUtils.isEmpty(label)) return;
+        // Only one name is ever set per header; a second call would re-register the layout
+        // listener, which destroy() only removes once.
+        if (mAppNameView != null) return;
+
+        mAppNameView = mView.findViewById(R.id.app_name);
+        mAppNameView.setPadding(0, 0, 0, mButtonBottomInsetPx);
+        mAppNameView.setText(label);
+        mAppNameMaxWidthPx =
+                mAppNameView
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.web_app_header_app_name_max_width);
+        if (mAppNameView.getLayoutParams() instanceof ViewGroup.MarginLayoutParams params) {
+            mAppNameMarginsPx = params.getMarginStart() + params.getMarginEnd();
+        }
+        mAppNameWidthPx = measureAppNameWidth(mAppNameView) + mAppNameMarginsPx;
+        mView.findViewById(R.id.right_aligned_wrapper)
+                .addOnLayoutChangeListener(mRightControlsLayoutListener);
+        updateAppNameVisibility();
+        setTextThemeColor(mAppNameView, mThemeColorProvider.getActivityFocusTint());
+    }
+
+    /**
+     * Called by the mediator whenever the header switches between being drawn as a window controls
+     * overlay and being a regular opaque header.
+     */
+    private void onHeaderAsOverlayChanged(boolean isHeaderAsOverlay) {
+        updateAppNameVisibility();
+        mSetHeaderAsOverlayCallback.onResult(isHeaderAsOverlay);
+    }
+
+    private void updateAppNameVisibility() {
+        if (mIsDestroyed || mAppNameView == null || mMediator == null) return;
+        int roomPx = calculateRoomForAppNamePx();
+        boolean showAppName = !mMediator.isHeaderAsOverlay() && roomPx >= mAppNameWidthPx;
+        if (showAppName) {
+            // Bound the name to the room actually available so it ellipsizes instead of
+            // overlapping the controls; RelativeLayout alone won't constrain it.
+            int maxWidthPx = Math.min(mAppNameMaxWidthPx, roomPx - mAppNameMarginsPx);
+            if (mAppNameView.getMaxWidth() != maxWidthPx) mAppNameView.setMaxWidth(maxWidthPx);
+        }
+        mAppNameView.setVisibility(showAppName ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * @return The header width left over for the app name once the controls are accounted for, in
+     *     px. Uses the right-aligned controls' live width when they have been laid out, since the
+     *     static estimate in {@link #calculateUIControlsMinWidth()} counts the origin text as 0 and
+     *     omits the extensions toolbar.
+     */
+    private int calculateRoomForAppNamePx() {
+        assert mView != null;
+        View rightAlignedWrapper = mView.findViewById(R.id.right_aligned_wrapper);
+        int liveControlsPx = 0;
+        if (rightAlignedWrapper.getWidth() > 0) {
+            liveControlsPx = rightAlignedWrapper.getWidth();
+            if (rightAlignedWrapper.getLayoutParams()
+                    instanceof ViewGroup.MarginLayoutParams params) {
+                liveControlsPx += params.getMarginStart();
+            }
+            // Count the start-aligned buttons by existence rather than visibility, so hiding the
+            // name can never feed back into this calculation.
+            if (mBackButtonCoordinator != null) liveControlsPx += mHeaderControlButtonWidthPx;
+            if (mReloadButtonCoordinator != null) liveControlsPx += mHeaderControlButtonWidthPx;
+        }
+        // Never be more permissive than the buttons' own threshold: the name should not appear
+        // while the controls are hidden for lack of space.
+        int controlsPx = Math.max(liveControlsPx, mUIControlsMinWidthPx);
+        return mAppHeaderUnoccludedWidthPx - controlsPx;
+    }
+
+    /**
+     * @return The width in px reserved for the app name, including its horizontal margins, or 0
+     *     until a name has been bound.
+     */
+    int getAppNameWidthPxForTesting() {
+        return mAppNameWidthPx;
+    }
+
+    private static int measureAppNameWidth(TextView appNameView) {
+        CharSequence text = appNameView.getText();
+        int textWidthPx =
+                (int) Math.ceil(appNameView.getPaint().measureText(text, 0, text.length()));
+        // The layout ellipsizes names that don't fit, so only require enough room for a
+        // recognisable prefix of long names.
+        int minWidthPx =
+                appNameView
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.web_app_header_app_name_min_width);
+        return Math.min(textWidthPx, minWidthPx);
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -294,17 +507,13 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         mToggleButtonView.setVisibility(View.VISIBLE);
         syncToggleButtonView();
         mToggleButtonView.setOnTouchListener(
-                new View.OnTouchListener() {
-                    @SuppressLint("ClickableViewAccessibility")
-                    @Override
-                    public boolean onTouch(View v, MotionEvent event) {
-                        if (event.getAction() != MotionEvent.ACTION_UP) return false;
-                        assert mMediator != null;
-                        mMediator.setUserToggleHeaderAsOverlay(
-                                !mMediator.getUserToggleHeaderAsOverlay());
-                        syncToggleButtonView();
-                        return false;
-                    }
+                (v, event) -> {
+                    if (event.getAction() != MotionEvent.ACTION_UP) return false;
+                    assert mMediator != null;
+                    mMediator.setUserToggleHeaderAsOverlay(
+                            !mMediator.getUserToggleHeaderAsOverlay());
+                    syncToggleButtonView();
+                    return false;
                 });
         mToggleButtonView.setForegroundTintList(mThemeColorProvider.getTint());
 
@@ -338,6 +547,7 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     }
 
     @Override
+    @SuppressWarnings("SetTextColorAndSetTextSizeCheck")
     public void onTintChanged(
             @Nullable ColorStateList tint,
             @Nullable ColorStateList activityFocusTint,
@@ -347,6 +557,9 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         }
         if (mAppOriginView != null) {
             mAppOriginView.setTextColor(activityFocusTint);
+        }
+        if (mAppNameView != null) {
+            mAppNameView.setTextColor(activityFocusTint);
         }
     }
 
@@ -384,8 +597,57 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
                         },
                         mHistoryDelegate,
                         /* isWebApp= */ true);
+    }
 
-        mMediator.setOnButtonBottomInsetChanged(this::onButtonBottomInsetChanged);
+    private void initExtensionsToolbar() {
+        assert mExtensionsToolbarCoordinator == null;
+        if (!mIsTWA || mView == null) return;
+
+        mChromeAndroidTaskSupplier.onAvailable(
+                (task) -> {
+                    if (mIsDestroyed || mExtensionsToolbarCoordinator != null || mView == null) {
+                        return;
+                    }
+                    final WebAppHeaderLayout view = mView;
+                    ViewStub stub = view.findViewById(R.id.extensions_toolbar_container_stub);
+                    if (stub == null) return;
+
+                    TabModel currentModel = mTabModelSelector.getCurrentModel();
+                    if (currentModel == null || currentModel.getProfile() == null) return;
+                    Profile profile = currentModel.getProfile();
+
+                    Runnable cleanup = () -> mExtensionsToolbarCoordinator = null;
+                    mExtensionsToolbarCoordinator =
+                            (ExtensionsToolbarCoordinator)
+                                    task.addFeature(
+                                            new ChromeAndroidTaskFeatureKey(
+                                                    ExtensionsToolbarCoordinator.class,
+                                                    profile,
+                                                    (ActivityWindowAndroid) mActivityWindowAndroid),
+                                            () ->
+                                                    ExtensionsToolbarCoordinator.maybeCreate(
+                                                            mActivity,
+                                                            stub,
+                                                            mActivityWindowAndroid,
+                                                            task,
+                                                            profile,
+                                                            mTabSupplier,
+                                                            mTabCreator,
+                                                            mThemeColorProvider,
+                                                            view,
+                                                            /* contextMenuPopulatorFactory= */ null,
+                                                            /* selectionDropdownMenuDelegate= */ null,
+                                                            mTabModelSelector,
+                                                            mModalDialogManager,
+                                                            cleanup,
+                                                            /* clearOmniboxFocus= */ CallbackUtils
+                                                                    .emptyRunnable(),
+                                                            /* isWebApp= */ true));
+                });
+    }
+
+    public @Nullable ExtensionsToolbarCoordinator getExtensionsToolbarCoordinator() {
+        return mExtensionsToolbarCoordinator;
     }
 
     private void initMenuButton() {
@@ -401,23 +663,31 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
 
             // TODO(crbug.com/453007852): When ObservableSupplier<E> extends Supplier<@Nullable E>,
             // remove cast to Supplier<@Nullable MenuButtonState>,
+            // Pass View.NO_ID to prevent MenuButtonCoordinator from searching mActivity for
+            // R.id.menu_button_wrapper, which would incorrectly bind to CustomTabToolbar's
+            // MenuButton. Explicitly set the MenuButton view resolved from the header container
+            // instead.
             mMenuButtonCoordinator =
                     new MenuButtonCoordinator(
                             mActivity,
                             mAppMenuCoordinatorSupplier,
                             mBrowserStateBrowserControlsVisibilityDelegate,
                             mActivityWindowAndroid,
-                            /* clearOmniboxFocus= */ () -> {},
+                            /* clearOmniboxFocus= */ CallbackUtils.emptyRunnable(),
                             mRequestRenderRunnable,
                             /* canShowAppUpdateBadge= */ false,
-                            /* isInOverviewModeSupplier= */ () -> false,
+                            /* isInOverviewModeSupplier= */ SupplierUtils.alwaysFalse(),
                             mThemeColorProvider,
                             mIncognitoStateProvider,
                             (Supplier<@Nullable MenuButtonState>) mMenuButtonStateSupplier,
                             this::onMenuButtonClicked,
-                            R.id.menu_button_wrapper,
+                            View.NO_ID,
                             /* visibilityDelegate= */ null,
                             /* isWebApp= */ true);
+            mMenuButtonCoordinator.setMenuButton(
+                    mMenuButtonContainer.findViewById(R.id.menu_button_wrapper));
+
+            initExtensionsToolbar();
         }
     }
 
@@ -425,6 +695,9 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         boolean wasShowingButtons = mShowButtons;
         mAppHeaderUnoccludedWidthPx = newUnoccludedWidthPx;
         mShowButtons = mAppHeaderUnoccludedWidthPx >= mUIControlsMinWidthPx;
+        // The app name has its own width threshold, so update it on every width change, even when
+        // the buttons' visibility doesn't change.
+        updateAppNameVisibility();
 
         if (wasShowingButtons == mShowButtons) return;
 
@@ -511,6 +784,16 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
             areas.add(rect);
         }
 
+        View extensionsToolbar = mView.findViewById(R.id.extensions_toolbar_container);
+        if (extensionsToolbar != null
+                && extensionsToolbar.getVisibility() == View.VISIBLE
+                && extensionsToolbar.getWidth() > 0) {
+            final var rect = new Rect();
+            extensionsToolbar.getHitRect(rect);
+            mView.offsetDescendantRectToMyCoords(rightAlignedWrapper, rect);
+            areas.add(rect);
+        }
+
         return areas;
     }
 
@@ -523,36 +806,32 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     int calculateUIControlsMinWidth() {
         if (mView == null) return 0;
 
-        int totalWidthDp = 0;
+        int totalWidthPx = 0;
         if (mReloadButtonCoordinator != null) {
-            totalWidthDp += mHeaderControlButtonWidthDp;
+            totalWidthPx += mHeaderControlButtonWidthPx;
         }
 
         if (mBackButtonCoordinator != null) {
-            totalWidthDp += mHeaderControlButtonWidthDp;
+            totalWidthPx += mHeaderControlButtonWidthPx;
         }
 
         if (mMenuButtonCoordinator != null) {
-            totalWidthDp += mHeaderControlButtonWidthDp;
+            totalWidthPx += mHeaderControlButtonWidthPx;
         }
 
         // Add button padding.
-        totalWidthDp += mHeaderButtonPaddingDp;
-
-        if (mAppOriginView != null) {
-            totalWidthDp += mAppOriginView.getWidth();
-        }
+        totalWidthPx += mHeaderButtonPaddingPx;
 
         if (mToggleButtonView != null) {
             // If mToggleButtonView is non-null, we're in WINDOW_CONTROLS_OVERLAY mode. In addition
             // to allowing space for the toggle button, allow a minimal space for the web content
             // in the header.
-            totalWidthDp += (mHeaderControlButtonWidthDp * 3);
+            totalWidthPx += (mHeaderControlButtonWidthPx * 3);
         }
 
-        int totalWidthPx =
-                DisplayUtil.dpToPx(
-                        DisplayAndroid.getNonMultiDisplay(mView.getContext()), totalWidthDp);
+        if (mAppOriginView != null) {
+            totalWidthPx += mAppOriginView.getWidth();
+        }
 
         return totalWidthPx;
     }
@@ -562,7 +841,9 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
      */
     @VisibleForTesting
     int getHeaderControlButtonWidthDp() {
-        return mHeaderControlButtonWidthDp;
+        if (mView == null) return 0;
+        float density = mView.getResources().getDisplayMetrics().density;
+        return Math.round(mHeaderControlButtonWidthPx / density);
     }
 
     /**
@@ -570,7 +851,9 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
      */
     @VisibleForTesting
     int getHeaderButtonPaddingDp() {
-        return mHeaderButtonPaddingDp;
+        if (mView == null) return 0;
+        float density = mView.getResources().getDisplayMetrics().density;
+        return Math.round(mHeaderButtonPaddingPx / density);
     }
 
     @VisibleForTesting
@@ -580,6 +863,7 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
     }
 
     private void onButtonBottomInsetChanged(int bottomInset) {
+        mButtonBottomInsetPx = bottomInset;
         if (mReloadButtonCoordinator != null) {
             mReloadButtonCoordinator.setBackgroundInsets(Insets.of(0, 0, 0, bottomInset));
         }
@@ -594,6 +878,10 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
 
         if (mAppOriginView != null) {
             mAppOriginView.setPadding(0, 0, 0, bottomInset);
+        }
+
+        if (mAppNameView != null) {
+            mAppNameView.setPadding(0, 0, 0, bottomInset);
         }
     }
 
@@ -632,8 +920,11 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
 
         mDesktopWindowStateManager.removeObserver(this);
         mBrowserControlsStateProvider.removeObserver(this);
+        mThemeColorProvider.removeTintObserver(this);
 
         if (mView != null) {
+            mView.findViewById(R.id.right_aligned_wrapper)
+                    .removeOnLayoutChangeListener(mRightControlsLayoutListener);
             mView.destroy();
         }
 
@@ -657,11 +948,18 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
             mMenuButtonCoordinator = null;
         }
 
-        final var tab = mTabSupplier.get();
-        if (tab != null) {
-            tab.removeObserver(this);
+        if (mObservedTab != null) {
+            mObservedTab.removeObserver(this);
+            mObservedTab = null;
         }
         mTabSupplier.removeObserver(mOnTabUpdate);
+
+        if (mExtensionsToolbarCoordinator != null) {
+            mExtensionsToolbarCoordinator.destroy();
+            mExtensionsToolbarCoordinator = null;
+        }
+
+        mIsDestroyed = true;
     }
 
     @VisibleForTesting
@@ -704,7 +1002,7 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         mAppOrigin = originSpec;
         String domain = UrlFormatter.formatUrlForDisplayOmitSchemePathAndTrivialSubdomains(origin);
         mAppOriginView.setText(domain);
-        setTextThemeColor();
+        setTextThemeColor(mAppOriginView, mThemeColorProvider.getActivityFocusTint());
         runDomainTextAnimation();
     }
 
@@ -748,14 +1046,14 @@ public class WebAppHeaderLayoutCoordinator extends EmptyTabObserver
         return fadeOutAnimation;
     }
 
-    private void setTextThemeColor() {
-        if (mAppOriginView == null) return;
-
-        final ColorStateList textColorList =
-                mThemeColorProvider.getActivityFocusTint() == null
-                        ? mAppOriginView.getTextColors()
-                        : mThemeColorProvider.getActivityFocusTint();
-        mAppOriginView.setTextColor(textColorList);
+    // This helps ensure that the presubmit warning to set a pre-defined text appearance
+    // no longer occurs, as the header text (origin and app name) is set according to the theme
+    // color, and a predefined text appearance style cannot be used in a dynamic context like this.
+    // Same for wherever else setTextColor() is called in this file.
+    @SuppressWarnings("SetTextColorAndSetTextSizeCheck")
+    private void setTextThemeColor(@Nullable TextView textView, @Nullable ColorStateList tint) {
+        if (textView == null) return;
+        textView.setTextColor(tint != null ? tint : textView.getTextColors());
     }
 
     private void onMenuButtonClicked() {

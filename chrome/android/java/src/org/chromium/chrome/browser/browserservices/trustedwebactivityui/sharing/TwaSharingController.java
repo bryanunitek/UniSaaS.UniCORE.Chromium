@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.browserservices.trustedwebactivityui.sharing
 
 import static org.chromium.build.NullUtil.assertNonNull;
 
+import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.text.TextUtils;
@@ -23,15 +24,23 @@ import org.chromium.chrome.browser.browserservices.intents.WebApkShareTarget;
 import org.chromium.chrome.browser.browserservices.ui.controller.Verifier;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityNavigationController;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
+import org.chromium.chrome.browser.customtabs.content.WebAppLaunchHandler;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.webapps.WebApkPostShareTargetNavigator;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.function.Function;
 
-/** Handles sharing intents coming to Trusted Web Activities. */
+/**
+ * Delivers incoming share data to the Web Share Target of the web app hosted in a {@code
+ * BaseCustomTabActivity}. This class serves both Trusted Web Activities and WebAPKs, which launch
+ * differently: TWAs arrive via {@code LaunchIntentDispatcher} with a Custom Tabs session, while
+ * WebAPKs arrive via {@code WebappLauncherActivity} with no session.
+ */
 @NullMarked
 public class TwaSharingController {
     private final CustomTabActivityTabProvider mTabProvider;
@@ -67,6 +76,27 @@ public class TwaSharingController {
         Intent intent = intentDataProvider.getIntent();
         assert intent != null;
 
+        if (shareData.uris != null && !shareData.uris.isEmpty()) {
+            Tab tab = mTabProvider.getTab();
+            Activity activity =
+                    (tab != null && tab.getWindowAndroid() != null)
+                            ? tab.getWindowAndroid().getActivity().get()
+                            : null;
+            // Pass null for caller: activity.getInitialCaller() would return Chrome's own UID
+            // because of trampoline dispatch. filterShareData() instead uses the share data
+            // verified at launch (by LaunchIntentDispatcher for TWAs, or WebappLauncherActivity
+            // for WebAPKs). Otherwise, it falls back to checking URI permissions against the
+            // Custom Tabs session UID (TWAs) or the WebAPK package UID (WebAPKs). If activity is
+            // null, shared file URIs are dropped.
+            shareData =
+                    WebAppLaunchHandler.filterShareData(
+                            intentDataProvider, activity, /* caller= */ null);
+            if (shareData == null) {
+                return Promise.fulfilled(false);
+            }
+        }
+
+        final ShareData finalShareData = shareData;
         return mVerifierDelegate
                 .verify(shareTarget.getAction())
                 .then(
@@ -76,22 +106,29 @@ public class TwaSharingController {
                                         return false;
                                     }
                                     if (shareTarget.isShareMethodPost()) {
-                                        return sendPost(shareData, shareTarget);
+                                        return sendPost(finalShareData, shareTarget);
                                     }
 
-                                    mNavigationController.navigate(
+                                    LoadUrlParams params =
                                             new LoadUrlParams(
                                                     computeStartUrlForGETShareTarget(
-                                                            shareData, shareTarget)),
-                                            intent);
+                                                            finalShareData, shareTarget));
+                                    // The action has been verified to be within the app's scope,
+                                    // so the app is the initiator of this navigation. Attributing
+                                    // it ensures SameSite cookies are evaluated as they would be
+                                    // for a navigation started by the app itself, rather than
+                                    // treating the request as a user-typed navigation.
+                                    params.setInitiatorOrigin(
+                                            Origin.create(new GURL(shareTarget.getAction())));
+                                    mNavigationController.navigate(params, intent);
                                     return true;
                                 });
     }
 
     /**
-     * Converts to internal format.
-     * TODO(pshmakov): pull WebApkShareTarget out of WebApkInfo and rename to
-     * ShareTargetInternal. Also, replace WebApkInfo.ShareData with ShareData from TWA API.
+     * Converts to internal format. TODO(pshmakov): pull WebApkShareTarget out of WebApkInfo and
+     * rename to ShareTargetInternal. Also, replace WebApkInfo.ShareData with ShareData from TWA
+     * API.
      */
     private @Nullable WebApkShareTarget toShareTargetInternal(@Nullable ShareTarget shareTarget) {
         if (shareTarget == null) return null;

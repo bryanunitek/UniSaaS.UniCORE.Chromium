@@ -133,10 +133,18 @@ TEST_F(ImageDecoderTest, DecodeEmpty) {
   init->setType("image/png");
   init->setData(MakeGarbageCollected<V8ImageBufferSource>(
       DOMArrayBuffer::Create(SharedBuffer::Create())));
+  std::string extra_data = "extra";
+  auto* transfer_buffer =
+      DOMArrayBuffer::Create(base::as_byte_span(extra_data));
+  HeapVector<Member<DOMArrayBuffer>> transfer;
+  transfer.push_back(Member<DOMArrayBuffer>(transfer_buffer));
+  init->setTransfer(std::move(transfer));
+
   auto* decoder = ImageDecoderExternal::Create(v8_scope.GetScriptState(), init,
                                                v8_scope.GetExceptionState());
   EXPECT_FALSE(decoder);
   EXPECT_TRUE(v8_scope.GetExceptionState().HadException());
+  EXPECT_FALSE(transfer_buffer->IsDetached());
 }
 
 TEST_F(ImageDecoderTest, DecodeNeuteredAtConstruction) {
@@ -1161,6 +1169,45 @@ TEST_F(ImageDecoderTest, TransferBuffer) {
     EXPECT_EQ(frame->displayWidth(), 16u);
     EXPECT_EQ(frame->displayHeight(), 16u);
   }
+}
+
+TEST_F(ImageDecoderTest, DecodeRotatedJpeg) {
+  V8TestingScope v8_scope;
+
+  auto* decoder = CreateDecoder(
+      &v8_scope, "images/resources/jpeg-height-exif-orientation.jpg",
+      "image/jpeg");
+  ASSERT_TRUE(decoder);
+
+  auto promise = decoder->decode(MakeOptions(0, true));
+  ScriptPromiseTester tester(v8_scope.GetScriptState(), promise);
+  tester.WaitUntilSettled();
+  ASSERT_TRUE(tester.IsFulfilled());
+  auto* result = ToImageDecodeResult(&v8_scope, tester.Value());
+  EXPECT_TRUE(result->complete());
+
+  auto* frame = result->image();
+  EXPECT_EQ(frame->codedWidth(), 1281u);
+  EXPECT_EQ(frame->codedHeight(), 82u);
+  EXPECT_EQ(frame->displayWidth(), 82u);
+  EXPECT_EQ(frame->displayHeight(), 1281u);
+  EXPECT_EQ(frame->rotation(), 90u);
+
+  auto media_frame = frame->frame();
+  ASSERT_TRUE(media_frame);
+  EXPECT_EQ(media_frame->coded_size(), gfx::Size(1281, 82));
+  EXPECT_EQ(media_frame->visible_rect(), gfx::Rect(0, 0, 1281, 82));
+  EXPECT_EQ(media_frame->natural_size(), gfx::Size(1281, 82));
+  EXPECT_EQ(media_frame->metadata().transformation->rotation,
+            media::VIDEO_ROTATION_90);
+
+  SourceImageStatus status = kInvalidSourceImageStatus;
+  CanvasImageSource* image_source = frame;
+  auto image = image_source->GetSourceImageForCanvas(&status, gfx::SizeF());
+  ASSERT_TRUE(image);
+  EXPECT_EQ(status, kNormalSourceImageStatus);
+  EXPECT_EQ(image->Size(), gfx::Size(82, 1281));
+  EXPECT_EQ(image->SizeAsFloat(kRespectImageOrientation), gfx::SizeF(1281, 82));
 }
 
 }  // namespace

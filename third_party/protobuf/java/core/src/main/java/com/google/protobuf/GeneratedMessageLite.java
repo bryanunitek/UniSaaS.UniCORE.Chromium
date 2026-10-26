@@ -66,27 +66,27 @@ public abstract class GeneratedMessageLite<
   /** For use by generated code only. Lazily initialized to reduce allocations. */
   protected UnknownFieldSetLite unknownFields = UnknownFieldSetLite.getDefaultInstance();
 
-  boolean isMutable() {
+  final boolean isMutable() {
     return (memoizedSerializedSize & MUTABLE_FLAG_MASK) != 0;
   }
 
-  void markImmutable() {
+  final void markImmutable() {
     memoizedSerializedSize &= ~MUTABLE_FLAG_MASK;
   }
 
-  int getMemoizedHashCode() {
+  final int getMemoizedHashCode() {
     return memoizedHashCode;
   }
 
-  void setMemoizedHashCode(int value) {
+  final void setMemoizedHashCode(int value) {
     memoizedHashCode = value;
   }
 
-  void clearMemoizedHashCode() {
+  final void clearMemoizedHashCode() {
     memoizedHashCode = UNINITIALIZED_HASH_CODE;
   }
 
-  boolean hashCodeIsNotMemoized() {
+  final boolean hashCodeIsNotMemoized() {
     return UNINITIALIZED_HASH_CODE == getMemoizedHashCode();
   }
 
@@ -109,7 +109,7 @@ public abstract class GeneratedMessageLite<
   }
 
   @SuppressWarnings("unchecked") // Guaranteed by runtime.
-  MessageType newMutableInstance() {
+  final MessageType newMutableInstance() {
     return (MessageType) dynamicMethod(MethodToInvoke.NEW_MUTABLE_INSTANCE, null, null);
   }
 
@@ -143,7 +143,7 @@ public abstract class GeneratedMessageLite<
     return getMemoizedHashCode();
   }
 
-  int computeHashCode() {
+  final int computeHashCode() {
     return Protobuf.getInstance().schemaFor(this).hashCode(this);
   }
 
@@ -182,7 +182,7 @@ public abstract class GeneratedMessageLite<
    *
    * @return {@code true} unless the tag is an end-group tag.
    */
-  protected boolean parseUnknownField(int tag, CodedInputStream input) throws IOException {
+  protected final boolean parseUnknownField(int tag, CodedInputStream input) throws IOException {
     // This will avoid the allocation of unknown fields when a group tag is encountered.
     if (WireFormat.getTagWireType(tag) == WireFormat.WIRETYPE_END_GROUP) {
       return false;
@@ -193,19 +193,19 @@ public abstract class GeneratedMessageLite<
   }
 
   /** Called by subclasses to parse an unknown field. For use by generated code only. */
-  protected void mergeVarintField(int tag, int value) {
+  protected final void mergeVarintField(int tag, int value) {
     ensureUnknownFieldsInitialized();
     unknownFields.mergeVarintField(tag, value);
   }
 
   /** Called by subclasses to parse an unknown field. For use by generated code only. */
-  protected void mergeLengthDelimitedField(int fieldNumber, ByteString value) {
+  protected final void mergeLengthDelimitedField(int fieldNumber, ByteString value) {
     ensureUnknownFieldsInitialized();
     unknownFields.mergeLengthDelimitedField(fieldNumber, value);
   }
 
   /** Called by subclasses to complete parsing. For use by generated code only. */
-  protected void makeImmutable() {
+  protected final void makeImmutable() {
     Protobuf.getInstance().schemaFor(this).makeImmutable(this);
     markImmutable();
   }
@@ -218,6 +218,7 @@ public abstract class GeneratedMessageLite<
     return (BuilderType2) dynamicMethod(MethodToInvoke.NEW_BUILDER, null, null);
   }
 
+  @SuppressWarnings("unchecked") // Guaranteed by runtime.
   protected final <
           MessageType2 extends GeneratedMessageLite<MessageType2, BuilderType2>,
           BuilderType2 extends GeneratedMessageLite.Builder<MessageType2, BuilderType2>>
@@ -226,6 +227,7 @@ public abstract class GeneratedMessageLite<
   }
 
   @Override
+  @SuppressWarnings("unchecked") // Guaranteed by runtime.
   public final boolean isInitialized() {
     return isInitialized((MessageType) this, /* shouldMemoize= */ true);
   }
@@ -284,12 +286,12 @@ public abstract class GeneratedMessageLite<
           Object arg0,
           Object arg1);
 
-  void clearMemoizedSerializedSize() {
+  final void clearMemoizedSerializedSize() {
     setMemoizedSerializedSize(UNINITIALIZED_SERIALIZED_SIZE);
   }
 
   @Override
-  int getMemoizedSerializedSize() {
+  final int getMemoizedSerializedSize() {
     return memoizedSerializedSize & MEMOIZED_SERIALIZED_SIZE_MASK;
   }
 
@@ -310,6 +312,7 @@ public abstract class GeneratedMessageLite<
   }
 
   @Override
+  @SuppressWarnings("rawtypes")
   int getSerializedSize(
           Schema schema) {
     if (isMutable()) {
@@ -339,6 +342,7 @@ public abstract class GeneratedMessageLite<
     return getSerializedSize(null);
   }
 
+  @SuppressWarnings("unchecked")
   private int computeSerializedSize(
           Schema<?> nullableSchema) {
     if (nullableSchema == null) {
@@ -350,11 +354,11 @@ public abstract class GeneratedMessageLite<
   }
 
   /** Constructs a {@link MessageInfo} for this message type. */
-  Object buildMessageInfo() throws Exception {
+  final Object buildMessageInfo() throws Exception {
     return dynamicMethod(MethodToInvoke.BUILD_MESSAGE_INFO, null, null);
   }
 
-  private static Map<Class<?>, GeneratedMessageLite<?, ?>> defaultInstanceMap =
+  private static final Map<Class<?>, GeneratedMessageLite<?, ?>> defaultInstanceMap =
       new ConcurrentHashMap<>();
 
   @SuppressWarnings("unchecked")
@@ -495,6 +499,10 @@ public abstract class GeneratedMessageLite<
 
     /** All subclasses implement this. */
     public BuilderType mergeFrom(MessageType message) {
+      if (message != null && !getDefaultInstanceForType().getClass().isInstance(message)) {
+        throw new IllegalArgumentException(
+            "mergeFrom(MessageLite) can only merge messages of the same type.");
+      }
       if (getDefaultInstanceForType().equals(message)) {
         return (BuilderType) this;
       }
@@ -554,7 +562,8 @@ public abstract class GeneratedMessageLite<
       return (BuilderType) this;
     }
 
-    private static <MessageType> void mergeFromInstance(MessageType dest, MessageType src) {
+    private static <MessageType extends GeneratedMessageLite<?, ?>> void mergeFromInstance(
+        MessageType dest, MessageType src) {
       Protobuf.getInstance().schemaFor(dest).mergeFrom(dest, src);
     }
 
@@ -1139,7 +1148,7 @@ public abstract class GeneratedMessageLite<
           final Internal.EnumLiteMap<?> enumTypeMap,
           final int number,
           final WireFormat.FieldType type,
-          final Class singularType) {
+          final Class<?> singularType) {
     return new GeneratedExtension<ContainingType, Type>(
         containingTypeDefaultInstance,
         defaultValue,
@@ -1158,7 +1167,7 @@ public abstract class GeneratedMessageLite<
           final int number,
           final WireFormat.FieldType type,
           final boolean isPacked,
-          final Class singularType) {
+          final Class<?> singularType) {
     @SuppressWarnings("unchecked") // Subclasses ensure Type is a List
     Type emptyList = (Type) ProtobufArrayList.emptyList();
     return new GeneratedExtension<ContainingType, Type>(
@@ -1240,7 +1249,7 @@ public abstract class GeneratedMessageLite<
   // =================================================================
 
   /** Calls Class.getMethod and throws a RuntimeException if it fails. */
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({"unchecked", "rawtypes"})
   static Method getMethodOrDie(Class clazz, String name, Class... params) {
     try {
       return clazz.getMethod(name, params);
@@ -1292,7 +1301,7 @@ public abstract class GeneratedMessageLite<
         final Type defaultValue,
         final MessageLite messageDefaultInstance,
         final ExtensionDescriptor descriptor,
-        final Class singularType) {
+        final Class<?> singularType) {
       // Defensive checks to verify the correct initialization order of
       // GeneratedExtensions and their related GeneratedMessages.
       if (containingTypeDefaultInstance == null) {
@@ -1457,16 +1466,19 @@ public abstract class GeneratedMessageLite<
     }
 
     private Class<?> resolveMessageClass() throws ClassNotFoundException {
-      if (messageClass == null) {
-        Class<?> clazz =
+      Class<?> clazz = messageClass;
+      if (clazz == null) {
+        clazz =
             Class.forName(
                 messageClassName, /* initialize= */ false, getClass().getClassLoader());
-        if (!MessageLite.class.isAssignableFrom(clazz)) {
-          throw new ClassNotFoundException();
-        }
-        return clazz;
       }
-      return messageClass;
+      if (!MessageLite.class.isAssignableFrom(clazz)) {
+        throw new ClassNotFoundException();
+      }
+      if (!clazz.getName().equals(messageClassName)) {
+        throw new ClassNotFoundException();
+      }
+      return clazz;
     }
   }
 

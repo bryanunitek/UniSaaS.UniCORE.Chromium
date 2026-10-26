@@ -17,6 +17,7 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
@@ -25,12 +26,12 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTabsTask;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.tabmodel.AsyncTabCreationParams;
@@ -44,10 +45,12 @@ import org.chromium.chrome.browser.util.AndroidTaskUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /** Implements {@link MultiInstanceOrchestrator} as a singleton. */
 @NullMarked
@@ -58,6 +61,7 @@ import java.util.Set;
     private final TabReparentingDelegate mTabReparentingDelegate;
     private final Map<Activity, MultiInstanceManager> mActivityMultiInstanceManagerAssignments =
             new HashMap<>();
+    private int mInitializedTabbedActivityCount;
 
     /** Returns the singleton instance for {@link MultiInstanceOrchestrator}. */
     public static MultiInstanceOrchestrator getInstance() {
@@ -109,32 +113,26 @@ import java.util.Set;
 
     @Override
     public void onInitialize(Activity activity, MultiInstanceManager multiInstanceManager) {
+        ThreadUtils.assertOnUiThread();
         assert !mActivityMultiInstanceManagerAssignments.containsKey(activity)
                 : "A MultiInstanceManager for this Activity already exists.";
-        if (mActivityMultiInstanceManagerAssignments.isEmpty()) {
-            // Evaluate and persist crash recovery metadata when the first activity is initialized
-            // in the browser process.
-            TabbedCrashRecoveryDelegate.getInstance().initializeCrashRecoveryMetadata();
-        }
         mActivityMultiInstanceManagerAssignments.put(activity, multiInstanceManager);
+        if (activity instanceof ChromeTabbedActivity tabbedActivity) {
+            mInitializedTabbedActivityCount++;
+            if (mInitializedTabbedActivityCount == 1) {
+                TabbedStartupCoordinator.processStartupWindow(tabbedActivity);
+            }
+        }
     }
 
     @Override
     public void onForegroundBrowserProcessInitialized() {
-        if (!ChromeFeatureList.sSessionRestoreAfterCrash.isEnabled()) return;
-
-        // If a ChromeTabbedActivity has already initialized, immediate crash recovery was already
-        // evaluated / handled. Do not set a pending crash recovery state.
-        for (Activity activity : mActivityMultiInstanceManagerAssignments.keySet()) {
-            if (activity instanceof ChromeTabbedActivity) {
-                return;
-            }
+        // If a ChromeTabbedActivity has already initialized, cold startup window state has already
+        // been evaluated.
+        if (mInitializedTabbedActivityCount > 0) {
+            return;
         }
-
-        // This means that there is no ChromeTabbedActivity to initiate crash recovery when the
-        // browser process starts after a crash. Track this as a pending task that can be
-        // addressed when the next ChromeTabbedActivity is registered with the orchestrator.
-        TabbedCrashRecoveryDelegate.getInstance().maybeDeferCrashRecovery();
+        TabbedStartupCoordinator.onForegroundBrowserProcessInitialized();
     }
 
     @Override
@@ -168,13 +166,18 @@ import java.util.Set;
             @Nullable Bundle additionalIntentExtras,
             @Nullable Bundle startActivityOptions,
             @NewWindowAppSource int source) {
-        if (!MultiWindowUtils.isMultiInstanceApi31Enabled()) return false;
+        if (!MultiWindowUtils.isMultiInstanceApi31Enabled()) {
+            webContents.destroy();
+            return false;
+        }
 
-        if (!MultiWindowUtils.isWithinInstanceLimit()) {
+        if (!MultiWindowUtils.isWithinInstanceLimit(
+                MultiWindowUtils.getAllAppTaskIds(sourceActivity))) {
             var multiInstanceManager = getMultiInstanceManager(sourceActivity);
             if (multiInstanceManager != null) {
                 multiInstanceManager.showInstanceCreationLimitMessage();
             }
+            webContents.destroy();
             return false;
         }
 
@@ -197,7 +200,8 @@ import java.util.Set;
         if (tabs.isEmpty()) return;
         if (sourceActivity == null) return;
 
-        if (!MultiWindowUtils.isWithinInstanceLimit()) {
+        if (!MultiWindowUtils.isWithinInstanceLimit(
+                MultiWindowUtils.getAllAppTaskIds(sourceActivity))) {
             var multiInstanceManager = getMultiInstanceManager(sourceActivity);
             if (multiInstanceManager != null) {
                 multiInstanceManager.showInstanceCreationLimitMessage();
@@ -207,7 +211,12 @@ import java.util.Set;
 
         boolean openAdjacently = shouldMoveTabsInAdjacentWindow(sourceActivity, tabs.size());
         mTabReparentingDelegate.reparentTabsToNewWindow(
-                sourceActivity, tabs, INVALID_WINDOW_ID, openAdjacently, finalizeCallback, source);
+                tabs,
+                INVALID_WINDOW_ID,
+                openAdjacently,
+                finalizeCallback,
+                source,
+                /* destGroupTabId= */ Tab.INVALID_TAB_ID);
     }
 
     @Override
@@ -215,18 +224,17 @@ import java.util.Set;
             int destWindowId,
             List<Tab> tabs,
             int destTabIndex,
-            int destGroupTabId,
+            @TabId int destGroupTabId,
             boolean bringToFront) {
         if (!MultiWindowUtils.isMultiInstanceApi31Enabled()) return;
         if (tabs.isEmpty()) return;
-        assert destTabIndex == TabList.INVALID_TAB_INDEX
-                        || destGroupTabId == TabList.INVALID_TAB_INDEX
+        assert destTabIndex == TabList.INVALID_TAB_INDEX || destGroupTabId == Tab.INVALID_TAB_ID
                 : "Only one of destTabIndex or destGroupTabId should be specified.";
         assert ChromeMultiInstancePersistentStore.hasInstance(destWindowId)
                 : "Invalid destination window id.";
 
         // Validate tabs that are being moved to a tab group in the destination window.
-        if (BuildConfig.ENABLE_ASSERTS && destGroupTabId != TabList.INVALID_TAB_INDEX) {
+        if (BuildConfig.ENABLE_ASSERTS && destGroupTabId != Tab.INVALID_TAB_ID) {
             for (Tab tab : tabs) {
                 assert tab.getTabGroupId() == null : "Tab should not be part of a group.";
             }
@@ -236,25 +244,22 @@ import java.util.Set;
         // Reparent tabs to the activity associated with the specified instance if it is alive. If
         // the instance does not have a live activity, restore it in a new activity to reparent the
         // tabs into.
-        if (destActivity != null) {
+        if (destActivity instanceof ChromeTabbedActivity tabbedActivity
+                && !tabbedActivity.isActivityFinishingOrDestroyed()) {
             mTabReparentingDelegate.reparentTabsToExistingWindow(
-                    (ChromeTabbedActivity) destActivity,
-                    tabs,
-                    destTabIndex,
-                    destGroupTabId,
-                    bringToFront);
-        } else {
+                    tabbedActivity, tabs, destTabIndex, destGroupTabId, bringToFront);
+        } else if (destActivity == null || !destActivity.isFinishing()) {
             Activity sourceActivity = TabUtils.getActivity(tabs.get(0));
             boolean openAdjacently =
                     sourceActivity != null
                             && shouldMoveTabsInAdjacentWindow(sourceActivity, tabs.size());
             mTabReparentingDelegate.reparentTabsToNewWindow(
-                    tabs.get(0).getContext(),
                     tabs,
                     destWindowId,
                     openAdjacently,
                     /* finalizeCallback= */ null,
-                    NewWindowAppSource.TAB_REPARENTING_TO_INSTANCE_WITH_NO_ACTIVITY);
+                    NewWindowAppSource.TAB_REPARENTING_TO_INSTANCE_WITH_NO_ACTIVITY,
+                    destGroupTabId);
         }
     }
 
@@ -273,6 +278,7 @@ import java.util.Set;
                             ? PersistedInstanceType.OFF_THE_RECORD
                             : PersistedInstanceType.REGULAR);
         }
+        // TODO(crbug.com/573931711): Share pre-fetched appTaskIds with moveTabsToNewWindow().
         int instanceCount = MultiWindowUtils.getInstanceCount(instanceType);
 
         Activity sourceActivity = TabUtils.getActivity(tabs.get(0));
@@ -292,11 +298,12 @@ import java.util.Set;
             ((MultiInstanceManagerApi31) multiInstanceManager)
                     .showTargetSelectorDialog(
                             (instanceInfo) -> {
+                                if (instanceInfo == null) return;
                                 moveTabsToWindowByIdChecked(
                                         instanceInfo.instanceId,
                                         tabs,
                                         /* destTabIndex= */ TabList.INVALID_TAB_INDEX,
-                                        /* destGroupTabId= */ TabList.INVALID_TAB_INDEX,
+                                        /* destGroupTabId= */ Tab.INVALID_TAB_ID,
                                         /* bringToFront= */ true);
                                 // Close the source instance window, if needed.
                                 multiInstanceManager.closeChromeWindowIfEmpty(
@@ -315,7 +322,8 @@ import java.util.Set;
         Activity sourceActivity = MultiWindowUtils.getActivityById(tabGroupMetadata.sourceWindowId);
         if (sourceActivity == null) return;
 
-        if (!MultiWindowUtils.isWithinInstanceLimit()) {
+        if (!MultiWindowUtils.isWithinInstanceLimit(
+                MultiWindowUtils.getAllAppTaskIds(sourceActivity))) {
             MultiInstanceManager multiInstanceManager = getMultiInstanceManager(sourceActivity);
             if (multiInstanceManager != null) {
                 multiInstanceManager.showInstanceCreationLimitMessage();
@@ -339,12 +347,10 @@ import java.util.Set;
 
         Activity sourceActivity = MultiWindowUtils.getActivityById(tabGroupMetadata.sourceWindowId);
         Activity destActivity = MultiWindowUtils.getActivityById(destWindowId);
-        if (destActivity != null) {
+        if (destActivity instanceof ChromeTabbedActivity tabbedActivity
+                && !tabbedActivity.isActivityFinishingOrDestroyed()) {
             mTabReparentingDelegate.reparentTabGroupToExistingWindow(
-                    (ChromeTabbedActivity) destActivity,
-                    tabGroupMetadata,
-                    destTabIndex,
-                    bringToFront);
+                    tabbedActivity, tabGroupMetadata, destTabIndex, bringToFront);
         } else {
             boolean openAdjacently =
                     sourceActivity != null
@@ -371,6 +377,7 @@ import java.util.Set;
                             ? PersistedInstanceType.OFF_THE_RECORD
                             : PersistedInstanceType.REGULAR);
         }
+        // TODO(crbug.com/573931711): Share pre-fetched appTaskIds with moveTabGroupToNewWindow().
         int instanceCount = MultiWindowUtils.getInstanceCount(instanceType);
 
         if (instanceCount <= 1) {
@@ -384,6 +391,7 @@ import java.util.Set;
         if (multiInstanceManager != null) {
             multiInstanceManager.showTargetSelectorDialog(
                     (instanceInfo) -> {
+                        if (instanceInfo == null) return;
                         moveTabGroupToWindowByIdChecked(
                                 instanceInfo.instanceId,
                                 tabGroupMetadata,
@@ -431,18 +439,59 @@ import java.util.Set;
             int parentTabId,
             boolean preferNew,
             boolean isIncognito) {
+        return openUrlsInOtherWindow(
+                sourceActivity,
+                loadUrlParams,
+                /* additionalUrls= */ null,
+                parentTabId,
+                preferNew,
+                isIncognito,
+                /* openInTabGroup= */ false);
+    }
+
+    @Override
+    public boolean openUrlsInOtherWindow(
+            Activity sourceActivity,
+            LoadUrlParams loadUrlParams,
+            @Nullable List<String> additionalUrls,
+            int parentTabId,
+            boolean preferNew,
+            boolean isIncognito,
+            boolean openInTabGroup) {
         var targetActivityClass =
                 MultiWindowUtils.getInstance().getOpenInOtherWindowActivity(sourceActivity);
-        if (targetActivityClass == null) return false;
+        if (targetActivityClass == null) {
+            destroyAdditionalNavigationParams(loadUrlParams);
+            return false;
+        }
 
-        Intent intent =
-                getBasicUrlLaunchIntent(
-                        sourceActivity,
-                        loadUrlParams,
-                        parentTabId,
-                        isIncognito,
-                        targetActivityClass);
+        // Defer calling getBasicUrlLaunchIntent() until the launch is ready to proceed, because
+        // IntentHandler.createAsyncNewTabIntent() registers loadUrlParams (including its native
+        // AdditionalNavigationParams) in AsyncTabParamsManagerSingleton, which would leak if
+        // instance limits are exceeded or the target selector dialog is dismissed.
+        Supplier<Intent> createIntent =
+                () -> {
+                    Intent intent =
+                            getBasicUrlLaunchIntent(
+                                    sourceActivity,
+                                    loadUrlParams,
+                                    parentTabId,
+                                    isIncognito,
+                                    targetActivityClass);
+                    if (additionalUrls != null && !additionalUrls.isEmpty()) {
+                        intent.putExtra(
+                                IntentHandler.EXTRA_ADDITIONAL_URLS,
+                                new ArrayList<>(additionalUrls));
+                        if (openInTabGroup) {
+                            intent.putExtra(
+                                    IntentHandler.EXTRA_OPEN_ADDITIONAL_URLS_IN_TAB_GROUP, true);
+                        }
+                    }
+                    return intent;
+                };
+
         if (!MultiWindowUtils.isMultiInstanceApi31Enabled()) {
+            Intent intent = createIntent.get();
             addOpenUrlInNewWindowIntentExtras(
                     sourceActivity, intent, /* isIncognitoWindow= */ false);
             MultiInstanceManager.onMultiInstanceModeStarted();
@@ -457,7 +506,8 @@ import java.util.Set;
                             ? PersistedInstanceType.OFF_THE_RECORD
                             : PersistedInstanceType.REGULAR);
         }
-        int instanceCount = MultiWindowUtils.getInstanceCount(targetInstanceType);
+        Set<Integer> appTaskIds = MultiWindowUtils.getAllAppTaskIds(sourceActivity);
+        int instanceCount = MultiWindowUtils.getInstanceCount(targetInstanceType, appTaskIds);
         boolean isTargetIncognitoWindow =
                 IncognitoUtils.shouldOpenIncognitoAsWindow()
                         && ((targetInstanceType & PersistedInstanceType.OFF_THE_RECORD) != 0);
@@ -475,15 +525,16 @@ import java.util.Set;
         var multiInstanceManager =
                 (MultiInstanceManagerApi31) getMultiInstanceManager(sourceActivity);
         if (instanceCount == 0 || preferNew) {
-            if (!MultiWindowUtils.isWithinInstanceLimit()) {
+            if (!MultiWindowUtils.isWithinInstanceLimit(appTaskIds)) {
                 if (multiInstanceManager != null) {
                     multiInstanceManager.showInstanceCreationLimitMessage();
                 }
+                destroyAdditionalNavigationParams(loadUrlParams);
                 return false;
             }
             openUrlInOtherWindowApi31(
                     sourceActivity,
-                    intent,
+                    createIntent.get(),
                     /* windowId= */ INVALID_WINDOW_ID,
                     isTargetIncognitoWindow);
             return true;
@@ -501,21 +552,37 @@ import java.util.Set;
             assert lastAccessedWindowId != INVALID_WINDOW_ID
                     : "Last accessed window id for the target instance type should be valid.";
             openUrlInOtherWindowApi31(
-                    sourceActivity, intent, lastAccessedWindowId, isTargetIncognitoWindow);
+                    sourceActivity,
+                    createIntent.get(),
+                    lastAccessedWindowId,
+                    isTargetIncognitoWindow);
             return true;
         }
 
         @StringRes int title = R.string.contextmenu_open_in_other_window;
         multiInstanceManager.showTargetSelectorDialog(
-                (instanceInfo) ->
-                        openUrlInOtherWindowApi31(
-                                sourceActivity,
-                                intent,
-                                instanceInfo.instanceId,
-                                /* isIncognitoWindow= */ false),
+                (instanceInfo) -> {
+                    if (instanceInfo == null) {
+                        destroyAdditionalNavigationParams(loadUrlParams);
+                        return;
+                    }
+                    openUrlInOtherWindowApi31(
+                            sourceActivity,
+                            createIntent.get(),
+                            instanceInfo.instanceId,
+                            /* isIncognitoWindow= */ false);
+                },
                 targetInstanceType,
                 title);
         return true;
+    }
+
+    private static void destroyAdditionalNavigationParams(LoadUrlParams loadUrlParams) {
+        var params = loadUrlParams.getAdditionalNavigationParams();
+        if (params != null) {
+            params.destroy();
+            loadUrlParams.setAdditionalNavigationParams(null);
+        }
     }
 
     private void moveTabsToOtherWindowPreApi31(List<Tab> tabs) {
@@ -628,7 +695,25 @@ import java.util.Set;
 
     private void onActivityStateChange(Activity activity, @ActivityState int newState) {
         if (newState == ActivityState.DESTROYED) {
-            mActivityMultiInstanceManagerAssignments.remove(activity);
+            MultiInstanceManager removed =
+                    mActivityMultiInstanceManagerAssignments.remove(activity);
+            if (activity instanceof ChromeTabbedActivity tabbedActivity) {
+                if (removed != null) {
+                    mInitializedTabbedActivityCount--;
+                    assert mInitializedTabbedActivityCount >= 0
+                            : "Initialized tabbed activity count cannot be negative.";
+                }
+                if (tabbedActivity.isFinishing()) {
+                    TabbedStartupCoordinator.onWindowClosed(tabbedActivity.getWindowId());
+                }
+                // Reset the startup policy reservation only if all initialized tabbed
+                // activities have drained and no in-flight activities are currently
+                // starting up, preventing races during overlapping window launches.
+                if (mInitializedTabbedActivityCount == 0
+                        && MultiWindowUtils.getRunningTabbedActivityCount() == 0) {
+                    TabbedStartupCoordinator.resetStartupState();
+                }
+            }
         }
     }
 
@@ -646,5 +731,6 @@ import java.util.Set;
 
     /* package */ void clearAssignmentsForTesting() {
         mActivityMultiInstanceManagerAssignments.clear();
+        mInitializedTabbedActivityCount = 0;
     }
 }

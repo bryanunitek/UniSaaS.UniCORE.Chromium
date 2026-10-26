@@ -32,10 +32,14 @@ group("absl") {
 }
 
 config("protobuf_config") {
-  include_dirs = [ "src" ]
+  include_dirs = [
+    "src",
+    "third_party/utf8_range",
+  ]
   defines = [
     "GOOGLE_PROTOBUF_NO_RTTI",
     "PROTOBUF_INTERNAL_BOUNDS_CHECK_MODE_ABORT",
+    "PROTOBUF_MESSAGE_GLOBALS_TEMPORARY_OPTOUT",
   ]
   if (!is_win) {
     defines += [ "HAVE_PTHREAD" ]
@@ -63,7 +67,11 @@ config("protobuf_config_internal") {
 # This config should be applied to targets using generated code from the proto
 # compiler. It sets up the include directories properly.
 config("using_proto") {
-  include_dirs = [ "src" ]
+  include_dirs = [
+    "src",
+    "third_party/utf8_range",
+  ]
+  defines = [ "PROTOBUF_MESSAGE_GLOBALS_TEMPORARY_OPTOUT" ]
 }
 
 # Configs to remove from the main protobuf libraries (lite and full)
@@ -95,7 +103,10 @@ if (!is_debug && is_android) {
 source_set("protobuf_headers_source_set") {
   visibility = [ ":*" ]
   public = protobuf_headers
-  public_deps = [ ":absl" ]
+  public_deps = [
+    ":absl",
+    ":utf8_range",
+  ]
   public_configs = [ ":protobuf_config" ]
 }
 
@@ -211,10 +222,6 @@ group("protobuf_full") {
       # The Cast Core gRPC generator tool.
       "//third_party/cast_core/public/src/build/chromium:cast_core_grpc_generator",
 
-      # The proto_extras plugin generates code that some of the above fuzzers
-      # use, and thus needs to know the full types.
-      "//components/proto_extras:protobuf_full_support",
-
       # The proto_extras plugin uses a custom option, which must be defined in a
       # full protobuf. This is only used in the plugin binary.
       "//components/proto_extras:proto_extras_options_proto",
@@ -256,8 +263,12 @@ if (current_toolchain == host_toolchain) {
 
     configs += [ ":protobuf_config_internal" ]
 
-    public_deps = [ ":protobuf_full" ]
+    public_deps = [
+      ":protobuf_full",
+      ":protoc_lib_sources",
+    ]
   }
+
   source_set("protoc_java") {
     sources = protoc_java_sources
     configs += [ ":libprotoc_config" ]
@@ -270,7 +281,9 @@ if (current_toolchain == host_toolchain) {
       ":protobuf_full",
       ":protoc_java_all_headers",
     ]
+    deps = [ ":protoc_lib_sources" ]
   }
+
   source_set("protoc_java_full") {
     sources = protoc_java_full_sources
     configs += [ ":libprotoc_config" ]
@@ -283,7 +296,9 @@ if (current_toolchain == host_toolchain) {
       ":protobuf_full",
       ":protoc_java_all_headers",
     ]
+    deps = [ ":protoc_lib_sources" ]
   }
+
   source_set("protoc_java_lite") {
     sources = protoc_java_lite_sources
     configs += [ ":libprotoc_config" ]
@@ -296,6 +311,7 @@ if (current_toolchain == host_toolchain) {
       ":protobuf_full",
       ":protoc_java_all_headers",
     ]
+    deps = [ ":protoc_lib_sources" ]
   }
 
   source_set("protoc_cpp") {
@@ -306,7 +322,10 @@ if (current_toolchain == host_toolchain) {
 
     configs += [ ":protobuf_config_internal" ]
 
-    public_deps = [ ":protobuf_full" ]
+    public_deps = [
+      ":protobuf_full",
+      ":protoc_lib_sources",
+    ]
   }
 
   source_set("protoc_python") {
@@ -317,7 +336,10 @@ if (current_toolchain == host_toolchain) {
 
     configs += [ ":protobuf_config_internal" ]
 
-    public_deps = [ ":protobuf_full" ]
+    public_deps = [
+      ":protobuf_full",
+      ":protoc_lib_sources",
+    ]
   }
 
   # In component builds, protoc targets depending on `protobuf_lite` inherit
@@ -330,8 +352,7 @@ if (current_toolchain == host_toolchain) {
     defines = [ "LIBPROTOC_EXPORTS" ]
   }
 
-  # protoc generates language-specific bindings from protos.
-  static_library("protoc_lib") {
+  static_library("protoc_lib_sources") {
     sources = protoc_sources + protoc_headers
 
     configs -= [ "//build/config/compiler:chromium_code" ]
@@ -351,20 +372,25 @@ if (current_toolchain == host_toolchain) {
     public_configs += [ ":libprotoc_config" ]
 
     public_deps = [ ":protobuf_full" ]
+  }
+
+  # protoc generates language-specific bindings from protos.
+  group("protoc_lib") {
+    public_configs = [
+      ":protobuf_config",
+      ":libprotoc_config",
+    ]
+
+    public_deps = [
+      ":protobuf_full",
+      ":protoc_lib_sources",
+    ]
     deps = [
       ":protoc_cpp",
       ":protoc_java",
       ":protoc_java_all_headers",
       ":protoc_java_full",
       ":protoc_java_lite",
-      ":protoc_python",
-    ]
-    allow_circular_includes_from = [
-      ":protoc_java",
-      ":protoc_java_all_headers",
-      ":protoc_java_full",
-      ":protoc_java_lite",
-      ":protoc_cpp",
       ":protoc_python",
     ]
   }

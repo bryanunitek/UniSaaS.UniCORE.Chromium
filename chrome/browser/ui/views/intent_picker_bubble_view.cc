@@ -17,18 +17,16 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/sharing/click_to_call/click_to_call_ui_controller.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
-#include "chrome/browser/ui/views/controls/hover_button.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -62,6 +60,7 @@
 #include "ui/views/style/typography_provider.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/window/dialog_client_view.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ui/chromeos/devicetype_utils.h"
@@ -99,8 +98,8 @@ bool IsDoubleClick(const ui::Event& event) {
 
 // Callback for when an app is selected in the app list. First parameter is the
 // index, second parameter is true if the dialog should be immediately accepted.
-using AppSelectedCallback =
-    base::RepeatingCallback<void(std::optional<size_t>, bool)>;
+using AppSelectedCallback = base::RepeatingCallback<
+    void(std::optional<size_t>, bool, const ui::Event*)>;
 
 // Grid view:
 
@@ -112,7 +111,8 @@ class IntentPickerAppGridButton : public views::Button {
  public:
   // Callback for when this app is selected. Parameter is true if the dialog
   // should be immediately accepted.
-  using ButtonSelectedCallback = base::RepeatingCallback<void(bool)>;
+  using ButtonSelectedCallback =
+      base::RepeatingCallback<void(bool, const ui::Event*)>;
 
   IntentPickerAppGridButton(ButtonSelectedCallback selected_callback,
                             const ui::ImageModel& icon_model,
@@ -187,7 +187,7 @@ class IntentPickerAppGridButton : public views::Button {
   void OnFocus() override {
     Button::OnFocus();
     if (select_on_focus_) {
-      selected_callback_.Run(false);
+      selected_callback_.Run(false, nullptr);
     }
   }
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override {
@@ -219,7 +219,7 @@ class IntentPickerAppGridButton : public views::Button {
     bool should_open = IsDoubleClick(event) ||
                        (event.IsKeyEvent() &&
                         event.AsKeyEvent()->key_code() == ui::VKEY_RETURN);
-    selected_callback_.Run(should_open);
+    selected_callback_.Run(should_open, &event);
   }
 
   // Updates the accessible name of the bubble in the ViewsAX cache.
@@ -302,7 +302,7 @@ class IntentPickerAppGridView
   }
 
   void SetSelectedIndex(std::optional<size_t> index) override {
-    SetSelectedIndexInternal(index, false);
+    SetSelectedIndexInternal(index, false, nullptr);
   }
 
   std::optional<size_t> GetSelectedIndex() const override {
@@ -311,7 +311,8 @@ class IntentPickerAppGridView
 
  private:
   void SetSelectedIndexInternal(std::optional<size_t> new_index,
-                                bool accepted) {
+                                bool accepted,
+                                const ui::Event* event) {
     if (selected_app_index_.has_value()) {
       GetButtonAtIndex(selected_app_index_.value())->SetSelected(false);
     }
@@ -326,7 +327,7 @@ class IntentPickerAppGridView
 
     selected_app_index_ = new_index;
 
-    selected_callback_.Run(new_index, accepted);
+    selected_callback_.Run(new_index, accepted, event);
   }
 
   IntentPickerAppGridButton* GetButtonAtIndex(size_t index) {
@@ -411,7 +412,7 @@ class IntentPickerAppListView
 
     SetBackgroundColor(ui::kColorBubbleBackground);
     SetContents(std::move(scrollable_view));
-    DCHECK(!contents()->children().empty());
+    CHECK(!contents()->children().empty(), base::NotFatalUntil::M162);
     const int row_height =
         contents()->children().front()->GetPreferredSize().height();
     // Use |kMaxAppResults| as a measure of how many apps we want to show.
@@ -422,8 +423,9 @@ class IntentPickerAppListView
   ~IntentPickerAppListView() override = default;
 
   void SetSelectedIndex(std::optional<size_t> index) override {
-    DCHECK(index.has_value());  // List-style intent picker does not support
-                                // having no selection.
+    CHECK(index.has_value(),
+          base::NotFatalUntil::M162);  // List-style intent picker does not
+                                       // support having no selection.
     SetSelectedAppIndex(index.value(), nullptr);
   }
 
@@ -477,7 +479,7 @@ class IntentPickerAppListView
       accepted = true;
     }
 
-    selected_callback_.Run(index, accepted);
+    selected_callback_.Run(index, accepted, event);
   }
 
   size_t CalculateNextAppIndex(int delta) {
@@ -496,7 +498,7 @@ class IntentPickerAppListView
 
   IntentPickerLabelButton* GetIntentPickerLabelButtonAt(size_t index) {
     const auto& children = contents()->children();
-    DCHECK_LT(index, children.size());
+    CHECK_LT(index, children.size(), base::NotFatalUntil::M162);
     return views::AsViewClass<IntentPickerLabelButton>(children[index]);
   }
 
@@ -539,12 +541,7 @@ views::Widget* IntentPickerBubbleView::ShowBubble(
   views::Widget* widget =
       views::BubbleDialogDelegateView::CreateBubble(intent_picker_bubble_);
 
-  if (bubble_type == BubbleType::kClickToCall) {
-    ClickToCallUiController::GetOrCreateFromWebContents(web_contents)
-        ->ClearLastDialog();
-  }
-
-  DCHECK(intent_picker_bubble_->HasCandidates());
+  CHECK(intent_picker_bubble_->HasCandidates(), base::NotFatalUntil::M162);
   intent_picker_bubble_->ShowForReason(DisplayReason::USER_GESTURE);
 
   intent_picker_bubble_->SelectDefaultItem();
@@ -588,7 +585,7 @@ void IntentPickerBubbleView::OnDialogAccepted() {
                         remember_selection_checkbox_->GetChecked();
   auto selected_index = GetSelectedIndex();
   // Dialog cannot be accepted when there is no selection.
-  DCHECK(selected_index.has_value());
+  CHECK(selected_index.has_value(), base::NotFatalUntil::M162);
   RunCallbackAndCloseBubble(app_info_[selected_index.value()].launch_name,
                             app_info_[selected_index.value()].type,
                             apps::IntentPickerCloseReason::OPEN_APP,
@@ -633,11 +630,6 @@ std::optional<size_t> IntentPickerBubbleView::GetSelectedIndex() const {
 }
 
 std::u16string IntentPickerBubbleView::GetWindowTitle() const {
-  if (bubble_type_ == BubbleType::kClickToCall) {
-    return l10n_util::GetStringUTF16(
-        IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_TITLE_LABEL);
-  }
-
   return l10n_util::GetStringUTF16(
       use_grid_view_ ? IDS_INTENT_PICKER_BUBBLE_VIEW_OPEN_IN_APP
                      : IDS_INTENT_PICKER_BUBBLE_VIEW_OPEN_WITH);
@@ -665,12 +657,8 @@ IntentPickerBubbleView::IntentPickerBubbleView(
                  ? static_cast<int>(ui::mojom::DialogButton::kOk) |
                        static_cast<int>(ui::mojom::DialogButton::kCancel)
                  : static_cast<int>(ui::mojom::DialogButton::kOk));
-  SetButtonLabel(
-      ui::mojom::DialogButton::kOk,
-      l10n_util::GetStringUTF16(
-          bubble_type_ == BubbleType::kClickToCall
-              ? IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_CALL_BUTTON_LABEL
-              : IDS_INTENT_PICKER_BUBBLE_VIEW_OPEN));
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
+                 l10n_util::GetStringUTF16(IDS_INTENT_PICKER_BUBBLE_VIEW_OPEN));
   SetButtonLabel(
       ui::mojom::DialogButton::kCancel,
       l10n_util::GetStringUTF16(IDS_INTENT_PICKER_BUBBLE_VIEW_STAY_IN_CHROME));
@@ -681,11 +669,10 @@ IntentPickerBubbleView::IntentPickerBubbleView(
   SetCloseCallback(base::BindOnce(&IntentPickerBubbleView::OnDialogClosed,
                                   base::Unretained(this)));
 
-  // Click to call bubbles need to be closed after navigation if the main frame
-  // origin changed. Other intent picker bubbles will be handled in
-  // intent_picker_helpers, they will get closed on each navigation start and
-  // should stay open until after navigation finishes.
-  SetCloseOnMainFrameOriginNavigation(bubble_type == BubbleType::kClickToCall);
+  // Intent picker bubbles are handled in `intent_picker_helpers`, where they
+  // get closed on each navigation start and should stay open until after
+  // navigation finishes.
+  SetCloseOnMainFrameOriginNavigation(false);
   // Margins are manually added in Initialize().
   set_margins(gfx::Insets());
 }
@@ -702,8 +689,13 @@ void IntentPickerBubbleView::OnWidgetDestroying(views::Widget* widget) {
                             false);
 }
 
+bool IntentPickerBubbleView::ShouldAllowKeyEventsDuringInputProtection() const {
+  return false;
+}
+
 void IntentPickerBubbleView::OnAppSelected(std::optional<size_t> index,
-                                           bool accepted) {
+                                           bool accepted,
+                                           const ui::Event* event) {
   SetButtonEnabled(ui::mojom::DialogButton::kOk, index.has_value());
 
   if (index.has_value()) {
@@ -711,7 +703,14 @@ void IntentPickerBubbleView::OnAppSelected(std::optional<size_t> index,
   }
 
   if (accepted) {
-    DCHECK(index.has_value());
+    CHECK(index.has_value(), base::NotFatalUntil::M162);
+    CHECK(event, base::NotFatalUntil::M162);
+    if (GetDialogClientView() &&
+        GetDialogClientView()->IsPossiblyUnintendedInteraction(
+            *event,
+            /*allow_key_events=*/ShouldAllowKeyEventsDuringInputProtection())) {
+      return;
+    }
     AcceptDialog();
   }
 }
@@ -754,9 +753,7 @@ void IntentPickerBubbleView::Initialize() {
 
   if (show_origin) {
     std::u16string origin_text = l10n_util::GetStringFUTF16(
-        bubble_type_ == BubbleType::kClickToCall
-            ? IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_INITIATING_ORIGIN
-            : IDS_INTENT_PICKER_BUBBLE_VIEW_INITIATING_ORIGIN,
+        IDS_INTENT_PICKER_BUBBLE_VIEW_INITIATING_ORIGIN,
         url_formatter::FormatOriginForSecurityDisplay(*initiating_origin_));
     auto* label = AddChildView(std::make_unique<views::Label>(
         origin_text, ChromeTextContext::CONTEXT_DIALOG_BODY_TEXT_SMALL,
@@ -793,7 +790,7 @@ void IntentPickerBubbleView::RunCallbackAndCloseBubble(
   ClearIntentPickerBubbleView();
   if (!intent_picker_cb_.is_null()) {
     // Calling Run() will make |intent_picker_cb_| null.
-    DCHECK(!should_persist || !launch_name.empty());
+    CHECK(!should_persist || !launch_name.empty(), base::NotFatalUntil::M162);
     std::move(intent_picker_cb_)
         .Run(launch_name, entry_type, close_reason, should_persist);
   }

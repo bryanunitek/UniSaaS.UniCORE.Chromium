@@ -5,18 +5,70 @@
 #include "chrome/browser/actor/tools/window_management_tool.h"
 
 #include "base/functional/bind.h"
+#include "base/notreached.h"
+#include "build/build_config.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/tools/observation_delay_controller.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/actor/action_result.h"
 #include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/sessions/core/session_id.h"
+#include "ui/base/base_window.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
+#include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
+#else
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "url/url_constants.h"
+#endif
 
 namespace actor {
+
+namespace {
+
+// Puts `browser` into or out of fullscreen, as a no-op if it's already in the
+// requested state.
+mojom::ActionResultPtr SetWindowFullscreen(BrowserWindowInterface& browser,
+                                           bool fullscreen) {
+#if BUILDFLAG(IS_ANDROID)
+  // Android has no browser-level fullscreen. A window is fullscreen exactly
+  // when its active tab is in immersive (tab) fullscreen, so drive that state
+  // through the tab's WebContentsDelegate, the same path HTML
+  // requestFullscreen() takes.
+  TabListInterface* tab_list = TabListInterface::From(&browser);
+  tabs::TabInterface* tab = tab_list ? tab_list->GetActiveTab() : nullptr;
+  content::WebContents* contents = tab ? tab->GetContents() : nullptr;
+  if (!contents || !contents->GetDelegate()) {
+    return MakeResult(mojom::ActionResultCode::kTabWentAway,
+                      /*requires_page_stabilization=*/false,
+                      "The target window has no active tab.");
+  }
+  if (contents->IsFullscreen() != fullscreen) {
+    if (fullscreen) {
+      contents->GetDelegate()->EnterFullscreenModeForTab(
+          contents->GetPrimaryMainFrame(), blink::mojom::FullscreenOptions());
+    } else {
+      contents->ExitFullscreen(/*will_cause_resize=*/true);
+    }
+  }
+#else
+  if (browser.GetWindow()->IsFullscreen() != fullscreen) {
+    chrome::ToggleFullscreenMode(&browser);
+  }
+#endif
+  return MakeOkResult();
+}
+
+}  // namespace
 
 WindowManagementTool::WindowManagementTool(TaskId task_id,
                                            ToolDelegate& tool_delegate)
@@ -26,7 +78,11 @@ WindowManagementTool::WindowManagementTool(Action action,
                                            TaskId task_id,
                                            ToolDelegate& tool_delegate,
                                            int32_t window_id)
-    : Tool(task_id, tool_delegate), action_(action), window_id_(window_id) {}
+    : Tool(task_id, tool_delegate), action_(action), window_id_(window_id) {
+  CHECK(action_ == Action::kActivate || action_ == Action::kClose ||
+        action_ == Action::kEnterFullscreen ||
+        action_ == Action::kExitFullscreen);
+}
 
 WindowManagementTool::~WindowManagementTool() = default;
 
@@ -35,25 +91,22 @@ void WindowManagementTool::Validate(ToolCallback callback) {
     case Action::kCreate:
       break;
     case Action::kActivate:
-    case Action::kClose: {
+    case Action::kClose:
+    case Action::kEnterFullscreen:
+    case Action::kExitFullscreen: {
       CHECK(window_id_.has_value());
-      BrowserWindowInterface* browser = BrowserWindowInterface::FromSessionID(
-          SessionID::FromSerializedValue(*window_id_));
-      if (!browser) {
-        std::move(callback).Run(
-            MakeResult(mojom::ActionResultCode::kWindowWentAway,
-                       /*requires_page_stabilization=*/false,
-                       "The target window could not be found."));
-        return;
-      }
-      mojom::ActionResultPtr result = CheckCrossProfile(browser);
+      mojom::ActionResultPtr result =
+          ValidateWindowId(SessionID::FromSerializedValue(*window_id_));
       if (!IsOk(*result)) {
         std::move(callback).Run(std::move(result));
         return;
       }
-      browser_did_close_subscription_ = browser->RegisterBrowserDidClose(
-          base::BindRepeating(&WindowManagementTool::OnBrowserDidClose,
-                              base::Unretained(this)));
+      if (action_ == Action::kClose) {
+        BrowserWindowInterface* browser = GetTargetBrowser();
+        browser_did_close_subscription_ = browser->RegisterBrowserDidClose(
+            base::BindRepeating(&WindowManagementTool::OnBrowserDidClose,
+                                base::Unretained(this)));
+      }
       break;
     }
   }
@@ -62,16 +115,24 @@ void WindowManagementTool::Validate(ToolCallback callback) {
 }
 
 void WindowManagementTool::Invoke(ToolCallback callback) {
-  // The callback is invoked from observing changes to the Browser instance.
+  // The callback is invoked from observing changes to the
+  // BrowserWindowInterface instance.
   callback_ = std::move(callback);
 
   switch (action_) {
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/470475787): Port these actions to Android. Their
+    // requests aren't dispatched there yet, so they can't reach this point.
+    case Action::kCreate:
+    case Action::kActivate:
+      NOTREACHED();
+#else
     case Action::kCreate: {
-      Browser::CreateParams params(Browser::TYPE_NORMAL,
-                                   &tool_delegate().GetProfile(),
-                                   /*user_gesture=*/false);
+      BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
+                                       &tool_delegate().GetProfile(),
+                                       /*from_user_gesture=*/false);
       params.initial_show_state = ::ui::mojom::WindowShowState::kNormal;
-      Browser* browser = Browser::Create(params);
+      BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
       browser_did_become_active_subscription_ =
           browser->RegisterDidBecomeActive(base::BindRepeating(
               &WindowManagementTool::OnBrowserDidBecomeActive,
@@ -93,17 +154,16 @@ void WindowManagementTool::Invoke(ToolCallback callback) {
       break;
     }
     case Action::kActivate: {
-      BrowserWindowInterface* browser = BrowserWindowInterface::FromSessionID(
-          SessionID::FromSerializedValue(*window_id_));
-      if (!browser || !browser->GetWindow()) {
+      BrowserWindowInterface* browser = GetTargetBrowser();
+      mojom::ActionResultPtr result = ValidateBrowserWindow(browser);
+      if (!IsOk(*result)) {
+        OnInvokeFinished(std::move(result));
+        return;
+      }
+      if (!browser->GetWindow()) {
         OnInvokeFinished(MakeResult(mojom::ActionResultCode::kWindowWentAway,
                                     /*requires_page_stabilization=*/false,
                                     "The target window could not be found."));
-        return;
-      }
-      mojom::ActionResultPtr result = CheckCrossProfile(browser);
-      if (!IsOk(*result)) {
-        OnInvokeFinished(std::move(result));
         return;
       }
       browser_did_become_active_subscription_ =
@@ -113,22 +173,56 @@ void WindowManagementTool::Invoke(ToolCallback callback) {
       browser->GetWindow()->Show();
       break;
     }
+#endif  // BUILDFLAG(IS_ANDROID)
     case Action::kClose: {
-      auto* browser = BrowserWindowInterface::FromSessionID(
-          SessionID::FromSerializedValue(*window_id_));
-      if (!browser || !browser->GetWindow()) {
+      BrowserWindowInterface* browser = GetTargetBrowser();
+      mojom::ActionResultPtr result = ValidateBrowserWindow(browser);
+      if (!IsOk(*result)) {
+        OnInvokeFinished(std::move(result));
+        return;
+      }
+      if (!browser->GetWindow()) {
         OnInvokeFinished(MakeResult(mojom::ActionResultCode::kWindowWentAway,
                                     /*requires_page_stabilization=*/false,
                                     "The target window could not be found."));
         return;
       }
-      mojom::ActionResultPtr result = CheckCrossProfile(browser);
+
+      browser->GetWindow()->Close();
+      break;
+    }
+    case Action::kEnterFullscreen: {
+      BrowserWindowInterface* browser = GetTargetBrowser();
+      mojom::ActionResultPtr result = ValidateBrowserWindow(browser);
       if (!IsOk(*result)) {
         OnInvokeFinished(std::move(result));
         return;
       }
+      if (!browser->GetWindow()) {
+        OnInvokeFinished(MakeResult(mojom::ActionResultCode::kWindowWentAway,
+                                    /*requires_page_stabilization=*/false,
+                                    "The target window could not be found."));
+        return;
+      }
 
-      browser->GetWindow()->Close();
+      OnInvokeFinished(SetWindowFullscreen(*browser, /*fullscreen=*/true));
+      break;
+    }
+    case Action::kExitFullscreen: {
+      BrowserWindowInterface* browser = GetTargetBrowser();
+      mojom::ActionResultPtr result = ValidateBrowserWindow(browser);
+      if (!IsOk(*result)) {
+        OnInvokeFinished(std::move(result));
+        return;
+      }
+      if (!browser->GetWindow()) {
+        OnInvokeFinished(MakeResult(mojom::ActionResultCode::kWindowWentAway,
+                                    /*requires_page_stabilization=*/false,
+                                    "The target window could not be found."));
+        return;
+      }
+
+      OnInvokeFinished(SetWindowFullscreen(*browser, /*fullscreen=*/false));
       break;
     }
   }
@@ -146,6 +240,10 @@ std::string WindowManagementTool::JournalEvent() const {
       return "ActivateWindow";
     case Action::kClose:
       return "CloseWindow";
+    case Action::kEnterFullscreen:
+      return "EnterFullscreen";
+    case Action::kExitFullscreen:
+      return "ExitFullscreen";
   }
 }
 
@@ -161,13 +259,17 @@ void WindowManagementTool::UpdateTaskBeforeInvoke(ActorTask& task,
     // If closing a window, ensure all acting tabs in this window are removed
     // from the acting set. In particular, this ensures the task isn't stopped
     // when the acting tab is closed.
-    auto* browser = BrowserWindowInterface::FromSessionID(
-        SessionID::FromSerializedValue(*window_id_));
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/470475787): Port to Android, which has no TabStripModel.
+    NOTREACHED();
+#else
+    BrowserWindowInterface* browser = GetTargetBrowser();
     if (browser) {
       for (tabs::TabInterface* tab : *browser->GetTabStripModel()) {
         task.RemoveTab(tab->GetHandle());
       }
     }
+#endif
   }
   std::move(callback).Run(MakeOkResult());
 }
@@ -188,8 +290,10 @@ void WindowManagementTool::UpdateTaskAfterInvoke(ActorTask& task,
   }
 }
 
-tabs::TabHandle WindowManagementTool::GetTargetTab() const {
-  return tabs::TabHandle::Null();
+BrowserWindowInterface* WindowManagementTool::GetTargetBrowser() const {
+  CHECK_NE(action_, Action::kCreate);
+  CHECK(window_id_.has_value());
+  return FindBrowserWindow(SessionID::FromSerializedValue(*window_id_));
 }
 
 void WindowManagementTool::OnBrowserDidClose(BrowserWindowInterface* browser) {
@@ -200,7 +304,7 @@ void WindowManagementTool::OnBrowserDidClose(BrowserWindowInterface* browser) {
 }
 
 void WindowManagementTool::OnBrowserDidBecomeActive(
-    BrowserWindowInterface* Browser) {
+    BrowserWindowInterface* browser) {
   OnInvokeFinished(MakeOkResult());
 }
 
@@ -212,14 +316,8 @@ void WindowManagementTool::OnInvokeFinished(mojom::ActionResultPtr result) {
   browser_did_become_active_subscription_ = {};
 }
 
-mojom::ActionResultPtr WindowManagementTool::CheckCrossProfile(
-    BrowserWindowInterface* browser) {
-  if (browser && browser->GetProfile() != &tool_delegate().GetProfile()) {
-    return MakeResult(mojom::ActionResultCode::kWindowWentAway,
-                      /*requires_page_stabilization=*/false,
-                      "Cross-profile access denied.");
-  }
-  return MakeOkResult();
+ActorSurfaceHandle WindowManagementTool::GetTargetActorSurface() const {
+  return ActorSurfaceHandle::Null();
 }
 
 }  // namespace actor

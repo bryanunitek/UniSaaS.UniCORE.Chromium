@@ -14,25 +14,31 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/search/most_visited_metrics_logger.h"
 #include "chrome/common/search/ntp_logging_events.h"
 #include "components/ntp_tiles/constants.h"
 #include "components/ntp_tiles/ntp_tile_impression.h"
 
-// This enum must match the numbering for NewTabPageLogoShown in enums.xml.
+// This enum must match the numbering for NewTabPageLogoShown in enums.xml and
+// LogoShownId in LogoMediator.java, which records the same histograms from the
+// Android native NTP and must therefore use an identical bucket layout.
 // Do not reorder or remove items, and only add new items before
 // LOGO_IMPRESSION_TYPE_MAX.
 // LINT.IfChange(LogoImpressionType)
 enum LogoImpressionType {
   // Static Doodle image.
   LOGO_IMPRESSION_TYPE_STATIC = 0,
-  // (Deprecated) Call-to-action Doodle image.
+  // Call-to-action Doodle image. No longer recorded by the WebUI NTP, but still
+  // recorded by the Android native NTP for the static preview of an animated
+  // Doodle.
   LOGO_IMPRESSION_TYPE_CTA = 1,
   // Animated Doodle image.
   LOGO_IMPRESSION_TYPE_ANIMATED = 2,
 
   LOGO_IMPRESSION_TYPE_MAX
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NewTabPageLogoShown)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NewTabPageLogoShown,
+// //chrome/browser/ui/android/logo/java/src/org/chromium/chrome/browser/logo/LogoMediator.java:LogoShownId)
 
 // This enum must match the numbering for NewTabPageLogoClick in enums.xml.
 // Do not reorder or remove items, and only add new items before
@@ -51,7 +57,7 @@ enum LogoClickType {
 // LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NewTabPageLogoClick)
 
 // Helper class for logging data from the NTP. Attached to each NTP instance.
-class NTPUserDataLogger {
+class NTPUserDataLogger : public MostVisitedMetricsLogger {
  public:
   // Creates a NTPUserDataLogger. MUST be called only when the NTP is active.
   // `ntp_navigation_start_time_ticks` is the monotonic-clock timestamp of the
@@ -63,18 +69,19 @@ class NTPUserDataLogger {
   NTPUserDataLogger(const NTPUserDataLogger&) = delete;
   NTPUserDataLogger& operator=(const NTPUserDataLogger&) = delete;
 
-  virtual ~NTPUserDataLogger();
+  ~NTPUserDataLogger() override;
 
   // Called when a One Google Bar fetch has been completed after |duration|.
   // |success| is true if the fetch was successful.
   static void LogOneGoogleBarFetchDuration(bool success,
                                            const base::TimeDelta& duration);
 
+  // MostVisitedMetricsLogger:
   // Called when an event occurs on the NTP that requires a counter to be
   // incremented. |time| is the delta time from navigation start until this
   // event happened. The NTP_ALL_TILES_LOADED event may be logged from all NTPs;
   // all others require Google as the default search provider.
-  void LogEvent(NTPLoggingEventType event, base::TimeDelta time);
+  void LogEvent(NTPLoggingEventType event, base::TimeDelta time) override;
 
   // Called when all NTP tiles have finished loading (successfully or failing).
   void LogMostVisitedLoaded(base::TimeDelta time,
@@ -82,13 +89,7 @@ class NTPUserDataLogger {
                             bool using_custom_links,
                             bool using_enterprise_shortcuts,
                             bool is_visible,
-                            std::optional<bool> is_expanded);
-
-  // Logs an impression on one of the NTP tiles by given details.
-  void LogMostVisitedImpression(const ntp_tiles::NTPTileImpression& impression);
-
-  // Logs a navigation on one of the NTP tiles by a given impression.
-  void LogMostVisitedNavigation(const ntp_tiles::NTPTileImpression& impression);
+                            std::optional<bool> is_expanded) override;
 
  private:
   // Returns whether Google is selected as the default search engine. Virtual
@@ -115,20 +116,6 @@ class NTPUserDataLogger {
 
   // Logs the user |action| via base::RecordAction.
   void RecordAction(const char* action);
-
-  // Records whether we have yet logged an impression for the tile at a given
-  // index and if so the corresponding details. A typical NTP will log 9
-  // impressions, but could record fewer for new users that haven't built up a
-  // history yet. If the user has customized their shortcuts, this number can
-  // increase up to 10 impressions.
-  //
-  // If something happens that causes the NTP to pull tiles from different
-  // sources, such as signing in (switching from client to server tiles), then
-  // only the impressions for the first source will be logged, leaving the
-  // number of impressions for a source slightly out-of-sync with navigations.
-  std::array<std::optional<ntp_tiles::NTPTileImpression>,
-             ntp_tiles::kMaxNumTiles>
-      logged_impressions_;
 
   // Whether we have already emitted NTP stats for this web contents.
   bool has_emitted_ = false;

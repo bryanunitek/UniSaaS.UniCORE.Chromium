@@ -25,15 +25,12 @@ class PrivacySandboxAdsPageLoadMetricsObserver
   friend class page_load_metrics::PrivacySandboxAdsPageLoadMetricsObserverTest;
 
   enum class PrivacySandboxAdsApi {
-    kAttributionReporting,
     kFencedFrames,
     kProtectedAudienceRunAdAuction,
     kProtectedAudienceJoinAdInterestGroup,
-    kPrivateAggregation,
-    kSharedStorage,
     kTopics,
 
-    kMinValue = kAttributionReporting,
+    kMinValue = kFencedFrames,
     kMaxValue = kTopics,
   };
 

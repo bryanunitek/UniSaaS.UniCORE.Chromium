@@ -93,6 +93,28 @@ class AnnotatedPageContentRequest;
 struct ExtractedPageContentResult;
 class PageContentCacheHandler;
 
+// A Profile-keyed service that manages the extraction, caching, and retrieval
+// of page content (specifically `AnnotatedPageContent` for HTML pages and plain
+// text for PDFs).
+//
+// This service coordinates:
+// - Caching: Maintains an in-memory and on-disk cache of extracted page
+//   content (for HTML pages). PDF extractions are not cached.
+// - Observers: Automatically extracts page content when an observer is
+//   registered and fires notifications to registered `Observer`s upon
+//   extraction.
+// - Lifecycle management: Cleans up cached content when tabs are closed,
+//   handles tab visibility/backgrounding state, etc.
+//
+// Developers looking to fetch page content should prefer using this service
+// over the more direct `optimization_guide::GetAIPageContent` to benefit from:
+// 1. Shared Caching: Avoids running redundant extractions on the renderer if
+//    multiple features query the same page.
+// 2. Lifecycle Integration: Automatically handles waiting for the page to
+//    load, settling of layout stability, and cache cleanup on tab closing.
+//
+// For a detailed integration guide, comparison matrix, and usage examples,
+// see `components/page_content_annotations/content/pces_guide.md`.
 class PageContentExtractionService : public KeyedService,
                                      public base::SupportsUserData {
  public:
@@ -106,12 +128,39 @@ class PageContentExtractionService : public KeyedService,
 
   class Observer : public base::CheckedObserver {
    public:
-    // Invoked when `page_content` is extracted for `page`. The extraction is
-    // triggered for every page once the page has sufficiently loaded. The
-    // `page_content` holds either the APC for a non-PDF page; or the PDF text
-    // for a PDF page.
+    // Invoked when `page_content` is extracted for `page`, whether
+    // automatically (once the page loads and settles, or when the tab is
+    // hidden, depending on configuration) or on demand. May be invoked multiple
+    // times for the same `page` (e.g., on eligible same-document navigations,
+    // tab hides, or on-demand refreshes), or not at all if extraction is
+    // skipped or fails. `page_content` holds either the APC for a non-PDF page
+    // or the PDF text for a PDF page.
+    //
+    // For non-PDF pages, the extracted content and its server upload
+    // eligibility are cached before this method is called, so synchronous
+    // calls to `GetExtractedPageContentAndEligibilityForPage(page)` and
+    // `GetServerUploadEligibilityForPage(page)` from within this method will
+    // return the newly extracted result.
     virtual void OnPageContentExtracted(content::Page& page,
                                         PageContent page_content) {}
+
+    // Invoked when a navigation of the primary main frame resets page content
+    // tracking for its tab (discarding any previously extracted content), i.e.
+    // whenever a new automatic extraction cycle begins. `current_page` is the
+    // new primary page if the primary page changed, or the existing primary
+    // page for a same-document navigation. This fires for every
+    // cross-document navigation, and for same-document navigations that are
+    // significant enough to trigger a new extraction (see
+    // `AnnotatedPageContentRequest`). A matching `OnPageContentExtracted()`
+    // for `current_page` follows if and when extraction succeeds, but is not
+    // guaranteed (e.g. `current_page` is not eligible, or is navigated away
+    // from first).
+    //
+    // By the time this is called, pending async requests for any discarded
+    // content have already resolved with `std::nullopt`. Observers must not
+    // synchronously call back into the service from this method.
+    virtual void OnPageContentReset(content::Page& current_page,
+                                    bool is_same_document) {}
   };
 
 #if BUILDFLAG(IS_ANDROID)
@@ -218,10 +267,10 @@ class PageContentExtractionService : public KeyedService,
   void GetOnDiskCachedTabIds(GetAllTabIdsCallback callback);
 
  protected:
-  // Invoked when `page_content` is extracted for `page`, to notify the
-  // observers. The `page_content` holds either the APC for a non-PDF page; or
-  // the PDF text for a PDF page. `tab_id` for the tab where page is loaded, if
-  // available.
+  // Invoked when `page_content` (either the APC for a non-PDF page or the PDF
+  // text for a PDF page) is extracted for `page`. Notifies observers and, if
+  // enabled for non-PDF pages, updates the on-disk cache using `tab_id` and
+  // `screenshot_data`.
   virtual void OnPageContentExtracted(
       content::Page& page,
       PageContent page_content,

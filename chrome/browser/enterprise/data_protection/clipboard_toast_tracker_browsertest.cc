@@ -4,8 +4,8 @@
 
 #include "chrome/browser/enterprise/data_protection/clipboard_toast_tracker.h"
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
@@ -20,8 +20,8 @@ using ClipboardToastTrackerBrowserTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
                        MaybeShowCopyToastShowsAndRecordsAudit) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  auto* toast_controller = browser()->GetFeatures().toast_controller();
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  auto* toast_controller = ToastController::From(browser());
   ASSERT_TRUE(toast_controller);
   EXPECT_FALSE(toast_controller->IsShowingToast());
 
@@ -41,8 +41,8 @@ IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
 IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
                        MaybeShowCopyToastShowsAndRecordsKeptInManagedChrome) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  auto* toast_controller = browser()->GetFeatures().toast_controller();
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  auto* toast_controller = ToastController::From(browser());
   ASSERT_TRUE(toast_controller);
   EXPECT_FALSE(toast_controller->IsShowingToast());
 
@@ -62,8 +62,8 @@ IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
 IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
                        ToastNotShownTwiceInSingleSession) {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  auto* toast_controller = browser()->GetFeatures().toast_controller();
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  auto* toast_controller = ToastController::From(browser());
   ASSERT_TRUE(toast_controller);
   EXPECT_FALSE(toast_controller->IsShowingToast());
 
@@ -71,8 +71,8 @@ IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
   ASSERT_TRUE(tracker);
 
   // 1. Show the toast for the first time.
-  MaybeShowCopyToast(browser()->GetProfile(), web_contents,
-                     CopyToastType::kAudit);
+  EXPECT_TRUE(MaybeShowCopyToast(browser()->GetProfile(), web_contents,
+                                 CopyToastType::kAudit));
   EXPECT_TRUE(toast_controller->IsShowingToast());
   EXPECT_EQ(toast_controller->GetCurrentToastId(),
             ToastId::kEnterpriseCopyAudit);
@@ -83,8 +83,8 @@ IN_PROC_BROWSER_TEST_F(ClipboardToastTrackerBrowserTest,
 
   // 3. Attempt to show the same toast type again during the same active
   // session.
-  MaybeShowCopyToast(browser()->GetProfile(), web_contents,
-                     CopyToastType::kAudit);
+  EXPECT_FALSE(MaybeShowCopyToast(browser()->GetProfile(), web_contents,
+                                  CopyToastType::kAudit));
 
   // 4. Verify that the toast is NOT shown a second time.
   EXPECT_FALSE(toast_controller->IsShowingToast());

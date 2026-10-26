@@ -4,13 +4,15 @@
 
 #include "services/network/shared_dictionary/shared_dictionary_manager_on_disk.h"
 
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback.h"
-#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -216,7 +218,7 @@ class SharedDictionaryManagerOnDiskTest : public ::testing::Test {
   }
 
   std::unique_ptr<SharedDictionaryManager> CreateSharedDictionaryManager(
-      uint64_t cache_max_size = 0,
+      std::optional<base::ByteSize> cache_max_size = std::nullopt,
       uint64_t cache_max_count =
           shared_dictionary::kDictionaryMaxCountPerNetworkContext) {
     return SharedDictionaryManager::CreateOnDisk(
@@ -273,7 +275,7 @@ class SharedDictionaryManagerOnDiskTest : public ::testing::Test {
     ASSERT_TRUE(future.Wait());
   }
 
-  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
 
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
@@ -1170,7 +1172,7 @@ TEST_F(SharedDictionaryManagerOnDiskTest, MetadataBrokenDatabase) {
     }
     // SetCacheMaxSize() triggers CacheEvictionTask which reset the storage
     // when `total_dict_size` is not available.
-    manager->SetCacheMaxSize(10000);
+    manager->SetCacheMaxSize(base::ByteSize(10000));
 
     // RunUntilIdle() to load from the database.
     task_environment_.RunUntilIdle();
@@ -1648,7 +1650,7 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
               DictionaryUrlIs("https://target1.test/d"))))));
 
   // Set the max size to kTestData1.size() * 100
-  manager->SetCacheMaxSize(kTestData1.size() * 100);
+  manager->SetCacheMaxSize(base::ByteSize(kTestData1.size() * 100));
 
   // FlushCacheTasks() to finish the persistence operation.
   FlushCacheTasks();
@@ -1774,7 +1776,8 @@ TEST_F(SharedDictionaryManagerOnDiskTest, CacheEvictionOnReload) {
   }
 
   std::unique_ptr<SharedDictionaryManager> manager =
-      CreateSharedDictionaryManager(/*cache_max_size=*/kTestData1.size() * 2);
+      CreateSharedDictionaryManager(
+          /*cache_max_size=*/base::ByteSize(kTestData1.size() * 2));
   scoped_refptr<SharedDictionaryStorage> storage =
       manager->GetStorage(isolation_key);
   ASSERT_TRUE(storage);
@@ -1822,7 +1825,8 @@ TEST_F(SharedDictionaryManagerOnDiskTest, CacheEvictionOnSetCacheMaxSize) {
   base::UnguessableToken token3 = GetDiskCacheKeyTokenOfFirstDictionary(
       dictionary_map, "https://target3.test/");
 
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 2);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 2));
   // RunUntilIdle() to load from the database.
   task_environment_.RunUntilIdle();
 
@@ -1856,7 +1860,8 @@ TEST_F(SharedDictionaryManagerOnDiskTest, CacheEvictionOnNewDictionary) {
 
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 2);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 2));
 
   scoped_refptr<SharedDictionaryStorage> storage1 =
       manager->GetStorage(isolation_key1);
@@ -1937,7 +1942,8 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
 
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 2);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 2));
 
   scoped_refptr<SharedDictionaryStorage> storage1 =
       manager->GetStorage(isolation_key1);
@@ -2024,7 +2030,7 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
       url::Origin::Create(GURL("https://origin2.test")), site2);
 
   std::unique_ptr<SharedDictionaryManager> manager =
-      CreateSharedDictionaryManager(/*cache_max_size=*/0,
+      CreateSharedDictionaryManager(/*cache_max_size=*/std::nullopt,
                                     /*cache_max_count=*/4);
 
   scoped_refptr<SharedDictionaryStorage> storage1 =
@@ -2177,7 +2183,7 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
 
   // Set the max size to kTestData1.size() * 3. The low water mark will be
   // kTestData1.size() * 2.7 (3 * 0.9).
-  manager->SetCacheMaxSize(kTestData1.size() * 3);
+  manager->SetCacheMaxSize(base::ByteSize(kTestData1.size() * 3));
 
   // FlushCacheTasks() to finish the persistence operation.
   FlushCacheTasks();
@@ -2562,8 +2568,9 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
   }
 
   // Trigger memory pressure to evict all cached storages.
-  base::MemoryPressureListener::SimulatePressureNotification(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimit(
+      base::kCriticalMemoryPressureThreshold);
+  test_memory_consumer_registry_.NotifyReleaseMemory();
   task_environment_.RunUntilIdle();
 
   // The storage for `isolation_key` should have been evicted.
@@ -2678,8 +2685,9 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
   }
 
   // Trigger memory pressure to evict all cached storages.
-  base::MemoryPressureListener::SimulatePressureNotification(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimit(
+      base::kCriticalMemoryPressureThreshold);
+  test_memory_consumer_registry_.NotifyReleaseMemory();
   task_environment_.RunUntilIdle();
 
   // The storage for `isolation_key` should have been evicted.
@@ -2735,8 +2743,9 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
   }
 
   // Trigger memory pressure to evict all cached storages.
-  base::MemoryPressureListener::SimulatePressureNotification(
-      base::MEMORY_PRESSURE_LEVEL_MODERATE);
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimit(
+      base::kModerateMemoryPressureThreshold);
+  test_memory_consumer_registry_.NotifyReleaseMemory();
   task_environment_.RunUntilIdle();
 
   // The storage for `isolation_key` should have been evicted.
@@ -2793,8 +2802,9 @@ TEST_F(SharedDictionaryManagerOnDiskTest,
   }
 
   // Trigger memory pressure to evict all cached storages.
-  base::MemoryPressureListener::SimulatePressureNotification(
-      base::MEMORY_PRESSURE_LEVEL_MODERATE);
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimit(
+      base::kModerateMemoryPressureThreshold);
+  test_memory_consumer_registry_.NotifyReleaseMemory();
   task_environment_.RunUntilIdle();
 
   // The storage for `isolation_key` should have been evicted.

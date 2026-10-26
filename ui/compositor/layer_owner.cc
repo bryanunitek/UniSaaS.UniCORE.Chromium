@@ -6,10 +6,13 @@
 
 #include <utility>
 
+#include "base/auto_reset.h"
+#include "base/check.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
+#include "ui/compositor/layer_observer.h"
 
 namespace ui {
 
@@ -20,7 +23,9 @@ LayerOwner::LayerOwner(std::unique_ptr<Layer> layer) {
     SetLayer(std::move(layer));
 }
 
-LayerOwner::~LayerOwner() = default;
+LayerOwner::~LayerOwner() {
+  CHECK(!recreating_layer_);
+}
 
 void LayerOwner::AddObserver(Observer* observer) {
   observers_.AddObserver(observer);
@@ -54,9 +59,13 @@ void LayerOwner::Reset(std::unique_ptr<Layer> layer) {
 }
 
 std::unique_ptr<Layer> LayerOwner::RecreateLayer() {
+  CHECK(!recreating_layer_);
+  base::AutoReset<bool> auto_reset(&recreating_layer_, true);
+
   std::unique_ptr<ui::Layer> old_layer(AcquireLayer());
-  if (!old_layer)
+  if (!old_layer) {
     return old_layer;
+  }
 
   LayerDelegate* old_delegate = old_layer->delegate();
   old_layer->set_delegate(nullptr);
@@ -88,6 +97,8 @@ std::unique_ptr<Layer> LayerOwner::RecreateLayer() {
   // state to the new layer.
   layer_->set_delegate(old_delegate);
 
+  old_layer->observer_list_.Notify(&LayerObserver::OnLayerRecreated,
+                                   old_layer.get(), layer_.get());
   observers_.Notify(&Observer::OnLayerRecreated, old_layer.get());
 
   return old_layer;

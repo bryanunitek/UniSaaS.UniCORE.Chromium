@@ -16,7 +16,6 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -79,7 +78,7 @@ HomePageUndoBubble::HomePageUndoBubble(views::BubbleAnchor anchor,
       prefs_(prefs),
       undo_url_(undo_url),
       undo_value_is_ntp_(undo_value_is_ntp) {
-  DCHECK(prefs_);
+  CHECK(prefs_, base::NotFatalUntil::M162);
   SetProperty(views::kElementIdentifierKey,
               HomePageUndoBubbleCoordinator::kHomePageUndoBubbleMainViewId);
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));

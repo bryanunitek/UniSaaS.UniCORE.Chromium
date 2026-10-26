@@ -13,7 +13,7 @@
 #include "base/functional/callback_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/test/test_windows.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -28,7 +28,7 @@ constexpr gfx::RoundedCornersF kRootLayerRadii(10);
 constexpr gfx::RoundedCornersF kZeroRadii(0);
 
 std::unique_ptr<ui::Layer> CreateLayer() {
-  return std::make_unique<ui::Layer>();
+  return std::make_unique<ui::LayerTextured>();
 }
 
 using BoundsWithRoundedCorners = std::pair<gfx::Rect, gfx::RoundedCornersF>;

@@ -28,7 +28,6 @@ build_webui("build") {
     "images/app_icons/files.svg",
     "images/app_icons/photos.svg",
     "images/app_icons/settings.svg",
-    "images/arc_vm_data_migration_icon.svg",
     "images/browser_sync.svg",
     "images/cfm/enrollment.svg",
     "images/cfm/welcome.svg",
@@ -87,7 +86,6 @@ build_webui("build") {
     "screens/oobe/welcome_dialog.ts",
 
     # Common screens
-    "screens/common/account_selection.ts",
     "screens/common/adb_sideloading.ts",
     "screens/common/add_child.ts",
     "screens/common/ai_intro.ts",
@@ -138,7 +136,6 @@ build_webui("build") {
     "screens/common/wrong_hwid.ts",
 
     # Login screens
-    "screens/login/arc_vm_data_migration.ts",
     "screens/login/checking_downloading_update.ts",
     "screens/login/encryption_migration.ts",
     "screens/login/management_transition.ts",

@@ -6,7 +6,7 @@
 #include "ui/compositor/scoped_layer_request.h"
 
 #include "base/check.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 
 namespace ui {
 
@@ -29,13 +29,14 @@ void ScopedLayerRequest<type>::LayerDestroyed(Layer* layer) {
 template <>
 ScopedLayerRequest<LayerRequestType::kPaint>::ScopedLayerRequest(Layer* layer) {
   CHECK(layer);
+  CHECK(layer->AsTextured());
   observation_.Observe(layer);
-  layer->AddDeferredPaintRequest();
+  layer->AsTextured()->AddDeferredPaintRequest();
 }
 template <>
 ScopedLayerRequest<LayerRequestType::kPaint>::~ScopedLayerRequest() {
   if (Layer* layer = GetLayer()) {
-    layer->RemoveDeferredPaintRequest();
+    layer->AsTextured()->RemoveDeferredPaintRequest();
   }
 }
 

@@ -13,6 +13,7 @@
 
 #include "base/feature_list.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -250,11 +251,11 @@ class TestTableModel2 : public ui::TableModel {
   void SetTooltip(const std::u16string& tooltip);
 
   // ui::TableModel:
-  size_t RowCount() override;
-  std::u16string GetText(size_t row, int column_id) override;
-  std::u16string GetTooltip(size_t row) override;
+  size_t RowCount() const override;
+  std::u16string GetText(size_t row, int column_id) const override;
+  std::u16string GetTooltip(size_t row) const override;
   void SetObserver(ui::TableModelObserver* observer) override;
-  int CompareValues(size_t row1, size_t row2, int column_id) override;
+  int CompareValues(size_t row1, size_t row2, int column_id) const override;
 
  private:
   raw_ptr<ui::TableModelObserver> observer_ = nullptr;
@@ -350,15 +351,15 @@ void TestTableModel2::SetTooltip(const std::u16string& tooltip) {
   tooltip_ = tooltip;
 }
 
-size_t TestTableModel2::RowCount() {
+size_t TestTableModel2::RowCount() const {
   return rows_.size();
 }
 
-std::u16string TestTableModel2::GetText(size_t row, int column_id) {
+std::u16string TestTableModel2::GetText(size_t row, int column_id) const {
   return base::NumberToString16(rows_[row][column_id]);
 }
 
-std::u16string TestTableModel2::GetTooltip(size_t row) {
+std::u16string TestTableModel2::GetTooltip(size_t row) const {
   return tooltip_ ? *tooltip_ : u"Tooltip" + base::NumberToString16(row);
 }
 
@@ -366,7 +367,9 @@ void TestTableModel2::SetObserver(ui::TableModelObserver* observer) {
   observer_ = observer;
 }
 
-int TestTableModel2::CompareValues(size_t row1, size_t row2, int column_id) {
+int TestTableModel2::CompareValues(size_t row1,
+                                   size_t row2,
+                                   int column_id) const {
   return rows_[row1][column_id] - rows_[row2][column_id];
 }
 
@@ -1001,13 +1004,10 @@ TEST_P(TableViewTest, ColumnVisibility) {
   EXPECT_EQ(1, table_->GetVisibleColumn(0).column.id);
   EXPECT_EQ("rows=0 4 cols=0 1", helper_->GetPaintRegion(table_->bounds()));
 
-  // Hide the second column.
+  // The second column is the last visible one, so it cannot be hidden.
   table_->SetColumnVisibility(1, false);
-  EXPECT_EQ(0u, helper_->visible_col_count());
-
-  // Show the second column.
-  table_->SetColumnVisibility(1, true);
   ASSERT_EQ(1u, helper_->visible_col_count());
+  EXPECT_TRUE(table_->IsColumnVisible(1));
   EXPECT_EQ(1, table_->GetVisibleColumn(0).column.id);
   EXPECT_EQ("rows=0 4 cols=0 1", helper_->GetPaintRegion(table_->bounds()));
 
@@ -1019,17 +1019,30 @@ TEST_P(TableViewTest, ColumnVisibility) {
   EXPECT_EQ("rows=0 4 cols=0 2", helper_->GetPaintRegion(table_->bounds()));
 }
 
-// Regression tests for https://crbug.com/1283805, and
-// https://crbug.com/1283807.
-TEST_P(TableViewTest, NoCrashesWithAllColumnsHidden) {
-  // Set both initially visible columns hidden.
+// Regression test for https://crbug.com/1283805, https://crbug.com/1283807
+// and https://crbug.com/40836680: the table never ends up with rows but no
+// visible column, and the one remaining column keeps working.
+TEST_P(TableViewTest, LastVisibleColumnCannotBeHidden) {
+  EXPECT_FALSE(table_->IsLastVisibleColumn(0));
+  EXPECT_FALSE(table_->IsLastVisibleColumn(1));
   table_->SetColumnVisibility(0, false);
+  EXPECT_TRUE(table_->IsLastVisibleColumn(1));
+  EXPECT_FALSE(table_->IsLastVisibleColumn(0));
   table_->SetColumnVisibility(1, false);
-  EXPECT_EQ(0u, helper_->visible_col_count());
+  ASSERT_EQ(1u, helper_->visible_col_count());
+  EXPECT_TRUE(table_->IsColumnVisible(1));
+  EXPECT_FALSE(table_->IsColumnVisible(0));
 
-  // Remove and add rows in this state, there should be no crashes.
+  // Rows can still be removed and added.
   model_->RemoveRow(0);
   model_->AddRows(1, 2, /*value_multiplier=*/10);
+  EXPECT_EQ(1u, helper_->visible_col_count());
+
+  // Once another column is visible again, the previously last one can go.
+  table_->SetColumnVisibility(0, true);
+  table_->SetColumnVisibility(1, false);
+  ASSERT_EQ(1u, helper_->visible_col_count());
+  EXPECT_EQ(0, table_->GetVisibleColumn(0).column.id);
 }
 
 // Verifies resizing a column using the mouse works.
@@ -2133,8 +2146,9 @@ TEST_P(TableViewTest, KeyUpDownHorizontalScrollbarStability) {
     GTEST_SKIP() << "platform doesn't support table keyboard navigation";
   }
   EXPECT_FALSE(base::i18n::IsRTL());
+  std::optional<base::i18n::ScopedRTLForTesting> scoped_rtl;
   if (use_rtl()) {
-    base::i18n::SetRTLForTesting(true);
+    scoped_rtl.emplace(true);
     EXPECT_TRUE(base::i18n::IsRTL());
   }
   table_->RequestFocus();
@@ -2151,9 +2165,7 @@ TEST_P(TableViewTest, KeyUpDownHorizontalScrollbarStability) {
   PressKey(ui::VKEY_UP);
   EXPECT_EQ(1u, table_->ViewToModel(1));
   EXPECT_EQ(visible_bounds, table_->GetVisibleBounds());
-  if (use_rtl()) {
-    base::i18n::SetRTLForTesting(false);
-  }
+  scoped_rtl.reset();
   EXPECT_FALSE(base::i18n::IsRTL());
 }
 
@@ -2162,8 +2174,9 @@ TEST_P(TableViewTest, KeyUpDownHorizontalScrollbarStability) {
 // testing the RTL layout and false for testing the LTR layout
 TEST_P(TableViewTest, ClickRowHorizontalScrollbarStability) {
   EXPECT_FALSE(base::i18n::IsRTL());
+  std::optional<base::i18n::ScopedRTLForTesting> scoped_rtl;
   if (use_rtl()) {
-    base::i18n::SetRTLForTesting(true);
+    scoped_rtl.emplace(true);
     EXPECT_TRUE(base::i18n::IsRTL());
   }
   table_->RequestFocus();
@@ -2180,9 +2193,7 @@ TEST_P(TableViewTest, ClickRowHorizontalScrollbarStability) {
   ClickOnRow(3, 0);
   EXPECT_EQ(3u, table_->ViewToModel(3));
   EXPECT_EQ(visible_bounds, table_->GetVisibleBounds());
-  if (use_rtl()) {
-    base::i18n::SetRTLForTesting(false);
-  }
+  scoped_rtl.reset();
   EXPECT_FALSE(base::i18n::IsRTL());
 }
 
@@ -2699,7 +2710,7 @@ class TestTableModel3 : public TestTableModel2 {
 
   TestTableModel3(const TestTableModel3&) = delete;
   TestTableModel3& operator=(const TestTableModel3&) = delete;
-  ui::ImageModel GetIcon(size_t row) override {
+  ui::ImageModel GetIcon(size_t row) const override {
     return ui::ImageModel::FromImageSkia(
         gfx::ImageSkia::CreateFrom1xBitmap(icon_));
   }
@@ -3143,7 +3154,7 @@ TEST_F(TableViewPaintIconBoundsTest, TestPaintIconBoundsForNormally) {
     EXPECT_EQ(src_image_bounds, gfx::Rect(image.size()));
   }
   {
-    base::i18n::SetRTLForTesting(true);
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
     EXPECT_TRUE(base::i18n::IsRTL());
     gfx::Rect dest_image_bounds =
         helper_->GetPaintIconDestBounds(cell_bounds, text_bounds.x());
@@ -3161,7 +3172,6 @@ TEST_F(TableViewPaintIconBoundsTest, TestPaintIconBoundsForNormally) {
     gfx::Rect src_image_bounds =
         helper_->GetPaintIconSrcBounds(image.size(), dest_image_bounds.width());
     EXPECT_EQ(src_image_bounds, gfx::Rect(image.size()));
-    base::i18n::SetRTLForTesting(false);
   }
 }
 
@@ -3217,7 +3227,7 @@ TEST_F(TableViewPaintIconBoundsTest, TestPaintIconBoundsForClipped) {
   }
   {
     // When the layout is RTL.
-    base::i18n::SetRTLForTesting(true);
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
     EXPECT_TRUE(base::i18n::IsRTL());
     gfx::Rect dest_image_bounds =
         helper_->GetPaintIconDestBounds(cell_bounds, text_bounds.x());
@@ -3242,7 +3252,6 @@ TEST_F(TableViewPaintIconBoundsTest, TestPaintIconBoundsForClipped) {
     EXPECT_EQ(src_image_bounds,
               gfx::Rect(image.width() - src_image_bounds.width(), 0,
                         image.width() / 2, image.height()));
-    base::i18n::SetRTLForTesting(false);
   }
 }
 
@@ -3276,12 +3285,11 @@ TEST_F(TableViewPaintIconBoundsTest, TestPaintIconBoundsNotNeedDisplay) {
     EXPECT_TRUE(dest_image_bounds.IsEmpty());
   }
   {
-    base::i18n::SetRTLForTesting(true);
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
     EXPECT_TRUE(base::i18n::IsRTL());
     gfx::Rect dest_image_bounds =
         helper_->GetPaintIconDestBounds(cell_bounds, text_bounds.x());
     EXPECT_TRUE(dest_image_bounds.IsEmpty());
-    base::i18n::SetRTLForTesting(false);
   }
 }
 }  // namespace views

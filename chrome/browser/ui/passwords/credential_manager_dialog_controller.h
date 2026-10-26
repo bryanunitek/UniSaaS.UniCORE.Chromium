@@ -12,6 +12,7 @@
 
 #include "chrome/browser/ui/passwords/password_combined_selector_controller.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
+#include "ui/gfx/range/range.h"
 
 namespace password_manager {
 struct PasswordForm;
@@ -30,7 +31,7 @@ class CredentialManagerDialogController : public PasswordCombinedSelectorControl
   const FormsVector& GetLocalForms() const override = 0;
 
   // Returns the origin of the current site.
-  url::Origin GetOrigin() const override = 0;
+  virtual url::Origin GetOrigin() const = 0;
 
   // Returns a title of the account chooser.
   virtual std::u16string GetAccountChooserTitle() const = 0;
@@ -63,6 +64,15 @@ class CredentialManagerDialogController : public PasswordCombinedSelectorControl
 
   // Called when the dialog was closed.
   void OnCloseDialog() override = 0;
+
+  // PasswordCombinedSelectorController:
+  DisplayType GetDisplayType() const override = 0;
+  bool ShouldShowTopIllustration() const override = 0;
+  std::u16string GetTitle() const override = 0;
+  std::u16string GetSubtitle() const override = 0;
+  gfx::Range GetSubtitleLinkRange() const override = 0;
+  void OnSubtitleLinkClicked() override = 0;
+  std::u16string GetOkButtonLabel() const override = 0;
 
  protected:
   ~CredentialManagerDialogController() override = default;

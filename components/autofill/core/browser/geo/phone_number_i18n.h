@@ -76,12 +76,21 @@ std::u16string NormalizePhoneNumber(std::u16string_view value,
                                         const std::string& region,
                                         std::u16string* output_whole_number);
 
+// Returns true if `number_a` and `number_b` match. If `support_short_nsn_match`
+// is true, short national significant number matches are also considered a
+// match.
+bool PhoneNumbersMatch(const ::i18n::phonenumbers::PhoneNumber& number_a,
+                       const ::i18n::phonenumbers::PhoneNumber& number_b,
+                       bool support_short_nsn_match = false);
+
 // Returns true if `number_a` and `number_b` parse to the same phone number in
-// the given `region`.
+// the given `region`. If `support_short_nsn_match` is true, short national
+// significant number matches are also considered a match.
 bool PhoneNumbersMatch(std::u16string_view number_a,
                        std::u16string_view number_b,
                        std::string_view region,
-                       std::string_view app_locale);
+                       std::string_view app_locale,
+                       bool support_short_nsn_match = false);
 
 // Returns the phone number from the given `profile` formatted for display.
 // If it's a valid number for the profile's country or for the `locale` given
@@ -126,6 +135,12 @@ class PhoneObject final {
   ~PhoneObject();
 
   const std::string& region() const { return region_; }
+  const std::string& creation_region_hint() const {
+    return creation_region_hint_;
+  }
+  bool infer_country_code_from_region_hint() const {
+    return infer_country_code_from_region_hint_;
+  }
 
   const std::u16string& country_code() const { return country_code_; }
   const std::u16string& city_code() const { return city_code_; }
@@ -134,17 +149,28 @@ class PhoneObject final {
   const std::u16string& GetFormattedNumber() const;
   std::u16string GetNationallyFormattedNumber() const;
   const std::u16string& GetWholeNumber() const;
-  std::string GetRegionCode() const;
-
 
   bool IsValidNumber() const { return i18n_number_ != nullptr; }
 
  private:
-  // The region code for this phone number, inferred during parsing.
+  // The region code for this phone number, inferred during parsing. May be
+  // empty or "ZZ" if the region cannot be inferred.
   std::string region_;
 
+  // The `default_region` passed to the constructor, i.e. the region in which
+  // numbers without a country calling code are interpreted. Unlike `region_`,
+  // it doesn't depend on the outcome of parsing. Together with
+  // `infer_country_code_from_region_hint_`, it allows callers that cache a
+  // `PhoneObject` to check whether parsing the number again would give the
+  // same result. Empty for a default constructed object.
+  std::string creation_region_hint_;
+
+  // The `infer_country_code` passed to the constructor, i.e. whether
+  // `country_code_` is set to the calling code of `creation_region_hint_` if
+  // the number doesn't contain one. False for a default constructed object.
+  bool infer_country_code_from_region_hint_ = false;
+
   // The parsed number and its components.
-  //
   std::unique_ptr<::i18n::phonenumbers::PhoneNumber> i18n_number_;
   std::u16string city_code_;
   std::u16string country_code_;

@@ -10,6 +10,7 @@
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/global_features.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -24,6 +25,7 @@
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -57,7 +59,10 @@ class ManagedSessionServiceTest : public ::testing::Test,
         TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
         TestingBrowserProcess::GetGlobal()
             ->platform_part()
-            ->browser_policy_connector_ash());
+            ->browser_policy_connector_ash(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->component_manager_ash());
 
     managed_session_service_ =
         std::make_unique<ManagedSessionService>(&test_clock_);

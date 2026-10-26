@@ -17,7 +17,6 @@
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/ash/extended_updates/extended_updates_dialog.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
@@ -43,7 +42,7 @@ class ExtendedUpdatesBrowserTest : public WebUIMochaBrowserTest {
     base::RunLoop run_loop;
     auto* owner_settings =
         ash::OwnerSettingsServiceAshFactory::GetForBrowserContext(
-            browser()->profile());
+            browser()->GetProfile());
     ASSERT_TRUE(owner_settings);
     owner_settings->IsOwnerAsync(base::BindLambdaForTesting(
         [&run_loop](bool is_owner) { run_loop.Quit(); }));
@@ -96,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(ExtendedUpdatesBrowserTest, DialogMetricsTest) {
 IN_PROC_BROWSER_TEST_F(ExtendedUpdatesBrowserTest, NoShowDialogIfNotEligible) {
   ash::MockExtendedUpdatesController mock_controller;
   ash::ScopedExtendedUpdatesController scoped_controller(&mock_controller);
-  EXPECT_CALL(mock_controller, IsOptInEligible(browser()->profile()))
+  EXPECT_CALL(mock_controller, IsOptInEligible(browser()->GetProfile()))
       .WillOnce(testing::Return(false));
 
   EXPECT_FALSE(ash::extended_updates::ExtendedUpdatesDialog::Get());
@@ -107,14 +106,14 @@ IN_PROC_BROWSER_TEST_F(ExtendedUpdatesBrowserTest, NoShowDialogIfNotEligible) {
 IN_PROC_BROWSER_TEST_F(ExtendedUpdatesBrowserTest, CloseDialogIfNotEligible) {
   ash::MockExtendedUpdatesController mock_controller;
   ash::ScopedExtendedUpdatesController scoped_controller(&mock_controller);
-  EXPECT_CALL(mock_controller, IsOptInEligible(browser()->profile()))
+  EXPECT_CALL(mock_controller, IsOptInEligible(browser()->GetProfile()))
       .WillRepeatedly(testing::Return(true));
 
   EXPECT_FALSE(ash::extended_updates::ExtendedUpdatesDialog::Get());
   ash::extended_updates::ExtendedUpdatesDialog::Show();
   EXPECT_TRUE(ash::extended_updates::ExtendedUpdatesDialog::Get());
 
-  EXPECT_CALL(mock_controller, IsOptInEligible(browser()->profile()))
+  EXPECT_CALL(mock_controller, IsOptInEligible(browser()->GetProfile()))
       .WillOnce(testing::Return(false));
   ash::extended_updates::ExtendedUpdatesDialog::Show();
 

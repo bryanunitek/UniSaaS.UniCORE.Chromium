@@ -7,21 +7,18 @@ package org.chromium.android_webview;
 import static java.lang.annotation.ElementType.TYPE_USE;
 
 import android.annotation.SuppressLint;
-import android.content.Context;
 import android.content.pm.PackageManager;
-import android.content.res.Configuration;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.webkit.WebSettings;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.android_webview.client_hints.AwUserAgentMetadata;
@@ -32,7 +29,6 @@ import org.chromium.android_webview.common.Lifetime;
 import org.chromium.android_webview.common.MediaIntegrityApiStatus;
 import org.chromium.android_webview.metrics.BackForwardCacheNotRestoredReason;
 import org.chromium.android_webview.safe_browsing.AwSafeBrowsingConfigHelper;
-import org.chromium.android_webview.settings.AttributionBehavior;
 import org.chromium.android_webview.settings.ForceDarkBehavior;
 import org.chromium.android_webview.settings.ForceDarkMode;
 import org.chromium.android_webview.settings.SpeculativeLoadingAllowedFlags;
@@ -41,6 +37,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.embedder_support.util.PasswordEchoSettingState;
 import org.chromium.components.webauthn.WebauthnMode;
 import org.chromium.components.webauthn.WebauthnModeProvider;
@@ -107,21 +104,6 @@ public class AwSettings {
     @ForceDarkBehavior
     private int mForceDarkBehavior = ForceDarkBehavior.PREFER_MEDIA_QUERY_OVER_FORCE_DARK;
 
-    @AttributionBehavior
-    public static final int ATTRIBUTION_DISABLED = AttributionBehavior.DISABLED;
-
-    @AttributionBehavior
-    public static final int ATTRIBUTION_APP_SOURCE_AND_WEB_TRIGGER =
-            AttributionBehavior.APP_SOURCE_AND_WEB_TRIGGER;
-
-    @AttributionBehavior
-    public static final int ATTRIBUTION_WEB_SOURCE_AND_WEB_TRIGGER =
-            AttributionBehavior.WEB_SOURCE_AND_WEB_TRIGGER;
-
-    @AttributionBehavior
-    public static final int ATTRIBUTION_APP_SOURCE_AND_APP_TRIGGER =
-            AttributionBehavior.APP_SOURCE_AND_APP_TRIGGER;
-
     /**
      * Do not change these constants. Apps rely on them for compatibility across WebView versions.
      */
@@ -149,7 +131,7 @@ public class AwSettings {
     private @HyperlinkContextMenuItems int mHyperlinkContextMenuItems =
             HyperlinkContextMenuItems.DISABLED;
 
-    private final Context mContext;
+    private final AwContents mAwContents;
     private WebContents mWebContents;
 
     // This class must be created on the UI thread. Afterwards, it can be
@@ -167,6 +149,7 @@ public class AwSettings {
 
     @LayoutAlgorithm private int mLayoutAlgorithm = LAYOUT_ALGORITHM_NARROW_COLUMNS;
     private int mTextSizePercent = 100;
+    private boolean mTextZoomSetByEmbedder;
     private String mStandardFontFamily = "sans-serif";
     private String mFixedFontFamily = "monospace";
     private String mSansSerifFontFamily = "sans-serif";
@@ -200,7 +183,6 @@ public class AwSettings {
     private boolean mDownloadFaviconsEnabled = true;
     private boolean mEnableSupportedHardwareAcceleratedFeatures;
     private int mMixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW;
-    private int mAttributionBehavior = AttributionBehavior.APP_SOURCE_AND_WEB_TRIGGER;
 
     @SpeculativeLoadingAllowedFlags
     private int mSpeculativeLoadingAllowedFlags =
@@ -247,6 +229,13 @@ public class AwSettings {
     private boolean mShouldFocusFirstNode = true;
     private boolean mGeolocationEnabled = true;
     private boolean mFullscreenSupported;
+    // WebSurface does not yet support fullscreen so when it is bound, we will explicitly prevent
+    // fullscreen from being entered.
+    // Our logic assumes that if a developer has implemented the fullscreen methods in our
+    // client, we should enable fullscreen mode.
+    // We are implementing these methods in AndroidX to mark them as deprecated so we need
+    // to force disable fullscreen here.
+    private boolean mForceFullscreenUnsupported;
     private boolean mSupportZoom = true;
     private boolean mBuiltInZoomControls;
     private boolean mDisplayZoomControls = true;
@@ -396,15 +385,17 @@ public class AwSettings {
     }
 
     public AwSettings(
-            Context context,
+            AwContents awContents,
             boolean isAccessFromFileUrlsGrantedByDefault,
             boolean supportsLegacyQuirks,
             boolean allowEmptyDocumentPersistence,
             boolean allowGeolocationOnInsecureOrigins,
             boolean doNotUpdateSelectionOnMutatingSelectionRange) {
-        mContext = context;
+        mAwContents = awContents;
         boolean hasInternetPermission =
-                mContext.checkSelfPermission(android.Manifest.permission.INTERNET)
+                mAwContents
+                                .getProvidedContext()
+                                .checkSelfPermission(android.Manifest.permission.INTERNET)
                         == PackageManager.PERMISSION_GRANTED;
         synchronized (mAwSettingsLock) {
             mHasInternetPermission = hasInternetPermission;
@@ -420,7 +411,9 @@ public class AwSettings {
 
             // Best-guess a sensible initial value based on the features supported on the device.
             mSpatialNavigationEnabled =
-                    !context.getPackageManager()
+                    !mAwContents
+                            .getProvidedContext()
+                            .getPackageManager()
                             .hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN);
 
             // Respect the system setting for password echoing.
@@ -430,8 +423,7 @@ public class AwSettings {
 
             // By default, scale the text size by the system font scale factor. Embedders
             // may override this by invoking setTextZoom().
-            mTextSizePercent =
-                    (int) (mTextSizePercent * context.getResources().getConfiguration().fontScale);
+            updateFontScaleLocked();
 
             mSupportLegacyQuirks = supportsLegacyQuirks;
             mAllowEmptyDocumentPersistence = allowEmptyDocumentPersistence;
@@ -447,8 +439,7 @@ public class AwSettings {
             mBlockSpecialFileUrls = ContextUtils.isSdkSandboxProcess();
 
             mAllowFileUrlAccess =
-                    ContextUtils.getApplicationContext().getApplicationInfo().targetSdkVersion
-                            < Build.VERSION_CODES.R;
+                    CompatQuirks.isEnabled(CompatQuirks.Quirk.ALLOW_FILE_URL_ACCESS_BY_DEFAULT);
             mIntegrityApiStatusConfig = new AwMediaIntegrityApiStatusConfig();
             mSpeculativeLoadingAllowedFlags =
                     SpeculativeLoadingAllowedFlags.SPECULATIVE_LOADING_DISABLED;
@@ -480,10 +471,6 @@ public class AwSettings {
         synchronized (mAwSettingsLock) {
             runnable.run();
         }
-    }
-
-    public int getUiModeNight() {
-        return mContext.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
     }
 
     @CalledByNative
@@ -589,6 +576,7 @@ public class AwSettings {
 
     /**
      * Enable/disable third party cookies for an AwContents
+     *
      * @param accept true if we should accept third party cookies
      */
     public void setAcceptThirdPartyCookies(boolean accept) {
@@ -621,6 +609,7 @@ public class AwSettings {
 
     /**
      * Return whether third party cookies are enabled for an AwContents
+     *
      * @return true if accept third party cookies
      */
     public boolean getAcceptThirdPartyCookies() {
@@ -637,6 +626,7 @@ public class AwSettings {
 
     /**
      * Return whether Safe Browsing has been enabled for the current WebView
+     *
      * @return true if SafeBrowsing is enabled
      */
     public boolean getSafeBrowsingEnabled() {
@@ -651,6 +641,7 @@ public class AwSettings {
     /** See {@link android.webkit.WebSettings#setAllowFileAccess}. */
     public void setAllowFileAccess(boolean allow) {
         if (TRACE) Log.i(TAG, "setAllowFileAccess=" + allow);
+        RecordHistogram.recordBooleanHistogram("Android.WebView.SetAllowFileAccess", allow);
         synchronized (mAwSettingsLock) {
             mAllowFileUrlAccess = allow;
             mEventHandler.updateAllowFileAccessLocked();
@@ -694,6 +685,7 @@ public class AwSettings {
     /** See {@link android.webkit.WebSettings#setAllowContentAccess}. */
     public void setAllowContentAccess(boolean allow) {
         if (TRACE) Log.i(TAG, "setAllowContentAccess=" + allow);
+        RecordHistogram.recordBooleanHistogram("Android.WebView.SetAllowContentAccess", allow);
         synchronized (mAwSettingsLock) {
             if (mAllowContentUrlAccess != allow) {
                 flushBackForwardCacheOnUiThreadLocked();
@@ -797,10 +789,19 @@ public class AwSettings {
         }
     }
 
+    void setForceFullscreenUnsupported(boolean forceUnsupported) {
+        synchronized (mAwSettingsLock) {
+            if (mForceFullscreenUnsupported != forceUnsupported) {
+                mForceFullscreenUnsupported = forceUnsupported;
+                mEventHandler.updateWebkitPreferencesLocked();
+            }
+        }
+    }
+
     @CalledByNative
     private boolean getFullscreenSupportedLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
-        return mFullscreenSupported;
+        return mFullscreenSupported && !mForceFullscreenUnsupported;
     }
 
     /** See {@link android.webkit.WebSettings#setNeedInitialFocus}. */
@@ -861,8 +862,7 @@ public class AwSettings {
     @CalledByNative
     private static boolean getAllowSniffingFileUrls() {
         // Don't allow sniffing file:// URLs for MIME type if the application targets P or later.
-        return ContextUtils.getApplicationContext().getApplicationInfo().targetSdkVersion
-                < Build.VERSION_CODES.P;
+        return CompatQuirks.isEnabled(CompatQuirks.Quirk.ALLOW_SNIFFING_FILE_URLS);
     }
 
     /** See {@link android.webkit.WebSettings#setUserAgentString}. */
@@ -891,14 +891,14 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getUserAgentLocked() {
+    private @JniType("std::optional<std::string>") @Nullable String getUserAgentLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mUserAgent;
     }
 
     /**
-     * See {@link androidx.webkit.WebSettingsCompat#setUserAgentMetadata}.
-     * Map<String, Object> represents the priorities name its value for AwUserAgentMetadata.
+     * See {@link androidx.webkit.WebSettingsCompat#setUserAgentMetadata}. Map<String, Object>
+     * represents the priorities name its value for AwUserAgentMetadata.
      */
     public void setUserAgentMetadataFromMap(Map<String, Object> uaMetadataMap) {
         if (TRACE) Log.i(TAG, "setUserAgentMetadata=" + uaMetadataMap);
@@ -976,6 +976,7 @@ public class AwSettings {
     public void setTextZoom(final int textZoom) {
         if (TRACE) Log.i(TAG, "setTextZoom=" + textZoom);
         synchronized (mAwSettingsLock) {
+            mTextZoomSetByEmbedder = true;
             if (mTextSizePercent != textZoom) {
                 mTextSizePercent = textZoom;
                 mEventHandler.updateWebkitPreferencesLocked();
@@ -1015,7 +1016,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getStandardFontFamilyLocked() {
+    private @JniType("std::u16string") String getStandardFontFamilyLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mStandardFontFamily;
     }
@@ -1039,7 +1040,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getFixedFontFamilyLocked() {
+    private @JniType("std::u16string") String getFixedFontFamilyLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mFixedFontFamily;
     }
@@ -1063,7 +1064,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getSansSerifFontFamilyLocked() {
+    private @JniType("std::u16string") String getSansSerifFontFamilyLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mSansSerifFontFamily;
     }
@@ -1087,7 +1088,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getSerifFontFamilyLocked() {
+    private @JniType("std::u16string") String getSerifFontFamilyLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mSerifFontFamily;
     }
@@ -1111,7 +1112,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getCursiveFontFamilyLocked() {
+    private @JniType("std::u16string") String getCursiveFontFamilyLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mCursiveFontFamily;
     }
@@ -1135,7 +1136,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getFantasyFontFamilyLocked() {
+    private @JniType("std::u16string") String getFantasyFontFamilyLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mFantasyFontFamily;
     }
@@ -1254,6 +1255,8 @@ public class AwSettings {
     /** See {@link android.webkit.WebSettings#setAllowUniversalAccessFromFileURLs}. */
     public void setAllowUniversalAccessFromFileUrls(boolean flag) {
         if (TRACE) Log.i(TAG, "setAllowUniversalAccessFromFileURLs=" + flag);
+        RecordHistogram.recordBooleanHistogram(
+                "Android.WebView.SetAllowUniversalAccessFromFileURLs", flag);
         synchronized (mAwSettingsLock) {
             if (mAllowUniversalAccessFromFileUrls != flag) {
                 mAllowUniversalAccessFromFileUrls = flag;
@@ -1265,6 +1268,8 @@ public class AwSettings {
     /** See {@link android.webkit.WebSettings#setAllowFileAccessFromFileURLs}. */
     public void setAllowFileAccessFromFileUrls(boolean flag) {
         if (TRACE) Log.i(TAG, "setAllowFileAccessFromFileURLs=" + flag);
+        RecordHistogram.recordBooleanHistogram(
+                "Android.WebView.SetAllowFileAccessFromFileURLs", flag);
         synchronized (mAwSettingsLock) {
             if (mAllowFileAccessFromFileUrls != flag) {
                 mAllowFileAccessFromFileUrls = flag;
@@ -1671,7 +1676,7 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getDefaultTextEncodingLocked() {
+    private @JniType("std::string") String getDefaultTextEncodingLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mDefaultTextEncoding;
     }
@@ -1719,7 +1724,8 @@ public class AwSettings {
     }
 
     @CalledByNative
-    private String getDefaultVideoPosterUrlLocked() {
+    private @JniType("std::optional<std::string>") @Nullable String
+            getDefaultVideoPosterUrlLocked() {
         assert Thread.holdsLock(mAwSettingsLock);
         return mDefaultVideoPosterUrl;
     }
@@ -1830,9 +1836,6 @@ public class AwSettings {
     }
 
     public void setMixedContentMode(int mode) {
-        // Using explicit max count for the histogram since enum is defined in Android code. The
-        // values can be trusted to remain stable since they are defined in the Android API.
-        RecordHistogram.recordEnumeratedHistogram("Android.WebView.MixedContent.Mode", mode, 3);
         synchronized (mAwSettingsLock) {
             if (mMixedContentMode != mode) {
                 mMixedContentMode = mode;
@@ -1845,23 +1848,6 @@ public class AwSettings {
     public int getMixedContentMode() {
         synchronized (mAwSettingsLock) {
             return mMixedContentMode;
-        }
-    }
-
-    public void setAttributionBehavior(@AttributionBehavior int behavior) {
-        synchronized (mAwSettingsLock) {
-            if (mAttributionBehavior != behavior) {
-                mAttributionBehavior = behavior;
-                mEventHandler.updateWebkitPreferencesLocked();
-            }
-        }
-    }
-
-    @CalledByNative
-    @AttributionBehavior
-    public int getAttributionBehavior() {
-        synchronized (mAwSettingsLock) {
-            return mAttributionBehavior;
         }
     }
 
@@ -2090,7 +2076,6 @@ public class AwSettings {
         return false;
     }
 
-
     public boolean getOffscreenPreRaster() {
         synchronized (mAwSettingsLock) {
             return getOffscreenPreRasterLocked();
@@ -2104,15 +2089,17 @@ public class AwSettings {
     }
 
     /**
-     * Sets whether this WebView should raster tiles when it is
-     * offscreen but attached to window. Turning this on can avoid
-     * rendering artifacts when animating an offscreen WebView on-screen.
-     * In particular, insertVisualStateCallback requires this mode to function.
-     * Offscreen WebViews in this mode uses more memory. Please follow
-     * these guidelines to limit memory usage:
-     * - Webview size should be not be larger than the device screen size.
-     * - Limit simple mode to a small number of webviews. Use it for
-     *   visible webviews and webviews about to be animated to visible.
+     * Sets whether this WebView should raster tiles when it is offscreen but attached to window.
+     *
+     * <p>Turning this on can avoid rendering artifacts when animating an offscreen WebView
+     * on-screen. In particular, insertVisualStateCallback requires this mode to function. Offscreen
+     * WebViews in this mode uses more memory. Please follow these guidelines to limit memory usage:
+     *
+     * <ul>
+     *   <li>Webview size should be not be larger than the device screen size.
+     *   <li>Limit simple mode to a small number of webviews. Use it for visible webviews and
+     *       webviews about to be animated to visible.
+     * </ul>
      */
     public void setOffscreenPreRaster(boolean enabled) {
         synchronized (mAwSettingsLock) {
@@ -2385,8 +2372,10 @@ public class AwSettings {
         synchronized (mAwSettingsLock) {
             if (support == WebauthnMode.BROWSER) {
                 boolean hasPermission =
-                        mContext.checkSelfPermission(
-                                        android.Manifest.permission.CREDENTIAL_MANAGER_SET_ORIGIN)
+                        ContextUtils.getApplicationContext()
+                                        .checkSelfPermission(
+                                                android.Manifest.permission
+                                                        .CREDENTIAL_MANAGER_SET_ORIGIN)
                                 == android.content.pm.PackageManager.PERMISSION_GRANTED;
                 RecordHistogram.recordBooleanHistogram(
                         "Android.WebView.Webauthn.BrowserModePermissionGranted", hasPermission);
@@ -2454,6 +2443,26 @@ public class AwSettings {
         }
     }
 
+    private void updateFontScaleLocked() {
+        if (mTextZoomSetByEmbedder) {
+            return;
+        }
+
+        float newFontScale =
+                mAwContents.getProvidedContext().getResources().getConfiguration().fontScale;
+        int newTextSizePercent = (int) (newFontScale * 100);
+        if (mTextSizePercent != newTextSizePercent) {
+            mTextSizePercent = newTextSizePercent;
+            mEventHandler.updateWebkitPreferencesLocked();
+        }
+    }
+
+    public void updateContext() {
+        synchronized (mAwSettingsLock) {
+            updateFontScaleLocked();
+        }
+    }
+
     @NativeMethods
     interface Natives {
         long init(AwSettings caller, WebContents webContents);
@@ -2475,6 +2484,7 @@ public class AwSettings {
 
         void updateWebkitPreferencesLocked(long nativeAwSettings, AwSettings caller);
 
+        @JniType("std::string")
         String getDefaultUserAgent();
 
         AwUserAgentMetadata getDefaultUserAgentMetadata();

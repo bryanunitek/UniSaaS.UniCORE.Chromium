@@ -34,6 +34,7 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
 
   ExternalBeginFrameSourceMac(uint32_t restart_id,
                               int64_t display_id,
+                              float refresh_rate,
                               OutputSurface* output_surface);
 
   ExternalBeginFrameSourceMac(const ExternalBeginFrameSourceMac&) = delete;
@@ -44,8 +45,7 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
   // BeginFrameSource implementation.
   void SetVSyncDisplayID(int64_t display_id, bool force_update) override;
 
-  void UpdateVSyncDisplay(int64_t display_id,
-                          bool is_browser_vsync_supported) override;
+  void UpdateVSyncDisplay(int64_t display_id) override;
 
   // ExternalBeginFrameSourceClient implementation.
   void OnNeedsBeginFrames(bool needs_begin_frames) override;
@@ -59,6 +59,7 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
   base::TimeDelta GetMinimumFrameInterval() override;
   base::flat_set<base::TimeDelta> GetSupportedFrameIntervals(
       base::TimeDelta interval) override;
+  void UpdateRefreshRate(float refresh_rate) override;
 
   // CVDisplayLink Callback on the Viz thread.
   void OnDisplayLinkCallback(ui::VSyncParamsMac params);
@@ -83,11 +84,6 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
 
   void StartBeginFrame(bool display_link_keep_alive_only);
   void StopBeginFrame(bool force_stop);
-
-  // Defer `UpdateVSyncDisplay()` calls while `needs_begin_frames_` is true
-  // to ensure a jank-free transition when switching to the browser-side
-  // DisplayLink. (Used for the kCADisplayLinkInBrowser feature only).
-  void UpdateDeferredVSyncDisplayIfNeeded();
 
   void RecordFirstFrameHistograms(bool is_timer);
 
@@ -125,12 +121,6 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
 
   bool just_started_begin_frame_ = false;
 
-  // Indicates that a VSync display update is deferred until active rendering
-  // (`needs_begin_frames_`) stops, ensuring a smooth transition to the
-  // browser-side DisplayLink. (Used for the kCADisplayLinkInBrowser feature
-  // only).
-  bool vsync_display_id_update_deferred_ = false;
-
   // To prevent the DisplayLink from constantly toggling on and off, allow it
   // to continue running for this many consecutive VSyncs after it is no longer
   // needed.
@@ -138,6 +128,9 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
   int vsync_callback_keep_alive_counter_ = 0;
 
   const raw_ptr<OutputSurface, DanglingUntriaged> output_surface_;
+
+  // When `min_refresh_interval_` changes, this callback is called and
+  // FrameIntervalDecider is updated.
   UpdateVSyncParametersCallback update_vsync_params_callback_;
 
   MultipleHWRefreshRatesCallback multiple_hw_refresh_rates_callback_;
@@ -147,8 +140,10 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSourceMac
   // FrameRateDecider. No preferred refresh rate is adjusted.
   bool hw_takes_any_refresh_rate_ = false;
 
-  // Screen refresh interval caps.
+  // This is the last known refresh interval. It's updated every time a VSync
+  // arrives and OnDisplayLinkCallback() is called.
   base::TimeDelta min_refresh_interval_ = BeginFrameArgs::DefaultInterval();
+
   base::TimeDelta max_refresh_interval_ = BeginFrameArgs::DefaultInterval();
 
   base::WeakPtrFactory<ExternalBeginFrameSourceMac> weak_ptr_factory_{this};

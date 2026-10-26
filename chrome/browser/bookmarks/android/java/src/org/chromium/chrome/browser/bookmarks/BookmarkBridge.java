@@ -22,6 +22,7 @@ import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.partnerbookmarks.PartnerBookmark.BookmarkIterator;
 import org.chromium.chrome.browser.partnerbookmarks.PartnerBookmarksShim;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -196,10 +197,11 @@ class BookmarkBridge {
                     if (mNativeBookmarkBridge == 0) return;
 
                     provider.getIterator(
-                            (iterator) -> {
-                                PartnerBookmarksShim.kickOffReading(
-                                        ContextUtils.getApplicationContext(), mProfile, iterator);
-                            });
+                            (BookmarkIterator iterator) ->
+                                    PartnerBookmarksShim.kickOffReading(
+                                            ContextUtils.getApplicationContext(),
+                                            mProfile,
+                                            iterator));
                 });
     }
 
@@ -337,8 +339,8 @@ class BookmarkBridge {
                     shouldTrim = false;
                     trimThreshold = -1;
                 } else {
-                    folderList.remove(i);
-                    depthList.remove(i);
+                    folderList.remove(/* index */ i);
+                    depthList.remove(/* index */ i);
                     i--;
                 }
             }
@@ -349,8 +351,8 @@ class BookmarkBridge {
                 if (bookmarksToMove.contains(folder)) {
                     shouldTrim = true;
                     trimThreshold = depth;
-                    folderList.remove(i);
-                    depthList.remove(i);
+                    folderList.remove(/* index */ i);
+                    depthList.remove(/* index */ i);
                     i--;
                 }
             }
@@ -792,6 +794,24 @@ class BookmarkBridge {
             for (BookmarkModelObserver observer : mObservers) {
                 observer.bookmarkModelLoaded();
             }
+        }
+    }
+
+    /** Notifies observers that the bookmark manager has been opened. */
+    public void notifyBookmarkManagerOpened() {
+        for (BookmarkModelObserver observer : mObservers) {
+            observer.bookmarkManagerOpened();
+        }
+    }
+
+    /**
+     * Notifies observers that a bookmark folder's contents are being viewed.
+     *
+     * @param folderId The {@link BookmarkId} of the folder being viewed.
+     */
+    public void notifyBookmarkFolderViewed(@Nullable BookmarkId folderId) {
+        for (BookmarkModelObserver observer : mObservers) {
+            observer.bookmarkFolderViewed(folderId);
         }
     }
 

@@ -9,6 +9,7 @@
 #include <security.h>
 #include <shlobj.h>
 #include <taskschd.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <memory>
@@ -30,6 +31,7 @@
 #include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "base/win/scoped_bstr.h"
+#include "base/win/scoped_variant.h"
 #include "chrome/updater/test/integration_tests_impl.h"
 #include "chrome/updater/test/test_scope.h"
 #include "chrome/updater/test/unit_test_util.h"
@@ -476,19 +478,14 @@ TEST_F(TaskSchedulerTests, GetTaskInfoUserId) {
 
   EXPECT_TRUE(task_scheduler_->GetTaskInfo(kTaskName1, info));
 
-  const std::wstring expected_user_id = [&is_system]() -> std::wstring {
-    if (is_system) {
-      return L"SYSTEM";
-    }
-
-    base::win::ScopedBstr user_name_bstr;
-    ULONG user_name_size = 256;
-    EXPECT_TRUE(::GetUserNameExW(
-        NameSamCompatible,
-        user_name_bstr.AllocateBytes(user_name_size * sizeof(OLECHAR)),
-        &user_name_size));
-    return user_name_bstr.Get();
-  }();
+  std::wstring expected_user_id = L"SYSTEM";
+  if (!is_system) {
+    wchar_t user_name[256] = {};
+    ULONG user_name_size = std::size(user_name);
+    ASSERT_TRUE(
+        ::GetUserNameExW(NameSamCompatible, user_name, &user_name_size));
+    expected_user_id = std::wstring(user_name, user_name_size);
+  }
 
   EXPECT_TRUE(base::EndsWith(info.user_id, expected_user_id,
                              base::CompareCase::INSENSITIVE_ASCII) ||
@@ -508,6 +505,55 @@ TEST_F(TaskSchedulerTests, GetTaskInfoTriggerTypes) {
   RunGetTaskInfoTriggerTypesTest(TaskScheduler::TRIGGER_TYPE_LOGON |
                                  TaskScheduler::TRIGGER_TYPE_HOURLY |
                                  TaskScheduler::TRIGGER_TYPE_EVERY_FIVE_HOURS);
+}
+
+// The logon trigger is delayed so that the task does not compete for resources
+// with the rest of the logon sequence.
+TEST_F(TaskSchedulerTests, LogonTriggerIsDelayed) {
+  ExpectRegisterTaskSucceeds(
+      kTaskName1, kTaskDescription1,
+      GetTestProcessCommandLine(GetUpdaterScopeForTesting(),
+                                test::GetTestName()),
+      TaskScheduler::TRIGGER_TYPE_LOGON, false);
+
+  Microsoft::WRL::ComPtr<ITaskService> task_service;
+  ASSERT_HRESULT_SUCCEEDED(::CoCreateInstance(CLSID_TaskScheduler, nullptr,
+                                              CLSCTX_INPROC_SERVER,
+                                              IID_PPV_ARGS(&task_service)));
+  ASSERT_HRESULT_SUCCEEDED(
+      task_service->Connect(base::win::ScopedVariant::kEmptyVariant,
+                            base::win::ScopedVariant::kEmptyVariant,
+                            base::win::ScopedVariant::kEmptyVariant,
+                            base::win::ScopedVariant::kEmptyVariant));
+
+  Microsoft::WRL::ComPtr<ITaskFolder> task_folder;
+  ASSERT_HRESULT_SUCCEEDED(task_service->GetFolder(
+      base::win::ScopedBstr(task_scheduler_->GetTaskSubfolderName()).Get(),
+      &task_folder));
+
+  Microsoft::WRL::ComPtr<IRegisteredTask> registered_task;
+  ASSERT_HRESULT_SUCCEEDED(task_folder->GetTask(
+      base::win::ScopedBstr(kTaskName1).Get(), &registered_task));
+
+  Microsoft::WRL::ComPtr<ITaskDefinition> task_definition;
+  ASSERT_HRESULT_SUCCEEDED(registered_task->get_Definition(&task_definition));
+
+  Microsoft::WRL::ComPtr<ITriggerCollection> triggers;
+  ASSERT_HRESULT_SUCCEEDED(task_definition->get_Triggers(&triggers));
+
+  LONG trigger_count = 0;
+  ASSERT_HRESULT_SUCCEEDED(triggers->get_Count(&trigger_count));
+  ASSERT_EQ(trigger_count, 1);
+
+  Microsoft::WRL::ComPtr<ITrigger> trigger;
+  ASSERT_HRESULT_SUCCEEDED(triggers->get_Item(1, &trigger));
+
+  Microsoft::WRL::ComPtr<ILogonTrigger> logon_trigger;
+  ASSERT_HRESULT_SUCCEEDED(trigger.As(&logon_trigger));
+
+  base::win::ScopedBstr delay;
+  ASSERT_HRESULT_SUCCEEDED(logon_trigger->get_Delay(delay.Receive()));
+  EXPECT_STREQ(delay.Get(), L"PT1M");
 }
 
 TEST(TaskSchedulerTest, NoSubfolders) {
@@ -569,7 +615,7 @@ TEST(TaskSchedulerTest, ForEachTaskWithPrefix) {
     task_scheduler->ForEachTaskWithPrefix(
         kTaskNamePrefix, [&count_entries, &task_scheduler,
                           kTaskNamePrefix](const std::wstring& task_name) {
-          EXPECT_TRUE(base::StartsWith(task_name, kTaskNamePrefix));
+          EXPECT_TRUE(task_name.starts_with(kTaskNamePrefix));
           ++count_entries;
           EXPECT_TRUE(task_scheduler->DeleteTask(task_name));
         });

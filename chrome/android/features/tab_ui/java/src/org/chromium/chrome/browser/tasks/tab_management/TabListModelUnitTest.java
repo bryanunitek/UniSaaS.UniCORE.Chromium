@@ -11,6 +11,7 @@ import static org.junit.Assert.assertNull;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties;
@@ -31,21 +32,23 @@ public class TabListModelUnitTest {
     }
 
     @Test
-    public void testIndexOfTabCardsOrInvalid() {
+    public void testGetTabGroupIdForIndex() {
+        Token groupId = Token.createRandom();
         TabListModel tabListModel = new TabListModel();
         tabListModel.add(listItemWithType(ModelType.MESSAGE));
         tabListModel.add(listItemWithType(ModelType.TAB));
-        tabListModel.add(listItemWithType(ModelType.MESSAGE));
-        tabListModel.add(listItemWithType(ModelType.TAB));
-        tabListModel.add(listItemWithType(ModelType.MESSAGE));
+        PropertyModel groupModel =
+                new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GRID)
+                        .with(CardProperties.CARD_TYPE, ModelType.TAB_GROUP)
+                        .with(TabProperties.TAB_GROUP_HEADER_ID, groupId)
+                        .build();
+        tabListModel.add(new ListItem(UiType.TAB_GROUP, groupModel));
 
-        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexOfTabCardsOrInvalid(-1));
-        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexOfTabCardsOrInvalid(0));
-        assertEquals(0, tabListModel.indexOfTabCardsOrInvalid(1));
-        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexOfTabCardsOrInvalid(2));
-        assertEquals(1, tabListModel.indexOfTabCardsOrInvalid(3));
-        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexOfTabCardsOrInvalid(4));
-        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexOfTabCardsOrInvalid(5));
+        assertNull(tabListModel.getTabGroupIdForIndex(-1));
+        assertNull(tabListModel.getTabGroupIdForIndex(0));
+        assertNull(tabListModel.getTabGroupIdForIndex(1));
+        assertEquals(groupId, tabListModel.getTabGroupIdForIndex(2));
+        assertNull(tabListModel.getTabGroupIdForIndex(3));
     }
 
     @Test
@@ -114,5 +117,55 @@ public class TabListModelUnitTest {
         assertEquals(
                 archivedGroupModel, tabListModel.getModelFromArchivedTabGroupSyncId("sync_id_1"));
         assertNull(tabListModel.getModelFromArchivedTabGroupSyncId("non_existent"));
+
+        // Verify indexFromModel lookup helper.
+        assertEquals(0, tabListModel.indexFromModel(tabModel));
+        assertEquals(1, tabListModel.indexFromModel(activeGroupModel));
+        assertEquals(2, tabListModel.indexFromModel(archivedGroupModel));
+        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexFromModel(null));
+        PropertyModel unaddedModel =
+                new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GRID).build();
+        assertEquals(TabModel.INVALID_TAB_INDEX, tabListModel.indexFromModel(unaddedModel));
+    }
+
+    @Test
+    public void testMoveItem() {
+        TabListModel tabListModel = new TabListModel();
+        ListItem item0 = listItemWithType(ModelType.TAB);
+        ListItem item1 = listItemWithType(ModelType.TAB_GROUP);
+        ListItem item2 = listItemWithType(ModelType.MESSAGE);
+
+        tabListModel.add(item0);
+        tabListModel.add(item1);
+        tabListModel.add(item2);
+
+        // Move item0 from index 0 to index 1
+        tabListModel.moveItem(0, 1);
+        assertEquals(item1, tabListModel.get(0));
+        assertEquals(item0, tabListModel.get(1));
+        assertEquals(item2, tabListModel.get(2));
+
+        // Move item0 (now index 1) to index 2 (end of list)
+        tabListModel.moveItem(1, 2);
+        assertEquals(item1, tabListModel.get(0));
+        assertEquals(item2, tabListModel.get(1));
+        assertEquals(item0, tabListModel.get(2));
+
+        // Move item0 (now index 2) back to index 0
+        tabListModel.moveItem(2, 0);
+        assertEquals(item0, tabListModel.get(0));
+        assertEquals(item1, tabListModel.get(1));
+        assertEquals(item2, tabListModel.get(2));
+
+        // Test invalid moves (should no-op)
+        tabListModel.moveItem(-1, 1);
+        tabListModel.moveItem(0, -1);
+        tabListModel.moveItem(0, 3); // desIndex == size() is out-of-bounds
+        tabListModel.moveItem(0, 4); // desIndex > size()
+        tabListModel.moveItem(1, 1); // srcIndex == desIndex
+
+        assertEquals(item0, tabListModel.get(0));
+        assertEquals(item1, tabListModel.get(1));
+        assertEquals(item2, tabListModel.get(2));
     }
 }

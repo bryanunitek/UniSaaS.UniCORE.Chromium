@@ -49,10 +49,12 @@ suite('TabSearchItemTest', () => {
   }
 
   function assertHighlight(node: HTMLElement, expected: string[]) {
-    assertDeepEquals(
-        expected,
-        Array.from(node.querySelectorAll('.search-highlight-hit'))
-            .map(e => e ? e.textContent : ''));
+    const hits =
+        Array.from(node.querySelectorAll<HTMLElement>('.search-highlight-hit'));
+    assertDeepEquals(expected, hits.map(e => e ? e.textContent : ''));
+    for (const hit of hits) {
+      assertEquals('700', getComputedStyle(hit).fontWeight);
+    }
   }
 
   test('Highlight', () => {
@@ -84,13 +86,13 @@ suite('TabSearchItemTest', () => {
     assertNotEquals(null, tooltip);
 
     // Tooltip should be hidden initially.
-    const innerTooltip = tooltip!.shadowRoot.querySelector('#tooltip');
+    const innerTooltip = tooltip!.$.tooltip;
     assertNotEquals(null, innerTooltip);
-    assertEquals('none', getComputedStyle(innerTooltip!).display);
+    assertEquals('none', getComputedStyle(innerTooltip).display);
 
     // Test that the tooltip is shown when the close button is focused.
     tabSearchItemCloseButton!.focus();
-    assertNotEquals('none', getComputedStyle(innerTooltip!).display);
+    assertNotEquals('none', getComputedStyle(innerTooltip).display);
 
     setupTest(new TabData(
         {
@@ -107,7 +109,7 @@ suite('TabSearchItemTest', () => {
     assertEquals(null, tabSearchItemCloseButton);
   });
 
-  test('GroupDetailsPresence', () => {
+  test('GroupDetailsPresence', async () => {
     const token = sampleToken(1n, 1n);
     const tab: Tab = createTab({
       active: true,
@@ -125,6 +127,7 @@ suite('TabSearchItemTest', () => {
     const tabData = new TabData(tab, TabItemType.OPEN_TAB, 'example');
     tabData.tabGroup = tabGroup;
     setupTest(tabData);
+    await microtasksFinished();
 
     const groupDotElement =
         tabSearchItem.shadowRoot.querySelector('#groupDot')!;
@@ -194,8 +197,7 @@ suite('TabSearchItemTest', () => {
 
   // Regression test for crbug.com/504594425
   test('SecondaryTextDirection', () => {
-    const secondaryTextInner =
-        tabSearchItem.shadowRoot.querySelector('#secondaryTextInner')!;
+    const secondaryTextInner = tabSearchItem.$.secondaryTextInner;
     assertEquals(
         'ltr',
         (secondaryTextInner.computedStyleMap().get('direction') as CSSUnitValue)

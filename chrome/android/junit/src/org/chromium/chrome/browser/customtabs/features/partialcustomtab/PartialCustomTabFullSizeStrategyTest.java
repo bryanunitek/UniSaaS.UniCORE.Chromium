@@ -22,7 +22,6 @@ import static org.chromium.chrome.browser.customtabs.features.partialcustomtab.P
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
@@ -30,15 +29,14 @@ import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 
 /** Tests for {@link PartialCustomTabFullSizeStrategy}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PartialCustomTabFullSizeStrategyTest {
-    private boolean mFullscreen;
-
     @Rule public final PartialCustomTabTestRule mPCCTTestRule = new PartialCustomTabTestRule();
 
     private PartialCustomTabFullSizeStrategy createPcctFullSizeStrategy() {
         BrowserServicesIntentDataProvider intentData = mPCCTTestRule.mIntentData;
         when(intentData.canInteractWithBackground()).thenReturn(true);
+        // Start from a non-full-size window so that the MATCH_PARENT asserts are meaningful.
+        mPCCTTestRule.mActivity.getWindow().setLayout(/* width= */ 100, /* height= */ 100);
         PartialCustomTabFullSizeStrategy pcct =
                 new PartialCustomTabFullSizeStrategy(
                         mPCCTTestRule.mActivity,
@@ -70,11 +68,11 @@ public class PartialCustomTabFullSizeStrategyTest {
         assertEquals(
                 "Full-Size has wrong height",
                 MATCH_PARENT,
-                mPCCTTestRule.mAttributeResults.get(0).height);
+                mPCCTTestRule.getWindowAttributes().height);
         assertEquals(
                 "Full-Size has wrong width",
                 MATCH_PARENT,
-                mPCCTTestRule.mAttributeResults.get(0).width);
+                mPCCTTestRule.getWindowAttributes().width);
         verify(mPCCTTestRule.mOnActivityLayoutCallback)
                 .onActivityLayout(
                         eq(0),
@@ -100,11 +98,11 @@ public class PartialCustomTabFullSizeStrategyTest {
         assertEquals(
                 "Full-Size has wrong height",
                 MATCH_PARENT,
-                mPCCTTestRule.mAttributeResults.get(0).height);
+                mPCCTTestRule.getWindowAttributes().height);
         assertEquals(
                 "Full-Size has wrong width",
                 MATCH_PARENT,
-                mPCCTTestRule.mAttributeResults.get(0).width);
+                mPCCTTestRule.getWindowAttributes().width);
         verify(mPCCTTestRule.mOnActivityLayoutCallback)
                 .onActivityLayout(
                         eq(0),
@@ -116,10 +114,11 @@ public class PartialCustomTabFullSizeStrategyTest {
     }
 
     @Test
-    @SuppressWarnings("DirectInvocationOnMock")
     public void create_fullSizeStrategyInPortrait_HeightNotSet_WidthSet() {
         when(mPCCTTestRule.mIntentData.getInitialActivityWidth()).thenReturn(300);
         mPCCTTestRule.configPortraitMode();
+        // Non-zero so that the reset to 0 is meaningful.
+        mPCCTTestRule.mCoordinatorLayout.setElevation(10);
 
         PartialCustomTabFullSizeStrategy strategy = createPcctFullSizeStrategy();
 
@@ -131,11 +130,11 @@ public class PartialCustomTabFullSizeStrategyTest {
         assertEquals(
                 "Full-Size has wrong height",
                 MATCH_PARENT,
-                mPCCTTestRule.mAttributeResults.get(0).height);
+                mPCCTTestRule.getWindowAttributes().height);
         assertEquals(
                 "Full-Size has wrong width",
                 MATCH_PARENT,
-                mPCCTTestRule.mAttributeResults.get(0).width);
+                mPCCTTestRule.getWindowAttributes().width);
         verify(mPCCTTestRule.mOnActivityLayoutCallback)
                 .onActivityLayout(
                         eq(0),

@@ -48,6 +48,10 @@ class WebState;
 @property(nonatomic, readwrite)
     BOOL canfocusAccessibilityOmniboxWhenViewAppears;
 
+// `YES` when a new NTP tab is being opened with the omnibox scheduled to be
+// focused after the new tab animation completes.
+@property(nonatomic, assign) BOOL willFocusOmniboxAfterNewTabAnimation;
+
 // Animates the NTP fakebox to the focused position and focuses the real
 // omnibox.
 - (void)focusFakebox;
@@ -94,9 +98,15 @@ class WebState;
 // Presents an IPH bubble to highlight the Lens icon in the NTP Fakebox.
 - (void)presentLensIconBubble;
 
+// Navigates to the NTP if needed and presents an IPH bubble to highlight the
+// AI Mode button.
+- (void)presentAIModeBubble;
+
 // Shows the Home Background Customization promo.
 - (void)showHomeBackgroundCustomizationPromoWithUIHandler:
-    (id<PromosManagerUIHandler>)uiHandler;
+            (id<PromosManagerUIHandler>)promosUIHandler
+                                shouldAlertFETOfDismissal:
+                                    (BOOL)shouldAlertFETOfDismissal;
 
 // Returns `YES` if the feed is currently visible on the NTP.
 - (BOOL)isFeedVisible;
@@ -107,6 +117,9 @@ class WebState;
 // Called when the home customization action is tapped in the NTP overflow menu.
 // Presents the  customization menu.
 - (void)customizationMenuWasTapped;
+
+// Controls the visibility of the blue dot on the NTP.
+- (void)setBlueDotVisible:(BOOL)visible;
 
 @end
 

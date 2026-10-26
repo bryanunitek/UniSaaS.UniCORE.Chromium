@@ -15,6 +15,7 @@
 #import "ios/chrome/browser/collaboration/model/messaging/messaging_backend_service_bridge.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_availability.h"
 #import "ios/chrome/browser/menu/ui_bundled/browser_action_factory.h"
+#import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter_observer_bridge.h"
@@ -40,7 +41,6 @@
 #import "ios/web/public/favicon/favicon_status.h"
 #import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/navigation/navigation_manager.h"
-#import "ios/web/public/web_client.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_observer_bridge.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -422,6 +422,14 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
 
   BOOL isNTP = IsVisibleURLNewTabPage(self.webState);
   [self.consumer setIsNTP:isNTP];
+
+  BOOL isStartSurface = NO;
+  if (isNTP) {
+    NewTabPageTabHelper* NTPHelper =
+        NewTabPageTabHelper::FromWebState(self.webState);
+    isStartSurface = NTPHelper && NTPHelper->ShouldShowStartSurface();
+  }
+  [self.consumer setIsStartSurface:isStartSurface];
   // Never show the loading UI for an NTP.
   BOOL isLoading = self.webState->IsLoading() && !isNTP;
   [self.consumer setLoadingState:isLoading];
@@ -450,20 +458,10 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
   if (!self.webState) {
     return;
   }
-  const GURL& URL = webState->GetLastCommittedURL();
 
-  // Enable sharing when the current page url is valid and the url is not app
-  // specific (the url's scheme is `chrome`) except when:
-  // 1. The page url represents a chrome's download path `chrome://downloads`.
-  // 2. The page url is a reference to an external file
-  //    `chrome://external-file`.
-  BOOL shareMenuEnabled =
-      URL.is_valid() &&
-      (UrlIsDownloadedFile(URL) || UrlIsExternalFileReference(URL) ||
-       !web::GetWebClient()->IsAppSpecificURL(URL));
   // Page sharing requires JavaScript execution, which is paused while overlays
   // are displayed over the web content area.
-  [self.consumer setShareMenuEnabled:shareMenuEnabled &&
+  [self.consumer setShareMenuEnabled:IsUrlShareable(webState) &&
                                      !self.webContentAreaShowingOverlay];
 }
 
@@ -497,7 +495,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
                                                        ->GetVirtualURL()]) {
       title = l10n_util::GetNSStringWithFixup(IDS_IOS_NEW_INCOGNITO_TAB);
       image = SymbolWithPalette(
-          CustomSymbolWithPointSize(kIncognitoSymbol, kInfobarSymbolPointSize),
+          SymbolWithPointSize(SymbolIncognito, kInfobarSymbolPointSize),
           @[ UIColor.whiteColor ]);
     } else {
       title = base::SysUTF16ToNSString(navigationItem->GetTitleForDisplay());
@@ -505,7 +503,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
       if (!gfxImage.IsEmpty()) {
         image = gfxImage.ToUIImage();
       } else {
-        image = DefaultSymbolWithPointSize(kDocSymbol, kInfobarSymbolPointSize);
+        image = SymbolWithPointSize(SymbolDoc, kInfobarSymbolPointSize);
       }
     }
 

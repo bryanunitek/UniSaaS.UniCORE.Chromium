@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
@@ -27,12 +28,10 @@ namespace {
 
 // Note about empirical tuning:
 // The maximum FFT size affects reverb performance and accuracy.
-// If the reverb is single-threaded and processes entirely in the real-time
-// audio thread, it's important not to make this too high.  In this case 8192 is
-// a good value.  But, the Reverb object is multi-threaded, so we want this as
-// high as possible without losing too much accuracy.  Very large FFTs will have
-// worse phase errors. Given these constraints 32768 is a good compromise.
-constexpr unsigned kMaxFftSize = 32768;
+// In single-threaded partitioned convolution, 8192 is a good compromise between
+// amortizing FFT computation and minimizing phase errors and real-time load
+// spikes with larger FFT sizes.
+constexpr unsigned kMaxFftSize = 8192;
 
 constexpr unsigned kDefaultNumberOfInputChannels = 2;
 constexpr unsigned kDefaultNumberOfOutputChannels = 1;
@@ -95,26 +94,32 @@ void ConvolverHandler::Process(uint32_t frames_to_process) {
   }
 }
 
+void ConvolverHandler::ClearBuffer() {
+  DCHECK(IsMainThread());
+  DeferredTaskHandler::GraphAutoLocker context_locker(
+      Context()->GetDeferredTaskHandler());
+  base::AutoLock locker(process_lock_);
+  reverb_.reset();
+  shared_buffer_ = nullptr;
+  Output(0).SetNumberOfChannels(
+      ComputeNumberOfOutputChannels(Input(0).NumberOfChannels(), 1));
+}
+
 void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
                                  ExceptionState& exception_state) {
   DCHECK(IsMainThread());
 
   if (!buffer) {
-    DeferredTaskHandler::GraphAutoLocker context_locker(
-        Context()->GetDeferredTaskHandler());
-    base::AutoLock locker(process_lock_);
-    reverb_.reset();
-    shared_buffer_ = nullptr;
+    ClearBuffer();
     return;
   }
 
   if (buffer->sampleRate() != Context()->sampleRate()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotSupportedError,
-        StrCat({"The buffer sample rate of ",
-                String::Number(buffer->sampleRate()),
-                " does not match the context rate of ",
-                String::Number(Context()->sampleRate()), " Hz."}));
+        Format("The buffer sample rate of {:g} does not match the context "
+               "rate of {:g} Hz.",
+               buffer->sampleRate(), Context()->sampleRate()));
     return;
   }
 
@@ -131,8 +136,8 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
   if (!is_channel_count_good) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotSupportedError,
-        StrCat({"The buffer must have 1, 2, or 4 channels, not ",
-                String::Number(number_of_channels)}));
+        Format("The buffer must have 1, 2, or 4 channels, not {}",
+               number_of_channels));
     return;
   }
 
@@ -159,15 +164,11 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
     }
   }
 
+  // If any channel is detached, we're supposed to treat it as if all were.
+  // This means the buffer effectively has length 0, which is the same as if
+  // no buffer were given.
   if (any_buffer_detached) {
-    // If any channel is detached, we're supposed to treat it as if all were.
-    // This means the buffer effectively has length 0, which is the same as if
-    // no buffer were given.
-    DeferredTaskHandler::GraphAutoLocker context_locker(
-        Context()->GetDeferredTaskHandler());
-    base::AutoLock locker(process_lock_);
-    reverb_.reset();
-    shared_buffer_ = nullptr;
+    ClearBuffer();
     return;
   }
 
@@ -179,9 +180,15 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
   buffer_bus->SetSampleRate(buffer->sampleRate());
 
   // Create the reverb with the given impulse response.
-  std::unique_ptr<Reverb> reverb = std::make_unique<Reverb>(
+  std::unique_ptr<Reverb> reverb = Reverb::TryCreate(
       buffer_bus.get(), GetDeferredTaskHandler().RenderQuantumFrames(),
-      kMaxFftSize, Context() && Context()->HasRealtimeConstraint(), normalize_);
+      kMaxFftSize, normalize_);
+  if (!reverb) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "Not enough memory to create convolver.");
+    return;
+  }
 
   {
     // The context must be locked since changing the buffer can
@@ -320,9 +327,8 @@ void ConvolverHandler::CheckNumberOfChannelsForInput(AudioNodeInput* input) {
         number_of_channels = shared_buffer_->numberOfChannels();
       }
 
-      unsigned number_of_output_channels =
-          ComputeNumberOfOutputChannels(input->NumberOfChannels(),
-                                        number_of_channels);
+      unsigned number_of_output_channels = ComputeNumberOfOutputChannels(
+          input->NumberOfChannels(), number_of_channels);
 
       if (IsInitialized() &&
           number_of_output_channels != Output(0).NumberOfChannels()) {
@@ -330,10 +336,12 @@ void ConvolverHandler::CheckNumberOfChannelsForInput(AudioNodeInput* input) {
         Uninitialize();
       }
 
+      // Always synchronize the output channel count (including any pending
+      // desired channel count set on the main thread) with the audio thread's
+      // authoritative input and buffer channel counts.
+      Output(0).SetNumberOfChannels(number_of_output_channels);
+
       if (!IsInitialized()) {
-        // This will propagate the channel count to any nodes connected further
-        // downstream in the graph.
-        Output(0).SetNumberOfChannels(number_of_output_channels);
         Initialize();
       }
     }

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <array>
 #include <string>
 
@@ -11,6 +12,7 @@
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/functions.h"
@@ -153,7 +155,6 @@ CreateWebNNTensor(mojo::Remote<mojom::WebNNContext>& webnn_context_remote,
                   mojom::TensorInfoPtr tensor_info) {
   base::test::TestFuture<mojom::CreateTensorResultPtr> create_tensor_future;
   webnn_context_remote->CreateTensor(std::move(tensor_info),
-                                     mojo_base::BigBuffer(0),
                                      create_tensor_future.GetCallback());
   mojom::CreateTensorResultPtr create_tensor_result =
       create_tensor_future.Take();
@@ -197,6 +198,59 @@ TEST_F(WebNNTensorImplBackendTest, CreateTensorImplTest) {
                                         std::array<uint32_t, 2>{3, 4}),
                                     MLTensorUsage()))
                   .has_value());
+
+  webnn_context_remote.FlushForTesting();
+  EXPECT_FALSE(bad_message_helper.GetLastBadMessage().has_value());
+}
+
+// A freshly created tensor must read back as zeros, so a renderer cannot
+// observe whatever the allocation previously held. Reading a tensor requires
+// read usage, which keeps it in mappable memory, so this covers clearing a
+// mapped tensor. `NewGraphInputTensorIsZeroInitialized` covers the tensors
+// that may be placed in device-only memory.
+TEST_F(WebNNTensorImplBackendTest, NewTensorIsZeroInitializedTest) {
+  BadMessageTestHelper bad_message_helper;
+
+  mojo::Remote<mojom::WebNNContext> webnn_context_remote;
+  base::expected<CreateContextSuccess, webnn::mojom::Error::Code>
+      context_result = CreateWebNNContext();
+  if (!context_result.has_value() &&
+      context_result.error() == mojom::Error::Code::kNotSupportedError) {
+    GTEST_SKIP() << "WebNN not supported on this platform.";
+  } else {
+    webnn_context_remote =
+        std::move(context_result.value().webnn_context_remote);
+  }
+
+  ASSERT_TRUE(webnn_context_remote.is_bound());
+
+  for (uint32_t size : {uint32_t{1}, uint32_t{4 * 1024 * 1024},
+                        uint32_t{9 * 1024 * 1024 + 7}}) {
+    SCOPED_TRACE(size);
+
+    base::expected<CreateTensorSuccess, webnn::mojom::Error::Code>
+        tensor_result = CreateWebNNTensor(
+            webnn_context_remote,
+            mojom::TensorInfo::New(
+                OperandDescriptor::UnsafeCreateForTesting(
+                    OperandDataType::kUint8, std::array<uint32_t, 1>{size}),
+                MLTensorUsage{MLTensorUsageFlags::kRead}));
+    ASSERT_TRUE(tensor_result.has_value());
+
+    mojo::AssociatedRemote<mojom::WebNNTensor> webnn_tensor_remote =
+        std::move(tensor_result.value().webnn_tensor_remote);
+    ASSERT_TRUE(webnn_tensor_remote.is_bound());
+
+    base::test::TestFuture<mojom::ReadTensorResultPtr> future;
+    webnn_tensor_remote->ReadTensor(future.GetCallback());
+    mojom::ReadTensorResultPtr result = future.Take();
+    ASSERT_FALSE(result->is_error());
+
+    const mojo_base::BigBuffer buffer = std::move(result->get_buffer());
+    ASSERT_EQ(buffer.size(), size);
+    EXPECT_TRUE(std::ranges::all_of(base::span(buffer),
+                                    [](uint8_t byte) { return byte == 0; }));
+  }
 
   webnn_context_remote.FlushForTesting();
   EXPECT_FALSE(bad_message_helper.GetLastBadMessage().has_value());
@@ -266,7 +320,7 @@ TEST_F(WebNNTensorImplBackendTest, CreateTooLargeTensorTest) {
       mojom::TensorInfo::New(
           OperandDescriptor::UnsafeCreateForTesting(data_type, large_shape),
           MLTensorUsage{MLTensorUsageFlags::kWrite}),
-      mojo_base::BigBuffer(0), std::move(create_tensor_callback));
+      std::move(create_tensor_callback));
 
   webnn_context_remote.FlushForTesting();
   EXPECT_EQ(bad_message_helper.GetLastBadMessage(), kBadMessageInvalidTensor);
@@ -388,6 +442,51 @@ TEST_F(WebNNTensorImplBackendTest, CreateContextImplManyTest) {
   EXPECT_FALSE(bad_message_helper.GetLastBadMessage().has_value());
 }
 
+// Test that ExportTensor() is rejected when SyncPointGraphValidation is
+// disabled.
+TEST_F(WebNNTensorImplBackendTest,
+       ExportTensorAsyncRejectedWhenSyncPointGraphValidationDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kSyncPointGraphValidation);
+  ASSERT_FALSE(features::IsSyncPointGraphValidationEnabled());
+
+  BadMessageTestHelper bad_message_helper;
+
+  mojo::Remote<mojom::WebNNContext> webnn_context_remote;
+  base::expected<CreateContextSuccess, webnn::mojom::Error::Code>
+      context_result = CreateWebNNContext();
+  if (!context_result.has_value() &&
+      context_result.error() == mojom::Error::Code::kNotSupportedError) {
+    GTEST_SKIP() << "WebNN not supported on this platform.";
+  } else {
+    webnn_context_remote =
+        std::move(context_result.value().webnn_context_remote);
+  }
+
+  mojo::AssociatedRemote<mojom::WebNNTensor> webnn_tensor_remote;
+  base::expected<CreateTensorSuccess, webnn::mojom::Error::Code> tensor_result =
+      CreateWebNNTensor(
+          webnn_context_remote,
+          mojom::TensorInfo::New(
+              OperandDescriptor::UnsafeCreateForTesting(
+                  OperandDataType::kUint8, std::array<uint32_t, 2>{2, 2}),
+              MLTensorUsage{MLTensorUsageFlags::kWebGpuInterop}));
+  if (tensor_result.has_value()) {
+    webnn_tensor_remote = std::move(tensor_result.value().webnn_tensor_remote);
+  }
+
+  ASSERT_TRUE(webnn_tensor_remote.is_bound());
+
+  // Simulate a compromised renderer calling the async entrypoint directly. With
+  // the feature disabled, the service must report a bad message and drop the
+  // call rather than scheduling the export.
+  webnn_tensor_remote->ExportTensor(/*flow_id=*/0u, /*release_count=*/1u);
+
+  webnn_context_remote.FlushForTesting();
+  EXPECT_EQ(bad_message_helper.GetLastBadMessage(),
+            kBadMessageAsyncExportNotSupported);
+}
 
 }  // namespace
 

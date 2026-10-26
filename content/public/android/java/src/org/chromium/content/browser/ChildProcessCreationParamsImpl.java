@@ -6,10 +6,12 @@ package org.chromium.content.browser;
 
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Process;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.base.library_loader.LibraryProcessType;
-import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.JavalessRenderersFeatureList;
@@ -35,7 +37,7 @@ public class ChildProcessCreationParamsImpl {
     // Use only the explicit WebContents.setImportance signal, and ignore other implicit
     // signals in content.
     private static boolean sIgnoreVisibilityForImportance;
-    private static @Nullable Boolean sForceNativeSandboxedService;
+    private static @TriState int sForceNativeSandboxedService;
 
     private static boolean sInitialized;
 
@@ -60,7 +62,7 @@ public class ChildProcessCreationParamsImpl {
         sLibraryProcessType = libraryProcessType;
         sBindToCallerCheck = bindToCallerCheck;
         sIgnoreVisibilityForImportance = ignoreVisibilityForImportance;
-        sForceNativeSandboxedService = forceNativeSandboxedService;
+        sForceNativeSandboxedService = TriStateUtils.from(forceNativeSandboxedService);
         sInitialized = true;
     }
 
@@ -104,16 +106,30 @@ public class ChildProcessCreationParamsImpl {
         return PRIVILEGED_SERVICES_NAME;
     }
 
+    private static boolean isPrimaryAbi64Bit() {
+        if (Build.SUPPORTED_ABIS.length == 0) return false;
+        String primaryAbi = Build.SUPPORTED_ABIS[0];
+        for (String abi : Build.SUPPORTED_64_BIT_ABIS) {
+            if (primaryAbi.equals(abi)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isRunningInSecondaryAbi() {
+        return Process.is64Bit() != isPrimaryAbi64Bit();
+    }
+
     private static boolean isNativeSandboxedServiceSupported() {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN
-                // Incremental install disables isolated processes, which are required for
-                // javaless renderers.
-                && !BuildConfig.IS_INCREMENTAL_INSTALL;
+                // Native App Zygote (/system/bin/zygote_next) is built only for the device's
+                // primary ABI. If Chrome is running in a secondary ABI, disable native
+                // sandboxed services to avoid dlopen failures in zygote_next.
+                && !isRunningInSecondaryAbi();
     }
 
     public static boolean isNativeSandboxedServiceEnabled() {
-        if (sForceNativeSandboxedService != null) {
-            return sForceNativeSandboxedService;
+        if (sForceNativeSandboxedService != TriState.NOT_SET) {
+            return sForceNativeSandboxedService == TriState.TRUE;
         }
         return isNativeSandboxedServiceSupported() && JavalessRenderersFeatureList.isEnabled();
     }

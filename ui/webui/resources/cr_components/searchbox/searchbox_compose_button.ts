@@ -5,14 +5,24 @@
 import '//resources/cr_elements/cr_button/cr_button.js';
 
 import {I18nMixinLit} from '//resources/cr_elements/i18n_mixin_lit.js';
+import {isFaviconUrl} from '//resources/js/icon.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './searchbox_compose_button.css.js';
 import {getHtml} from './searchbox_compose_button.html.js';
 
+export interface ComposeClickEventDetail {
+  button: number;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  viaKeyboard?: boolean;
+}
+
 export interface SearchboxComposeButtonElement {
   $: {
+    composeButton: HTMLElement,
     glowAnimationWrapper: HTMLElement,
   };
 }
@@ -52,7 +62,19 @@ export class SearchboxComposeButtonElement extends
 
   static override get properties() {
     return {
-      composeIcon_: {
+      labelText: {
+        type: String,
+        reflect: true,
+      },
+      tooltipTitle: {
+        type: String,
+        reflect: true,
+      },
+      a11yLabel: {
+        type: String,
+        reflect: true,
+      },
+      composeIcon: {
         type: String,
         reflect: true,
       },
@@ -63,35 +85,76 @@ export class SearchboxComposeButtonElement extends
         type: Boolean,
         reflect: true,
       },
-      ntpRealboxNextEnabled_: {
+      isFuseboxEnabled_: {
         type: Boolean,
         reflect: true,
+        attribute: 'is-fusebox-enabled',
       },
       energyEffectAnimationEnabled_: {
         type: Boolean,
         reflect: true,
         attribute: 'energy-effect-animation-enabled',
       },
+      hasVirtualFocus: {
+        type: Boolean,
+        reflect: true,
+      },
+      virtualFocusEnabled: {
+        type: Boolean,
+        reflect: true,
+      },
+      dropdownIsVisible: {
+        type: Boolean,
+      },
     };
   }
 
-  protected accessor ntpRealboxNextEnabled_: boolean =
-      loadTimeData.getBoolean('ntpRealboxNextEnabled');
+  accessor labelText: string =
+      loadTimeData.getString('searchboxComposeButtonText');
+
+  accessor tooltipTitle: string =
+      loadTimeData.getString('searchboxComposeButtonTitle');
+
+  accessor a11yLabel: string =
+      loadTimeData.getString('searchboxComposeButtonA11yLabel');
+
+  accessor composeIcon: string =
+      loadTimeData.valueExists('searchboxComposeButtonIcon') ?
+      loadTimeData.getString('searchboxComposeButtonIcon') :
+      '//resources/cr_components/searchbox/icons/search_spark.svg';
+
+  accessor hasVirtualFocus: boolean = false;
+  accessor dropdownIsVisible: boolean = false;
+  accessor virtualFocusEnabled: boolean = false;
+
+  protected accessor isFuseboxEnabled_: boolean =
+      loadTimeData.getBoolean('isFuseboxEnabled');
 
   protected accessor energyEffectAnimationEnabled_: boolean =
       loadTimeData.getBoolean('energyEffectAnimationEnabled');
 
-  protected accessor composeIcon_: string =
-      '//resources/cr_components/searchbox/icons/search_spark.svg';
-
   protected accessor arrowIcon_: string =
-      '//resources/cr_components/searchbox/icons/arrow_forward.svg';
+      (document.documentElement.hasAttribute('webui-rounded-icons') ?
+           '//resources/cr_components/searchbox/icons/arrow_forward.svg' :
+           '//resources/cr_components/searchbox/icons/arrow_forward_old.svg');
 
   protected accessor showAnimation_: boolean = false;
 
+  protected hasFavicon_(): boolean {
+    return isFaviconUrl(this.composeIcon);
+  }
+
+  override focus() {
+    this.$.composeButton?.focus();
+  }
+
+  override blur() {
+    this.$.composeButton?.blur();
+  }
+
   override firstUpdated() {
     if (this.$.glowAnimationWrapper) {
-      if (this.ntpRealboxNextEnabled_) {
+      if (this.isFuseboxEnabled_) {
         this.$.glowAnimationWrapper.addEventListener(
             'mouseenter', this.onMouseEnter_);
         this.$.glowAnimationWrapper.addEventListener(
@@ -146,6 +209,7 @@ export class SearchboxComposeButtonElement extends
       ctrlKey: e.ctrlKey,
       metaKey: e.metaKey,
       shiftKey: e.shiftKey,
+      viaKeyboard: e.detail === 0,
     });
   }
 

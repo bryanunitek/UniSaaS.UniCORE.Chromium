@@ -4,11 +4,13 @@
 
 #include "chrome/browser/component_updater/ai_embeddings_component_installer.h"
 
+#include <stdint.h>
+
 #include <array>
-#include <cstdint>
-#include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/containers/flat_set.h"
@@ -19,20 +21,26 @@
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
+#include "base/path_service.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/ai/ai_semantic_embedder_service_launcher.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/pref_names.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service.h"
+#include "components/crx_file/id_util.h"
 #include "components/optimization_guide/core/delivery/model_info.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
-#include "components/optimization_guide/core/model_execution/model_execution_util.h"
+#include "components/optimization_guide/core/model_execution/on_device_prefs.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
 #include "components/optimization_guide/proto/passage_embeddings_model_metadata.pb.h"
 #include "components/passage_embeddings/core/passage_embeddings_service_controller.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "third_party/blink/public/common/features_generated.h"
 
@@ -65,6 +73,11 @@ class AIEmbeddingsComponentInstallerPolicy
  public:
   AIEmbeddingsComponentInstallerPolicy() = default;
   ~AIEmbeddingsComponentInstallerPolicy() override = default;
+
+  AIEmbeddingsComponentInstallerPolicy(
+      const AIEmbeddingsComponentInstallerPolicy&) = delete;
+  AIEmbeddingsComponentInstallerPolicy& operator=(
+      const AIEmbeddingsComponentInstallerPolicy&) = delete;
 
  private:
   // ComponentInstallerPolicy overrides:
@@ -121,8 +134,7 @@ class AIEmbeddingsComponentInstallerPolicy
   }
 
   void GetHash(std::vector<uint8_t>* hash) const override {
-    hash->assign(kAIEmbeddingsPublicKeySHA256.begin(),
-                 kAIEmbeddingsPublicKeySHA256.end());
+    hash->assign_range(kAIEmbeddingsPublicKeySHA256);
   }
 
   std::string GetName() const override { return kAIEmbeddingsManifestName; }
@@ -136,37 +148,73 @@ class AIEmbeddingsComponentInstallerPolicy
 }  // namespace
 
 namespace component_updater {
+
+std::string GetAIEmbeddingsComponentId() {
+  return crx_file::id_util::GenerateIdFromHash(kAIEmbeddingsPublicKeySHA256);
+}
+
 std::unique_ptr<ComponentInstallerPolicy>
 GetAIEmbeddingsComponentInstallerPolicyForTesting() {
   return std::make_unique<AIEmbeddingsComponentInstallerPolicy>();
 }
 
-void RegisterAIEmbeddingsComponent(ComponentUpdateService* cus,
-                                   PrefService* local_state) {
+void RegisterAIEmbeddingsComponent(
+    ComponentUpdateService* cus,
+    PrefService* local_state,
+    base::OnceCallback<void(bool /*registered*/)> callback) {
   CHECK(local_state);
   if (!base::FeatureList::IsEnabled(blink::features::kAIEmbeddingsAPI) &&
       !base::FeatureList::IsEnabled(
-          blink::features::kAIEmbeddingsAPIForWorkers)) {
+          blink::features::kAIEmbeddingsAPIForWorkers) &&
+      !base::FeatureList::IsEnabled(blink::features::kAIDecisionModelAPI)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), false));
     return;
   }
 
-  if (optimization_guide::
+  if (optimization_guide::model_execution::prefs::
           GetGenAILocalFoundationalModelEnterprisePolicySettings(local_state) ==
       optimization_guide::model_execution::prefs::
           GenAILocalFoundationalModelEnterprisePolicySettings::kDisallowed) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), false));
     return;
   }
 
   auto installer = base::MakeRefCounted<ComponentInstaller>(
       std::make_unique<AIEmbeddingsComponentInstallerPolicy>());
-  installer->Register(cus, base::OnceClosure());
+  installer->Register(cus, base::BindOnce(std::move(callback), true));
 }
 
-void DeleteAIEmbeddingsComponent(const base::FilePath& user_data_dir) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
-      base::BindOnce(base::IgnoreResult(&base::DeletePathRecursively),
-                     user_data_dir.Append(FILE_PATH_LITERAL("AIEmbeddings"))));
+void ManageAIEmbeddingsComponentRegistration(ComponentUpdateService* cus,
+                                             PrefService* local_state) {
+  if (!local_state->GetBoolean(
+          optimization_guide::model_execution::prefs::localstate::
+              kOnDeviceAiUserSettingsEnabled) ||
+      optimization_guide::model_execution::prefs::
+              GetGenAILocalFoundationalModelEnterprisePolicySettings(
+                  local_state) ==
+          optimization_guide::model_execution::prefs::
+              GenAILocalFoundationalModelEnterprisePolicySettings::
+                  kDisallowed) {
+    local_state->SetBoolean(optimization_guide::model_execution::prefs::
+                                localstate::kEmbeddingApiModelDownloadEligible,
+                            false);
+    base::MakeRefCounted<ComponentInstaller>(
+        std::make_unique<AIEmbeddingsComponentInstallerPolicy>())
+        ->Uninstall();
+  } else if (local_state->GetBoolean(
+                 optimization_guide::model_execution::prefs::localstate::
+                     kEmbeddingApiModelDownloadEligible)) {
+    RegisterAIEmbeddingsComponent(cus, local_state);
+  }
+}
+
+void UpdateAIEmbeddingsComponentOnDemand(
+    component_updater::OnDemandUpdater::Priority priority,
+    update_client::Callback callback) {
+  g_browser_process->component_updater()->GetOnDemandUpdater().OnDemandUpdate(
+      GetAIEmbeddingsComponentId(), priority, std::move(callback));
 }
 
 }  // namespace component_updater

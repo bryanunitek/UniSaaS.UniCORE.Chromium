@@ -68,6 +68,7 @@
 #include "third_party/blink/public/common/performance/largest_contentful_paint_type.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/events/blink/blink_features.h"
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
@@ -353,14 +354,8 @@ UkmPageLoadMetricsObserver::ObservePolicy UkmPageLoadMetricsObserver::OnCommit(
         response_headers->HasHeaderValue("cache-control", "no-store");
   }
 
-  navigation_trigger_type_ =
-      page_load_metrics::NavigationHandleUserData::InitiatorLocation::kOther;
-  auto* navigation_userdata =
-      page_load_metrics::NavigationHandleUserData::GetForNavigationHandle(
-          *navigation_handle);
-  if (navigation_userdata) {
-    navigation_trigger_type_ = navigation_userdata->navigation_type();
-  }
+  navigation_initiator_id_ =
+      page_load_metrics::GetNavigationInitiator(*navigation_handle).id();
 
   // The PageTransition for the navigation may be updated on commit.
   page_transition_ = navigation_handle->GetPageTransition();
@@ -671,8 +666,7 @@ void UkmPageLoadMetricsObserver::
   ukm::builders::PageLoad builder(GetDelegate().GetPageUkmSourceId());
   const page_load_metrics::InteractionToNextPaintCalculator&
       interaction_to_next_paint_calculator_before_soft_nav =
-          GetDelegate()
-              .GetSoftNavigationIntervalInteractionToNextPaintCalculator();
+          GetDelegate().GetInteractionToNextPaintCalculator();
   std::optional<
       page_load_metrics::InteractionToNextPaintCalculator::InteractionData>
       inp_data = interaction_to_next_paint_calculator_before_soft_nav
@@ -706,8 +700,7 @@ void UkmPageLoadMetricsObserver::
 
   ukm::builders::PageLoad builder(GetDelegate().GetPageUkmSourceId());
 
-  const std::optional<float> cwv_cls_value =
-      GetCoreWebVitalsSoftNavigationIntervalCLS();
+  const std::optional<float> cwv_cls_value = GetCoreWebVitalsCLS();
 
   if (cwv_cls_value.has_value()) {
     builder
@@ -724,22 +717,18 @@ void UkmPageLoadMetricsObserver::
   builder.Record(ukm::UkmRecorder::Get());
 }
 
-void UkmPageLoadMetricsObserver::OnSoftNavigation() {
+void UkmPageLoadMetricsObserver::OnSoftNavigationFirstContentfulPaint(
+    const page_load_metrics::mojom::SoftNavigationMetrics&
+        soft_navigation_metrics) {
   CHECK_GE(soft_navigation_count_, 0);
   soft_navigation_count_++;
-  // When the 1st soft navigation comes in, we record the CWVs before then;
+  // When the 1st soft navigation presents FCP, we record the CWVs before then;
   // these may (eventually) be used for blending.
   if (soft_navigation_count_ == 1) {
     RecordLargestContentfulPaintBeforeSoftNavigation();
     RecordResponsivenessMetricsBeforeSoftNavigationForMainFrame();
     RecordLayoutShiftBeforeSoftNavigationForMainFrame();
   }
-}
-
-const page_load_metrics::ContentfulPaintTimingInfo&
-UkmPageLoadMetricsObserver::GetSoftNavigationLargestContentfulPaint() const {
-  return GetDelegate()
-      .GetSoftNavigationLargestContentfulPaint();
 }
 
 const page_load_metrics::ContentfulPaintTimingInfo&
@@ -1300,16 +1289,6 @@ std::optional<float> UkmPageLoadMetricsObserver::GetCoreWebVitalsCLS() {
   return std::nullopt;
 }
 
-std::optional<float>
-UkmPageLoadMetricsObserver::GetCoreWebVitalsSoftNavigationIntervalCLS() {
-  const page_load_metrics::NormalizedCLSData& normalized_cls_data =
-      GetDelegate().GetSoftNavigationIntervalNormalizedCLSData();
-  if (!normalized_cls_data.data_tainted) {
-    return normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls;
-  }
-  return std::nullopt;
-}
-
 void UkmPageLoadMetricsObserver::ReportLayoutStability() {
   // Don't report CLS if we were never in the foreground.
   if (last_time_shown_.is_null())
@@ -1531,8 +1510,7 @@ void UkmPageLoadMetricsObserver::RecordPageEndMetrics(
   // page_transition_ fits in a uint32_t, so we can safely cast to int64_t.
   builder.SetNavigation_PageTransition(static_cast<int64_t>(page_transition_));
 
-  builder.SetNavigation_InitiatorLocation(
-      static_cast<int64_t>(navigation_trigger_type_));
+  builder.SetNavigation_InitiatorLocation(navigation_initiator_id_);
 
   // GetDelegate().GetPageEndReason() fits in a uint32_t, so we can safely cast
   // to int64_t.

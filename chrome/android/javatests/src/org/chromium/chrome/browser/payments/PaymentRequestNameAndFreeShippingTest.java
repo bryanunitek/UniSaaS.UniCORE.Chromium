@@ -58,7 +58,7 @@ public class PaymentRequestNameAndFreeShippingTest {
         helper.setCreditCard(
                 new CreditCard(
                         "",
-                        "https://example.test",
+                        /* isUserConfirmed= */ true,
                         true,
                         "Jon Doe",
                         "4111111111111111",
@@ -126,6 +126,7 @@ public class PaymentRequestNameAndFreeShippingTest {
                         | Event2.HAD_INITIAL_FORM_OF_PAYMENT
                         | Event2.REQUEST_SHIPPING
                         | Event2.REQUEST_PAYER_DATA
+                        | Event2.REQUEST_PAYER_NAME
                         | Event2.REQUEST_METHOD_BASIC_CARD;
         Assert.assertEquals(
                 1,

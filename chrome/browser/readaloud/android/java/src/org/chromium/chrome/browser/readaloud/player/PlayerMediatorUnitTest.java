@@ -42,8 +42,8 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.Promise;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
@@ -76,7 +76,6 @@ import java.util.Map;
 /** Unit tests for {@link PlayerMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @DisableFeatures({ChromeFeatureList.FEED_AUDIO_OVERVIEWS})
-@Config(manifest = Config.NONE)
 public class PlayerMediatorUnitTest {
     private static final String TITLE = "Title";
     private static final String PUBLISHER = "Publisher";
@@ -87,8 +86,8 @@ public class PlayerMediatorUnitTest {
     @Mock private PlayerCoordinator mPlayerCoordinator;
     @Mock private Playback mPlayback;
     @Mock private Playback.Metadata mPlaybackMetadata;
-    @Mock private SeekBar mSeekbar;
     @Mock private BottomControlsStacker mBottomControlsStacker;
+    private final SeekBar mSeekbar = new SeekBar(ContextUtils.getApplicationContext());
     private MockPrefServiceHelper mMockPrefServiceHelper;
     private OnSeekBarChangeListener mOnSeekBarChangeListener;
     private final PlaybackVoice mPlaybackVoiceA = new PlaybackVoice("en", "a", "");
@@ -176,7 +175,7 @@ public class PlayerMediatorUnitTest {
         doReturn(TITLE).when(mPlaybackMetadata).title();
         doReturn(PUBLISHER).when(mPlaybackMetadata).publisher();
         doReturn(PlaybackMode.OVERVIEW).when(mPlaybackMetadata).playbackMode();
-        doReturn(1000).when(mSeekbar).getMax();
+        mSeekbar.setMax(1000);
         doReturn(mBottomControlsStacker).when(mDelegate).getBottomControlsStacker();
         mVoicesSupplier = ObservableSuppliers.createNonNull(List.of(new PlaybackVoice("en", "a")));
         mSelectedVoiceIdSupplier = ObservableSuppliers.createNonNull("a");
@@ -195,7 +194,9 @@ public class PlayerMediatorUnitTest {
         doReturn(true).when(mDelegate).isHighlightingSupported(any());
         doReturn(mHighlightingEnabledSupplier).when(mDelegate).getHighlightingEnabledSupplier();
         doReturn(mVoicesSupplier).when(mDelegate).getCurrentLanguageVoicesSupplier();
-        doReturn(mPlaybackModeSelectorEnabledSupplier).when(mDelegate).getPlaybackModeSelectionEnabled();
+        doReturn(mPlaybackModeSelectorEnabledSupplier)
+                .when(mDelegate)
+                .getPlaybackModeSelectionEnabled();
         doReturn(mFeedbackTypeSupplier).when(mDelegate).getFeedbackTypeSupplier();
         doReturn(mSelectedVoiceIdSupplier).when(mDelegate).getVoiceIdSupplier();
         doReturn(mMockPrefServiceHelper.getPrefService()).when(mDelegate).getPrefService();
@@ -259,6 +260,20 @@ public class PlayerMediatorUnitTest {
         verify(mPlayback).addListener(eq(mPlaybackListenerCaptor.getValue()));
         assertEquals(TITLE, mModel.get(PlayerProperties.TITLE));
         assertEquals(PUBLISHER, mModel.get(PlayerProperties.PUBLISHER));
+    }
+
+    @Test
+    public void testMetadataUpdated() {
+        mMediator.setPlayback(mPlayback);
+        verify(mPlayback).addListener(mPlaybackListenerCaptor.capture());
+
+        Playback.Metadata metadata = Mockito.mock(Playback.Metadata.class);
+        doReturn("New Title").when(metadata).title();
+        doReturn("New Publisher").when(metadata).publisher();
+        mPlaybackListenerCaptor.getValue().onMetadataChanged(metadata);
+
+        assertEquals("New Title", mModel.get(PlayerProperties.TITLE));
+        assertEquals("New Publisher", mModel.get(PlayerProperties.PUBLISHER));
     }
 
     @Test

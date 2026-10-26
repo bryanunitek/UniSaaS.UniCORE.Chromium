@@ -7,6 +7,7 @@ import("//mojo/public/tools/bindings/mojom.gni")
 # The features file is separate to allow WebNN-dependent components to use
 # features without importing the rest of WebNN (ex. //gpu/config).
 mojom_component("features") {
+  generate_blink = true
   output_prefix = "webnn_mojom_features"
   macro_prefix = "WEBNN_MOJOM_FEATURES"
 
@@ -17,6 +18,7 @@ mojom_component("features") {
 # Device enum without creating a dependency cycle through the typemapped :mojom
 # target.
 mojom_component("device") {
+  generate_blink = true
   output_prefix = "webnn_mojom_device"
   macro_prefix = "WEBNN_MOJOM_DEVICE"
 
@@ -24,6 +26,7 @@ mojom_component("device") {
 }
 
 mojom_component("webnn_service_introspection") {
+  generate_blink = true
   output_prefix = "webnn_mojom_webnn_service_introspection"
   macro_prefix = "WEBNN_MOJOM_WEBNN_SERVICE_INTROSPECTION"
 
@@ -35,10 +38,12 @@ mojom_component("webnn_service_introspection") {
 }
 
 mojom_component("mojom") {
+  generate_blink = true
   output_prefix = "webnn_mojom"
   macro_prefix = "WEBNN_MOJOM"
 
   sources = [
+    "webnn_browser_host.mojom",
     "webnn_compiler_context.mojom",
     "webnn_context.mojom",
     "webnn_context_properties.mojom",
@@ -49,12 +54,16 @@ mojom_component("mojom") {
     "webnn_tensor.mojom",
   ]
 
+  if (is_win || is_apple) {
+    sources += [
+      "webnn_compiler_service.mojom",
+      "webnn_model_loader.mojom",
+    ]
+  }
   if (is_win) {
     sources += [
       "ep_device_info.mojom",
       "ep_package_info.mojom",
-      "webnn_compiler_service.mojom",
-      "webnn_model_loader.mojom",
     ]
   }
 
@@ -164,9 +173,16 @@ mojom_component("mojom") {
 
 component("webnn_mojom_traits") {
   sources = [
+    "context_properties_mojom_traits.h",
+    "data_type_limits_mojom_traits.h",
+    "number_mojom_traits.h",
     "operand_descriptor_mojom_traits.cc",
     "operand_descriptor_mojom_traits.h",
     "operand_id_mojom_traits.h",
+    "range_mojom_traits.h",
+    "supported_data_types_mojom_traits.h",
+    "supported_tensors_mojom_traits.h",
+    "tensor_usage_mojom_traits.h",
   ]
 
   public_deps = [
@@ -180,6 +196,14 @@ component("webnn_mojom_traits") {
   defines = [ "IS_WEBNN_MOJOM_TRAITS_IMPL" ]
 
   configs += [ "//build/config/compiler:prevent_unsafe_narrowing" ]
+
+  if (is_win) {
+    sources += [
+      "ep_device_info_mojom_traits.h",
+      "package_version_mojom_traits.h",
+    ]
+    public_deps += [ "//services/webnn/public/cpp:win" ]
+  }
 }
 
 source_set("tests") {

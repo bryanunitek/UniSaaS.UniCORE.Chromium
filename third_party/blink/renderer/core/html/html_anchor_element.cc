@@ -31,7 +31,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
@@ -48,7 +47,6 @@
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
 #include "third_party/blink/renderer/core/events/web_input_event_conversion.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
@@ -103,18 +101,6 @@ FocusableState HTMLAnchorElementBase::SupportsFocus(
     return FocusableState::kFocusable;
   }
   return HTMLElement::SupportsFocus(update_behavior);
-}
-
-bool HTMLAnchorElementBase::ShouldHaveFocusAppearance() const {
-  if (RuntimeEnabledFeatures::AnchorFocusRingFixEnabled()) {
-    // When this flag is removed, we can remove
-    // HTMLAnchorElementBase::ShouldHaveFocusAppearance.
-    return HTMLElement::ShouldHaveFocusAppearance();
-  }
-  // TODO(crbug.com/1444450): Can't this be done with focus-visible now?
-  return (GetDocument().LastFocusType() != mojom::blink::FocusType::kMouse) ||
-         HTMLElement::SupportsFocus(UpdateBehavior::kNoneForFocusManagement) !=
-             FocusableState::kNotFocusable;
 }
 
 FocusableState HTMLAnchorElementBase::IsFocusableState(
@@ -175,7 +161,7 @@ static void AppendServerMapMousePosition(StringBuilder& url, Event* event) {
       To<LayoutBox>(layout_object)->PhysicalContentBoxRect().offset);
 
   // CSS zoom is not reflected in the map coordinates.
-  float scale_factor = 1 / layout_object->StyleRef().EffectiveZoom();
+  float scale_factor = 1 / layout_object->Style().EffectiveZoom();
   map_point.Scale(scale_factor, scale_factor);
 
   // Negative coordinates are clamped to 0 such that clicks in the left and
@@ -189,6 +175,24 @@ static void AppendServerMapMousePosition(StringBuilder& url, Event* event) {
   url.AppendNumber(clamped_point.y());
 }
 
+void HTMLAnchorElementBase::RunActivationBehaviorBeforeDOMActivate(
+    Event& event,
+    EventDispatchHandlingState*) {
+  if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled()) {
+    return;
+  }
+  if (event.defaultPrevented() || event.DefaultHandled()) {
+    return;
+  }
+
+  if (AnchorElementUtils::IsLinkClick(event) && IsLiveLink()) {
+    // IsLinkClick validates that |event| is a MouseEvent. `HandleClick()` marks
+    // the event as default-handled, which suppresses the DOMActivate event that
+    // `Node::DefaultEventHandler()` would otherwise dispatch.
+    HandleClick(To<MouseEvent>(event));
+  }
+}
+
 void HTMLAnchorElementBase::DefaultEventHandler(Event& event) {
   if (IsLink()) {
     if (IsFocused() && KeyboardEvent::IsEnterKeyKeydownEvent(event) &&
@@ -198,10 +202,19 @@ void HTMLAnchorElementBase::DefaultEventHandler(Event& event) {
       return;
     }
 
-    if (AnchorElementUtils::IsLinkClick(event) && IsLiveLink()) {
-      // IsLinkClick validates that |event| is a MouseEvent.
-      HandleClick(To<MouseEvent>(event));
-      return;
+    if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled()) {
+      if (AnchorElementUtils::IsLinkClick(event) && IsLiveLink()) {
+        // IsLinkClick validates that |event| is a MouseEvent.
+        HandleClick(To<MouseEvent>(event));
+        return;
+      }
+    } else {
+      if (event.type() == event_type_names::kAuxclick &&
+          AnchorElementUtils::IsLinkClick(event) && IsLiveLink()) {
+        // IsLinkClick validates that |event| is a MouseEvent.
+        HandleClick(To<MouseEvent>(event));
+        return;
+      }
     }
   }
 
@@ -242,16 +255,7 @@ void HTMLAnchorElementBase::ParseAttribute(
     if (params.old_value == params.new_value) {
       return;
     }
-    bool was_link = IsLink();
-    SetIsLink(!params.new_value.IsNull());
-    if (was_link || IsLink()) {
-      PseudoStateChanged(CSSSelector::kPseudoLink);
-      PseudoStateChanged(CSSSelector::kPseudoVisited);
-      if (was_link != IsLink()) {
-        PseudoStateChanged(CSSSelector::kPseudoWebkitAnyLink);
-        PseudoStateChanged(CSSSelector::kPseudoAnyLink);
-      }
-    }
+    AnchorElementUtils::UpdateHref(*this, params.new_value);
     if (isConnected() && params.old_value != params.new_value) {
       if (auto* document_rules =
               DocumentSpeculationRules::FromIfExists(GetDocument())) {
@@ -350,7 +354,7 @@ KURL HTMLAnchorElementBase::Url() const {
   return href;
 }
 
-void HTMLAnchorElementBase::SetURL(const KURL& url) {
+void HTMLAnchorElementBase::SetUrl(const KURL& url) {
   SetHref(AtomicString(url.GetString()));
 }
 
@@ -411,7 +415,7 @@ void HTMLAnchorElementBase::NavigateToHyperlink(
   frame_request.SetNavigationPolicy(navigation_policy);
   frame_request.SetClientNavigationReason(ClientNavigationReason::kAnchorClick);
   frame_request.SetSourceElement(this);
-  const AtomicString& target =
+  const AtomicString target =
       frame_request.CleanNavigationTarget(GetEffectiveTarget());
 
   AnchorElementUtils::HandleRelAttribute(frame_request, frame->GetSettings(),
@@ -425,31 +429,6 @@ void HTMLAnchorElementBase::NavigateToHyperlink(
       is_trusted ? mojom::blink::TriggeringEventInfo::kFromTrustedEvent
                  : mojom::blink::TriggeringEventInfo::kFromUntrustedEvent);
   frame_request.SetInputStartTime(platform_time_stamp);
-
-  if (const AtomicString& attribution_src =
-          FastGetAttribute(html_names::kAttributionsrcAttr);
-      !attribution_src.IsNull()) {
-    // An impression must be attached prior to the
-    // `FindOrCreateFrameForNavigation()` call, as that call may result in
-    // performing a navigation if the call results in creating a new window with
-    // noopener set.
-    // At this time we don't know if the navigation will navigate a main frame
-    // or subframe. For example, a middle click on the anchor element will
-    // set `target_frame` to `frame`, but end up targeting a new window.
-    // Attach the impression regardless, the embedder will be able to drop
-    // impressions for subframe navigations.
-
-    std::optional<Impression> impression =
-        frame->GetAttributionSrcLoader()->RegisterNavigation(
-            /*navigation_url=*/completed_url, attribution_src,
-            /*element=*/this, request.HasUserGesture(),
-            request.GetReferrerPolicy());
-    if (impression.has_value()) {
-      impression->is_empty_attribution_src_tag = attribution_src.empty();
-    }
-
-    frame_request.SetImpression(impression);
-  }
 
   Frame* target_frame =
       frame->Tree().FindOrCreateFrameForNavigation(frame_request, target).frame;
@@ -514,8 +493,7 @@ void HTMLAnchorElementBase::HandleClick(MouseEvent& event) {
                       WebFeature::kAnchorClickDispatchForNonConnectedNode);
     // Disconnected <area> elements should not trigger navigation.
     // https://html.spec.whatwg.org/multipage/links.html#cannot-navigate
-    if (RuntimeEnabledFeatures::DisallowDisconnectedAreaNavigationEnabled() &&
-        IsA<HTMLAreaElement>(this)) {
+    if (IsA<HTMLAreaElement>(this)) {
       return;
     }
   }
@@ -542,8 +520,6 @@ void HTMLAnchorElementBase::HandleClick(MouseEvent& event) {
       link_relations_, GetDocument());
 
   LocalFrame* frame = window->GetFrame();
-  request.SetHasUserGesture(LocalFrame::HasTransientUserActivation(frame));
-
   NavigationPolicy navigation_policy = NavigationPolicyFromEvent(&event);
 
   // Respect the download attribute only if we can read the content, and the

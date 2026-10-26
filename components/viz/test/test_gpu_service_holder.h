@@ -31,6 +31,7 @@ class ShelfContextMenuTest;
 
 namespace gpu {
 class CommandBufferTaskExecutor;
+class GraphiteSharedContext;
 class SingleTaskSequence;
 #if BUILDFLAG(ENABLE_VULKAN)
 class VulkanImplementation;
@@ -131,6 +132,12 @@ class TestGpuServiceHolder : public gpu::GpuInProcessThreadServiceDelegate {
   scoped_refptr<gpu::SharedContextState> GetSharedContextState() override;
   scoped_refptr<gl::GLShareGroup> GetShareGroup() override;
 
+  gpu::GraphiteSharedContext* GetGraphiteSharedContext() const;
+
+#if BUILDFLAG(IS_WIN)
+  void InitializeDirectComposition();
+#endif
+
  private:
   void InitializeOnGpuThread(const gpu::GpuPreferences& preferences,
                              base::WaitableEvent* completion);
@@ -158,6 +165,10 @@ class TestGpuServiceHolder : public gpu::GpuInProcessThreadServiceDelegate {
   std::unique_ptr<gpu::SingleTaskSequence> compositor_gpu_task_sequence_;
 #if BUILDFLAG(ENABLE_VULKAN)
   std::unique_ptr<gpu::VulkanImplementation> vulkan_implementation_;
+#endif
+
+#if BUILDFLAG(IS_WIN)
+  bool direct_composition_initialized_ = false;
 #endif
 
 #if BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_FUCHSIA)

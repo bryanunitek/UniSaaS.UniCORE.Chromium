@@ -20,7 +20,6 @@
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/web_apps/sub_apps/sub_apps_install_dialog_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
@@ -1012,7 +1011,7 @@ IN_PROC_BROWSER_TEST_F(SubAppsServiceImplLimitBrowserTest,
   // Add 2 sub-apps, all should fail.
   auto actual = CallAdd({kSubAppPath, kSubAppPath2});
   ASSERT_FALSE(actual.has_value());
-  EXPECT_EQ(actual.error(), SubAppsServiceResultCode::kLimitExceeded);
+  EXPECT_EQ(actual.error(), SubAppsServiceResultCode::kTotalLimitExceeded);
 
   // Add 1 more - success.
   ExpectCallAdd({{kSubAppPath, SubAppsServiceAddResultType::kSuccess}},
@@ -1022,7 +1021,39 @@ IN_PROC_BROWSER_TEST_F(SubAppsServiceImplLimitBrowserTest,
 
   auto actual2 = CallAdd({kSubAppPath2});
   ASSERT_FALSE(actual2.has_value());
-  EXPECT_EQ(actual2.error(), SubAppsServiceResultCode::kLimitExceeded);
+  EXPECT_EQ(actual2.error(), SubAppsServiceResultCode::kTotalLimitExceeded);
+}
+
+class SubAppsServiceImplPerPromptLimitBrowserTest
+    : public SubAppsServiceImplBrowserTest {
+ public:
+  SubAppsServiceImplPerPromptLimitBrowserTest() {
+    // Set per-prompt limit to 1.
+    scoped_feature_list.InitAndEnableFeatureWithParameters(
+        kSubAppsPerPromptLimit, {{"limit", "1"}});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list;
+};
+
+IN_PROC_BROWSER_TEST_F(SubAppsServiceImplPerPromptLimitBrowserTest,
+                       AddFailExceedsPerPromptLimit) {
+  content::RenderFrameHost* iwa_frame = InstallAndOpenParentIwaApp();
+  BindRemote(iwa_frame);
+
+  // Add 2 sub-apps, all should fail because limit is 1.
+  auto actual = CallAdd({kSubAppPath, kSubAppPath2});
+  ASSERT_FALSE(actual.has_value());
+  EXPECT_EQ(actual.error(), SubAppsServiceResultCode::kPerPromptLimitExceeded);
+
+  // Add 1 - success.
+  ExpectCallAdd({{kSubAppPath, SubAppsServiceAddResultType::kSuccess}},
+                {kSubAppPath});
+
+  // Add 1 more - success.
+  ExpectCallAdd({{kSubAppPath2, SubAppsServiceAddResultType::kSuccess}},
+                {kSubAppPath2});
 }
 
 /********** Tests for the List API call. **********/

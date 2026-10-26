@@ -10,18 +10,23 @@
 #include "base/containers/flat_set.h"
 #include "base/uuid.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_model_listener.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "components/saved_tab_groups/internal/stats.h"
 #include "components/saved_tab_groups/internal/tab_group_sync_service_impl.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/saved_tab_groups/public/types.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_handle.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/range/range.h"
 
 namespace tab_groups {
@@ -65,17 +70,17 @@ void RemoveTabFromGroup(TabStripModel& tab_strip_model,
   // group contiguity.
   tab_strip_model.RemoveFromGroup({tab_strip_model.GetIndexOfTab(&local_tab)});
 
-  // Find the tab again and close it.
-  tab_strip_model.CloseWebContentsAt(
-      tab_strip_model.GetIndexOfTab(&local_tab),
-      TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+  // Close the tab.
+  tab_strip_model.CloseWebContents(local_tab.GetContents(),
+                                   TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
 }
 
 TabStripModel* GetTabStripModelForLocalGroup(const LocalTabGroupID& group_id) {
-  Browser* browser = SavedTabGroupUtils::GetBrowserWithTabGroupId(group_id);
+  BrowserWindowInterface* browser =
+      SavedTabGroupUtils::GetBrowserWithTabGroupId(group_id);
   CHECK(browser);
 
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   CHECK(tab_strip_model);
   CHECK(tab_strip_model->SupportsTabGroups());
 
@@ -109,10 +114,10 @@ void RemoveExtraTabsFromLocalGroupBeforeConnecting(
   }
 }
 
-// Try to open the `saved_tab`. Returns the opened tab if successful, otherwise
-// returns nullptr.
+// Try to open the `saved_tab`. Returns the opened tab if successful,
+// otherwise returns nullptr.
 tabs::TabInterface* MaybeOpenTabFromSavedTab(const SavedTabGroupTab& saved_tab,
-                                             Browser* browser) {
+                                             BrowserWindowInterface* browser) {
   if (!saved_tab.url().is_valid()) {
     return nullptr;
   }
@@ -120,12 +125,12 @@ tabs::TabInterface* MaybeOpenTabFromSavedTab(const SavedTabGroupTab& saved_tab,
   content::NavigationHandle* navigation_handle =
       SavedTabGroupUtils::OpenTabInBrowser(
           saved_tab.url(), browser, browser->GetProfile(),
-          WindowOpenDisposition::NEW_BACKGROUND_TAB);
+          WindowOpenDisposition::kNewBackgroundTab);
   if (!navigation_handle) {
     return nullptr;
   }
 
-  return browser->tab_strip_model()->GetTabForWebContents(
+  return browser->GetTabStripModel()->GetTabForWebContents(
       navigation_handle->GetWebContents());
 }
 
@@ -166,7 +171,19 @@ TabGroupSyncDelegateDesktop::HandleOpenTabGroupRequest(
 
   TabGroupActionContextDesktop* desktop_context =
       static_cast<TabGroupActionContextDesktop*>(context.get());
-  Browser* const browser = desktop_context->browser;
+  CHECK(desktop_context);
+  BrowserWindowInterface* const browser = desktop_context->browser;
+
+  // Only a single tab group can be focused at a time. Because of this, new open
+  // tab group requests unfocus the group putting users back into the normal tab
+  // strip state. This is done to consistently handle this behavior across a
+  // number of scenarios (opening a closed group, and focusing an already open
+  // tab group in the browser).
+  if (base::FeatureList::IsEnabled(features::kTabGroupsFocusing) &&
+      browser->GetTabStripModel()->GetFocusedGroup().has_value()) {
+    browser->GetTabStripModel()->ExitFocusMode(
+        TabGroupFocusExitReason::kGroupCreated);
+  }
 
   // Open the tabs in the saved group.
   std::map<tabs::TabInterface*, base::Uuid> tab_guid_mapping =
@@ -179,7 +196,7 @@ TabGroupSyncDelegateDesktop::HandleOpenTabGroupRequest(
 
   // Add the tabs to a new group in the tabstrip and link it to `group`.
   return AddOpenedTabsToGroup(
-      browser->tab_strip_model(), std::move(tab_guid_mapping), group.value(),
+      browser->GetTabStripModel(), std::move(tab_guid_mapping), group.value(),
       desktop_context->opening_source !=
           tab_groups::OpeningSource::kOpenedFromTabRestore);
 }
@@ -281,7 +298,6 @@ TabGroupSyncDelegateDesktop::GetLocalTabGroupIds() {
 
 std::vector<LocalTabID> TabGroupSyncDelegateDesktop::GetLocalTabIdsForTabGroup(
     const LocalTabGroupID& local_tab_group_id) {
-  // TODO(b/346871861): Implement.
   return std::vector<LocalTabID>();
 }
 
@@ -334,7 +350,6 @@ std::u16string TabGroupSyncDelegateDesktop::GetTabTitle(
 std::unique_ptr<SavedTabGroup>
 TabGroupSyncDelegateDesktop::CreateSavedTabGroupFromLocalGroup(
     const LocalTabGroupID& local_tab_group_id) {
-  // TODO(b/346871861): Implement.
   return nullptr;
 }
 
@@ -345,7 +360,7 @@ TabGroupSyncDelegateDesktop::CreateScopedLocalObserverPauser() {
 
 std::map<tabs::TabInterface*, base::Uuid>
 TabGroupSyncDelegateDesktop::OpenTabsAndMapToUuids(
-    Browser* const browser,
+    BrowserWindowInterface* const browser,
     const SavedTabGroup& saved_group) {
   std::map<tabs::TabInterface*, base::Uuid> tab_guid_mapping;
   for (const SavedTabGroupTab& saved_tab : saved_group.saved_tabs()) {
@@ -384,7 +399,7 @@ TabGroupId TabGroupSyncDelegateDesktop::AddOpenedTabsToGroup(
 
     // Activate the first tab in the group.
     tabs::TabInterface* first_tab = tab_group->GetFirstTab();
-    DCHECK(first_tab);
+    CHECK(first_tab, base::NotFatalUntil::M162);
     tab_strip_model->ActivateTabAt(tab_strip_model->GetIndexOfTab(first_tab));
   }
 

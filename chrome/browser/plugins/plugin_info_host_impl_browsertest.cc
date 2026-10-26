@@ -21,7 +21,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/plugins/plugin_prefs.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/plugin.mojom.h"
@@ -66,7 +65,7 @@ class PluginInfoHostImplTest : public InProcessBrowserTest {
     auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
     plugin_info_host_impl_ = std::make_unique<PluginInfoHostImpl>(
         web_contents->GetPrimaryMainFrame()->GetGlobalFrameToken(),
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override { plugin_info_host_impl_.reset(); }
@@ -206,14 +205,20 @@ IN_PROC_BROWSER_TEST_P(PluginInfoHostImplBidiTest,
   // Background color hard-coded in `GetPdfBackgroundColor()`.
   EXPECT_EQ(SkColorSetRGB(40, 40, 40), plugin_info->plugin.background_color);
 
-  // Has PDF MIME type.
-  ASSERT_THAT(plugin_info->plugin.mime_types, SizeIs(1));
+  // Has the PDF MIME types: application/pdf and text/pdf.
+  ASSERT_THAT(plugin_info->plugin.mime_types, SizeIs(2));
 
   WebPluginMimeType mime_type = plugin_info->plugin.mime_types[0];
   EXPECT_EQ(pdf::kPDFMimeType, mime_type.mime_type);
   EXPECT_THAT(mime_type.file_extensions, ElementsAre("pdf"));
   EXPECT_EQ(u"", mime_type.description);
   EXPECT_THAT(mime_type.additional_params, IsEmpty());
+
+  WebPluginMimeType text_pdf_mime_type = plugin_info->plugin.mime_types[1];
+  EXPECT_EQ("text/pdf", text_pdf_mime_type.mime_type);
+  EXPECT_THAT(text_pdf_mime_type.file_extensions, IsEmpty());
+  EXPECT_EQ(u"", text_pdf_mime_type.description);
+  EXPECT_THAT(text_pdf_mime_type.additional_params, IsEmpty());
 }
 
 IN_PROC_BROWSER_TEST_P(PluginInfoHostImplBidiTest,
@@ -266,7 +271,9 @@ IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest,
 
   WebPluginMimeType mime_type = plugin_info->plugin.mime_types[0];
   EXPECT_EQ(pdf::kInternalPluginMimeType, mime_type.mime_type);
-  EXPECT_THAT(mime_type.file_extensions, ElementsAre("pdf"));
+  // No file extensions: the internal PDF plugin must not be reachable via URL
+  // file-extension sniffing.
+  EXPECT_THAT(mime_type.file_extensions, IsEmpty());
   EXPECT_EQ(u"Portable Document Format", mime_type.description);
   EXPECT_THAT(mime_type.additional_params, IsEmpty());
 }
@@ -282,6 +289,28 @@ IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest,
   // Internal PDF plugin is not affected by PDF content setting.
   EXPECT_EQ(PluginStatus::kAllowed, plugin_info->status);
   EXPECT_EQ(pdf::kInternalPluginMimeType, plugin_info->actual_mime_type);
+}
+
+// An <embed> or <object> with no "type" attribute passes an empty MIME type,
+// so plugin lookup fell back to URL file-extension matching. The internal PDF
+// plugin used to register the "pdf" extension, and it was exempt from the
+// "always open PDFs externally" preference, so it was selected in the lookup.
+// Lookup then reported kAllowed for a plugin the renderer cannot create
+// in web content.
+IN_PROC_BROWSER_TEST_F(PluginInfoHostImplTest,
+                       GetPluginInfoForPdfByFileExtensionWhenDisabled) {
+  SetAlwaysOpenPdfExternally();
+
+  // Note: the URL must be valid and have a path, or PluginList bails out
+  // before it reaches file-extension matching.
+  PluginInfoPtr plugin_info =
+      GetPluginInfo(GURL("https://example.com/fake.pdf"), std::string());
+  ASSERT_TRUE(plugin_info);
+
+  // Only the PDF viewer extension should match, and the preference disables
+  // it.
+  EXPECT_EQ(PluginStatus::kDisabled, plugin_info->status);
+  EXPECT_EQ(pdf::kPDFMimeType, plugin_info->actual_mime_type);
 }
 
 INSTANTIATE_TEST_SUITE_P(All, PluginInfoHostImplBidiTest, testing::Bool());

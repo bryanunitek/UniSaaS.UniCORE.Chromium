@@ -18,6 +18,9 @@
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/web_cache/browser/web_cache_manager.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/api/constants.h"
 #include "extensions/browser/api/declarative_net_request/composite_matcher.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
@@ -274,8 +277,31 @@ void RulesetManager::OnRenderFrameDeleted(content::RenderFrameHost* host) {
 
 void RulesetManager::OnDidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
+  content::RenderFrameHost* host = navigation_handle->GetRenderFrameHost();
+  DCHECK(host);
+
+  int tab_id = extension_misc::kUnknownTabId;
+  int window_id_unused = extension_misc::kUnknownWindowId;
+  ExtensionsBrowserClient::Get()->GetTabAndWindowIdForWebContents(
+      content::WebContents::FromRenderFrameHost(host), &tab_id,
+      &window_id_unused);
+  const WebRequestResourceType resource_type =
+      host->GetParentOrOuterDocument() ? WebRequestResourceType::SUB_FRAME
+                                       : WebRequestResourceType::MAIN_FRAME;
+
   for (ExtensionRulesetData& ruleset : rulesets_) {
-    ruleset.matcher->OnDidFinishNavigation(navigation_handle);
+    // For navigation requests, `CanExtensionAccessURL` only checks host
+    // permissions for the URL, not the initiator. However, the initiator is
+    // still passed in so that navigations initiated by policy-blocked or
+    // user-restricted hosts are denied access.
+    PageAccess page_access_for_navigation =
+        WebRequestPermissions::CanExtensionAccessURL(
+            permission_helper_, ruleset.extension_id,
+            host->GetLastCommittedURL(), tab_id, /*crosses_incognito=*/false,
+            WebRequestPermissions::REQUIRE_HOST_PERMISSION_FOR_URL,
+            navigation_handle->GetInitiatorOrigin(), resource_type);
+    ruleset.matcher->OnDidFinishNavigation(navigation_handle,
+                                           page_access_for_navigation);
   }
 }
 
@@ -527,7 +553,8 @@ std::vector<RequestAction> RulesetManager::EvaluateRequestInternal(
       } else {
         bool is_dse_redirect =
             ExtensionsBrowserClient::Get()->IsDefaultSearchEngineRedirect(
-                browser_context_, request.url, action->redirect_url.value());
+                browser_context_, action->extension_id, request.url,
+                action->redirect_url.value());
         if (is_dse_redirect) {
           base::UmaHistogramEnumeration(
               "Extensions.DeclarativeNetRequest.RedirectAction",
@@ -582,6 +609,15 @@ std::vector<RequestAction> RulesetManager::EvaluateRequestInternal(
 bool RulesetManager::ShouldEvaluateRequest(
     const WebRequestInfo& request) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Requests for privileged content (see //chrome's PrivilegedWebContents) are
+  // exempt from Declarative Net Request, mirroring their invisibility to the
+  // webRequest API. This covers a privileged WebContents' own main-frame
+  // navigation as well as requests from its renderer. It must come before the
+  // HideRequest() DCHECK below, because such requests are also hidden.
+  if (request.is_privileged) {
+    return false;
+  }
 
   // Ensure clients filter out sensitive requests.
   DCHECK(!WebRequestPermissions::HideRequest(permission_helper_, request));

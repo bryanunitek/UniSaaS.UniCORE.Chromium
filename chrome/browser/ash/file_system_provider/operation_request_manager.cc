@@ -5,11 +5,11 @@
 #include "chrome/browser/ash/file_system_provider/operation_request_manager.h"
 
 #include "base/time/time.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/extensions/window_controller_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "content/public/browser/web_contents.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
+#include "components/tabs/public/tab_interface.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/common/constants.h"
 
@@ -65,7 +65,7 @@ bool OperationRequestManager::IsInteractingWithUser() const {
   // and tabs.
   const extensions::AppWindowRegistry* const registry =
       extensions::AppWindowRegistry::Get(profile_);
-  DCHECK(registry);
+  CHECK(registry, base::NotFatalUntil::M160);
   if (registry->GetCurrentAppWindowForApp(provider_id_))
     return true;
 
@@ -76,10 +76,12 @@ bool OperationRequestManager::IsInteractingWithUser() const {
     const BrowserDelegate* const browser =
         BrowserController::GetInstance()->GetDelegate(
             window->GetBrowserWindowInterface());
-    if (!browser)
+    if (!browser || browser->GetType() != ash::BrowserType::kNormal) {
       continue;
-    for (unsigned int i = 0, n = browser->GetWebContentsCount(); i < n; ++i) {
-      const GURL& url = browser->GetWebContentsAt(i)->GetURL();
+    }
+
+    for (tabs::TabInterface* tab : browser->GetTabIterator()) {
+      const GURL& url = tab->GetURL();
       if (url.SchemeIs(extensions::kExtensionScheme) &&
           url.host() == provider_id_) {
         return true;

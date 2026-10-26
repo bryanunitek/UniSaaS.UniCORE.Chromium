@@ -36,7 +36,10 @@
 #import "ios/chrome/browser/autofill/model/form_input_accessory_view_handler.h"
 #import "ios/chrome/browser/autofill/model/form_suggestion_client.h"
 #import "ios/chrome/browser/autofill/model/manual_fill_virtual_card_cache.h"
+#import "ios/chrome/browser/level_up/model/level_up_service.h"
+#import "ios/chrome/browser/level_up/model/level_up_service_factory.h"
 #import "ios/chrome/browser/passwords/model/password_tab_helper.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/security_alert_commands.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_event.h"
@@ -76,6 +79,21 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
   return type == autofill::SuggestionType::kAddressEntry ||
          type == autofill::SuggestionType::kVirtualCreditCardEntry ||
          type == autofill::SuggestionType::kCreditCardEntry;
+}
+
+// Increments LevelUp password autofilled stat for the given web state.
+void RecordPasswordAutofilledStat(web::WebState* webState) {
+  if (!webState) {
+    return;
+  }
+  ProfileIOS* profile =
+      ProfileIOS::FromBrowserState(webState->GetBrowserState());
+  LevelUpService* levelUpService =
+      LevelUpServiceFactory::GetForProfile(profile);
+  if (levelUpService) {
+    levelUpService->IncrementStatValue(
+        LevelUpTaskStatType::kPasswordsAutofilled);
+  }
 }
 
 }  // namespace
@@ -164,7 +182,9 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
 
 - (void)userDidPickContent:(NSString*)content
              passwordField:(BOOL)passwordField
-             requiresHTTPS:(BOOL)requiresHTTPS {
+             requiresHTTPS:(BOOL)requiresHTTPS
+           jumpToNextField:(BOOL)jumpToNextField
+                actionType:(autofill::mojom::FieldActionType)actionType {
   if (passwordField) {
     UmaHistogramEnumeration("IOS.Reauth.Password.ManualFallback",
                             ReauthenticationEvent::kAttempt);
@@ -179,7 +199,10 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
         .field_id = [self lastFocusedElementUniqueID],
         .form_id = [self lastFocusedElementFormIdentifier]};
     if (!passwordField) {
-      [self fillLastSelectedFieldWithString:content context:context];
+      [self fillLastSelectedFieldWithString:content
+                                    context:context
+                            jumpToNextField:jumpToNextField
+                                 actionType:actionType];
       return;
     }
 
@@ -190,7 +213,10 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
         if (result != ReauthenticationResult::kFailure) {
           UmaHistogramEnumeration("IOS.Reauth.Password.ManualFallback",
                                   ReauthenticationEvent::kSuccess);
-          [weakSelf fillLastSelectedFieldWithString:content context:context];
+          [weakSelf fillLastSelectedFieldWithString:content
+                                            context:context
+                                    jumpToNextField:jumpToNextField
+                                         actionType:actionType];
         } else {
           UmaHistogramEnumeration("IOS.Reauth.Password.ManualFallback",
                                   ReauthenticationEvent::kFailure);
@@ -204,7 +230,10 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
     } else {
       UmaHistogramEnumeration("IOS.Reauth.Password.ManualFallback",
                               ReauthenticationEvent::kMissingPasscode);
-      [self fillLastSelectedFieldWithString:content context:context];
+      [self fillLastSelectedFieldWithString:content
+                                    context:context
+                            jumpToNextField:jumpToNextField
+                                 actionType:actionType];
     }
   }
 }
@@ -317,13 +346,15 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
                     inFrame:(web::WebFrame*)frame {
   // Ignore non-user triggered events so page JS can't control which fields
   // receive data.
-  if (params.type != "focus" || !params.has_user_gesture) {
+  if (params.type != autofill::FormActivityParams::ActivityType::kFocus ||
+      !params.has_user_gesture) {
     return;
   }
   _lastFocusedElementParams = params;
   self.lastFocusedElementSecure =
       autofill::IsContextSecureForWebState(webState);
-  self.lastFocusedElementPasswordField = params.field_type == "password";
+  self.lastFocusedElementPasswordField =
+      params.field_type == autofill::FormActivityParams::FieldType::kObfuscated;
   DCHECK(frame);
   self.lastFocusedElementFrameIdentifier = frame->GetFrameId();
   if (!GURL::SchemeIsCryptographic(frame->GetSecurityOrigin().scheme())) {
@@ -342,9 +373,13 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
   return feature->GetWebFramesManager(webState)->GetFrameWithId(frameId);
 }
 
-// Injects the passed string to the active field and jumps to the next field.
+// Injects the passed `string` to the active field and optionally jumps to the
+// next field.
 - (void)fillLastSelectedFieldWithString:(NSString*)string
-                                context:(const AutofillTargetContext&)context {
+                                context:(const AutofillTargetContext&)context
+                        jumpToNextField:(BOOL)jumpToNextField
+                             actionType:
+                                 (autofill::mojom::FieldActionType)actionType {
   if (!_webStateList) {
     return;
   }
@@ -359,14 +394,21 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
     return;
   }
 
+  RecordPasswordAutofilledStat(activeWebState);
+
   base::DictValue data;
   data.Set("renderer_id", static_cast<int>(context.field_id.value()));
   data.Set("value", base::SysNSStringToUTF16(string));
+  data.Set("should_insert_at_cursor",
+           actionType ==
+               autofill::mojom::FieldActionType::kReplaceSelectionForAtMemory);
   __weak __typeof(self) weakSelf = self;
   NSString* frameID = base::SysUTF8ToNSString(context.frame_id);
   autofill::AutofillJavaScriptFeature::GetInstance()->FillActiveFormField(
       activeWebFrame, std::move(data), base::BindOnce(^(BOOL success) {
-        [weakSelf jumpToNextFieldWithFrameId:frameID];
+        if (jumpToNextField) {
+          [weakSelf jumpToNextFieldWithFrameId:frameID];
+        }
       }));
 }
 
@@ -489,6 +531,7 @@ bool IsSupportedSuggestion(FormSuggestion* suggestion) {
                          triggerSubmission:NO
                          completionHandler:^(BOOL success) {
                            if (success) {
+                             RecordPasswordAutofilledStat(webState);
                              [weakSelf announceFormWasFilled];
                            }
                          }];

@@ -6,6 +6,7 @@
 #include "services/network/public/cpp/cors/cors.h"
 
 #include <algorithm>
+#include <limits>
 #include <set>
 #include <string_view>
 #include <vector>
@@ -94,9 +95,7 @@ bool IsCorsUnsafeRequestHeaderByte(char c) {
 }
 
 // |value| should be lower case.
-bool IsCorsSafelistedLowerCaseContentType(
-    const std::string& value,
-    bool is_ad_auction_trusted_signals_request) {
+bool IsCorsSafelistedLowerCaseContentType(const std::string& value) {
   DCHECK_EQ(value, base::ToLowerASCII(value));
   if (std::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte)) {
     return false;
@@ -110,9 +109,7 @@ bool IsCorsSafelistedLowerCaseContentType(
   }
 
   return *mime_type == "application/x-www-form-urlencoded" ||
-         *mime_type == "multipart/form-data" || *mime_type == "text/plain" ||
-         (*mime_type == "message/ad-auction-trusted-signals-request" &&
-          is_ad_auction_trusted_signals_request);
+         *mime_type == "multipart/form-data" || *mime_type == "text/plain";
 }
 
 bool IsNoCorsSafelistedHeaderNameLowerCase(const std::string& lower_name) {
@@ -252,14 +249,25 @@ bool IsCorsSafelistedMethod(const std::string& method) {
 }
 
 bool IsCorsSafelistedContentType(const std::string& media_type) {
-  return IsCorsSafelistedLowerCaseContentType(
-      base::ToLowerASCII(media_type),
-      /*is_ad_auction_trusted_signals_request=*/false);
+  return IsCorsSafelistedLowerCaseContentType(base::ToLowerASCII(media_type));
 }
 
-bool IsCorsSafelistedHeader(const std::string& name,
-                            const std::string& value,
-                            bool is_ad_auction_trusted_signals_request) {
+bool IsCorsSafelistedResponseHeaderName(std::string_view name) {
+  // https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name
+  static constexpr auto kSafelistedResponseHeaderNames =
+      base::MakeFixedFlatSet<std::string_view>({
+          "cache-control",
+          "content-language",
+          "content-length",
+          "content-type",
+          "expires",
+          "last-modified",
+          "pragma",
+      });
+  return kSafelistedResponseHeaderNames.contains(base::ToLowerASCII(name));
+}
+
+bool IsCorsSafelistedHeader(const std::string& name, const std::string& value) {
   const std::string lower_name = base::ToLowerASCII(name);
 
   // If |value|’s length is greater than 128, then return false.
@@ -281,12 +289,7 @@ bool IsCorsSafelistedHeader(const std::string& name,
       // https://fetch.spec.whatwg.org/#simple-range-header-value
       "range",
 
-      // [Block 2 - Intervention]
-      // Treat 'Intervention' as a CORS-safelisted header, since it is added by
-      // Chrome when an intervention is (or may be) applied.
-      "intervention",
-
-      // [Block 3 - Client Hints]
+      // [Block 2 - Client Hints]
       // Headers in this section are included in the order listed by:
       // services/network/public/mojom/web_client_hints_types.mojom
       // These four were deprecated and replaced by variants with a `sec-ch-`
@@ -358,10 +361,18 @@ bool IsCorsSafelistedHeader(const std::string& name,
   });
 
   // Check if the name of the header to send is safe.
-  if (!safe_names.contains(lower_name))
+  if (!safe_names.contains(lower_name)) {
+    // Emergency kill-switch: if the feature is disabled, allow 'intervention'
+    // without value validation as legacy behavior.
+    if (lower_name == "intervention" &&
+        !base::FeatureList::IsEnabled(
+            features::kDisallowInterventionInCorsSafelistedHeaders)) {
+      return true;
+    }
     return false;
+  }
 
-  // Verify the values of all non-secure headers (except `intervention`).
+  // Verify the values of all non-secure headers.
   const std::string lower_value = base::ToLowerASCII(value);
   if (lower_name == "accept") {
     return !std::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte);
@@ -373,25 +384,26 @@ bool IsCorsSafelistedHeader(const std::string& name,
              c == 0x2d || c == 0x2e || c == 0x3b || c == 0x3d;
     });
   } else if (lower_name == "content-type") {
-    return IsCorsSafelistedLowerCaseContentType(
-        lower_value, is_ad_auction_trusted_signals_request);
+    return IsCorsSafelistedLowerCaseContentType(lower_value);
   } else if (lower_name == "range") {
-    // A 'simple' range value is of the following form: 'bytes=\d+-(\d+)?'.
-    // We can use the regular range header parser with the following caveats:
-    // - No space characters or trailing commas
-    // - Only one range is provided
-    // - No suffix (bytes=-x) ranges
-
-    if (std::ranges::any_of(lower_value, [](char c) {
-          return net::HttpUtil::IsLWS(c) || c == ',';
-        })) {
+    // A 'simple' range value is defined in the Fetch specification:
+    // https://fetch.spec.whatwg.org/#simple-range-header-value
+    // It must have an exact case-sensitive "bytes=" prefix. We also impose
+    // extra restrictions:
+    //  - No whitespace (e.g. space or trailing comma).
+    //  - No suffix ranges (e.g. bytes=-500).
+    std::optional<net::HttpByteRange> range =
+        net::HttpUtil::ParseFetchSingleRange(value,
+                                             /*allow_whitespace=*/false);
+    if (!range || range->IsSuffixByteRange() || !range->IsValid()) {
       return false;
     }
-    std::vector<net::HttpByteRange> ranges;
-    if (!net::HttpUtil::ParseRangeHeader(lower_value, &ranges))
+    // `ParseFetchSingleRange()` will saturate values too high to represent as
+    // `int64_t` to `std::numeric_limits<int64_t>::max()`.
+    if (range->first_byte_position() == std::numeric_limits<int64_t>::max() ||
+        range->last_byte_position() == std::numeric_limits<int64_t>::max()) {
       return false;
-    if (ranges.size() != 1 || ranges[0].IsSuffixByteRange())
-      return false;
+    }
     return true;
   } else if (lower_name == "device-memory" || lower_name == "dpr" ||
              lower_name == "downlink") {
@@ -443,9 +455,7 @@ std::vector<std::string> CorsUnsafeRequestHeaderNames(
   size_t safe_list_value_size = 0;
 
   for (const auto& header : headers) {
-    if (!IsCorsSafelistedHeader(
-            header.key, header.value,
-            /*is_ad_auction_trusted_signals_request=*/false)) {
+    if (!IsCorsSafelistedHeader(header.key, header.value)) {
       header_names.push_back(base::ToLowerASCII(header.key));
     } else {
       potentially_unsafe_names.push_back(base::ToLowerASCII(header.key));

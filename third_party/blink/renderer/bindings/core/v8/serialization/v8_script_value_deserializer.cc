@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/numerics/checked_math.h"
 #include "base/rand_util.h"
 #include "base/time/time.h"
@@ -78,10 +79,38 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(ScriptValueDeserializationEvent)
+enum class ScriptValueDeserializationEvent {
+  kAttempted = 0,
+  kSucceeded = 1,
+  kFailed = 2,
+  kBlobLookupFailed = 3,
+  kFileLookupFailed = 4,
+  kBlobDeserializationSucceeded = 5,
+  kFileDeserializationSucceeded = 6,
+  kMaxValue = kFileDeserializationSucceeded,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:ScriptValueDeserializationEvent)
+
+void RecordDeserializationEvent(const String& histogram_variant,
+                                ScriptValueDeserializationEvent event) {
+  if (histogram_variant.IsNull()) {
+    return;
+  }
+  CHECK(!histogram_variant.empty());
+  base::UmaHistogramEnumeration(
+      StrCat({"Blink.ScriptValueDeserialization.", histogram_variant}).Utf8(),
+      event);
+}
 
 // The "Blink-side" serialization version, which defines how Blink will behave
 // during the serialization process. The serialization format has two
@@ -192,8 +221,16 @@ V8ScriptValueDeserializer::V8ScriptValueDeserializer(
                     serialized_script_value_->DataLengthInBytes(),
                     this),
       transferred_message_ports_(options.message_ports),
-      blob_info_array_(options.blob_info) {
+      blob_info_array_(options.blob_info),
+      histogram_variant_(options.histogram_variant) {
   deserializer_.SetSupportsLegacyWireFormat(true);
+  if (!serialized_script_value_->SharedImmutableArrayBuffersContents()
+           .empty()) {
+    auto* execution_context = ExecutionContext::From(script_state_);
+    CHECK(execution_context->SharedArrayBufferTransferAllowed());
+    deserializer_.SetSharedImmutableBackingStores(
+        serialized_script_value_->ReleaseSharedImmutableBackingStores());
+  }
 }
 
 v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
@@ -206,6 +243,9 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   v8::EscapableHandleScope scope(isolate);
   v8::TryCatch try_catch(isolate);
   v8::Local<v8::Context> context = script_state_->GetContext();
+
+  RecordDeserializationEvent(histogram_variant_,
+                             ScriptValueDeserializationEvent::kAttempted);
 
   size_t version_envelope_size =
       ReadVersionEnvelope(serialized_script_value_.get(), &version_);
@@ -221,6 +261,8 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   bool read_header;
   if (!deserializer_.ReadHeader(context).To(&read_header)) {
     has_error_ = true;
+    RecordDeserializationEvent(histogram_variant_,
+                               ScriptValueDeserializationEvent::kFailed);
     return v8::Null(isolate);
   }
   DCHECK(read_header);
@@ -236,6 +278,8 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   v8::Local<v8::Value> value;
   if (!deserializer_.ReadValue(context).ToLocal(&value)) {
     has_error_ = true;
+    RecordDeserializationEvent(histogram_variant_,
+                               ScriptValueDeserializationEvent::kFailed);
     return v8::Null(isolate);
   }
 
@@ -243,6 +287,8 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
     // TODO(caseq): consider additionally gating this on payload size.
     MaskDeserializationTimings(value.As<v8::Object>());
   }
+  RecordDeserializationEvent(histogram_variant_,
+                             ScriptValueDeserializationEvent::kSucceeded);
   return scope.Escape(value);
 }
 
@@ -341,6 +387,10 @@ void V8ScriptValueDeserializer::MaskDeserializationTimings(
     v8::ValueDeserializer deserializer(isolate, serialized->Data(),
                                        serialized->DataLengthInBytes(),
                                        &delegate);
+    if (!serialized->SharedImmutableArrayBuffersContents().empty()) {
+      deserializer.SetSharedImmutableBackingStores(
+          serialized->ReleaseSharedImmutableBackingStores());
+    }
 
     uint32_t version;
     size_t version_envelope_size =
@@ -426,14 +476,25 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
     case kBlobTag: {
       if (Version() < 3)
         return nullptr;
-      String uuid, type;
+      String blob_index_string, type;
       uint64_t size;
-      if (!ReadUTF8String(&uuid) || !ReadUTF8String(&type) ||
-          !ReadUint64(&size))
+      if (!ReadUTF8String(&blob_index_string) || !ReadUTF8String(&type) ||
+          !ReadUint64(&size)) {
         return nullptr;
-      auto blob_handle = GetBlobDataHandle(uuid);
-      if (!blob_handle)
+      }
+      auto blob_handle = GetBlobDataHandle(blob_index_string);
+      if (!blob_handle) {
+        RecordDeserializationEvent(
+            histogram_variant_,
+            ScriptValueDeserializationEvent::kBlobLookupFailed);
         return nullptr;
+      }
+      if (!recorded_blob_deserialization_success_) {
+        recorded_blob_deserialization_success_ = true;
+        RecordDeserializationEvent(
+            histogram_variant_,
+            ScriptValueDeserializationEvent::kBlobDeserializationSucceeded);
+      }
       return MakeGarbageCollected<Blob>(std::move(blob_handle));
     }
     case kBlobIndexTag: {
@@ -835,10 +896,9 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
           has_requested ? std::make_optional(requested) : std::nullopt);
     }
     case kFencedFrameConfigTag: {
-      String url_string, shared_storage_context, urn_uuid_string;
-      uint32_t has_shared_storage_context, has_container_size, container_width,
-          container_height, has_content_size, content_width, content_height,
-          freeze_initial_size;
+      String url_string, urn_uuid_string;
+      uint32_t has_container_size, container_width, container_height,
+          has_content_size, content_width, content_height, freeze_initial_size;
       KURL url;
       std::optional<KURL> urn_uuid;
       FencedFrameConfig::AttributeVisibility url_visibility;
@@ -849,17 +909,6 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
               &url_visibility) ||
           !ReadUint32(&freeze_initial_size) ||
           !ReadUTF8String(&urn_uuid_string)) {
-        return nullptr;
-      }
-
-      // `ReadUTF8String` does not distinguish between null and empty strings.
-      // Adding the `has_shared_storage_context` bit allows us to get this
-      // functionality back, which is needed for Shared Storage.
-      if (!ReadUint32(&has_shared_storage_context)) {
-        return nullptr;
-      }
-      if (has_shared_storage_context &&
-          !ReadUTF8String(&shared_storage_context)) {
         return nullptr;
       }
 
@@ -894,9 +943,9 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
         return nullptr;
       }
 
-      return FencedFrameConfig::Create(url, shared_storage_context, urn_uuid,
-                                       container_size, content_size,
-                                       url_visibility, freeze_initial_size);
+      return FencedFrameConfig::Create(url, urn_uuid, container_size,
+                                       content_size, url_visibility,
+                                       freeze_initial_size);
     }
     default:
       break;
@@ -907,15 +956,16 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
 File* V8ScriptValueDeserializer::ReadFile() {
   if (Version() < 3)
     return nullptr;
-  String path, name, relative_path, uuid, type;
+  String path, name, relative_path, blob_index_string, type;
   uint32_t has_snapshot = 0;
   uint64_t size = 0;
   std::optional<base::Time> last_modified;
   if (!ReadUTF8String(&path) || (Version() >= 4 && !ReadUTF8String(&name)) ||
       (Version() >= 4 && !ReadUTF8String(&relative_path)) ||
-      !ReadUTF8String(&uuid) || !ReadUTF8String(&type) ||
-      (Version() >= 4 && !ReadUint32(&has_snapshot)))
+      !ReadUTF8String(&blob_index_string) || !ReadUTF8String(&type) ||
+      (Version() >= 4 && !ReadUint32(&has_snapshot))) {
     return nullptr;
+  }
   if (has_snapshot) {
     double last_modified_ms = 0;
     if (!ReadUint64(&size) || !ReadDouble(&last_modified_ms))
@@ -932,9 +982,18 @@ File* V8ScriptValueDeserializer::ReadFile() {
     return nullptr;
   const File::UserVisibility user_visibility =
       is_user_visible ? File::kIsUserVisible : File::kIsNotUserVisible;
-  auto blob_handle = GetBlobDataHandle(uuid);
-  if (!blob_handle)
+  auto blob_handle = GetBlobDataHandle(blob_index_string);
+  if (!blob_handle) {
+    RecordDeserializationEvent(
+        histogram_variant_, ScriptValueDeserializationEvent::kFileLookupFailed);
     return nullptr;
+  }
+  if (!recorded_file_deserialization_success_) {
+    recorded_file_deserialization_success_ = true;
+    RecordDeserializationEvent(
+        histogram_variant_,
+        ScriptValueDeserializationEvent::kFileDeserializationSucceeded);
+  }
   return File::CreateFromSerialization(path, name, relative_path,
                                        user_visibility, has_snapshot, size,
                                        last_modified, std::move(blob_handle));
@@ -963,13 +1022,18 @@ DOMRectReadOnly* V8ScriptValueDeserializer::ReadDOMRectReadOnly() {
 }
 
 scoped_refptr<BlobDataHandle> V8ScriptValueDeserializer::GetBlobDataHandle(
-    const String& uuid) {
-  BlobDataHandleMap& handles = serialized_script_value_->BlobDataHandles();
-  BlobDataHandleMap::const_iterator it = handles.find(uuid);
-  if (it != handles.end())
-    return it->value;
-
-  return nullptr;
+    const String& blob_index_string) {
+  // The key used to be a UUID, now it is an index. We don't have to worry about
+  // deserialization failing for UUIDs that were previously stored to disk
+  // because UUID lookup always failed in disk storage contexts anyway.
+  const BlobDataHandleArray& handles =
+      serialized_script_value_->BlobDataHandles();
+  std::optional<uint32_t> blob_index =
+      StringToUint(blob_index_string, NumberParsingOptions());
+  if (!blob_index || *blob_index >= handles.size()) {
+    return nullptr;
+  }
+  return handles[static_cast<wtf_size_t>(*blob_index)];
 }
 
 v8::MaybeLocal<v8::Object> V8ScriptValueDeserializer::ReadHostObject(

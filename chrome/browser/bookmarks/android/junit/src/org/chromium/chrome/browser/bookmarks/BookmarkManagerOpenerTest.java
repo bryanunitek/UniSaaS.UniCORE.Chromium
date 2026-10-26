@@ -9,7 +9,6 @@ import static org.junit.Assert.assertEquals;
 import android.app.Activity;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -18,10 +17,8 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileResolver;
@@ -30,9 +27,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.ui.base.TestActivity;
 
 /** Unit tests for {@link BookmarkManagerOpener}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BookmarkManagerOpenerTest {
     @Rule
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
@@ -58,7 +53,6 @@ public class BookmarkManagerOpenerTest {
     }
 
     @Test
-    @SmallTest
     public void testReopeningBookmarkManagerRecordsMetric() {
         BookmarkUtils.setLastUsedUrl("https://test.com");
         UserActionTester userActionTester = new UserActionTester();

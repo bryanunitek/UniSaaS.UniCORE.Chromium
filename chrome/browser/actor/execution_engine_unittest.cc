@@ -4,33 +4,37 @@
 
 #include "chrome/browser/actor/execution_engine.h"
 
+#include <algorithm>
+#include <initializer_list>
 #include <optional>
+#include <string>
+#include <string_view>
 
+#include "base/files/scoped_temp_dir.h"
 #include "base/strings/strcat.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/mock_callback.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "base/timer/elapsed_timer.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
-#include "chrome/browser/actor/actor_keyed_service_factory.h"
-#include "chrome/browser/actor/actor_tab_data.h"
+#include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/autofill_selection_dialog_event_handler.h"
 #include "chrome/browser/actor/enterprise_policy_checker.h"
-#include "chrome/browser/actor/tool_request_variant.h"
+#include "chrome/browser/actor/site_policy.h"
 #include "chrome/browser/actor/tools/click_tool_request.h"
-#include "chrome/browser/actor/tools/fake_tool.h"
 #include "chrome/browser/actor/tools/fake_tool_request.h"
-#include "chrome/browser/actor/tools/tool.h"
 #include "chrome/browser/actor/tools/tool_request.h"
+#include "chrome/browser/actor/tools/wait_tool.h"
 #include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/browser/actor/ui/test_support/mock_event_dispatcher.h"
+#include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
 #include "chrome/common/actor_webui.mojom.h"
@@ -39,17 +43,20 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/actor/core/actor_features.h"
-#include "components/actor/core/safety_list_manager.h"
+#include "components/actor/core/actor_switches.h"
 #include "components/actor/core/shared_types.h"
 #include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
+#include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
+#include "components/optimization_guide/core/optimization_guide_features.h"
+#include "components/optimization_guide/proto/hints.pb.h"
 #include "components/page_content_annotations/content/mojom/page_stability.mojom.h"
 #include "components/tabs/public/mock_tab_interface.h"
-#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/navigation_simulator.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
+#include "net/http/http_response_headers.h"
 #include "pdf/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -61,8 +68,10 @@ namespace actor {
 
 using ::optimization_guide::proto::Actions;
 using testing::_;
+using testing::Conditional;
 using testing::Eq;
 using testing::Field;
+using testing::Not;
 using testing::Property;
 using testing::VariantWith;
 using ChangeTaskState = ui::UiEventDispatcher::ChangeTaskState;
@@ -185,7 +194,7 @@ class FakeChromeRenderFrame : public chrome::mojom::ChromeRenderFrame {
       bool supports_paint_stability) override {}
   void CancelTool(const TaskId& task_id) override {}
   void GetCrossDocumentScriptToolResult(
-      const base::UnguessableToken& execution_id,
+      const blink::ToolInvocationToken& execution_id,
       GetCrossDocumentScriptToolResultCallback callback) override {
     std::move(callback).Run("");
   }
@@ -221,53 +230,45 @@ class ExecutionEngineTest : public ChromeRenderViewHostTestHarness {
     ChromeRenderViewHostTestHarness::SetUp();
     AssociateTabInterface();
 
-    // ExecutionEngine & ActorTask use separate UiEventDispatcher objects, so
-    // we create separate mocks for each.
     std::unique_ptr<ui::UiEventDispatcher> ui_event_dispatcher =
-        ui::NewMockUiEventDispatcher();
-    std::unique_ptr<ui::UiEventDispatcher> task_ui_event_dispatcher =
         ui::NewMockUiEventDispatcher();
     mock_ui_event_dispatcher_ =
         static_cast<ui::MockUiEventDispatcher*>(ui_event_dispatcher.get());
-    task_mock_ui_event_dispatcher_ =
-        static_cast<ui::MockUiEventDispatcher*>(task_ui_event_dispatcher.get());
-
-    ScopedExecutionEngineFactory scoped_execution_engine_factory(
-        base::BindLambdaForTesting([&](actor::ActorTask& task) {
-          CHECK(ui_event_dispatcher);
-          return actor::ExecutionEngine::CreateForTesting(
-              task, std::move(ui_event_dispatcher));
-        }));
 
     task_ = ActorTask::CreateForTesting(
         *ActorKeyedService::Get(profile()), TaskId(1),
-        std::move(task_ui_event_dispatcher),
+        std::move(ui_event_dispatcher),
         /*options=*/nullptr, TestTaskSourceInfo(), &no_enterprise_checker_,
         mock_actor_task_delegate_.GetWeakPtr());
 
-    for (auto& mock :
-         {mock_ui_event_dispatcher_, task_mock_ui_event_dispatcher_}) {
-      ON_CALL(*mock, OnPreTool)
-          .WillByDefault(
-              UiEventDispatcherCallback<ToolRequest>(base::BindRepeating(
-                  MakeOkResult, /*requires_page_stabilization=*/true)));
-      ON_CALL(*mock, OnPostTool)
-          .WillByDefault(
-              UiEventDispatcherCallback<ToolRequest>(base::BindRepeating(
-                  MakeOkResult, /*requires_page_stabilization=*/true)));
-      ON_CALL(*mock, OnActorTaskAsyncChange)
-          .WillByDefault(UiEventDispatcherCallback<
-                         ui::UiEventDispatcher::ActorTaskAsyncChange>(
-              base::BindRepeating(MakeOkResult,
-                                  /*requires_page_stabilization=*/true)));
-    }
+    ON_CALL(*mock_ui_event_dispatcher_, OnPreTool)
+        .WillByDefault(
+            UiEventDispatcherCallback<ToolRequest>(base::BindRepeating(
+                MakeOkResult, /*requires_page_stabilization=*/true)));
+    ON_CALL(*mock_ui_event_dispatcher_, OnPostTool)
+        .WillByDefault(
+            UiEventDispatcherCallback<ToolRequest>(base::BindRepeating(
+                MakeOkResult, /*requires_page_stabilization=*/true)));
+    ON_CALL(*mock_ui_event_dispatcher_, OnActorTaskAsyncChange)
+        .WillByDefault(UiEventDispatcherCallback<
+                       ui::UiEventDispatcher::ActorTaskAsyncChange>(
+            base::BindRepeating(MakeOkResult,
+                                /*requires_page_stabilization=*/true)));
+
+    ON_CALL(mock_actor_task_delegate_, RequestToShowUserConfirmationDialog)
+        .WillByDefault([](TaskId, const url::Origin&, bool,
+                          ActorTaskDelegate::UserConfirmationDialogCallback
+                              callback) {
+          std::move(callback).Run(
+              webui::mojom::UserConfirmationDialogResponse::New(
+                  webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                      true)));
+        });
   }
 
   void TearDown() override {
     testing::Mock::VerifyAndClearExpectations(mock_ui_event_dispatcher_);
-    testing::Mock::VerifyAndClearExpectations(task_mock_ui_event_dispatcher_);
     mock_ui_event_dispatcher_ = nullptr;
-    task_mock_ui_event_dispatcher_ = nullptr;
     if (!task_->IsCompleted()) {
       task_->Stop(kTabDetached);
     }
@@ -288,8 +289,8 @@ class ExecutionEngineTest : public ChromeRenderViewHostTestHarness {
                          .document_identifier = document_identifier});
       std::unique_ptr<ToolRequest> request =
           std::make_unique<actor::ClickToolRequest>(
-              GetTab()->GetHandle(), target, mojom::ClickType::kLeft,
-              mojom::ClickCount::kSingle);
+              ActorSurfaceHandle::From(GetTab()->GetHandle()), target,
+              mojom::ClickType::kLeft, mojom::ClickCount::kSingle);
       return request;
     });
   }
@@ -328,7 +329,6 @@ class ExecutionEngineTest : public ChromeRenderViewHostTestHarness {
   FakeChromeRenderFrame fake_chrome_render_frame_;
   std::unique_ptr<ActorTask> task_;
   raw_ptr<ui::MockUiEventDispatcher> mock_ui_event_dispatcher_;
-  raw_ptr<ui::MockUiEventDispatcher> task_mock_ui_event_dispatcher_;
   testing::NiceMock<MockActorTaskDelegate> mock_actor_task_delegate_;
 
  private:
@@ -352,17 +352,17 @@ TEST_F(ExecutionEngineTest, MAYBE_ActSucceedsOnSupportedUrl) {
               OnPostTool(Property(&ToolRequest::JournalEvent, Eq("Click")), _))
       .Times(1);
   EXPECT_CALL(
-      *task_mock_ui_event_dispatcher_,
+      *mock_ui_event_dispatcher_,
       OnActorTaskSyncChange(VariantWith<ChangeTaskState>(AllOf(
           Field(&ChangeTaskState::old_state, ActorTask::State::kCreated),
           Field(&ChangeTaskState::new_state, ActorTask::State::kActing)))))
       .Times(1);
   EXPECT_CALL(
-      *task_mock_ui_event_dispatcher_,
+      *mock_ui_event_dispatcher_,
       OnActorTaskSyncChange(VariantWith<ChangeTaskState>(AllOf(
           Field(&ChangeTaskState::old_state, ActorTask::State::kActing),
           Field(&ChangeTaskState::new_state, ActorTask::State::kReflecting)))));
-  EXPECT_CALL(*task_mock_ui_event_dispatcher_,
+  EXPECT_CALL(*mock_ui_event_dispatcher_,
               OnActorTaskAsyncChange(VariantWith<AddTab>(_), _))
       .Times(1);
   EXPECT_TRUE(
@@ -420,7 +420,7 @@ TEST_F(ExecutionEngineTest, MAYBE_UiOnPostToolFails) {
 #define MAYBE_ActFailsWhenAddTabFails ActFailsWhenAddTabFails
 #endif
 TEST_F(ExecutionEngineTest, MAYBE_ActFailsWhenAddTabFails) {
-  EXPECT_CALL(*task_mock_ui_event_dispatcher_,
+  EXPECT_CALL(*mock_ui_event_dispatcher_,
               OnActorTaskAsyncChange(VariantWith<AddTab>(_), _))
       .WillOnce(UiEventDispatcherCallback<
                 ui::UiEventDispatcher::ActorTaskAsyncChange>(
@@ -560,12 +560,12 @@ TEST_F(ExecutionEngineTest, MAYBE_ActorTaskCompletedHistogram) {
   const base::TimeDelta task_duration = base::Milliseconds(123);
   task_environment()->FastForwardBy(task_duration);
 
-  EXPECT_CALL(*task_mock_ui_event_dispatcher_,
+  EXPECT_CALL(*mock_ui_event_dispatcher_,
               OnActorTaskSyncChange(
                   VariantWith<ui::MockUiEventDispatcher::RemoveTab>(_)))
       .Times(testing::AnyNumber());
   EXPECT_CALL(
-      *task_mock_ui_event_dispatcher_,
+      *mock_ui_event_dispatcher_,
       OnActorTaskSyncChange(VariantWith<StopTask>(AllOf(
           Field(&StopTask::task_id, task_->id()),
           Field(&StopTask::final_state, ActorTask::State::kFinished),
@@ -1071,12 +1071,11 @@ TEST_F(ExecutionEngineNavigationGatingTest,
   content::MockNavigationHandle navigation_handle(kDestinationUrl, main_rfh());
   navigation_handle.set_initiator_origin(kInitiatorOrigin);
 
-  base::test::TestFuture<bool> future;
-  EXPECT_EQ(task_->GetExecutionEngine().ShouldDeferNavigation(
-                navigation_handle, future.GetCallback()),
-            content::NavigationThrottle::DEFER);
+  base::test::TestFuture<MayActOnUrlBlockReason> future;
+  task_->GetExecutionEngine().ShouldNavigationCommit(navigation_handle,
+                                                     future.GetCallback());
 
-  EXPECT_TRUE(future.Get());
+  EXPECT_EQ(future.Get(), MayActOnUrlBlockReason::kAllowed);
 
   histograms_.ExpectUniqueSample(
       "Actor.NavigationGating.GatingDecision2",
@@ -1107,17 +1106,681 @@ TEST_F(ExecutionEngineNavigationGatingTest,
 
   content::MockNavigationHandle navigation_handle(kDestinationUrl, main_rfh());
 
-  base::test::TestFuture<bool> future;
-  EXPECT_EQ(task_->GetExecutionEngine().ShouldDeferNavigation(
-                navigation_handle, future.GetCallback()),
-            content::NavigationThrottle::DEFER);
+  base::test::TestFuture<MayActOnUrlBlockReason> future;
+  task_->GetExecutionEngine().ShouldNavigationCommit(navigation_handle,
+                                                     future.GetCallback());
 
-  EXPECT_TRUE(future.Get());
+  EXPECT_EQ(future.Get(), MayActOnUrlBlockReason::kAllowed);
 
   // Verify that SameOriginSource is true, indicating it used the precursor
   // origin.
   histograms_.ExpectUniqueSample("Actor.NavigationGating.SameOriginSource",
                                  /*sample=*/true, /*expected_bucket_count=*/1);
+}
+
+class ExecutionEngineUrlGatingTest : public ChromeRenderViewHostTestHarness {
+ public:
+  ExecutionEngineUrlGatingTest() = default;
+  ~ExecutionEngineUrlGatingTest() override = default;
+
+  void SetUp() override {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kGlicActor,
+         optimization_guide::features::kOptimizationHints},
+        {});
+
+    ChromeRenderViewHostTestHarness::SetUp();
+
+    mock_optimization_guide_keyed_service_ = static_cast<
+        MockOptimizationGuideKeyedService*>(
+        OptimizationGuideKeyedServiceFactory::GetInstance()
+            ->SetTestingFactoryAndUse(
+                profile(),
+                base::BindOnce(
+                    &ExecutionEngineUrlGatingTest::CreateOptimizationService)));
+
+    // Simulate the component loading, as the implementation checks it, but the
+    // actual outcomes are determined by the mock.
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    optimization_guide::OptimizationHintsComponentUpdateListener::GetInstance()
+        ->MaybeUpdateHintsComponent(
+            {base::Version("123"),
+             temp_dir_.GetPath().Append(FILE_PATH_LITERAL("dont_care"))});
+
+    ON_CALL(mock_actor_task_delegate_, RequestToShowUserConfirmationDialog)
+        .WillByDefault([](TaskId, const url::Origin&, bool,
+                          ActorTaskDelegate::UserConfirmationDialogCallback
+                              callback) {
+          std::move(callback).Run(
+              webui::mojom::UserConfirmationDialogResponse::New(
+                  webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                      false)));
+        });
+  }
+
+  void TearDown() override {
+    if (task_) {
+      if (!task_->IsCompleted()) {
+        task_->Stop(ActorTask::StoppedReason::kTabDetached);
+      }
+      task_.reset();
+    }
+    mock_optimization_guide_keyed_service_ = nullptr;
+    ChromeRenderViewHostTestHarness::TearDown();
+  }
+
+ protected:
+  void SetExpectedOptimizationGuideCall(
+      const GURL& url,
+      optimization_guide::OptimizationGuideDecision result) {
+    EXPECT_CALL(
+        *mock_optimization_guide_keyed_service_,
+        CanApplyOptimization(
+            url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+            testing::An<
+                optimization_guide::OptimizationGuideDecisionCallback>()))
+        .WillOnce(base::test::RunOnceCallback<2>(
+            result, optimization_guide::OptimizationMetadata{}));
+  }
+
+  ActorTask& GetTask() {
+    GetExecutionEngine();
+    CHECK(task_);
+    return *task_;
+  }
+
+  void CheckUrl(const GURL& url,
+                bool expected_allowed,
+                EnterprisePolicyChecker::UrlBlockReason enterprise_reason) {
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                               url);
+
+    TestTabState tab_state(web_contents());
+
+    task_policy_checker_.set_reason(enterprise_reason);
+
+    WaitTool::SetNoDelayForTesting();
+    std::unique_ptr<ToolRequest> tool_request = MakeWaitRequest(&tab_state.tab);
+    ASSERT_TRUE(tool_request->RequiresUrlCheckInCurrentTab());
+    ActResultFuture result;
+    GetTask().Act(ToRequestList(tool_request), result.GetCallback());
+
+    // The result should not be provided synchronously.
+    EXPECT_FALSE(result.IsReady());
+    ASSERT_EQ(result.Get().size(), 1u);
+    EXPECT_THAT(result.Get()[0].result->code,
+                Conditional(expected_allowed, mojom::ActionResultCode::kOk,
+                            Not(mojom::ActionResultCode::kOk)));
+  }
+
+  void CheckUrl(const GURL& url, bool expected_allowed) {
+    return CheckUrl(url, expected_allowed,
+                    EnterprisePolicyChecker::UrlBlockReason::kNotBlocked);
+  }
+
+  raw_ptr<MockOptimizationGuideKeyedService>
+      mock_optimization_guide_keyed_service_;
+
+  // Lazily creates a real ActorTask/ExecutionEngine and returns its engine, so
+  // that IsAcceptableNavigationDestination tests can exercise the
+  // OriginGatingChecker-backed path.
+  ExecutionEngine& GetExecutionEngine(
+      ExecutionEngine::AllowedSchemes allowed_schemes =
+          ExecutionEngine::AllowedSchemes::kRequireHttpsOrHttp) {
+    if (!task_) {
+      std::unique_ptr<ui::UiEventDispatcher> task_dispatcher =
+          ui::NewMockUiEventDispatcher();
+      auto* mock =
+          static_cast<ui::MockUiEventDispatcher*>(task_dispatcher.get());
+      ON_CALL(*mock, OnPreTool)
+          .WillByDefault(
+              UiEventDispatcherCallback<ToolRequest>(base::BindRepeating(
+                  MakeOkResult, /*requires_page_stabilization=*/true)));
+      ON_CALL(*mock, OnPostTool)
+          .WillByDefault(
+              UiEventDispatcherCallback<ToolRequest>(base::BindRepeating(
+                  MakeOkResult, /*requires_page_stabilization=*/true)));
+      ON_CALL(*mock, OnActorTaskAsyncChange)
+          .WillByDefault(UiEventDispatcherCallback<
+                         ui::UiEventDispatcher::ActorTaskAsyncChange>(
+              base::BindRepeating(MakeOkResult,
+                                  /*requires_page_stabilization=*/true)));
+      task_ = ActorTask::CreateForTesting(
+          *ActorKeyedService::Get(profile()), TaskId(1),
+          std::move(task_dispatcher),
+          /*options=*/nullptr, TestTaskSourceInfo(), &task_policy_checker_,
+          mock_actor_task_delegate_.GetWeakPtr(),
+          /*initial_invocation_source=*/std::nullopt, allowed_schemes);
+    }
+    return task_->GetExecutionEngine();
+  }
+
+  MockActorTaskDelegate& mock_actor_task_delegate() {
+    return mock_actor_task_delegate_;
+  }
+
+ private:
+  static std::unique_ptr<KeyedService> CreateOptimizationService(
+      content::BrowserContext* context) {
+    return std::make_unique<MockOptimizationGuideKeyedService>();
+  }
+
+  std::unique_ptr<ActorTask> task_;
+  MockPolicyChecker task_policy_checker_{
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked};
+  testing::NiceMock<MockActorTaskDelegate> mock_actor_task_delegate_;
+
+  base::test::ScopedFeatureList scoped_feature_list_;
+  base::ScopedTempDir temp_dir_;
+};
+
+// TODO(crbug.com/480230075): Crashing on Android.
+#if BUILDFLAG(SKIP_ANDROID_UNMIGRATED_ACTOR_FILES)
+#define MAYBE_LocalhostPromptsForUserConfirmation \
+  DISABLED_LocalhostPromptsForUserConfirmation
+#else
+#define MAYBE_LocalhostPromptsForUserConfirmation \
+  LocalhostPromptsForUserConfirmation
+#endif
+TEST_F(ExecutionEngineUrlGatingTest,
+       MAYBE_LocalhostPromptsForUserConfirmation) {
+  const GURL localhost_url("http://localhost/");
+  EXPECT_CALL(mock_actor_task_delegate(),
+              RequestToShowUserConfirmationDialog(
+                  _, url::Origin::Create(localhost_url), _, _))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          webui::mojom::UserConfirmationDialogResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+  CheckUrl(localhost_url, /*expected_allowed=*/true);
+
+  const GURL ipv4_url("http://127.0.0.1/");
+  EXPECT_CALL(mock_actor_task_delegate(),
+              RequestToShowUserConfirmationDialog(
+                  _, url::Origin::Create(ipv4_url), _, _))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          webui::mojom::UserConfirmationDialogResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+  CheckUrl(ipv4_url, /*expected_allowed=*/true);
+
+  const GURL ipv6_url("http://[::1]/");
+  EXPECT_CALL(mock_actor_task_delegate(),
+              RequestToShowUserConfirmationDialog(
+                  _, url::Origin::Create(ipv6_url), _, _))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          webui::mojom::UserConfirmationDialogResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+  CheckUrl(ipv6_url, /*expected_allowed=*/true);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, AllowAboutBlank) {
+  CheckUrl(GURL(url::kAboutBlankURL), true);
+}
+
+// TODO(crbug.com/480230075): Crashing on Android.
+#if BUILDFLAG(SKIP_ANDROID_UNMIGRATED_ACTOR_FILES)
+#define MAYBE_BlockIpAddress DISABLED_BlockIpAddress
+#else
+#define MAYBE_BlockIpAddress BlockIpAddress
+#endif
+TEST_F(ExecutionEngineUrlGatingTest, MAYBE_BlockIpAddress) {
+  CheckUrl(GURL("https://8.8.8.8/"), false);
+  CheckUrl(GURL("https://[2001:4860:4860::8888]/"), false);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, BlockNonHTTPScheme) {
+  CheckUrl(GURL("file:///my_file"), false);
+  CheckUrl(GURL("file://localhost/tmp"), false);
+  CheckUrl(GURL(chrome::kChromeUIVersionURL), false);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, BlockInsecureHTTP) {
+  CheckUrl(GURL("http://a.test/"), false);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, InsecureHTTPAllowedWhenSpecified) {
+  base::test::TestFuture<MayActOnUrlBlockReason> allowed;
+  GetExecutionEngine().IsAcceptableNavigationDestination(GURL("http://a.test/"),
+                                                         allowed.GetCallback());
+  EXPECT_EQ(allowed.Get(), MayActOnUrlBlockReason::kAllowed);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, AllowIfNotBlocked) {
+  const GURL url("https://c.test/");
+  SetExpectedOptimizationGuideCall(
+      url, optimization_guide::OptimizationGuideDecision::kTrue);
+  CheckUrl(url, true);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, BlockIfInBlocklist) {
+  const GURL url("https://c.test/");
+  SetExpectedOptimizationGuideCall(
+      url, optimization_guide::OptimizationGuideDecision::kFalse);
+  CheckUrl(url, false);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, AllowIfNotBlockedForOriginGating) {
+  const GURL url("https://c.test/");
+  SetExpectedOptimizationGuideCall(
+      url, optimization_guide::OptimizationGuideDecision::kTrue);
+  base::test::TestFuture<bool> got_may_act;
+  EXPECT_THAT(MaybeCheckOptimizationGuideForSensitiveUrl(
+                  url, profile(), got_may_act.GetCallback()),
+              base::test::HasValue());
+  EXPECT_TRUE(got_may_act.Get());
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, BlockIfInBlocklistForOriginGating) {
+  const GURL url("https://c.test/");
+  SetExpectedOptimizationGuideCall(
+      url, optimization_guide::OptimizationGuideDecision::kFalse);
+  base::test::TestFuture<bool> got_may_act;
+  EXPECT_THAT(MaybeCheckOptimizationGuideForSensitiveUrl(
+                  url, profile(), got_may_act.GetCallback()),
+              base::test::HasValue());
+  EXPECT_FALSE(got_may_act.Get());
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, AllowedOriginsFromNavigationGating) {
+  const GURL url("https://c.test/");
+
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(2)
+      .WillOnce(base::test::RunOnceCallback<2>(
+          optimization_guide::OptimizationGuideDecision::kFalse,
+          optimization_guide::OptimizationMetadata{}))
+      .WillOnce(base::test::RunOnceCallback<2>(
+          optimization_guide::OptimizationGuideDecision::kTrue,
+          optimization_guide::OptimizationMetadata{}));
+
+  CheckUrl(url, false);
+
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+    CheckUrl(url, true);
+  }
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, AllowIfDecisionUnknown) {
+  const GURL url("https://c.test/");
+  SetExpectedOptimizationGuideCall(
+      url, optimization_guide::OptimizationGuideDecision::kUnknown);
+  CheckUrl(url, true);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, EnterprisePolicyBlock) {
+  const GURL url("https://c.test/");
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+  CheckUrl(url, false,
+           EnterprisePolicyChecker::UrlBlockReason::kExplicitlyBlocked);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, EnterprisePolicyOrder) {
+  const GURL https_blocked_url("https://c.test/");
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          https_blocked_url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+  // Enterprise policy overrules the opt guide blocklist for a particular site.
+  CheckUrl(https_blocked_url, true,
+           EnterprisePolicyChecker::UrlBlockReason::kExplicitlyAllowed);
+  // Enterprise policy can't be used to bypass invariants like supported
+  // schemes.
+  CheckUrl(GURL("file:///my_file"), false,
+           EnterprisePolicyChecker::UrlBlockReason::kExplicitlyAllowed);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       IsAcceptableNavigationDestination_AllowedByCache) {
+  const GURL url("https://c.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+
+  ExecutionEngine& engine = GetExecutionEngine();
+  engine.GetOriginGatingChecker().AllowNavigationTo(url::Origin::Create(url),
+                                                    /*is_user_confirmed=*/true);
+  base::test::TestFuture<MayActOnUrlBlockReason> allowed;
+  engine.IsAcceptableNavigationDestination(url, allowed.GetCallback());
+  // Allowed by cache.
+  EXPECT_EQ(allowed.Get(), MayActOnUrlBlockReason::kAllowed);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       IsAcceptableNavigationDestination_FailsOpen) {
+  const GURL url("https://c.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+
+  base::test::TestFuture<MayActOnUrlBlockReason> allowed;
+  GetExecutionEngine().IsAcceptableNavigationDestination(url,
+                                                         allowed.GetCallback());
+  // Not allowed by the cache, but the policy fails open (without consulting
+  // the sensitive sites list).
+  EXPECT_EQ(allowed.Get(), MayActOnUrlBlockReason::kAllowed);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       IsAcceptableNavigationDestination_DefaultRejectsNewTabPage) {
+  base::test::TestFuture<MayActOnUrlBlockReason> allowed;
+  GetExecutionEngine().IsAcceptableNavigationDestination(
+      GURL("chrome://newtab/"), allowed.GetCallback());
+  EXPECT_EQ(allowed.Get(), MayActOnUrlBlockReason::kWrongScheme);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       IsAcceptableNavigationDestination_TtcAllowsNewTabPage) {
+  base::test::TestFuture<MayActOnUrlBlockReason> allowed_ntp;
+  GetExecutionEngine(ExecutionEngine::AllowedSchemes::kRequireHttpsOrHttpOrNtp)
+      .IsAcceptableNavigationDestination(GURL("chrome://newtab/"),
+                                         allowed_ntp.GetCallback());
+  EXPECT_EQ(allowed_ntp.Get(), MayActOnUrlBlockReason::kAllowed);
+
+  // Still rejects non-NTP chrome:// URLs.
+  base::test::TestFuture<MayActOnUrlBlockReason> allowed_settings;
+  GetExecutionEngine(ExecutionEngine::AllowedSchemes::kRequireHttpsOrHttpOrNtp)
+      .IsAcceptableNavigationDestination(GURL("chrome://settings/"),
+                                         allowed_settings.GetCallback());
+  EXPECT_EQ(allowed_settings.Get(), MayActOnUrlBlockReason::kWrongScheme);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest, SafetyChecksForNextAction_AllowedByCache) {
+  const GURL url("https://c.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+
+  GetExecutionEngine().GetOriginGatingChecker().AllowNavigationTo(
+      url::Origin::Create(url), /*is_user_confirmed=*/true);
+  CheckUrl(url, /*expected_allowed=*/true);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       SafetyChecksForNextAction_PromptsForSensitiveSite) {
+  const GURL url("https://c.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  SetExpectedOptimizationGuideCall(
+      url, optimization_guide::OptimizationGuideDecision::kFalse);
+
+  EXPECT_CALL(
+      mock_actor_task_delegate(),
+      RequestToShowUserConfirmationDialog(_, url::Origin::Create(url),
+                                          /*for_blocklisted_origin=*/true, _))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          webui::mojom::UserConfirmationDialogResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+
+  CheckUrl(url, /*expected_allowed=*/true);
+
+  // Subsequent check for the same origin is allowed via cache without
+  // re-prompting.
+  EXPECT_CALL(mock_actor_task_delegate(),
+              RequestToShowUserConfirmationDialog(_, _, _, _))
+      .Times(0);
+  CheckUrl(url, /*expected_allowed=*/true);
+
+  // Subsequent check for a same-site subdomain is also allowed via cache
+  // without re-prompting.
+  const GURL sub_url("https://sub.c.test/");
+  CheckUrl(sub_url, /*expected_allowed=*/true);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       SafetyChecksForNextAction_PromptsForSensitiveSiteFromCommandLine) {
+  const GURL url("https://c.test/");
+  const GURL sub_url("https://sub.c.test/");
+  const GURL other_sub_url("https://sub.d.test/");
+  const GURL non_matching_url("https://other.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      switches::kActorSensitiveSites, "https://c.test,https://d.test");
+
+  // Matching URL prompts for confirmation without querying Optimization Guide.
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+
+  EXPECT_CALL(
+      mock_actor_task_delegate(),
+      RequestToShowUserConfirmationDialog(_, url::Origin::Create(url),
+                                          /*for_blocklisted_origin=*/true, _))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          webui::mojom::UserConfirmationDialogResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+
+  CheckUrl(url, /*expected_allowed=*/true);
+
+  // Subsequent check for the same origin is allowed via cache.
+  EXPECT_CALL(mock_actor_task_delegate(),
+              RequestToShowUserConfirmationDialog(_, _, _, _))
+      .Times(0);
+  CheckUrl(url, /*expected_allowed=*/true);
+
+  // Same-site subdomain is also allowed via cache without re-prompting.
+  CheckUrl(sub_url, /*expected_allowed=*/true);
+
+  // Same-site subdomain of an unconfirmed sensitive site matches SchemefulSite
+  // and prompts without Optimization Guide.
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      CanApplyOptimization(
+          other_sub_url, optimization_guide::proto::GLIC_ACTION_PAGE_BLOCK,
+          testing::An<optimization_guide::OptimizationGuideDecisionCallback>()))
+      .Times(0);
+  EXPECT_CALL(
+      mock_actor_task_delegate(),
+      RequestToShowUserConfirmationDialog(_, url::Origin::Create(other_sub_url),
+                                          /*for_blocklisted_origin=*/true, _))
+      .WillOnce(base::test::RunOnceCallback<3>(
+          webui::mojom::UserConfirmationDialogResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+  CheckUrl(other_sub_url, /*expected_allowed=*/true);
+
+  // Non-matching URL falls back to Optimization Guide.
+  SetExpectedOptimizationGuideCall(
+      non_matching_url, optimization_guide::OptimizationGuideDecision::kTrue);
+  CheckUrl(non_matching_url, /*expected_allowed=*/true);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       ShouldDeferNavigation_CrossOriginNonSensitiveAllowed) {
+  const GURL source_url("https://a.test/");
+  const GURL destination_url("https://b.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  SetExpectedOptimizationGuideCall(
+      destination_url, optimization_guide::OptimizationGuideDecision::kTrue);
+  EXPECT_CALL(
+      mock_actor_task_delegate(),
+      RequestToConfirmNavigation(_, url::Origin::Create(destination_url), _))
+      .WillOnce(base::test::RunOnceCallback<2>(
+          webui::mojom::NavigationConfirmationResponse::New(
+              webui::mojom::ConfirmationRequestResult::NewPermissionGranted(
+                  true))));
+
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             source_url);
+
+  content::MockNavigationHandle navigation_handle(destination_url, main_rfh());
+
+  base::test::TestFuture<MayActOnUrlBlockReason> future;
+  GetExecutionEngine().ShouldNavigationCommit(navigation_handle,
+                                              future.GetCallback());
+
+  EXPECT_EQ(future.Get(), MayActOnUrlBlockReason::kAllowed);
+}
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       ShouldDeferNavigation_CrossOriginSensitiveBlocked) {
+  const GURL source_url("https://a.test/");
+  const GURL destination_url("https://b.test/");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kGlicCrossOriginNavigationGating);
+
+  SetExpectedOptimizationGuideCall(
+      destination_url, optimization_guide::OptimizationGuideDecision::kFalse);
+
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             source_url);
+
+  content::MockNavigationHandle navigation_handle(destination_url, main_rfh());
+
+  base::test::TestFuture<MayActOnUrlBlockReason> future;
+  GetExecutionEngine().ShouldNavigationCommit(navigation_handle,
+                                              future.GetCallback());
+
+  EXPECT_EQ(future.Get(), MayActOnUrlBlockReason::kOptimizationGuideBlock);
+}
+
+struct MimeTestCase {
+  std::optional<std::string_view> content_type_header;
+  bool expected_allowed;
+};
+
+class ExecutionEngineMimeGatingTest
+    : public ExecutionEngineUrlGatingTest,
+      public testing::WithParamInterface<MimeTestCase> {
+ public:
+  std::optional<std::string_view> content_type_header() const {
+    return GetParam().content_type_header;
+  }
+
+  MayActOnUrlBlockReason expected_reason() const {
+    return GetParam().expected_allowed
+               ? MayActOnUrlBlockReason::kAllowed
+               : MayActOnUrlBlockReason::kDangerousMimeType;
+  }
+};
+
+TEST_P(ExecutionEngineMimeGatingTest, HandlesMimeTypes) {
+  const GURL source_url("https://example.com/");
+  const GURL destination_url("https://example.com/api");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kGlicCrossOriginNavigationGating,
+                            kGlicBlockNavigationToDangerousContentTypes},
+      /*disabled_features=*/{});
+
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             source_url);
+
+  content::MockNavigationHandle navigation_handle(destination_url, main_rfh());
+  navigation_handle.set_initiator_origin(url::Origin::Create(source_url));
+
+  net::HttpResponseHeaders::Builder builder(net::HttpVersion(1, 1), "200 OK");
+  if (content_type_header().has_value()) {
+    builder.AddHeader("Content-Type", *content_type_header());
+  }
+  navigation_handle.set_response_headers(builder.Build());
+
+  base::test::TestFuture<MayActOnUrlBlockReason> future;
+  GetExecutionEngine().ShouldNavigationCommit(navigation_handle,
+                                              future.GetCallback());
+
+  EXPECT_EQ(future.Get(), expected_reason());
+}
+
+INSTANTIATE_TEST_SUITE_P(,
+                         ExecutionEngineMimeGatingTest,
+                         testing::ValuesIn(std::initializer_list<MimeTestCase>{
+                             {"application/json", false},
+                             {"application/ld+json", false},
+                             {"application/x-javascript", false},
+                             {"application/hal+json", false},
+                             {"application/xml", false},
+                             {"text/csv", false},
+                             {"text/comma-separated-values", false},
+                             {"text/tsv", false},
+                             {"text/tab-separated-values", false},
+                             {"text/plain", true},
+                             {std::nullopt, true},
+                             {"text/html", true},
+                         }),
+                         [](const testing::TestParamInfo<MimeTestCase>& info) {
+                           std::string mime_type(
+                               info.param.content_type_header.value_or("null"));
+                           std::ranges::replace(mime_type, '/', '_');
+                           std::ranges::replace(mime_type, '+', '_');
+                           std::ranges::replace(mime_type, '-', '_');
+                           return mime_type;
+                         });
+
+TEST_F(ExecutionEngineUrlGatingTest,
+       ShouldDeferNavigation_DangerousMimeTypeFeatureDisabled) {
+  const GURL source_url("https://a.test/");
+  const GURL destination_url("https://a.test/data.json");
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kGlicCrossOriginNavigationGating},
+      /*disabled_features=*/{kGlicBlockNavigationToDangerousContentTypes});
+
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             source_url);
+
+  content::MockNavigationHandle navigation_handle(destination_url, main_rfh());
+  net::HttpResponseHeaders::Builder builder(net::HttpVersion(1, 1), "200 OK");
+  builder.AddHeader("Content-Type", "application/json");
+  navigation_handle.set_response_headers(builder.Build());
+
+  base::test::TestFuture<MayActOnUrlBlockReason> future;
+  GetExecutionEngine().ShouldNavigationCommit(navigation_handle,
+                                              future.GetCallback());
+
+  EXPECT_EQ(future.Get(), MayActOnUrlBlockReason::kAllowed);
 }
 
 }  // namespace

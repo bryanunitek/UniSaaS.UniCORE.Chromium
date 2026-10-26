@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.download;
 
+import androidx.annotation.VisibleForTesting;
+
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
@@ -13,14 +15,15 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.pdf.PdfPage;
 import org.chromium.chrome.browser.pdf.PdfUtils;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.navigation_controller.LoadURLType;
 import org.chromium.ui.base.MimeTypeUtils;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 /** Java counterpart of android DownloadController. Owned by native. */
 @NullMarked
@@ -76,12 +79,12 @@ public class DownloadController {
      */
     @CalledByNative
     private static void enqueueAndroidDownloadManagerRequest(
-            GURL url,
+            @JniType("GURL") GURL url,
             @JniType("std::string") String userAgent,
             @JniType("std::u16string") String fileName,
             @JniType("std::string") String mimeType,
             @JniType("std::string") String cookie,
-            GURL referrer) {
+            @JniType("GURL") GURL referrer) {
         DownloadInfo downloadInfo =
                 new DownloadInfo.Builder()
                         .setUrl(url)
@@ -105,8 +108,20 @@ public class DownloadController {
                 .enqueueNewDownload(new DownloadItem(true, info), true);
     }
 
+    /**
+     * Called when an inline PDF download starts, to show the pdf native page for it.
+     *
+     * @param tab Tab the download was triggered from.
+     * @param downloadInfo Information about the download.
+     * @param initiatorOrigin Origin that initiated the download, or null if the download was
+     *     browser-initiated (e.g. from the omnibox, a bookmark or an external intent).
+     */
     @CalledByNative
-    private static void onPdfDownloadStarted(Tab tab, DownloadInfo downloadInfo) {
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    static void onPdfDownloadStarted(
+            Tab tab,
+            DownloadInfo downloadInfo,
+            @JniType("std::optional<url::Origin>") @Nullable Origin initiatorOrigin) {
         if (!PdfUtils.shouldOpenPdfInline(tab.isIncognito())) {
             return;
         }
@@ -119,12 +134,15 @@ public class DownloadController {
         param.setIsPdf(true);
         param.setLoadType(LoadURLType.PDF_ANDROID);
         param.setVirtualUrlForSpecialCases(downloadUrl);
+        // Record the initiator so that the re-download triggered by a later history traversal or
+        // tab restore keeps the SameSite context of the navigation that caused this download.
+        param.setInitiatorOrigin(initiatorOrigin);
         // If the download url matches the tab’s url, avoid duplicate navigation entries by
         // replacing the current entry.
         param.setShouldReplaceCurrentEntry(downloadUrl.equals(tab.getUrl().getSpec()));
         tab.loadUrl(param);
         tab.addObserver(
-                new EmptyTabObserver() {
+                new TabObserver() {
                     @Override
                     public void onDestroyed(Tab tab) {
                         DownloadControllerJni.get()
@@ -135,7 +153,9 @@ public class DownloadController {
 
     @NativeMethods
     interface Natives {
-        void downloadUrl(@JniType("std::string") String url, @Nullable WebContents webContents);
+        void downloadUrl(
+                @JniType("std::string") String url,
+                @JniType("content::WebContents*") @Nullable WebContents webContents);
 
         void cancelDownload(
                 @JniType("Profile*") Profile profile,

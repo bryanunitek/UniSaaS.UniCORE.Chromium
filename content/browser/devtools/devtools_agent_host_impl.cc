@@ -16,18 +16,15 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_view_util.h"
-#include "content/browser/devtools/auction_worklet_devtools_agent_host.h"
 #include "content/browser/devtools/dedicated_worker_devtools_agent_host.h"
 #include "content/browser/devtools/devtools_http_handler.h"
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/devtools_pipe_handler.h"
 #include "content/browser/devtools/devtools_stream_file.h"
 #include "content/browser/devtools/forwarding_agent_host.h"
-#include "content/browser/devtools/mojom_devtools_agent_host.h"
 #include "content/browser/devtools/render_frame_devtools_agent_host.h"
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
 #include "content/browser/devtools/service_worker_devtools_manager.h"
-#include "content/browser/devtools/shared_storage_worklet_devtools_manager.h"
 #include "content/browser/devtools/shared_worker_devtools_agent_host.h"
 #include "content/browser/devtools/shared_worker_devtools_manager.h"
 #include "content/browser/devtools/web_contents_devtools_agent_host.h"
@@ -38,7 +35,6 @@
 #include "content/public/browser/devtools_external_agent_proxy_delegate.h"
 #include "content/public/browser/devtools_manager_delegate.h"
 #include "content/public/browser/devtools_socket_factory.h"
-#include "content/public/browser/mojom_devtools_agent_host_delegate.h"
 #include "content/public/common/content_switches.h"
 #include "net/base/ip_endpoint.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -148,8 +144,6 @@ const char DevToolsAgentHost::kTypeDedicatedWorker[] = "worker";
 const char DevToolsAgentHost::kTypeSharedWorker[] = "shared_worker";
 const char DevToolsAgentHost::kTypeServiceWorker[] = "service_worker";
 const char DevToolsAgentHost::kTypeWorklet[] = "worklet";
-const char DevToolsAgentHost::kTypeSharedStorageWorklet[] =
-    "shared_storage_worklet";
 const char DevToolsAgentHost::kTypeBrowser[] = "browser";
 const char DevToolsAgentHost::kTypeGuest[] = "webview";
 const char DevToolsAgentHost::kTypeOther[] = "other";
@@ -194,14 +188,9 @@ DevToolsAgentHost::List DevToolsAgentHost::GetOrCreateAll() {
   for (const auto& host : service_list)
     result.push_back(host);
 
-  SharedStorageWorkletDevToolsManager::GetInstance()->AddAllAgentHosts(&result);
-
   DedicatedWorkerDevToolsAgentHost::AddAllAgentHosts(&result);
   RenderFrameDevToolsAgentHost::AddAllAgentHosts(&result);
   WebContentsDevToolsAgentHost::AddAllAgentHosts(&result);
-
-  AuctionWorkletDevToolsAgentHostManager::GetInstance().GetAll(&result);
-  MojomDevToolsAgentHost::GetAll(&result);
 
 #if DCHECK_IS_ON()
   for (auto it : result) {
@@ -296,17 +285,6 @@ scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::Forward(
   if (result)
     return result;
   return new ForwardingAgentHost(id, std::move(delegate));
-}
-
-// static
-scoped_refptr<DevToolsAgentHost> DevToolsAgentHost::CreateForMojomDelegate(
-    const std::string& id,
-    std::unique_ptr<MojomDevToolsAgentHostDelegate> delegate) {
-  scoped_refptr<DevToolsAgentHost> result = DevToolsAgentHost::GetForId(id);
-  if (result) {
-    return result;
-  }
-  return new MojomDevToolsAgentHost(id, std::move(delegate));
 }
 
 DevToolsSession* DevToolsAgentHostImpl::SessionByClient(

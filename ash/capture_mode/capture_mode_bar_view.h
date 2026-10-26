@@ -18,7 +18,7 @@ class CaptureModeSourceView;
 class CaptureModeTypeView;
 class PillButton;
 class IconButton;
-class SystemShadow;
+class SystemDecoration;
 
 // The contents of the capture bar can change based on the session initiation
 // type. Different clients of capture mode require different capture mode bar.
@@ -47,10 +47,6 @@ class ASH_EXPORT CaptureModeBarView : public views::View {
 
   bool IsEventOnSettingsButton(gfx::Point screen_location) const;
 
-  // views::View:
-  void AddedToWidget() override;
-  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
-
  protected:
   CaptureModeBarView();
 
@@ -64,7 +60,7 @@ class ASH_EXPORT CaptureModeBarView : public views::View {
 
   raw_ptr<IconButton> settings_button_ = nullptr;
   raw_ptr<IconButton> close_button_ = nullptr;
-  std::unique_ptr<SystemShadow> shadow_;
+  std::unique_ptr<SystemDecoration> shadow_;
 };
 
 }  // namespace ash

@@ -14,13 +14,13 @@ android_resources("java_resources") {
     "java/res/drawable-xxxhdpi/btn_tabswitcher_modern.png",
     "java/res/drawable/new_tab_icon.xml",
     "java/res/values/dimens.xml",
-    "java/res/values/ids.xml",
     "java/res/values/styles.xml",
   ]
 }
 
 android_library("java") {
   sources = [
+    "java/src/org/chromium/chrome/browser/ui/android/bars_common/CaptureSafeRippleDrawable.java",
     "java/src/org/chromium/chrome/browser/ui/android/bars_common/IphIntent.java",
     "java/src/org/chromium/chrome/browser/ui/android/bars_common/TabSwitcherButtonView.java",
     "java/src/org/chromium/chrome/browser/ui/android/bars_common/TabSwitcherDrawable.java",

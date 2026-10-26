@@ -8,8 +8,13 @@
 interface HTMLInstallElement : HTMLElement {
   [HTMLConstructor] constructor();
 
-  [CEReactions, Reflect, URL] attribute USVString? installURL;
-  [CEReactions, Reflect, URL] attribute USVString? manifestId;
-};
+  [CEReactions, Reflect, URL] attribute USVString manifestId;
+  // Relative URLs are resolved against the current document's base URL.
+  [CEReactions, Reflect, URL] attribute USVString manifest;
 
-HTMLInstallElement includes InPagePermissionMixin;
+  // Declare only the members needed by <install> instead of including
+  // InPagePermissionMixin; permission state and prompt events don't apply.
+  [MeasureAs=CapabilityElementIsValid] readonly attribute boolean isValid;
+  [MeasureAs=CapabilityElementInvalidReason] readonly attribute DOMString invalidReason;
+  [MeasureAs=CapabilityElementOnValidationStatusChange] attribute EventHandler onvalidationstatuschange;
+};

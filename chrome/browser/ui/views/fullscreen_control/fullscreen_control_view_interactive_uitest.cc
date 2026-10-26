@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/fullscreen_control/fullscreen_control_view.h"
+
 #include <memory>
 #include <optional>
 #include <utility>
@@ -12,15 +14,17 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_host.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/fullscreen_control/fullscreen_control_view.h"
 #include "content/public/browser/permission_result.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -56,10 +60,18 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
       delete;
 
   void SetUp() override {
-    // It is important to disable system keyboard lock as low-level test
-    // utilities may install a keyboard hook to listen for keyboard events and
-    // having an active system hook may cause issues with that mechanism.
-    scoped_feature_list_.InitWithFeatures({}, {features::kSystemKeyboardLock});
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // It is important to disable system keyboard lock as low-level test
+        // utilities may install a keyboard hook to listen for keyboard events
+        // and having an active system hook may cause issues with that
+        // mechanism.
+        {features::kSystemKeyboardLock,
+         // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
+         // Omnibox is enabled and then remove these two Features.
+         omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
     InProcessBrowserTest::SetUp();
   }
 
@@ -100,7 +112,7 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
 
  protected:
   FullscreenControlHost* GetFullscreenControlHost() {
-    return browser()->GetFeatures().fullscreen_control_host();
+    return FullscreenControlHost::From(browser());
   }
 
   FullscreenControlView* GetFullscreenControlView() {
@@ -112,7 +124,7 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
   }
 
   ExclusiveAccessManager* GetExclusiveAccessManager() {
-    return browser()->GetFeatures().exclusive_access_manager();
+    return ExclusiveAccessManager::From(browser());
   }
 
   ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() {
@@ -126,14 +138,14 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
   }
 
   content::WebContents* GetActiveWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   bool IsPopupCreated() { return GetFullscreenControlHost()->IsPopupCreated(); }
 
   void EnterActiveTabFullscreen() {
     ui_test_utils::FullscreenWaiter waiter(browser(), {.tab_fullscreen = true});
-    auto* delegate = static_cast<content::WebContentsDelegate*>(browser());
+    auto* delegate = BrowserWebContentsDelegate::From(browser());
     delegate->EnterFullscreenModeForTab(
         GetActiveWebContents()->GetPrimaryMainFrame(), {});
     waiter.Wait();
@@ -206,7 +218,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
                        NoFullscreenPopupOnBrowserFullscreen) {
   EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  DCHECK(browser_view);
+  CHECK(browser_view, base::NotFatalUntil::M162);
   ASSERT_TRUE(browser_view->IsFullscreen());
   ASSERT_FALSE(IsPopupCreated());
 }
@@ -245,8 +257,8 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, MouseExitFullscreen) {
 }
 
 // TODO(https://crbug.com/374539762): Deflake and re-enable on Windows.
-// TODO(crbug.com/524685085): Flaky on ASAN.
-#if BUILDFLAG(IS_WIN) || defined(ADDRESS_SANITIZER)
+// TODO(crbug.com/524685085): Flaky on Linux and ASAN.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || defined(ADDRESS_SANITIZER)
 #define MAYBE_MouseExitFullscreen_TimeoutAndRetrigger \
   DISABLED_MouseExitFullscreen_TimeoutAndRetrigger
 #else
@@ -438,8 +450,8 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, MAYBE_TouchPopupInteraction) {
   ASSERT_FALSE(browser_view->IsFullscreen());
 }
 
-// TODO(crbug.com/524685085): Flaky on ASAN.
-#if defined(ADDRESS_SANITIZER)
+// TODO(crbug.com/524685085): Flaky on ASAN and Linux.
+#if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_LINUX)
 #define MAYBE_MouseAndTouchInteraction_NoInterference \
   DISABLED_MouseAndTouchInteraction_NoInterference
 #else

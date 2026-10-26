@@ -39,6 +39,7 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/functional/function_ref.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "cc/test/fake_layer_tree_frame_sink.h"
@@ -67,6 +68,7 @@
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
 #include "third_party/blink/renderer/core/testing/scoped_mock_overlay_scrollbars.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/display/screen_info.h"
@@ -156,6 +158,11 @@ WebRemoteFrameImpl* CreateRemoteChild(WebRemoteFrame& parent,
                                       const WebString& name = WebString(),
                                       scoped_refptr<SecurityOrigin> = nullptr);
 
+// Helper that wraps WebFrame::Swap(WebLocalFrame*) in a FrameSwapScope with
+// LocalFrame::AttachViewToOwner, as would normally occur in the course of
+// FrameLoader::CommitNavigation.
+bool SwapLocalFrame(WebFrame* old_frame, WebLocalFrame* new_local_frame);
+
 // Call Swap with a `new_remote_frame` stubbing out the mojo channels if
 // necessary.
 void SwapRemoteFrame(
@@ -170,6 +177,14 @@ class TestWebFrameWidgetHost : public mojom::blink::WidgetHost,
   size_t CursorSetCount() const { return cursor_set_count_; }
   size_t VirtualKeyboardRequestCount() const {
     return virtual_keyboard_request_count_;
+  }
+  size_t TextInputStateChangedCount() const {
+    return text_input_state_changed_count_;
+  }
+  // The most recent state received via TextInputStateChanged(), or null if
+  // none has been received.
+  const ui::mojom::blink::TextInputStatePtr& LastTextInputState() const {
+    return last_text_input_state_;
   }
 
   // mojom::blink::WidgetHost overrides:
@@ -227,6 +242,8 @@ class TestWebFrameWidgetHost : public mojom::blink::WidgetHost,
  private:
   size_t cursor_set_count_ = 0;
   size_t virtual_keyboard_request_count_ = 0;
+  size_t text_input_state_changed_count_ = 0;
+  ui::mojom::blink::TextInputStatePtr last_text_input_state_;
   mojo::Remote<mojom::blink::RenderInputRouterClient> client_remote_;
   mojo::AssociatedReceiver<mojom::blink::WidgetHost> receiver_{this};
   mojo::AssociatedReceiver<mojom::blink::FrameWidgetHost> frame_receiver_{this};
@@ -301,7 +318,8 @@ class TestWebFrameWidget : public WebFrameWidgetImpl {
   bool AllowsScrollResampling() override { return false; }
 
  private:
-  cc::FakeLayerTreeFrameSink* last_created_frame_sink_ = nullptr;
+  raw_ptr<cc::FakeLayerTreeFrameSink, UnprotectedInRelease | DanglingUntriaged>
+      last_created_frame_sink_ = nullptr;
   Vector<std::unique_ptr<blink::WebCoalescedInputEvent>>
       injected_scroll_events_;
   std::unique_ptr<TestWidgetInputHandlerHost> widget_input_handler_host_;
@@ -498,7 +516,7 @@ class WebViewHelper : public ScopedMockOverlayScrollbars {
 
   bool viewport_enabled_ = false;
 
-  WebViewImpl* web_view_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_;
 
   std::unique_ptr<WebViewClient> owned_web_view_client_;
 
@@ -507,7 +525,7 @@ class WebViewHelper : public ScopedMockOverlayScrollbars {
   CreateWebFrameWidgetCallback create_widget_callback_wrapper_;
 
   // The Platform should not change during the lifetime of the test!
-  Platform* const platform_;
+  const raw_ptr<Platform, UnprotectedInRelease | DanglingUntriaged> platform_;
 };
 
 // Minimal implementation of WebLocalFrameClient needed for unit tests that load
@@ -521,7 +539,7 @@ class TestWebFrameClient : public WebLocalFrameClient {
   static bool IsLoading() { return loads_in_progress_ > 0; }
   Vector<String>& ConsoleMessages() { return console_messages_; }
 
-  WebNavigationControl* Frame() const { return frame_; }
+  WebLocalFrameImpl* Frame() const { return frame_.Get(); }
   // Pass ownership of the TestWebFrameClient to |self_owned| here if the
   // TestWebFrameClient should delete itself on frame detach.
   void Bind(WebLocalFrame*,
@@ -564,7 +582,6 @@ class TestWebFrameClient : public WebLocalFrameClient {
       network::mojom::blink::WebSandboxFlags,
       const SessionStorageNamespaceId&,
       bool& consumed_user_gesture,
-      const std::optional<Impression>&,
       const std::optional<WebPictureInPictureWindowOptions>&,
       const WebURL& base_url) override;
 
@@ -603,9 +620,8 @@ class TestWebFrameClient : public WebLocalFrameClient {
 
   std::unique_ptr<AssociatedInterfaceProvider> associated_interface_provider_;
 
-  // This is null from when the client is created until it is initialized with
-  // Bind().
-  WebNavigationControl* frame_ = nullptr;
+  // This is null until the client is initialized with Bind().
+  WeakPersistent<WebLocalFrameImpl> frame_;
 
   base::CancelableOnceCallback<void()> navigation_callback_;
   WebEffectiveConnectionType effective_connection_type_;

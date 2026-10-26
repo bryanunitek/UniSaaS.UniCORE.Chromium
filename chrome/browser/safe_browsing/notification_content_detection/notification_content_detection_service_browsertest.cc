@@ -4,6 +4,7 @@
 
 #include "components/safe_browsing/content/browser/notification_content_detection/notification_content_detection_service.h"
 
+#include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -23,11 +24,11 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/safe_browsing/notification_content_detection/notification_content_detection_service_factory.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/model_quality/test_model_quality_logs_uploader_service.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/prefs/pref_service.h"
@@ -70,8 +71,9 @@ class NotificationContentDetectionBrowserTestBase
     // Test UI manager and test database manager should be set before
     // the browser is started but after threads are created.
     factory_.SetTestUIManager(new TestSafeBrowsingUIManager());
-    factory_.SetTestDatabaseManager(new FakeSafeBrowsingDatabaseManager(
-        content::GetUIThreadTaskRunner({})));
+    factory_.SetTestDatabaseManager(
+        base::MakeRefCounted<FakeSafeBrowsingDatabaseManager>(
+            content::GetUIThreadTaskRunner({})));
     SafeBrowsingService::RegisterFactory(&factory_);
   }
 
@@ -204,9 +206,10 @@ class NotificationContentDetectionBrowserTest
         ->OverrideTargetModelForTesting(
             optimization_guide::proto::
                 OPTIMIZATION_TARGET_NOTIFICATION_CONTENT_DETECTION,
-            optimization_guide::TestModelInfoBuilder()
-                .SetModelFilePath(model_file_path)
-                .Build());
+            optimization_guide::ModelInfo{
+                .model_file_path = model_file_path,
+                .version = 123,
+            });
   }
 
  private:
@@ -619,7 +622,7 @@ IN_PROC_BROWSER_TEST_F(NotificationContentDetectionBrowserTest,
   // Setup enterprise allowlist.
   base::ListValue allowlist;
   allowlist.Append("enterprise-domain.com");
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kSafeBrowsingAllowlistDomains, std::move(allowlist));
 
   UpdateNotificationContentDetectionModel();
@@ -711,7 +714,7 @@ class NotificationContentDetectionLoggingEnabledBrowserTest
 
     base::RunLoop run_loop;
     browser()
-        ->profile()
+        ->GetProfile()
         ->GetStoragePartitionForUrl(origin)
         ->GetPlatformNotificationContext()
         ->WriteNotificationData(
@@ -828,7 +831,7 @@ IN_PROC_BROWSER_TEST_P(NotificationContentDetectionLoggingEnabledBrowserTest,
       std::make_unique<PersistentNotificationHandler>();
   handler->ReportUnwarnedNotificationAsSpam(
       GetNotificationId(/*is_allowlisted=*/true), GURL(kAllowlistedUrl),
-      browser()->profile());
+      browser()->GetProfile());
   ASSERT_TRUE(log_uploaded_signal.Wait());
   VerifyUniqueQualityLog(
       /*did_user_always_allow_url=*/false,
@@ -856,7 +859,7 @@ IN_PROC_BROWSER_TEST_P(NotificationContentDetectionLoggingEnabledBrowserTest,
       std::make_unique<PersistentNotificationHandler>();
   handler->ReportWarnedNotificationAsSpam(
       GetNotificationId(/*is_allowlisted=*/false), GURL(kNonAllowlistedUrl),
-      browser()->profile());
+      browser()->GetProfile());
   ASSERT_TRUE(log_uploaded_signal.Wait());
   VerifyUniqueQualityLog(
       /*did_user_always_allow_url=*/false,
@@ -884,7 +887,7 @@ IN_PROC_BROWSER_TEST_P(NotificationContentDetectionLoggingEnabledBrowserTest,
       std::make_unique<PersistentNotificationHandler>();
   handler->ReportNotificationAsSafe(GetNotificationId(/*is_allowlisted=*/false),
                                     GURL(kNonAllowlistedUrl),
-                                    browser()->profile());
+                                    browser()->GetProfile());
   ASSERT_TRUE(log_uploaded_signal.Wait());
   VerifyUniqueQualityLog(
       /*did_user_always_allow_url=*/false,

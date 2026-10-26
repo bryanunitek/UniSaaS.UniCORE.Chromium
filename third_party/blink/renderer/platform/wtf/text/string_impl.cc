@@ -25,6 +25,8 @@
 
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 
+#include <hwy/highway.h>
+
 #include <algorithm>
 #include <memory>
 
@@ -59,7 +61,7 @@ namespace {
 
 struct SameSizeAsStringImpl {
 #if DCHECK_IS_ON()
-  unsigned int ref_count_change_count;
+  wtf_size_t ref_count_change_count;
 #endif
   int fields[3];
 };
@@ -101,12 +103,12 @@ void CopyAndReplace(base::span<DestChar> dest,
 // Compute the new size for a string with the original length of `length` after
 // replacing `match_count` matches of `old_pattern_length` with
 // `new_pattern_length`. Used by the various Replace() variants.
-string_size_t ComputeSizeAfterReplacement(string_size_t length,
-                                          string_size_t match_count,
-                                          string_size_t old_pattern_length,
-                                          string_size_t new_pattern_length) {
-  const base::CheckedNumeric<string_size_t> checked_match_count(match_count);
-  base::CheckedNumeric<string_size_t> checked_new_size(length);
+wtf_size_t ComputeSizeAfterReplacement(wtf_size_t length,
+                                       wtf_size_t match_count,
+                                       wtf_size_t old_pattern_length,
+                                       wtf_size_t new_pattern_length) {
+  const base::CheckedNumeric<wtf_size_t> checked_match_count(match_count);
+  base::CheckedNumeric<wtf_size_t> checked_new_size(length);
   checked_new_size -= checked_match_count * old_pattern_length;
   checked_new_size += checked_match_count * new_pattern_length;
   return checked_new_size.ValueOrDie();
@@ -167,7 +169,7 @@ void StringImpl::DestroyIfNeeded() {
   }
 }
 
-unsigned StringImpl::ComputeAsciiFlags() const {
+uint32_t StringImpl::ComputeAsciiFlags() const {
   AsciiStringAttributes ascii_attributes = VisitCharacters(
       *this, [](auto chars) { return CharacterAttributes(chars); });
   uint32_t new_flags = AsciiStringAttributesToFlags(ascii_attributes);
@@ -272,8 +274,7 @@ StringImpl* StringImpl::CreateStatic(base::span<const char> string) {
   DCHECK(!string.empty());
   DCHECK(string.data());
 
-  unsigned hash =
-      StringHasher::ComputeHashAndMaskTop8Bits(string.data(), string.size());
+  uint32_t hash = HashString24(base::as_bytes(string));
 
   StaticStringsTable::const_iterator it = StaticStrings().find(hash);
   if (it != StaticStrings().end()) {
@@ -424,7 +425,7 @@ class StringImplAllocator {
   using ResultStringType = scoped_refptr<StringImpl>;
 
   template <typename CharType>
-  scoped_refptr<StringImpl> Alloc(string_size_t length,
+  scoped_refptr<StringImpl> Alloc(wtf_size_t length,
                                   base::span<CharType>& buffer) {
     return StringImpl::CreateUninitialized(length, buffer);
   }
@@ -467,21 +468,12 @@ scoped_refptr<StringImpl> StringImpl::FoldCase() {
     scoped_refptr<StringImpl> new_impl =
         StringImpl::CreateUninitialized(source16.size(), data16);
 
-    bool error;
-    const int32_t real_length = unicode::FoldCase(
-        data16.data(), static_cast<int32_t>(data16.size()), source16.data(),
-        static_cast<int32_t>(source16.size()), &error);
-    if (!error && real_length == static_cast<int32_t>(data16.size())) {
-      return new_impl;
+    std::optional<size_t> real_length = unicode::FoldCase(source16, data16);
+    if (real_length && *real_length != data16.size()) {
+      new_impl = StringImpl::CreateUninitialized(*real_length, data16);
+      real_length = unicode::FoldCase(source16, data16);
     }
-    new_impl = StringImpl::CreateUninitialized(real_length, data16);
-    unicode::FoldCase(data16.data(), static_cast<int32_t>(data16.size()),
-                      source16.data(), static_cast<int32_t>(source16.size()),
-                      &error);
-    if (error) {
-      return original_string;
-    }
-    return new_impl;
+    return real_length ? new_impl : original_string;
   };
 
   const bool is_ascii = ContainsOnlyAsciiOrEmpty();
@@ -733,6 +725,191 @@ const std::array<UChar, 256> StringImpl::kLatin1CaseFoldTable = {
     0x00fc, 0x00fd, 0x00fe, 0x00ff,
 };
 
+// The vectorized parts of StringImpl::CopyChars() and EqualIgnoringAsciiCase().
+// They are here and not in the header because <hwy/highway.h> is expensive to
+// include. See the comment at StringImpl::kMinLengthForSimd8.
+#if HWY_TARGET != HWY_SCALAR
+
+#if HWY_HAVE_CONSTEXPR_LANES
+
+static_assert(
+    StringImpl::kMinLengthForSimd8 ==
+    hwy::HWY_NAMESPACE::Lanes(hwy::HWY_NAMESPACE::FixedTag<uint8_t, 16>()));
+static_assert(
+    StringImpl::kMinLengthForSimd16 ==
+    hwy::HWY_NAMESPACE::Lanes(hwy::HWY_NAMESPACE::FixedTag<uint16_t, 8>()));
+
+#endif
+
+void StringImpl::CopyCharsSimd(base::span<UChar> destination,
+                               base::span<const LChar> source) {
+  namespace hw = hwy::HWY_NAMESPACE;
+
+  constexpr hw::FixedTag<uint16_t, 8> d16;
+  constexpr hw::FixedTag<uint8_t, 16> d8;
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d8);
+
+  const size_t length = source.size();
+  const LChar* src = source.data();
+  UChar* dst = destination.data();
+
+  // SAFETY: The SIMD code requires raw buffer access.
+  UNSAFE_BUFFERS({
+    size_t i = 0;
+    if (length >= kLanes) {
+      for (; i + kLanes <= length; i += kLanes) {
+        const auto v8 = hw::LoadU(d8, src + i);
+        const auto v16_low = hw::PromoteLowerTo(d16, v8);
+        const auto v16_high = hw::PromoteUpperTo(d16, v8);
+        hw::StoreU(v16_low, d16, reinterpret_cast<uint16_t*>(dst + i));
+        hw::StoreU(v16_high, d16,
+                   reinterpret_cast<uint16_t*>(dst + i + hw::Lanes(d16)));
+      }
+    }
+
+    for (; i < length; ++i) {
+      dst[i] = src[i];
+    }
+  });
+}
+
+bool EqualIgnoringAsciiCaseSimd(base::span<const LChar> a,
+                                base::span<const LChar> b) {
+  namespace hw = hwy::HWY_NAMESPACE;
+  constexpr hw::FixedTag<uint8_t, 16> d;
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d);
+
+  // SAFETY: The SIMD code requires raw buffer access.
+  UNSAFE_BUFFERS({
+    size_t i = 0;
+    if (a.size() >= kLanes) {
+      const auto upper_a = hw::Set(d, 'A');
+      const auto upper_z = hw::Set(d, 'Z');
+      const auto case_bit = hw::Set(d, 0x20);
+      for (; i + kLanes <= a.size(); i += kLanes) {
+        auto va = hw::LoadU(d, reinterpret_cast<const uint8_t*>(a.data() + i));
+        auto vb = hw::LoadU(d, reinterpret_cast<const uint8_t*>(b.data() + i));
+        auto is_upper_a = hw::And(hw::Ge(va, upper_a), hw::Le(va, upper_z));
+        va = hw::IfThenElse(is_upper_a, hw::Or(va, case_bit), va);
+        auto is_upper_b = hw::And(hw::Ge(vb, upper_a), hw::Le(vb, upper_z));
+        vb = hw::IfThenElse(is_upper_b, hw::Or(vb, case_bit), vb);
+        if (!hw::AllTrue(d, hw::Eq(va, vb))) {
+          return false;
+        }
+      }
+    }
+    for (; i < a.size(); ++i) {
+      if (ToAsciiLower(a.data()[i]) != ToAsciiLower(b.data()[i])) {
+        return false;
+      }
+    }
+  });
+  return true;
+}
+
+bool EqualIgnoringAsciiCaseSimd(base::span<const UChar> a,
+                                base::span<const LChar> b) {
+  namespace hw = hwy::HWY_NAMESPACE;
+  constexpr hw::FixedTag<uint16_t, 8> d16;
+  constexpr hw::FixedTag<uint8_t, 8> d8;
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d16);
+
+  // SAFETY: The SIMD code requires raw buffer access.
+  UNSAFE_BUFFERS({
+    size_t i = 0;
+    if (a.size() >= kLanes) {
+      const auto upper_a = hw::Set(d16, 'A');
+      const auto upper_z = hw::Set(d16, 'Z');
+      const auto case_bit = hw::Set(d16, 0x20);
+      for (; i + kLanes <= a.size(); i += kLanes) {
+        auto va =
+            hw::LoadU(d16, reinterpret_cast<const uint16_t*>(a.data() + i));
+        auto vb_8 =
+            hw::LoadU(d8, reinterpret_cast<const uint8_t*>(b.data() + i));
+        auto vb = hw::PromoteTo(d16, vb_8);
+        auto is_upper_a = hw::And(hw::Ge(va, upper_a), hw::Le(va, upper_z));
+        va = hw::IfThenElse(is_upper_a, hw::Or(va, case_bit), va);
+        auto is_upper_b = hw::And(hw::Ge(vb, upper_a), hw::Le(vb, upper_z));
+        vb = hw::IfThenElse(is_upper_b, hw::Or(vb, case_bit), vb);
+        if (!hw::AllTrue(d16, hw::Eq(va, vb))) {
+          return false;
+        }
+      }
+    }
+    for (; i < a.size(); ++i) {
+      if (ToAsciiLower(a.data()[i]) != ToAsciiLower(b.data()[i])) {
+        return false;
+      }
+    }
+  });
+  return true;
+}
+
+bool EqualIgnoringAsciiCaseSimd(base::span<const UChar> a,
+                                base::span<const UChar> b) {
+  namespace hw = hwy::HWY_NAMESPACE;
+  constexpr hw::FixedTag<uint16_t, 8> d;
+  HWY_LANES_CONSTEXPR size_t kLanes = hw::Lanes(d);
+
+  // SAFETY: The SIMD code requires raw buffer access.
+  UNSAFE_BUFFERS({
+    size_t i = 0;
+    if (a.size() >= kLanes) {
+      const auto upper_a = hw::Set(d, 'A');
+      const auto upper_z = hw::Set(d, 'Z');
+      const auto case_bit = hw::Set(d, 0x20);
+      for (; i + kLanes <= a.size(); i += kLanes) {
+        auto va = hw::LoadU(d, reinterpret_cast<const uint16_t*>(a.data() + i));
+        auto vb = hw::LoadU(d, reinterpret_cast<const uint16_t*>(b.data() + i));
+        auto is_upper_a = hw::And(hw::Ge(va, upper_a), hw::Le(va, upper_z));
+        va = hw::IfThenElse(is_upper_a, hw::Or(va, case_bit), va);
+        auto is_upper_b = hw::And(hw::Ge(vb, upper_a), hw::Le(vb, upper_z));
+        vb = hw::IfThenElse(is_upper_b, hw::Or(vb, case_bit), vb);
+        if (!hw::AllTrue(d, hw::Eq(va, vb))) {
+          return false;
+        }
+      }
+    }
+    for (; i < a.size(); ++i) {
+      if (ToAsciiLower(a.data()[i]) != ToAsciiLower(b.data()[i])) {
+        return false;
+      }
+    }
+  });
+  return true;
+}
+
+#else  // HWY_TARGET != HWY_SCALAR
+
+void StringImpl::CopyCharsSimd(base::span<UChar> destination,
+                               base::span<const LChar> source) {
+  const LChar* src = source.data();
+  UChar* dst = destination.data();
+  // SAFETY: The caller checked that both spans have the same size.
+  UNSAFE_BUFFERS({
+    for (size_t i = 0; i < source.size(); ++i) {
+      dst[i] = src[i];
+    }
+  });
+}
+
+bool EqualIgnoringAsciiCaseSimd(base::span<const LChar> a,
+                                base::span<const LChar> b) {
+  return EqualIgnoringAsciiCase<LChar, LChar>(a, b);
+}
+
+bool EqualIgnoringAsciiCaseSimd(base::span<const UChar> a,
+                                base::span<const LChar> b) {
+  return EqualIgnoringAsciiCase<UChar, LChar>(a, b);
+}
+
+bool EqualIgnoringAsciiCaseSimd(base::span<const UChar> a,
+                                base::span<const UChar> b) {
+  return EqualIgnoringAsciiCase<UChar, UChar>(a, b);
+}
+
+#endif  // HWY_TARGET != HWY_SCALAR
+
 bool DeprecatedEqualIgnoringCase(base::span<const LChar> a,
                                  base::span<const LChar> b) {
   CHECK_EQ(a.size(), b.size());
@@ -810,16 +987,16 @@ StringImpl::size_type StringImpl::Find(const StringView& match_string,
 }
 
 template <typename SearchCharacterType, typename MatchCharacterType>
-ALWAYS_INLINE static string_size_t FindIgnoringCaseInternal(
+ALWAYS_INLINE static wtf_size_t FindIgnoringCaseInternal(
     base::span<const SearchCharacterType> search,
     base::span<const MatchCharacterType> match,
-    string_size_t index) {
+    wtf_size_t index) {
   // delta is the number of additional times to test; delta == 0 means test only
   // once.
-  string_size_t delta =
-      base::checked_cast<string_size_t>(search.size() - match.size());
+  wtf_size_t delta =
+      base::checked_cast<wtf_size_t>(search.size() - match.size());
 
-  string_size_t i = 0;
+  wtf_size_t i = 0;
   const SearchCharacterType* search_data = search.data();
   // Keep looping until we match.
   // SAFETY: The `i == delta` check below guarantees the span is in `search`.
@@ -863,16 +1040,16 @@ StringImpl::size_type StringImpl::DeprecatedFindIgnoringCase(
 }
 
 template <typename SearchCharacterType, typename MatchCharacterType>
-ALWAYS_INLINE static string_size_t FindIgnoringAsciiCaseInternal(
+ALWAYS_INLINE static wtf_size_t FindIgnoringAsciiCaseInternal(
     base::span<const SearchCharacterType> search,
     base::span<const MatchCharacterType> match,
-    string_size_t index) {
+    wtf_size_t index) {
   // delta is the number of additional times to test; delta == 0 means test only
   // once.
-  string_size_t delta =
-      base::checked_cast<string_size_t>(search.size() - match.size());
+  wtf_size_t delta =
+      base::checked_cast<wtf_size_t>(search.size() - match.size());
 
-  string_size_t i = 0;
+  wtf_size_t i = 0;
   const SearchCharacterType* search_data = search.data();
   // Keep looping until we match.
   // SAFETY: The `i == delta` check below guarantees the span is in `search`.
@@ -1263,8 +1440,8 @@ scoped_refptr<StringImpl> StringImpl::UpconvertedString() {
 
 static inline bool StringImplContentEqual(const StringImpl* a,
                                           const StringImpl* b) {
-  string_size_t a_length = a->length();
-  string_size_t b_length = b->length();
+  wtf_size_t a_length = a->length();
+  wtf_size_t b_length = b->length();
   if (a_length != b_length)
     return false;
 
@@ -1314,7 +1491,7 @@ template <typename StringType>
 UNSAFE_BUFFER_USAGE bool EqualToCString(const StringType* a, const LChar* b) {
   DCHECK(b);
   return VisitCharacters(*a, [b](auto chars) {
-    for (string_size_t i = 0; auto ac : chars) {
+    for (wtf_size_t i = 0; auto ac : chars) {
       LChar bc = b[i++];
       if (!bc || ac != bc) {
         return false;

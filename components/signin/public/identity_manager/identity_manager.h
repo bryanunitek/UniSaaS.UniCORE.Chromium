@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -28,7 +29,7 @@
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_mutator.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -58,7 +59,6 @@ class AccountFetcherService;
 class AccountTrackerService;
 class GaiaCookieManagerService;
 class NewTabPageUI;
-class PrivacySandboxSettingsDelegate;
 
 namespace signin {
 
@@ -193,14 +193,12 @@ class IdentityManager : public KeyedService,
 #if BUILDFLAG(IS_IOS)
   // Whether a batch of primary account changes is in progress. See
   // `OnEndBatchOfPrimaryAccountChanges()`.
-  bool IsBatchOfPrimaryAccountChangesInProgress();
+  bool IsBatchOfPrimaryAccountChangesInProgress() const;
 
-  // Starts a batch of primary account changes by setting
-  // `batch_of_primary_account_changes_in_progress_` to `true`. As long as the
-  // batch is running, `OnEndBatchOfPrimaryAccountChanges()` are not sent when
-  // `OnPrimaryAccountChanged()` occurs.
-  // The batch needs to be used when the primary account is switched from one
-  // account to another.
+  // Starts a batch of primary account changes (e.g. when switching from one
+  // primary account to another). `OnEndBatchOfPrimaryAccountChanges()` is not
+  // sent on `OnPrimaryAccountChanged()` while the batch is running, and is sent
+  // when the returned `ScopedClosureRunner` is destructed.
   // See `OnEndBatchOfPrimaryAccountChanges()`.
   base::ScopedClosureRunner StartBatchOfPrimaryAccountChanges();
 #endif  // BUILDFLAG(IS_IOS)
@@ -323,8 +321,7 @@ class IdentityManager : public KeyedService,
   // Returns false if the generation cannot be started. In that case, `callback`
   // will not be invoked.
   bool GenerateBindingKeyRegistrationToken(
-      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-          supported_algorithms,
+      base::span<const crypto::sign::SignatureKind> supported_algorithms,
       std::string_view auth_code,
       base::OnceCallback<void(
           std::optional<signin::BindingKeyRegistrationTokenResult>)> callback);
@@ -374,7 +371,7 @@ class IdentityManager : public KeyedService,
       const CoreAccountId& account_id) const;
   // The same as `FindExtendedAccountInfo()` but finds an account by email.
   AccountInfo FindExtendedAccountInfoByEmailAddress(
-      const std::string& email_address) const;
+      std::string_view email_address) const;
   // The same as `FindExtendedAccountInfo()` but finds an account by gaia ID.
   AccountInfo FindExtendedAccountInfoByGaiaId(const GaiaId& gaia_id) const;
 
@@ -419,7 +416,7 @@ class IdentityManager : public KeyedService,
   // Gets all accounts on the device, including the ones from other profiles, in
   // the order provided by the system (usually the order in which the accounts
   // were added).
-  [[nodiscard]] std::vector<AccountInfo> GetAccountsOnDevice();
+  [[nodiscard]] std::vector<AccountInfo> GetAccountsOnDevice() const;
 #endif
 
   // Overrides the value of the given account capability for the account.
@@ -646,13 +643,13 @@ class IdentityManager : public KeyedService,
   friend void SimulateSuccessfulFetchOfAccountInfo(
       IdentityManager* identity_manager,
       const CoreAccountId& account_id,
-      const std::string& email,
+      std::string_view email,
       const GaiaId& gaia,
-      const std::string& hosted_domain,
-      const std::string& full_name,
-      const std::string& given_name,
-      const std::string& locale,
-      const std::string& picture_url);
+      std::string_view hosted_domain,
+      std::string_view full_name,
+      std::string_view given_name,
+      std::string_view locale,
+      std::string_view picture_url);
 
 #if BUILDFLAG(IS_CHROMEOS)
   friend account_manager::AccountManagerFacade* GetAccountManagerFacade(
@@ -717,7 +714,6 @@ class IdentityManager : public KeyedService,
   // TODO(crbug.com/40183609): Delete once the private calls have been
   // removed.
   friend class ::NewTabPageUI;
-  friend class ::PrivacySandboxSettingsDelegate;
 
   // Returns the extended account info for the primary account. This function
   // does not require tokens to be loaded.
@@ -744,6 +740,9 @@ class IdentityManager : public KeyedService,
   // PrimaryAccountManager::Observer:
   void OnPrimaryAccountChanged(
       const PrimaryAccountChangeEvent& event_details) override;
+#if BUILDFLAG(IS_IOS)
+  void OnEndBatchOfPrimaryAccountChanges() override;
+#endif  // BUILDFLAG(IS_IOS)
 
   // ProfileOAuth2TokenServiceObserver:
   void OnRefreshTokenAvailable(const CoreAccountId& account_id) override;
@@ -788,16 +787,6 @@ class IdentityManager : public KeyedService,
   void OnAccountUpdated(const AccountInfo& info);
   void OnAccountRemoved(const AccountInfo& info);
 
-#if BUILDFLAG(IS_IOS)
-  // Starts and stops the account switching. Those method can only be called by
-  // `StartBatchOfPrimaryAccountChanges()`. Only one account switching can be
-  // started at the same time.
-  void BatchOfPrimaryAccountChangesDone();
-  // Triggers `OnEndBatchOfPrimaryAccountChanges()` events. A batch of primary
-  // account changes should not be in progress when calling this method.
-  void FireOnEndBatchOfPrimaryAccountChanges();
-#endif  // BUILDFLAG(IS_IOS)
-
   // Backing signin classes.
   std::unique_ptr<AccountTrackerService> account_tracker_service_;
   std::unique_ptr<ProfileOAuth2TokenService> token_service_;
@@ -839,11 +828,6 @@ class IdentityManager : public KeyedService,
   // Java-side IdentityManager object.
   base::android::ScopedJavaGlobalRef<jobject> java_identity_manager_;
 #endif
-#if BUILDFLAG(IS_IOS)
-  // `true` if there is an account switching back in progress.
-  // See `StartBatchOfPrimaryAccountChanges()`.
-  bool batch_of_primary_account_changes_in_progress_ = false;
-#endif  // BUILDFLAG(IS_IOS)
   base::WeakPtrFactory<IdentityManager> weak_pointer_factory_;
 };
 

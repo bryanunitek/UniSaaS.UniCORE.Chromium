@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/deletion_origin.h"
@@ -13,10 +14,17 @@
 #include "components/sync/engine/commit_and_get_updates_types.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace syncer {
 
 namespace {
+
+constexpr char kHash[] = "hash";
+constexpr char kServerId[] = "server_id";
+constexpr char kUploadUrl[] = "https://example.com/upload/session";
+constexpr char kFilePath[] = "/tmp/attachment.bin";
+constexpr char kTemporaryBlobId[] = "temp_blob_123";
 
 sync_pb::EntityMetadata CreateValidMetadataProto() {
   sync_pb::EntityMetadata metadata;
@@ -25,6 +33,15 @@ sync_pb::EntityMetadata CreateValidMetadataProto() {
   metadata.set_sequence_number(1);
   metadata.set_acked_sequence_number(0);
   return metadata;
+}
+
+CommitResponseData CreateCommitResponse(int64_t sequence_number) {
+  CommitResponseData response;
+  response.id = kServerId;
+  response.client_tag_hash = ClientTagHash::FromHashed(kHash);
+  response.sequence_number = sequence_number;
+  response.response_version = 1;
+  return response;
 }
 
 TEST(ProcessorEntityMetadataTest, ShouldBeValidForValidMetadata) {
@@ -134,13 +151,29 @@ TEST(ProcessorEntityMetadataTest,
   ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
       ClientTagHash::FromHashed("hash"), "server_id", base::Time::Now());
 
-  sync_pb::EntitySpecifics specifics;
-  specifics.mutable_preference()->set_name("name");
-  metadata.UpdateSpecificsHash(specifics);
+  UpdateResponseData update;
+  update.entity.id = "server_id";
+  update.entity.specifics.mutable_preference()->set_name("name");
+  update.response_version = 1;
+  metadata.RecordAcceptedRemoteUpdate(update, /*trimmed_specifics=*/{},
+                                      /*unique_position=*/std::nullopt);
+  CommitResponseData response1;
+  response1.id = "server_id";
+  response1.sequence_number = metadata.proto().sequence_number();
+  response1.response_version = 1;
+  response1.specifics_hash = metadata.proto().specifics_hash();
+  metadata.RecordCommitResponse(response1);
+
   const std::string initial_hash = metadata.proto().specifics_hash();
   ASSERT_FALSE(initial_hash.empty());
 
-  metadata.IncrementSequenceNumber();
+  // First local update (becomes unsynced, base_specifics_hash set to
+  // initial_hash).
+  EntityData local_data;
+  local_data.specifics.mutable_preference()->set_name("new_name");
+  metadata.RecordLocalUpdate(local_data, /*trimmed_specifics=*/{},
+                             /*unique_position=*/std::nullopt);
+
   EXPECT_EQ(metadata.proto().base_specifics_hash(), initial_hash);
 }
 
@@ -149,22 +182,35 @@ TEST(ProcessorEntityMetadataTest,
   ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
       ClientTagHash::FromHashed("hash"), "server_id", base::Time::Now());
 
-  sync_pb::EntitySpecifics specifics1;
-  specifics1.mutable_preference()->set_name("name1");
-  metadata.UpdateSpecificsHash(specifics1);
-  const std::string initial_hash = metadata.proto().specifics_hash();
+  UpdateResponseData update;
+  update.entity.id = "server_id";
+  update.entity.specifics.mutable_preference()->set_name("name1");
+  update.response_version = 1;
+  metadata.RecordAcceptedRemoteUpdate(update, /*trimmed_specifics=*/{},
+                                      /*unique_position=*/std::nullopt);
 
-  // First increment (becomes unsynced).
-  metadata.IncrementSequenceNumber();
+  CommitResponseData response2;
+  response2.id = "server_id";
+  response2.sequence_number = metadata.proto().sequence_number();
+  response2.response_version = 1;
+  response2.specifics_hash = metadata.proto().specifics_hash();
+  metadata.RecordCommitResponse(response2);
+
+  const std::string initial_hash = metadata.proto().specifics_hash();
+  ASSERT_FALSE(initial_hash.empty());
+
+  // First local update (becomes unsynced).
+  EntityData local_data1;
+  local_data1.specifics.mutable_preference()->set_name("name2");
+  metadata.RecordLocalUpdate(local_data1, /*trimmed_specifics=*/{},
+                             /*unique_position=*/std::nullopt);
   ASSERT_EQ(metadata.proto().base_specifics_hash(), initial_hash);
 
-  // Set new specifics hash.
-  sync_pb::EntitySpecifics specifics2;
-  specifics2.mutable_preference()->set_name("name2");
-  metadata.UpdateSpecificsHash(specifics2);
-
-  // Second increment (already unsynced).
-  metadata.IncrementSequenceNumber();
+  // Second local update (already unsynced).
+  EntityData local_data2;
+  local_data2.specifics.mutable_preference()->set_name("name3");
+  metadata.RecordLocalUpdate(local_data2, /*trimmed_specifics=*/{},
+                             /*unique_position=*/std::nullopt);
   EXPECT_EQ(metadata.proto().base_specifics_hash(), initial_hash);
 }
 
@@ -181,6 +227,130 @@ TEST(ProcessorEntityMetadataTest, ShouldRecordLocalDeletion) {
       ProcessorEntityMetadata::FromProto(metadata.proto());
   ASSERT_NE(metadata_restored, nullptr);
   EXPECT_TRUE(metadata_restored->IsDeleted());
+}
+
+// Verifies that `RecordAttachmentUploadQueued()` and
+// `RecordAttachmentUploadStarted()` mark the entity as having a pending
+// attachment upload and record `file_path` and the session `upload_url` under
+// `pending_upload`.
+TEST(ProcessorEntityMetadataTest, ShouldRecordAttachmentUploadStarted) {
+  ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
+      ClientTagHash::FromHashed(kHash), kServerId, base::Time::Now());
+  metadata.IncrementSequenceNumber();
+
+  metadata.RecordAttachmentUploadQueued(
+      base::FilePath::FromUTF8Unsafe(kFilePath));
+  EXPECT_TRUE(metadata.HasPendingAttachmentUpload());
+  EXPECT_EQ(metadata.proto().attachment_metadata().pending_upload().file_path(),
+            kFilePath);
+  EXPECT_FALSE(
+      metadata.proto().attachment_metadata().pending_upload().has_upload_url());
+
+  metadata.RecordAttachmentUploadStarted(GURL(kUploadUrl));
+  EXPECT_TRUE(metadata.HasPendingAttachmentUpload());
+  EXPECT_EQ(metadata.proto().attachment_metadata().pending_upload().file_path(),
+            kFilePath);
+  EXPECT_EQ(
+      metadata.proto().attachment_metadata().pending_upload().upload_url(),
+      kUploadUrl);
+}
+
+// Verifies that `RecordAttachmentUploadCompleted()` clears `pending_upload`,
+// stores `temporary_blob_id`, and marks the upload as complete.
+TEST(ProcessorEntityMetadataTest, ShouldRecordAttachmentUploadCompleted) {
+  ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
+      ClientTagHash::FromHashed(kHash), kServerId, base::Time::Now());
+  metadata.IncrementSequenceNumber();
+  metadata.RecordAttachmentUploadQueued(
+      base::FilePath::FromUTF8Unsafe(kFilePath));
+  metadata.RecordAttachmentUploadStarted(GURL(kUploadUrl));
+
+  metadata.RecordAttachmentUploadCompleted(kTemporaryBlobId);
+
+  EXPECT_FALSE(metadata.HasPendingAttachmentUpload());
+  EXPECT_FALSE(metadata.proto().attachment_metadata().has_pending_upload());
+  EXPECT_EQ(
+      metadata.proto().attachment_metadata().attachment().temporary_blob_id(),
+      kTemporaryBlobId);
+}
+
+// Verifies that `RecordAttachmentUploadCancelled()` clears `pending_upload` and
+// clears `attachment_metadata` if no `attachment` submessage is present.
+TEST(ProcessorEntityMetadataTest, ShouldRecordAttachmentUploadCancelled) {
+  ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
+      ClientTagHash::FromHashed(kHash), kServerId, base::Time::Now());
+  metadata.IncrementSequenceNumber();
+  metadata.RecordAttachmentUploadQueued(
+      base::FilePath::FromUTF8Unsafe(kFilePath));
+  metadata.RecordAttachmentUploadStarted(GURL(kUploadUrl));
+
+  metadata.RecordAttachmentUploadCancelled();
+
+  EXPECT_FALSE(metadata.HasPendingAttachmentUpload());
+  EXPECT_FALSE(metadata.proto().has_attachment_metadata());
+}
+
+// Verifies that `RecordCommitResponse()` records the server's
+// `attachment_modification_time`, retains `temporary_blob_id` while the entity
+// remains unsynced, and clears `temporary_blob_id` (while retaining
+// `attachment_metadata` and `attachment`) once all local updates are
+// acknowledged.
+TEST(ProcessorEntityMetadataTest,
+     ShouldClearTemporaryBlobIdOnCommitResponseOnlyWhenSynced) {
+  constexpr int64_t kAttachmentMtimeMillis = 123456789;
+  ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
+      ClientTagHash::FromHashed(kHash), kServerId, base::Time::Now());
+  // Simulate two local updates so the first commit ack leaves the entity
+  // unsynced (`acked_sequence_number` < `sequence_number`).
+  metadata.IncrementSequenceNumber();
+  metadata.IncrementSequenceNumber();
+  metadata.RecordAttachmentUploadQueued(
+      base::FilePath::FromUTF8Unsafe(kFilePath));
+  metadata.RecordAttachmentUploadCompleted(kTemporaryBlobId);
+
+  CommitResponseData response1 = CreateCommitResponse(/*sequence_number=*/1);
+  response1.attachment_modification_time =
+      ProtoTimeToTime(kAttachmentMtimeMillis);
+  metadata.RecordCommitResponse(response1);
+  EXPECT_EQ(
+      metadata.proto().attachment_metadata().attachment().temporary_blob_id(),
+      kTemporaryBlobId);
+  EXPECT_EQ(metadata.proto()
+                .attachment_metadata()
+                .attachment()
+                .modification_time_unix_epoch_millis(),
+            kAttachmentMtimeMillis);
+
+  // Once the final sequence number is acknowledged, `temporary_blob_id` is
+  // cleared while `attachment_metadata` and its modification timestamp are
+  // retained.
+  metadata.RecordCommitResponse(CreateCommitResponse(/*sequence_number=*/2));
+  EXPECT_TRUE(metadata.proto().has_attachment_metadata());
+  EXPECT_TRUE(metadata.proto().attachment_metadata().has_attachment());
+  EXPECT_FALSE(metadata.proto()
+                   .attachment_metadata()
+                   .attachment()
+                   .has_temporary_blob_id());
+  EXPECT_EQ(metadata.proto()
+                .attachment_metadata()
+                .attachment()
+                .modification_time_unix_epoch_millis(),
+            kAttachmentMtimeMillis);
+}
+
+// Verifies that `RecordLocalDeletion()` clears `attachment_metadata`.
+TEST(ProcessorEntityMetadataTest,
+     ShouldClearAttachmentMetadataOnLocalDeletion) {
+  ProcessorEntityMetadata metadata = ProcessorEntityMetadata::CreateNew(
+      ClientTagHash::FromHashed(kHash), kServerId, base::Time::Now());
+  metadata.IncrementSequenceNumber();
+  metadata.RecordAttachmentUploadQueued(
+      base::FilePath::FromUTF8Unsafe(kFilePath));
+  metadata.RecordAttachmentUploadCompleted(kTemporaryBlobId);
+
+  metadata.RecordLocalDeletion(DeletionOrigin::Unspecified());
+
+  EXPECT_FALSE(metadata.proto().has_attachment_metadata());
 }
 
 }  // namespace

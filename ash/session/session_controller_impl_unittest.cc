@@ -129,14 +129,12 @@ class FakeSessionControllerClient : public SessionControllerClient {
 
   // SessionControllerClient:
   void RequestLockScreen() override {}
-  void RequestHideLockScreen() override {}
   void RequestSignOut() override {}
   void RequestRestartForUpdate() override {}
   void AttemptRestartChrome() override {}
   void SwitchActiveUser(const AccountId& account_id) override {}
   void CycleActiveUser(CycleUserDirection direction) override {}
   void ShowMultiProfileLogin() override {}
-  void EmitAshInitialized() override {}
   PrefService* GetSigninScreenPrefService() override { return nullptr; }
   PrefService* GetUserPrefService(const AccountId& account_id) override {
     return &pref_service_;
@@ -574,8 +572,8 @@ TEST_F(SessionControllerImplPrefsTest, Observer) {
   controller->AddObserver(&observer);
 
   // Setup 2 users.
-  SimulateUserLogin({kUser1});
-  SimulateUserLogin({kUser2});
+  SimulateUserLogin(kUserAccount1);
+  SimulateUserLogin(kUserAccount2);
 
   TestSessionControllerClient* session = GetSessionControllerClient();
   session->SwitchActiveUser(kUserAccount1);
@@ -608,12 +606,12 @@ TEST_F(SessionControllerImplPrefsTest, NotifyOnce) {
   controller->AddObserver(&observer);
   ASSERT_EQ(0, observer.user_prefs_changed_count());
 
-  SimulateUserLogin({kUser1});
+  SimulateUserLogin(kUserAccount1);
   EXPECT_EQ(1, observer.user_prefs_changed_count());
   EXPECT_EQ(controller->GetUserPrefServiceForUser(kUserAccount1),
             observer.last_user_pref_service());
 
-  SimulateUserLogin({kUser2});
+  SimulateUserLogin(kUserAccount2);
   EXPECT_EQ(2, observer.user_prefs_changed_count());
   EXPECT_EQ(controller->GetUserPrefServiceForUser(kUserAccount2),
             observer.last_user_pref_service());
@@ -651,7 +649,8 @@ TEST_F(SessionControllerImplPrefsTest, SetsTimeOfLastSessionActivation) {
   controller->AddObserver(&mock_session_observer);
 
   // Switch to test user.
-  SimulateUserLogin({.display_email = kUser1Email, .activate_session = false});
+  SimulateUserLogin({.account_id = kUser1AccountId},
+                    /*activate_session=*/false);
 
   // Initially time of last session activation is expected to be `base::Time()`.
   base::Time expected_time_of_last_session_activation;
@@ -744,7 +743,7 @@ TEST_F(SessionControllerImplPrefsTest, SetsTimeOfLastSessionActivation) {
             *base::ValueToTime(time_of_last_session_activation->GetValue()),
             expected_time_of_last_session_activation);
       });
-  SimulateUserLogin({kUser2Email});
+  SimulateUserLogin(kUser2AccountId);
   testing::Mock::VerifyAndClearExpectations(&mock_session_observer);
 
   {
@@ -1096,7 +1095,7 @@ TEST_F(SessionControllerImplUnblockTest, ActiveWindowAfterUnblocking) {
       CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   // |widget| should not be active as it is blocked by SessionControllerImpl.
   EXPECT_FALSE(widget->IsActive());
-  SimulateUserLogin({"user@test.com"});
+  SimulateUserLogin(AccountId::FromUserEmail("user@test.com"));
   EXPECT_FALSE(Shell::Get()->session_controller()->IsUserSessionBlocked());
 
   // |widget| should now be active as SessionControllerImpl no longer is

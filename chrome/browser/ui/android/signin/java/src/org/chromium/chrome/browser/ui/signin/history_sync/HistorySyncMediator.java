@@ -20,9 +20,7 @@ import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
 import org.chromium.chrome.browser.ui.signin.MinorModeHelper;
 import org.chromium.chrome.browser.ui.signin.R;
-import org.chromium.components.signin.SigninFeatureMap;
-import org.chromium.components.signin.SigninFeatures;
-import org.chromium.components.signin.base.CoreAccountInfo;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.signin.metrics.SignoutReason;
@@ -61,14 +59,12 @@ class HistorySyncMediator implements ProfileDataCache.Observer, SigninManager.Si
         mSigninManager.addSignInStateObserver(this);
         mConfig = config;
         // The history sync screen should never be created when the user is signed out.
-        final CoreAccountInfo primaryAccount =
-                assumeNonNull(identityManager.getPrimaryAccountInfo());
+        final AccountInfo primaryAccount = assumeNonNull(identityManager.getPrimaryAccountInfo());
         DisplayableProfileData profileData = mProfileDataCache.getById(primaryAccount.getId());
         mAccountEmail = profileData.getAccountEmail();
-        // Use a different decline button text for recent tabs when seamless sign-in is enabled.
+        // Use a different decline button text for recent tabs.
         String declineButtonText =
-                SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
-                                && mAccessPoint == SigninAccessPoint.RECENT_TABS
+                mAccessPoint == SigninAccessPoint.RECENT_TABS
                         ? context.getString(R.string.history_sync_recent_tabs_secondary_action)
                         : context.getString(R.string.history_sync_secondary_action);
         // When the email address is not displayable, fall back on the other string.
@@ -101,7 +97,7 @@ class HistorySyncMediator implements ProfileDataCache.Observer, SigninManager.Si
     @Override
     public void onSignedOut() {
         RecordHistogram.recordEnumeratedHistogram(
-                "Signin.HistorySyncOptIn.Aborted", mAccessPoint, SigninAccessPoint.MAX_VALUE);
+                "Signin.HistorySyncOptIn.Aborted", mAccessPoint, SigninAccessPoint.MAX_VALUE + 1);
         mDelegate.dismissHistorySync(/* didSignOut= */ true, /* isHistorySyncAccepted= */ false);
     }
 

@@ -80,6 +80,11 @@ class TestPageLoadMetricsEmbedderInterface
 
   bool ShouldObserveScheme(std::string_view scheme) override { return false; }
 
+  NavigationScenario GetNavigationScenario(
+      content::NavigationHandle* navigation_handle) const override {
+    return test_->GetNavigationScenario(navigation_handle);
+  }
+
  private:
   raw_ptr<PageLoadMetricsObserverTester> test_;
 };
@@ -199,6 +204,25 @@ void PageLoadMetricsObserverTester::SimulateTimingAndFontLoadingMetricsUpdate(
       std::vector<mojom::SoftNavigationMetricsPtr>(),
       std::vector<mojom::LargestContentfulPaintTimingPtr>(),
       std::move(font_loading_metrics));
+}
+
+void PageLoadMetricsObserverTester::SimulateSubresourceLoadMetricsUpdate(
+    const blink::SubresourceLoadMetrics& subresource_load_metrics) {
+  SimulateSubresourceLoadMetricsUpdate(subresource_load_metrics,
+                                       web_contents()->GetPrimaryMainFrame());
+}
+
+void PageLoadMetricsObserverTester::SimulateSubresourceLoadMetricsUpdate(
+    const blink::SubresourceLoadMetrics& subresource_load_metrics,
+    content::RenderFrameHost* rfh) {
+  mojom::PageLoadTiming timing;
+  InitPageLoadTimingForTest(&timing);
+  SimulatePageLoadTimingUpdate(
+      timing, mojom::FrameMetadata(), /* new_features= */ {},
+      mojom::FrameRenderDataUpdate(), mojom::CpuTiming(),
+      std::vector<mojom::EventTimingPtr>(), subresource_load_metrics, rfh,
+      std::vector<mojom::SoftNavigationMetricsPtr>(),
+      std::vector<mojom::LargestContentfulPaintTimingPtr>());
 }
 
 void PageLoadMetricsObserverTester::SimulateMetadataUpdate(

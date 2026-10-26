@@ -5,30 +5,22 @@
 #ifndef IOS_CHROME_BROWSER_AIM_MODEL_IOS_CHROME_AIM_ELIGIBILITY_SERVICE_FACTORY_H_
 #define IOS_CHROME_BROWSER_AIM_MODEL_IOS_CHROME_AIM_ELIGIBILITY_SERVICE_FACTORY_H_
 
-#include "base/no_destructor.h"
-#import "ios/chrome/browser/shared/model/profile/profile_keyed_service_factory_ios.h"
-
-class ProfileIOS;
-class AimEligibilityService;
+#include "components/omnibox/browser/aim_eligibility_service.h"
+#import "ios/chrome/browser/shared/model/profile/typed_profile_keyed_service_factory_ios.h"
 
 // Singleton that owns all IOSChromeAimEligibilityService and associates them
 // with ProfileIOS.
-class IOSChromeAimEligibilityServiceFactory
-    : public ProfileKeyedServiceFactoryIOS {
+class IOSChromeAimEligibilityServiceFactory final
+    : public TypedProfileKeyedServiceFactoryIOS<
+          IOSChromeAimEligibilityServiceFactory,
+          AimEligibilityService> {
  public:
-  static AimEligibilityService* GetForProfile(ProfileIOS* profile);
-
-  static IOSChromeAimEligibilityServiceFactory* GetInstance();
+  explicit IOSChromeAimEligibilityServiceFactory(PassKey key);
 
  private:
-  friend class base::NoDestructor<IOSChromeAimEligibilityServiceFactory>;
-
-  IOSChromeAimEligibilityServiceFactory();
-  ~IOSChromeAimEligibilityServiceFactory() override;
-
   // ProfileKeyedServiceFactoryIOS implementation.
   std::unique_ptr<KeyedService> BuildServiceInstanceFor(
-      ProfileIOS* profile) const override;
+      ProfileIOS* profile) const final;
 };
 
 #endif  // IOS_CHROME_BROWSER_AIM_MODEL_IOS_CHROME_AIM_ELIGIBILITY_SERVICE_FACTORY_H_

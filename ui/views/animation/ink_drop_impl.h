@@ -17,6 +17,10 @@
 #include "ui/views/animation/ink_drop_ripple_observer.h"
 #include "ui/views/views_export.h"
 
+namespace ui {
+class LayerNotDrawn;
+}  // namespace ui
+
 namespace views {
 namespace test {
 class InkDropImplTestApi;
@@ -49,11 +53,15 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   // Constructs an ink drop that will attach the ink drop to the given
   // |ink_drop_host|. |host_size| is used to set the size of the ink drop layer.
   //
-  // By default the highlight will be made visible while |this| is hovered but
-  // not focused.
+  // |show_highlight_on_hover| and |show_highlight_on_focus| say whether the
+  // highlight is made visible while |this| is hovered or focused; by default
+  // it is shown while hovered but not while focused. Both can be changed
+  // later with SetShowHighlightOnHover() and SetShowHighlightOnFocus().
   InkDropImpl(InkDropHost* ink_drop_host,
               const gfx::Size& host_size,
-              AutoHighlightMode auto_highlight_mode);
+              AutoHighlightMode auto_highlight_mode,
+              bool show_highlight_on_hover = true,
+              bool show_highlight_on_focus = false);
 
   InkDropImpl(const InkDropImpl&) = delete;
   InkDropImpl& operator=(const InkDropImpl&) = delete;
@@ -278,7 +286,7 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   // The root Layer that parents the InkDropRipple layers and the
   // InkDropHighlight layers. The |root_layer_| is the one that is added and
   // removed from the |ink_drop_host_|.
-  std::unique_ptr<ui::Layer> root_layer_;
+  std::unique_ptr<ui::LayerNotDrawn> root_layer_;
 
   // True when the |root_layer_| has been added to the |ink_drop_host_|.
   bool root_layer_added_to_host_ = false;

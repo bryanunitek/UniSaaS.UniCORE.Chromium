@@ -5,6 +5,7 @@
 import '//resources/ash/common/cr_elements/cr_input/cr_input.js';
 import '//resources/ash/common/cr_elements/md_select.css.js';
 
+import {assert} from '//resources/js/assert.js';
 import {sendWithPromise} from '//resources/js/cr.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -191,6 +192,42 @@ export class HealthdInternalsProcessElement extends PolymerElement implements
     };
   }
 
+  constructor() {
+    super();
+    this.displayedHeaders = [
+      {title: 'Process ID', sortColumnId: SortColumnEnum.PROCESS_ID},
+      {title: 'Name', sortColumnId: SortColumnEnum.NAME},
+      {title: 'Priority', sortColumnId: SortColumnEnum.PRIORITY},
+      {title: 'Nice', sortColumnId: SortColumnEnum.NICE},
+      {title: 'Process State', sortColumnId: SortColumnEnum.STATE},
+      {title: 'Threads Number', sortColumnId: SortColumnEnum.THREADS_NUMBER},
+      {title: 'User ID', sortColumnId: SortColumnEnum.USER_ID},
+      {title: 'Parent ID', sortColumnId: SortColumnEnum.PARENT_ID},
+      {title: 'Group ID', sortColumnId: SortColumnEnum.GROUP_ID},
+      {
+        title: 'Resident Memory (KiB)',
+        sortColumnId: SortColumnEnum.RESIDENT_MEMORY,
+      },
+      {title: 'Uptime Ticks', sortColumnId: SortColumnEnum.UPTIME},
+      {
+        title: 'Count of read syscall',
+        sortColumnId: SortColumnEnum.READ_SYSCALL_COUNT,
+      },
+      {
+        title: 'Count of write syscall',
+        sortColumnId: SortColumnEnum.WRITE_SYSCALL_COUNT,
+      },
+      {title: 'Command', sortColumnId: SortColumnEnum.COMMAND},
+    ];
+    this.processData = [];
+    this.filterQuery = '';
+    this.sortColumn = SortColumnEnum.PROCESS_ID;
+    this.sortOrder = SortOrderEnum.ASCEND;
+    this.pageSize = 100;
+    this.displayedData = [];
+    this.lastUpdateTime = '';
+  }
+
   override connectedCallback() {
     super.connectedCallback();
 
@@ -206,61 +243,39 @@ export class HealthdInternalsProcessElement extends PolymerElement implements
   }
 
   // The title and column ID for headers and selected menu in process table.
-  private readonly displayedHeaders: ProcessHeader[] = [
-    {title: 'Process ID', sortColumnId: SortColumnEnum.PROCESS_ID},
-    {title: 'Name', sortColumnId: SortColumnEnum.NAME},
-    {title: 'Priority', sortColumnId: SortColumnEnum.PRIORITY},
-    {title: 'Nice', sortColumnId: SortColumnEnum.NICE},
-    {title: 'Process State', sortColumnId: SortColumnEnum.STATE},
-    {title: 'Threads Number', sortColumnId: SortColumnEnum.THREADS_NUMBER},
-    {title: 'User ID', sortColumnId: SortColumnEnum.USER_ID},
-    {title: 'Parent ID', sortColumnId: SortColumnEnum.PARENT_ID},
-    {title: 'Group ID', sortColumnId: SortColumnEnum.GROUP_ID},
-    {
-      title: 'Resident Memory (KiB)',
-      sortColumnId: SortColumnEnum.RESIDENT_MEMORY,
-    },
-    {title: 'Uptime Ticks', sortColumnId: SortColumnEnum.UPTIME},
-    {
-      title: 'Count of read syscall',
-      sortColumnId: SortColumnEnum.READ_SYSCALL_COUNT,
-    },
-    {
-      title: 'Count of write syscall',
-      sortColumnId: SortColumnEnum.WRITE_SYSCALL_COUNT,
-    },
-    {title: 'Command', sortColumnId: SortColumnEnum.COMMAND},
-  ];
+  declare private readonly displayedHeaders: ProcessHeader[];
 
   // Latest process data from healthd.
-  private processData: HealthdApiProcessInfo[] = [];
+  declare private processData: HealthdApiProcessInfo[];
 
   // The user entered filter query.
-  private filterQuery: string = '';
+  declare private filterQuery: string;
 
   // The target column for sorting.
-  private sortColumn: SortColumnEnum = SortColumnEnum.PROCESS_ID;
+  declare private sortColumn: SortColumnEnum;
 
   // Sorting order.
-  private sortOrder: SortOrderEnum = SortOrderEnum.ASCEND;
+  declare private sortOrder: SortOrderEnum;
 
   // Number of processes displayed in the table.
-  private pageSize: number = 100;
+  declare private pageSize: number;
 
   // Data displayed in the process table.
-  private displayedData: DisplayedProcessInfo[] = [];
+  declare private displayedData: DisplayedProcessInfo[];
 
   // The time that the process data is last updated.
-  private lastUpdateTime: string = '';
+  declare private lastUpdateTime: string;
 
   // Helper for updating UI regularly. Init in `connectedCallback`.
-  private updateHelper: UiUpdateHelper;
+  private updateHelper: UiUpdateHelper|null = null;
 
   updateVisibility(isVisible: boolean) {
+    assert(this.updateHelper);
     this.updateHelper.updateVisibility(isVisible);
   }
 
   updateUiUpdateInterval(intervalSeconds: number) {
+    assert(this.updateHelper);
     this.updateHelper.updateUiUpdateInterval(intervalSeconds);
   }
 

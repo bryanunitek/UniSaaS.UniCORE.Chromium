@@ -52,11 +52,7 @@ namespace extensions {
 namespace {
 
 const char kCapturingSameTab[] = "Cannot capture a tab with an active stream.";
-const char kFindingTabError[] = "Error finding tab to capture.";
 const char kNoAudioOrVideo[] = "Capture failed. No audio or video requested.";
-const char kGrantError[] =
-    "Extension has not been invoked for the current page (see activeTab "
-    "permission). Chrome pages cannot be captured.";
 
 const char kInvalidOriginError[] = "Caller tab.url is not a valid URL.";
 const char kInvalidTabIdError[] = "Invalid tab specified.";
@@ -88,8 +84,8 @@ DesktopMediaID BuildDesktopMediaID(content::WebContents* target_contents,
 void AddMediaStreamSourceConstraints(content::WebContents* target_contents,
                                      TabCapture::CaptureOptions* options,
                                      const std::string& device_id) {
-  DCHECK(options);
-  DCHECK(target_contents);
+  CHECK(options, base::NotFatalUntil::M161);
+  CHECK(target_contents, base::NotFatalUntil::M161);
 
   MediaStreamConstraint* constraints_to_modify[2] = {nullptr, nullptr};
 
@@ -146,12 +142,12 @@ ExtensionFunction::ResponseAction TabCaptureCaptureFunction::Run() {
       browser_window_util::GetLastActiveBrowserWithProfile(
           *profile, match_incognito_profile);
   if (!target_browser) {
-    return RespondNow(Error(kFindingTabError));
+    return RespondNow(Error(tab_capture_errors::kFindingTabError));
   }
 
   content::WebContents* target_contents = GetActiveWebContents(target_browser);
   if (!target_contents) {
-    return RespondNow(Error(kFindingTabError));
+    return RespondNow(Error(tab_capture_errors::kFindingTabError));
   }
 
   content::WebContents* const extension_web_contents = GetSenderWebContents();
@@ -169,7 +165,7 @@ ExtensionFunction::ResponseAction TabCaptureCaptureFunction::Run() {
       capture_policy::GetIncludableWebContentsFilter(extension_origin,
                                                      capture_level);
   if (!includable_web_contents_filter.Run(target_contents)) {
-    return RespondNow(Error(kGrantError));
+    return RespondNow(Error(tab_capture_errors::kGrantError));
   }
 
   const std::string& extension_id = extension()->id();
@@ -180,7 +176,13 @@ ExtensionFunction::ResponseAction TabCaptureCaptureFunction::Run() {
           sessions::SessionTabHelper::IdForTab(target_contents).id(),
           mojom::APIPermissionID::kTabCaptureForTab) &&
       (GetAllowlistedExtensionID() != extension_id)) {
-    return RespondNow(Error(kGrantError));
+    return RespondNow(Error(tab_capture_errors::kGrantError));
+  }
+
+  std::string error;
+  if (!TabCaptureRegistry::CanCaptureWebContents(
+          *extension(), *browser_context(), *target_contents, error)) {
+    return RespondNow(Error(std::move(error)));
   }
 
   if (!OptionsSpecifyAudioOrVideo(params->options)) {
@@ -229,9 +231,9 @@ ExtensionFunction::ResponseAction TabCaptureGetMediaStreamIdFunction::Run() {
 
   content::WebContents* target_contents = nullptr;
   if (params->options && params->options->target_tab_id) {
-    if (!ExtensionTabUtil::GetTabById(*(params->options->target_tab_id),
-                                      browser_context(), true,
-                                      &target_contents)) {
+    if (!ExtensionTabUtil::GetTabById(
+            *(params->options->target_tab_id), browser_context(),
+            include_incognito_information(), &target_contents)) {
       return RespondNow(Error(kInvalidTabIdError));
     }
   } else {
@@ -241,13 +243,13 @@ ExtensionFunction::ResponseAction TabCaptureGetMediaStreamIdFunction::Run() {
         browser_window_util::GetLastActiveBrowserWithProfile(
             *profile, match_incognito_profile);
     if (!target_browser) {
-      return RespondNow(Error(kFindingTabError));
+      return RespondNow(Error(tab_capture_errors::kFindingTabError));
     }
 
     target_contents = GetActiveWebContents(target_browser);
   }
   if (!target_contents) {
-    return RespondNow(Error(kFindingTabError));
+    return RespondNow(Error(tab_capture_errors::kFindingTabError));
   }
 
   const std::string& extension_id = extension()->id();
@@ -258,7 +260,13 @@ ExtensionFunction::ResponseAction TabCaptureGetMediaStreamIdFunction::Run() {
           sessions::SessionTabHelper::IdForTab(target_contents).id(),
           mojom::APIPermissionID::kTabCaptureForTab) &&
       (GetAllowlistedExtensionID() != extension_id)) {
-    return RespondNow(Error(kGrantError));
+    return RespondNow(Error(tab_capture_errors::kGrantError));
+  }
+
+  std::string error;
+  if (!TabCaptureRegistry::CanCaptureWebContents(
+          *extension(), *browser_context(), *target_contents, error)) {
+    return RespondNow(Error(std::move(error)));
   }
 
   GURL origin;
@@ -267,9 +275,9 @@ ExtensionFunction::ResponseAction TabCaptureGetMediaStreamIdFunction::Run() {
   bool should_restrict_to_render_frame = extension()->manifest_version() < 3;
   if (params->options && params->options->consumer_tab_id) {
     content::WebContents* consumer_contents = nullptr;
-    if (!ExtensionTabUtil::GetTabById(*(params->options->consumer_tab_id),
-                                      browser_context(), true,
-                                      &consumer_contents)) {
+    if (!ExtensionTabUtil::GetTabById(
+            *(params->options->consumer_tab_id), browser_context(),
+            include_incognito_information(), &consumer_contents)) {
       return RespondNow(Error(kInvalidTabIdError));
     }
 

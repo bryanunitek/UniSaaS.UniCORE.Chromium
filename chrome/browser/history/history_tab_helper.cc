@@ -9,14 +9,16 @@
 
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
+#include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/complex_tasks/task_tab_helper.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
+#include "components/actor/core/task_id.h"
 #include "components/history/content/browser/history_context_helper.h"
-#include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_constants.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
@@ -33,18 +35,21 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_string.h"
 #include "chrome/browser/android/background_tab_manager.h"
 #include "chrome/browser/feed/feed_service_factory.h"
 #include "chrome/browser/flags/android/chrome_session_state.h"
-#include "chrome/browser/history/jni_headers/HistoryTabHelper_jni.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "components/feed/core/v2/public/feed_api.h"  // nogncheck crbug.com/40147906
 #include "components/feed/core/v2/public/feed_service.h"  // nogncheck crbug.com/40147906
 #include "content/public/browser/web_contents.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/history/jni_headers/HistoryTabHelper_jni.h"
 #else
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -55,7 +60,6 @@ namespace {
 using content::NavigationEntry;
 using content::WebContents;
 #if BUILDFLAG(IS_ANDROID)
-using base::android::ConvertUTF8ToJavaString;
 using chrome::android::BackgroundTabManager;
 #endif
 
@@ -78,7 +82,8 @@ bool ShouldConsiderForNtpMostVisited(
 #if BUILDFLAG(IS_ANDROID)
   // Clicks on content suggestions on the NTP should not contribute to the
   // Most Visited tiles in the NTP.
-  DCHECK(!navigation_handle->GetRedirectChain().empty());
+  CHECK(!navigation_handle->GetRedirectChain().empty(),
+        base::NotFatalUntil::M161);
   if (ui::PageTransitionCoreTypeIs(navigation_handle->GetPageTransition(),
                                    ui::PAGE_TRANSITION_AUTO_BOOKMARK) &&
       IsNavigationFromFeed(web_contents,
@@ -122,6 +127,32 @@ std::optional<history::Opener> GetHistoryOpenerFromWeakWebContents(
   return GetHistoryOpenerFromWebContents(weak_web_contents.get());
 }
 
+// Returns the TaskId associated with an active actor task on the given
+// `web_contents` or from `chrome_ui_data`.
+//
+// `chrome_ui_data` captures the actor task at navigation start time, but is
+// null for same-document navigations and in tests. In those cases, we fall back
+// to checking the active actor task on `web_contents`.
+//
+// TODO(crbug.com/545069770): Unify actor attribution across navigation types
+// so a fallback is not needed.
+actor::TaskId GetActorTaskId(content::WebContents* web_contents,
+                             const ChromeNavigationUIData* chrome_ui_data) {
+  if (chrome_ui_data) {
+    return chrome_ui_data->actor_task_id();
+  }
+  if (!web_contents) {
+    return actor::TaskId();
+  }
+  auto* actor_service =
+      actor::ActorKeyedService::Get(web_contents->GetBrowserContext());
+  const actor::ActorTask* task =
+      actor_service
+          ? actor_service->GetActingActorTaskForWebContents(web_contents)
+          : nullptr;
+  return task ? task->id() : actor::TaskId();
+}
+
 history::VisitContextAnnotations::BrowserType GetBrowserType(
     WebContents* web_contents) {
 #if BUILDFLAG(IS_ANDROID)
@@ -155,7 +186,7 @@ history::VisitContextAnnotations::BrowserType GetBrowserType(
     case BrowserWindowInterface::Type::TYPE_POPUP:
     case BrowserWindowInterface::Type::TYPE_APP:
     case BrowserWindowInterface::Type::TYPE_APP_POPUP:
-    case BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE:
+    case BrowserWindowInterface::Type::TYPE_FLOATING:
       return history::VisitContextAnnotations::BrowserType::kPopup;
     case BrowserWindowInterface::Type::TYPE_DEVTOOLS:
       return history::VisitContextAnnotations::BrowserType::kUnknown;
@@ -317,25 +348,14 @@ history::HistoryAddPageArgs HistoryTabHelper::CreateHistoryAddPageArgs(
           ? history::VisitContextEphemerality::kEphemeral
           : history::VisitContextEphemerality::kNotEphemeral;
 
-  // If `history::kVisitedLinksOn404` is enabled, visits to reachable URLs that
-  // result in a 404 response will be saved to history. We don't want to count
-  // 404 navigations as visits when calculating the Most Visited, so we filter
-  // them out here.
-  const bool status_code_qualifies_for_ntp_most_visited =
-      !(base::FeatureList::IsEnabled(history::kVisitedLinksOn404) &&
-        http_response_code == 404);
-
-  std::optional<int32_t> actor_task_id;
-  actor_task_id =
-      chrome_ui_data && chrome_ui_data->actor_task_id()
-          ? std::make_optional(chrome_ui_data->actor_task_id().value())
-          : std::nullopt;
+  const actor::TaskId actor_task_id =
+      GetActorTaskId(web_contents(), chrome_ui_data);
 
   // If the visit was initiated by an actor, it should not contribute to the
-  // Most Visited tiles in the NTP.
+  // Most Visited tiles in the NTP. We also don't want to count 404 navigations
+  // as visits when calculating the Most Visited.
   const bool should_consider_for_ntp_most_visited =
-      status_code_qualifies_for_ntp_most_visited &&
-      !actor_task_id.has_value() &&
+      !actor_task_id && http_response_code != 404 &&
       ShouldConsiderForNtpMostVisited(*web_contents(), navigation_handle);
 
   // Reloads do not result in calling TitleWasSet() (which normally sets
@@ -427,13 +447,13 @@ history::HistoryAddPageArgs HistoryTabHelper::CreateHistoryAddPageArgs(
       history::ContextIDForWebContents(web_contents()), nav_entry_id,
       navigation_handle->GetNavigationId(), referrer_url,
       navigation_handle->GetRedirectChain(), page_transition, hidden,
-      actor_task_id.has_value() ? history::SOURCE_ACTOR
-                                : history::SOURCE_BROWSED,
+      actor_task_id ? history::SOURCE_ACTOR : history::SOURCE_BROWSED,
       response_code_category, navigation_handle->DidReplaceEntry(),
       should_consider_for_ntp_most_visited, visit_context_ephemerality, title,
       top_level_url, frame_url, opener,
       chrome_ui_data == nullptr ? std::nullopt : chrome_ui_data->bookmark_id(),
-      app_id_, std::move(context_annotations), actor_task_id);
+      app_id_, std::move(context_annotations),
+      actor_task_id ? std::make_optional(actor_task_id.value()) : std::nullopt);
 
   if (ui::PageTransitionIsMainFrame(page_transition) &&
       virtual_url != navigation_handle->GetURL()) {
@@ -524,7 +544,8 @@ void HistoryTabHelper::DidFinishNavigation(
     return;
   }
 
-  DCHECK(navigation_handle->GetRenderFrameHost()->GetPage().IsPrimary());
+  CHECK(navigation_handle->GetRenderFrameHost()->GetPage().IsPrimary(),
+        base::NotFatalUntil::M161);
 
   // Most of the time, the displayURL matches the loaded URL, but for about:
   // URLs, we use a data: URL as the real value.  We actually want to save the
@@ -582,6 +603,8 @@ void HistoryTabHelper::DidOpenRequestedURL(
   }
 
   // This should only be set once on a new tab helper.
+  // TODO(crbug.com/571276287): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!new_history_tab_helper->opener_web_contents_);
   new_history_tab_helper->opener_web_contents_ = web_contents()->GetWeakPtr();
 }
@@ -711,14 +734,11 @@ static void JNI_HistoryTabHelper_SetAppIdForViewIntentNative(
   history_tab_helper->SetClearAppIdAfterFirstCommit();
   history_tab_helper->SetAppId(app_id);
 }
-static base::android::ScopedJavaLocalRef<jstring>
-JNI_HistoryTabHelper_GetAppIdForTestingNative(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jweb_contents) {
+static std::optional<std::string> JNI_HistoryTabHelper_GetAppIdForTestingNative(
+    const jni_zero::JavaRef<jobject>& jweb_contents) {
   auto* web_contents = content::WebContents::FromJavaWebContents(jweb_contents);
   auto* history_tab_helper = HistoryTabHelper::FromWebContents(web_contents);
-  auto appId = history_tab_helper->GetAppId();
-  return appId ? ConvertUTF8ToJavaString(env, *appId) : nullptr;
+  return history_tab_helper->GetAppId();
 }
 #endif
 WEB_CONTENTS_USER_DATA_KEY_IMPL(HistoryTabHelper);

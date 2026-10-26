@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
@@ -469,7 +469,7 @@ class IntegrationTestCommandsSystem : public IntegrationTestCommands {
                {Param("app_id", app_id),
                 Param("app_bundle_web_create_mode",
                       base::NumberToString(
-                          static_cast<int>(app_bundle_web_create_mode))),
+                          std::to_underlying(app_bundle_web_create_mode))),
                 Param("expected_final_state",
                       base::NumberToString(expected_final_state)),
                 Param("expected_error_code",

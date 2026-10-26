@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/logging.h"
 #include "chrome/browser/background/glic/glic_launcher_configuration.h"
 #include "chrome/browser/glic/common/local_hotkey_manager.h"
 #include "chrome/browser/glic/glic_pref_names_internal.h"
@@ -30,11 +31,29 @@ std::optional<GlicActuationOnWebPolicyState> GetActuationOnWebCapability(
   switch (capability_pref) {
     case GlicActuationOnWebPolicyState::kEnabled:
     case GlicActuationOnWebPolicyState::kDisabled:
-      break;
-    default:
-      return std::nullopt;
+      return capability_pref;
   }
-  return capability_pref;
+  DLOG(ERROR) << "Unknown capability_pref: "
+              << static_cast<int>(capability_pref);
+  return std::nullopt;
+}
+
+glic::mojom::FileUploadPolicyState GetFileUploadAllowedCapability(
+    const PrefService* pref_service) {
+  if (!pref_service) {
+    return glic::mojom::FileUploadPolicyState::kDisabled;
+  }
+  auto capability_pref = static_cast<GlicFileUploadPolicyState>(
+      pref_service->GetInteger(kGlicFileUploadAllowed));
+  switch (capability_pref) {
+    case GlicFileUploadPolicyState::kEnabled:
+      return glic::mojom::FileUploadPolicyState::kEnabled;
+    case GlicFileUploadPolicyState::kDisabled:
+      return glic::mojom::FileUploadPolicyState::kDisabled;
+  }
+  DLOG(ERROR) << "Unknown capability_pref: "
+              << static_cast<int>(capability_pref);
+  return glic::mojom::FileUploadPolicyState::kDisabled;
 }
 
 GlicActuationOnWebPolicyState GetGlicActuationOnWebPolicyState() {
@@ -58,7 +77,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
       kGlicRolloutEligibility, false,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
   registry->RegisterIntegerPref(
-      kGlicCompletedFre, std::to_underlying(prefs::FreStatus::kNotStarted));
+      ::glic::prefs::kGlicCompletedFre,
+      std::to_underlying(::glic::prefs::FreStatus::kNotStarted));
   registry->RegisterIntegerPref(prefs::kGlicZoomLevel, 100);
   registry->RegisterTimePref(kGlicWindowLastDismissedTime, base::Time());
   registry->RegisterIntegerPref(
@@ -90,6 +110,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(prefs::kGlicKeepSidepanelOpenOnNewTabsEnabled,
                                 true);
 
+  // Boolean pref for enabling shake trigger.
+  registry->RegisterBooleanPref(prefs::kGlicShakeTriggerEnabled, false);
+
   // Boolean pref that enables or disables experimental triggering.
   registry->RegisterBooleanPref(prefs::kGlicExperimentalTriggeringEnabled,
                                 false);
@@ -104,22 +127,42 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
       prefs::kGlicActuationOnWeb,
       std::to_underlying(GetGlicActuationOnWebPolicyState()));
 
+  registry->RegisterIntegerPref(
+      prefs::kGlicFileUploadAllowed,
+      std::to_underlying(GlicFileUploadPolicyState::kEnabled));
+
   registry->RegisterListPref(prefs::kGlicActuationOnWebAllowedForURLs);
   registry->RegisterListPref(prefs::kGlicActuationOnWebBlockedForURLs);
 
   registry->RegisterBooleanPref(prefs::kGlicUserEnabledActuationOnWeb, false);
 
   registry->RegisterBooleanPref(prefs::kGlicPartitionNeedsCookieSync, true);
+  // TODO(b/573595701): Deprecate and remove
+  // kGlicLocalStorageCopiedToMainPartition.
+  registry->RegisterBooleanPref(prefs::kGlicLocalStorageCopiedToMainPartition,
+                                false);
+  registry->RegisterBooleanPref(prefs::kGlicLocalStorageCopiedToPrefs, false);
+  registry->RegisterDictionaryPref(prefs::kGlicClientDataStorage);
   registry->RegisterBooleanPref(prefs::kGlicPreviouslyNotAllowed, false);
 
-  registry->RegisterDictionaryPref(prefs::kGlicGeminiEnterpriseSettings);
+  registry->RegisterStringPref(prefs::kGlicGeminiEnterpriseUrl, std::string());
   registry->RegisterIntegerPref(
       prefs::kGlicLastProfileReadyState,
       static_cast<int>(glic::mojom::ProfileReadyState::kReady));
+  registry->RegisterIntegerPref(prefs::kGlicMarketingAutoOpenCount, 0);
+  registry->RegisterStringPref(prefs::kGlicPromotionSourceCohort,
+                               std::string());
 }
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+  // On Android, hotkeys are scoped to the active browser window rather than
+  // operating as OS-global background shortcuts. Therefore, the launcher
+  // hotkey is enabled by default without requiring a default browser check.
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(prefs::kGlicLauncherEnabled, true);
+#else
   registry->RegisterBooleanPref(prefs::kGlicLauncherEnabled, false);
+#endif
 
   registry->RegisterStringPref(
       prefs::kGlicLauncherHotkey,
@@ -136,7 +179,11 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
       ui::Command::AcceleratorToString(
           LocalHotkeyManager::GetDefaultAccelerator(
               LocalHotkeyManager::Command::kFocusToggle)));
-
+  registry->RegisterBooleanPref(prefs::kGlicHotkeyGlobalScopeEnabled, false);
+  registry->RegisterIntegerPref(
+      prefs::kGlicDefaultHotkeyScope,
+      std::to_underlying(prefs::DefaultHotkeyScope::kNotMigrated));
+  registry->RegisterBooleanPref(prefs::kGlicHotkeyGlobalScopeMigratedV2, false);
   registry->RegisterStringPref(prefs::kGlicGuestUrlPresetAutopush, "");
   registry->RegisterStringPref(prefs::kGlicGuestUrlPresetStaging, "");
   registry->RegisterStringPref(prefs::kGlicGuestUrlPresetPreprod, "");

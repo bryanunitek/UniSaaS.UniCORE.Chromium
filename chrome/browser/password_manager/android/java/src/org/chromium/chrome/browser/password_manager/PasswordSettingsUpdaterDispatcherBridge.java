@@ -11,9 +11,11 @@ import static org.chromium.chrome.browser.password_manager.PasswordManagerSettin
 import static org.chromium.chrome.browser.password_manager.PasswordSettingsUpdaterMetricsRecorder.getStoreType;
 
 import android.accounts.Account;
+import android.text.TextUtils;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
@@ -53,7 +55,9 @@ public class PasswordSettingsUpdaterDispatcherBridge {
     }
 
     @CalledByNative
-    void getSettingValue(String account, @PasswordManagerSetting int setting) {
+    void getSettingValue(
+            @JniType("std::string") String account,
+            @PasswordManagerSetting int setting) {
         assertOnBackgroundThread();
         PasswordSettingsUpdaterMetricsRecorder metricsRecorder =
                 new PasswordSettingsUpdaterMetricsRecorder(
@@ -102,7 +106,10 @@ public class PasswordSettingsUpdaterDispatcherBridge {
     }
 
     @CalledByNative
-    void setSettingValue(String account, @PasswordManagerSetting int setting, boolean value) {
+    void setSettingValue(
+            @JniType("std::string") String account,
+            @PasswordManagerSetting int setting,
+            boolean value) {
         assertOnBackgroundThread();
         PasswordSettingsUpdaterMetricsRecorder metricsRecorder =
                 new PasswordSettingsUpdaterMetricsRecorder(
@@ -114,7 +121,7 @@ public class PasswordSettingsUpdaterDispatcherBridge {
                 mSettingsAccessor.setOfferToSavePasswords(
                         value,
                         getAccount(account),
-                        unused ->
+                        _ ->
                                 mReceiverBridge.onSettingValueSet(
                                         OFFER_TO_SAVE_PASSWORDS, metricsRecorder),
                         exception ->
@@ -125,7 +132,7 @@ public class PasswordSettingsUpdaterDispatcherBridge {
                 mSettingsAccessor.setAutoSignIn(
                         value,
                         getAccount(account),
-                        unused -> mReceiverBridge.onSettingValueSet(AUTO_SIGN_IN, metricsRecorder),
+                        _ -> mReceiverBridge.onSettingValueSet(AUTO_SIGN_IN, metricsRecorder),
                         exception ->
                                 handleSettingExceptionOnUiThread(
                                         AUTO_SIGN_IN, exception, metricsRecorder));
@@ -174,8 +181,8 @@ public class PasswordSettingsUpdaterDispatcherBridge {
                 () -> mReceiverBridge.handleSettingException(setting, exception, metricsRecorder));
     }
 
-    private Optional<Account> getAccount(String syncingAccount) {
-        if (syncingAccount == null) return Optional.empty();
+    private Optional<Account> getAccount(@Nullable String syncingAccount) {
+        if (TextUtils.isEmpty(syncingAccount)) return Optional.empty();
         return Optional.of(AccountUtils.createAccountFromEmail(syncingAccount));
     }
 }

@@ -22,19 +22,20 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.actor.ActorForegroundServiceUmaHelper.ForegroundLifecycle;
 import org.chromium.chrome.browser.actor.ActorForegroundServiceUmaHelper.StopReason;
+import org.chromium.chrome.browser.actor.foreground_service.ActorForegroundServiceController;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.components.browser_ui.notifications.ForegroundServiceUtils;
-import org.chromium.components.browser_ui.notifications.NotificationWrapper;
 
 /** Implementation of ActorForegroundService. */
 @NullMarked
 public class ActorForegroundServiceImpl extends SplitCompatService.Impl {
+    private static final String TAG = "ActorFGS";
+
     private final IBinder mBinder = new LocalBinder();
     private long mStartTime;
     private boolean mIsForeground;
     private boolean mStopReasonRecorded;
-
-    private static final String TAG = "Actor";
 
     /**
      * Start the foreground service with this given context.
@@ -70,6 +71,9 @@ public class ActorForegroundServiceImpl extends SplitCompatService.Impl {
         if (!mIsForeground) {
             ActorForegroundServiceUmaHelper.recordLifecycleHistogram(ForegroundLifecycle.STARTED);
             mIsForeground = true;
+            if (ChromeFeatureList.sGlicBackgroundTriggering.isEnabled()) {
+                ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+            }
         } else {
             ActorForegroundServiceUmaHelper.recordLifecycleHistogram(ForegroundLifecycle.UPDATED);
         }
@@ -94,29 +98,9 @@ public class ActorForegroundServiceImpl extends SplitCompatService.Impl {
 
     @Override
     public int onStartCommand(@Nullable Intent intent, int flags, int startId) {
-        Log.d(TAG, "GlicTrigger: ActorForegroundService onStartCommand");
         if (mStartTime == 0) {
             mStartTime = SystemClock.elapsedRealtime();
         }
-
-        if (!mIsForeground
-                && ChromeFeatureList.isEnabled(ChromeFeatureList.GLIC_BACKGROUND_TRIGGERING)) {
-            Log.d(TAG, "GlicTrigger: Promoting to foreground");
-            NotificationWrapper taskStartsSoonNotificationWrapper =
-                    ActorNotificationFactory.buildTaskStartsSoonNotification();
-            Notification taskStartsSoonNotification =
-                    taskStartsSoonNotificationWrapper.getNotification();
-            if (taskStartsSoonNotification != null) {
-                startOrUpdateForegroundService(
-                        ActorNotificationFactory.TASK_STARTS_SOON_NOTIFICATION_ID,
-                        taskStartsSoonNotification,
-                        -1,
-                        false);
-            }
-        }
-
-        // Return START_NOT_STICKY so the system doesn't attempt to recreate the service if it is
-        // killed.
         return Service.START_NOT_STICKY;
     }
 
@@ -140,6 +124,8 @@ public class ActorForegroundServiceImpl extends SplitCompatService.Impl {
             recordStopReason(StopReason.DESTROYED);
         }
 
+        ActorForegroundServiceController.get().destroyBackgroundActuationManager();
+
         // TODO(ritkagup) : Notify observers so they can perform cleanup or pause active tasks.
         super.onDestroy();
     }
@@ -156,8 +142,8 @@ public class ActorForegroundServiceImpl extends SplitCompatService.Impl {
     }
 
     /** Local binder class to allow clients to access this service instance. */
-    class LocalBinder extends Binder {
-        ActorForegroundServiceImpl getService() {
+    public class LocalBinder extends Binder {
+        public ActorForegroundServiceImpl getService() {
             return ActorForegroundServiceImpl.this;
         }
     }
@@ -175,6 +161,7 @@ public class ActorForegroundServiceImpl extends SplitCompatService.Impl {
                         notificationId,
                         notification,
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        Log.d(TAG, "Successfully promoted to foreground");
     }
 
     @VisibleForTesting

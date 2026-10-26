@@ -42,17 +42,6 @@
 
 namespace {
 
-WaapUIMetricsRecorder::ReloadButtonMode ToRecorderButtonMode(
-    ReloadButton::Mode mode) {
-  switch (mode) {
-    case ReloadButton::Mode::kReload:
-      return WaapUIMetricsRecorder::ReloadButtonMode::kReload;
-    case ReloadButton::Mode::kStop:
-      return WaapUIMetricsRecorder::ReloadButtonMode::kStop;
-  }
-  NOTREACHED();
-}
-
 static constexpr views::SingleAnimatedImageContainer::AnimationBoundary
     kReloadStopAnimationBoundary = {.start_offset = 0.0f,
                                     .end_offset = 123.0f / 400.0f};
@@ -74,13 +63,14 @@ ReloadButton::ReloadButton(
                                         base::Unretained(this)),
                     CreateMenuModel(),
                     nullptr),
-      metrics_recorder_(std::make_unique<WaapUIMetricsRecorder>(profile)),
+      metrics_recorder_(
+          profile ? std::make_unique<WaapUIMetricsRecorder>(profile) : nullptr),
       command_updater_(command_updater),
       reload_icon_(features::IsRoundedIconsEnabled()
                        ? vector_icons::kRefreshIcon
                        : vector_icons::kReloadChromeRefreshOldIcon),
       reload_touch_icon_(features::IsRoundedIconsEnabled()
-                             ? kRefreshIcon
+                             ? vector_icons::kRefreshIcon
                              : kReloadTouchOldIcon),
       stop_icon_(features::IsRoundedIconsEnabled()
                      ? kCloseIcon
@@ -151,35 +141,18 @@ void ReloadButton::SetDevToolsStatus(bool is_dev_tools_connected) {
   UpdateCachedTooltipText();
 }
 
-void ReloadButton::OnMouseEntered(const ui::MouseEvent& event) {
-  metrics_recorder_->OnMouseEntered(event.time_stamp());
-  ToolbarButton::OnMouseEntered(event);
-}
-
 void ReloadButton::OnMouseExited(const ui::MouseEvent& event) {
-  metrics_recorder_->OnMouseExited(event.time_stamp());
   ToolbarButton::OnMouseExited(event);
   if (!IsMenuShowing()) {
     ChangeMode(intended_mode_, true);
   }
 }
 
-bool ReloadButton::OnMousePressed(const ui::MouseEvent& event) {
-  metrics_recorder_->OnMousePressed(event.time_stamp());
-  return ToolbarButton::OnMousePressed(event);
-}
-
-void ReloadButton::OnMouseReleased(const ui::MouseEvent& event) {
-  metrics_recorder_->OnMouseReleased(event.time_stamp());
-  ToolbarButton::OnMouseReleased(event);
-}
-
 void ReloadButton::PaintButtonContents(gfx::Canvas* canvas) {
   // This has to be called every time the button is painted for various metrics.
   GetWidget()->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
       base::BindOnce(&ReloadButton::OnNextPresentation,
-                     weak_ptr_factory_.GetWeakPtr(), visible_mode_,
-                     GetState()));
+                     weak_ptr_factory_.GetWeakPtr()));
   Button::PaintButtonContents(canvas);
 }
 
@@ -233,9 +206,6 @@ std::unique_ptr<ui::SimpleMenuModel> ReloadButton::CreateMenuModel() {
 }
 
 void ReloadButton::SetVisibleMode(Mode mode) {
-  metrics_recorder_->OnChangeVisibleMode(ToRecorderButtonMode(visible_mode_),
-                                         ToRecorderButtonMode(mode),
-                                         base::TimeTicks::Now());
   const bool play_animation = features::IsToolbarGlowUpReloadEnabled() &&
                               !ui::TouchUiController::Get()->touch_ui() &&
                               animate_transitions_;
@@ -353,14 +323,14 @@ void ReloadButton::ButtonPressed(const ui::Event& event) {
 
   ClearPendingMenu();
 
-  metrics_recorder_->OnButtonPressedStart(event,
-                                          ToRecorderButtonMode(visible_mode_));
+  if (metrics_recorder_) {
+    metrics_recorder_->OnButtonPressedStart(event);
+  }
 
   if (visible_mode_ == Mode::kStop) {
     if (command_updater_) {
       command_updater_->ExecuteCommandWithDisposition(
-          IDC_STOP, WindowOpenDisposition::CURRENT_TAB);
-      metrics_recorder_->DidExecuteStopCommand(base::TimeTicks::Now());
+          IDC_STOP, WindowOpenDisposition::kCurrentTab);
     }
     // The user has clicked, so we can feel free to update the button, even if
     // the mouse is still hovering.
@@ -392,7 +362,9 @@ void ReloadButton::ButtonPressed(const ui::Event& event) {
     animate_transitions_ = true;
 
     ExecuteBrowserCommand(command, flags);
-    metrics_recorder_->DidExecuteReloadCommand(base::TimeTicks::Now());
+    if (metrics_recorder_) {
+      metrics_recorder_->DidExecuteReloadCommand(base::TimeTicks::Now());
+    }
     ++testing_reload_count_;
   }
 }
@@ -425,8 +397,6 @@ void ReloadButton::UpdateAccessibleHasPopup() {
 }
 
 void ReloadButton::OnNextPresentation(
-    Mode mode,
-    Button::ButtonState state,
     const viz::FrameTimingDetails& frame_timing_details) {
   if (window_metrics_manager_) {
     window_metrics_manager_->OnReloadButtonFirstPaint(
@@ -434,9 +404,6 @@ void ReloadButton::OnNextPresentation(
     window_metrics_manager_->OnReloadButtonFirstContentfulPaint(
         frame_timing_details.presentation_feedback.timestamp);
   }
-  metrics_recorder_->OnPaintFramePresented(
-      ToRecorderButtonMode(mode), state,
-      frame_timing_details.presentation_feedback.timestamp);
 }
 
 DEFINE_ENUM_CONVERTERS(ReloadButton::Mode,

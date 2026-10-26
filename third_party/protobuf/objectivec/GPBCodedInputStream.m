@@ -206,16 +206,33 @@ int32_t GPBCodedInputStreamReadTag(GPBCodedInputStreamState *state) {
     return 0;
   }
 
-  state->lastTag = ReadRawVarint32(state);
+  // The conformance tests now limit things to ensue the varint for a tag fits in 5 bytes. The logic
+  // for this parse is based on _upb_WireReader_ReadLongTag.
+  uint64_t rawTag = 0;
+  BOOL finishedParse = NO;
+  for (int i = 0; i < 5; i++) {
+    uint64_t byte = (uint64_t)ReadRawByte(state);
+    rawTag |= (byte & 0x7F) << (i * 7);
+    if ((byte & 0x80) == 0) {
+      finishedParse = YES;
+      break;
+    }
+  }
+  if (!finishedParse || (rawTag > (uint64_t)UINT32_MAX)) {
+    GPBRaiseStreamError(GPBCodedInputStreamErrorInvalidTag, @"Invalid tag");
+  }
+  uint32_t tag = (uint32_t)rawTag;
+
   // Tags have to include a valid wireformat.
-  if (!GPBWireFormatIsValidTag(state->lastTag)) {
+  if (!GPBWireFormatIsValidTag(tag)) {
     GPBRaiseStreamError(GPBCodedInputStreamErrorInvalidTag, @"Invalid wireformat in tag.");
   }
   // Zero is not a valid field number.
-  if (GPBWireFormatGetTagFieldNumber(state->lastTag) == 0) {
+  if (GPBWireFormatGetTagFieldNumber(tag) == 0) {
     GPBRaiseStreamError(GPBCodedInputStreamErrorInvalidTag,
                         @"A zero field number on the wire is invalid.");
   }
+  state->lastTag = (int32_t)tag;
   return state->lastTag;
 }
 
@@ -368,6 +385,29 @@ void GPBCodedInputStreamCheckLastTagWas(GPBCodedInputStreamState *state, int32_t
     state_.bytes = (const uint8_t *)[data bytes];
     state_.bufferSize = [data length];
     state_.currentLimit = state_.bufferSize;
+  }
+  return self;
+}
+
+- (instancetype)initWithData:(NSData *)data parentRecursionDepth:(NSUInteger)parentDepth {
+  if ((self = [self initWithData:data])) {
+    // The parent stream had already entered `parentDepth` nested parses; we
+    // are about to begin one more level in this child stream, so seed the
+    // depth accordingly and verify the limit before parsing starts. This
+    // matches the convention used by the C++ ParseContext spawn helper,
+    // which increments and checks the depth before recursing into a payload
+    // that has been read into a fresh buffer.
+    state_.recursionDepth = parentDepth + 1;
+    @try {
+      CheckRecursionLimit(&state_);
+    } @catch (NSException *exception) {
+      // If CheckRecursionLimit raises an exception (when recursion depth exceeds
+      // kDefaultRecursionLimit), `self` will not be returned to the caller.
+      // Explicitly release `self` here to avoid a memory leak before re-throwing.
+      [self release];
+      self = nil;
+      @throw;
+    }
   }
   return self;
 }

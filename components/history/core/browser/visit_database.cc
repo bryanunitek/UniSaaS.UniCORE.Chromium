@@ -19,9 +19,9 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/google/core/common/google_util.h"
-#include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_backend.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/url_database.h"
@@ -611,20 +611,14 @@ bool VisitDatabase::PrepareVisibleVisitsQuery(
   sql += ", IFNULL(visit_source.source, 1)";
   joins += " LEFT JOIN visit_source ON visits.id = visit_source.id";
 
-  if (history::IsBrowsingHistoryActorIntegrationM3Enabled()) {
-    CHECK(options.include_user_visits || options.include_actor_visits);
+  CHECK(options.include_user_visits || options.include_actor_visits);
 
-    if (options.include_user_visits && !options.include_actor_visits) {
-      where_clauses.push_back(
-          "(visit_source.source IS NULL OR visit_source.source != ?)");
-      binding_values.push_back(SOURCE_ACTOR);
-    } else if (!options.include_user_visits && options.include_actor_visits) {
-      where_clauses.push_back("visit_source.source = ?");
-      binding_values.push_back(SOURCE_ACTOR);
-    }
-  } else if (!options.include_actor_visits) {
+  if (options.include_user_visits && !options.include_actor_visits) {
     where_clauses.push_back(
         "(visit_source.source IS NULL OR visit_source.source != ?)");
+    binding_values.push_back(SOURCE_ACTOR);
+  } else if (!options.include_user_visits && options.include_actor_visits) {
+    where_clauses.push_back("visit_source.source = ?");
     binding_values.push_back(SOURCE_ACTOR);
   }
 #endif
@@ -660,8 +654,28 @@ bool VisitDatabase::PrepareVisibleVisitsQuery(
     where_clauses.push_back("visits.is_known_to_sync = 1");
   }
 
-  // This must be the last where clause added, as the App ID string is bound
-  // manually after the integer values in `binding_values` are bound.
+  if (!options.client_ids.empty()) {
+    std::vector<std::string> placeholders(options.client_ids.size(), "?");
+    std::string in_clause =
+        base::StringPrintf("visits.originator_cache_guid IN (%s)",
+                           base::JoinString(placeholders, ", ").c_str());
+
+    bool match_local_device =
+        !local_device_originator_cache_guid_.empty() &&
+        std::ranges::contains(options.client_ids,
+                              local_device_originator_cache_guid_);
+    if (match_local_device) {
+      where_clauses.push_back(
+          base::StringPrintf("(%s OR visits.originator_cache_guid IS NULL OR "
+                             "visits.originator_cache_guid = '')",
+                             in_clause.c_str()));
+    } else {
+      where_clauses.push_back(in_clause);
+    }
+  }
+
+  // String parameters (client_ids, app_id) are bound after integer values in
+  // `binding_values`.
   if (options.app_id) {
     where_clauses.push_back("visits.app_id = ?");
   }
@@ -686,6 +700,12 @@ bool VisitDatabase::PrepareVisibleVisitsQuery(
 
   for (int64_t value : binding_values) {
     out_statement.BindInt64(bind_index++, value);
+  }
+
+  if (!options.client_ids.empty()) {
+    for (const std::string& client_id : options.client_ids) {
+      out_statement.BindString(bind_index++, client_id);
+    }
   }
 
   if (options.app_id) {
@@ -1410,6 +1430,12 @@ bool VisitDatabase::GetIsUrlKnownToSync(URLID url_id, bool* is_known_to_sync) {
   statement.BindInt64(0, url_id);
   *is_known_to_sync = statement.Step();
   return true;
+}
+
+void VisitDatabase::SetLocalDeviceOriginatorCacheGuid(
+    std::string local_device_originator_cache_guid) {
+  local_device_originator_cache_guid_ =
+      std::move(local_device_originator_cache_guid);
 }
 
 bool VisitDatabase::MigrateVisitsWithoutDuration() {

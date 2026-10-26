@@ -5,9 +5,12 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_MANAGEMENT_STEP_CONTROLLER_H_
 #define CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_MANAGEMENT_STEP_CONTROLLER_H_
 
+#include <memory>
+#include <utility>
+
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
@@ -17,6 +20,10 @@
 
 class ProfilePickerPostSignInAdapter;
 class ProfilePickerWebContentsHost;
+
+namespace signin {
+enum class DeviceSignalsDisclaimerResult;
+}
 
 namespace content {
 class WebContents;
@@ -70,6 +77,12 @@ class ProfileManagementStepController {
       ProfilePickerWebContentsHost* host,
       base::OnceClosure finish_flow_and_run_in_browser_callback);
 
+  static std::unique_ptr<ProfileManagementStepController>
+  CreateForDeviceSignalsDisclaimer(
+      ProfilePickerWebContentsHost* host,
+      Profile* profile,
+      base::OnceCallback<void(signin::DeviceSignalsDisclaimerResult)> callback);
+
   explicit ProfileManagementStepController(ProfilePickerWebContentsHost* host);
   virtual ~ProfileManagementStepController();
 
@@ -88,8 +101,15 @@ class ProfileManagementStepController {
   // Method to be called if the user is attempting to reload this step.
   virtual void OnReloadRequested();
 
-  // Method to be called if the user is attempting to navigate back.
-  virtual void OnNavigateBackRequested() = 0;
+  // Method to be called if the user is attempting to navigate back. Subclasses
+  // that support back navigation should override this. The default
+  // implementation crashes via NOTREACHED().
+  virtual void OnNavigateBackRequested();
+
+  // Returns whether navigating back is allowed for this step. Subclasses
+  // should override this if they support back navigation. By default this
+  // returns false.
+  virtual bool CanNavigateBack() const;
 
   // Called when the user requests to toggle the media effects (e.g. audio or
   // animations) for a given step.
@@ -105,6 +125,9 @@ class ProfileManagementStepController {
   // calling `set_pop_step_callback()`) before we attempt to navigate back.
   virtual bool CanPopStep() const;
 
+  // Helper to check if back navigation can be performed.
+  bool CanNavigateBackInternal(content::WebContents* contents) const;
+
   // Helper to implement back navigations for `OnNavigateBackRequested()`.
   // `contents` is expected to be the `WebContents` in which the current step
   // is rendered, to determine whether some internal history can be popped.
@@ -113,10 +136,10 @@ class ProfileManagementStepController {
   // before.
   void NavigateBackInternal(content::WebContents* contents);
 
-  ProfilePickerWebContentsHost* host() const { return host_; }
+  ProfilePickerWebContentsHost& host() const { return *host_; }
 
  private:
-  raw_ptr<ProfilePickerWebContentsHost> host_;
+  raw_ref<ProfilePickerWebContentsHost> host_;
 
   base::OnceClosure pop_step_callback_;
 };

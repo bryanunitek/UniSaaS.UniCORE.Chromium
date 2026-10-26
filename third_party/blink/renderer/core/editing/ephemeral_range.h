@@ -12,7 +12,7 @@
 namespace blink {
 
 class Document;
-class AbstractRange;
+class NodeRange;
 class Range;
 
 template <class Iterator>
@@ -91,7 +91,7 @@ class EphemeralRangeTemplate final {
   // |position| should be |Position::isNull()| or in-document.
   explicit EphemeralRangeTemplate(
       const PositionTemplate<Strategy>& /* position */);
-  explicit EphemeralRangeTemplate(const AbstractRange*);
+  explicit EphemeralRangeTemplate(const NodeRange*);
   // When |range| is nullptr, |EphemeralRangeTemplate| is |isNull()|.
   explicit EphemeralRangeTemplate(const Range* /* range */);
   EphemeralRangeTemplate();
@@ -133,7 +133,7 @@ class EphemeralRangeTemplate final {
   PositionTemplate<Strategy> start_position_;
   PositionTemplate<Strategy> end_position_;
 #if DCHECK_IS_ON()
-  uint64_t dom_tree_version_;
+  uint64_t dom_tree_version_ = 0;
 #endif
 };
 

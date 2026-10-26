@@ -268,6 +268,7 @@ export function getEnableControl(data: chrome.developerPrivate.ExtensionInfo):
   return EnableControl.ENABLE_TOGGLE;
 }
 
+
 export function createDummyExtensionInfo():
     chrome.developerPrivate.ExtensionInfo {
   return {
@@ -286,6 +287,7 @@ export function createDummyExtensionInfo():
       parentDisabledPermissions: false,
       unsupportedManifestVersion: false,
       unsupportedDeveloperExtension: false,
+      disabledByAnotherExtension: false,
     },
     errorCollection: {isEnabled: false, isActive: false},
     fileAccess: {isEnabled: false, isActive: false},
@@ -319,5 +321,6 @@ export function createDummyExtensionInfo():
         chrome.developerPrivate.SafetyCheckWarningReason.UNPUBLISHED,
     isAffectedByMV2Deprecation: false,
     canUploadAsAccountExtension: false,
+    canShowReviewPrompt: false,
   };
 }

@@ -4,22 +4,41 @@
 
 #import "ios/chrome/browser/webui/ui_bundled/connectors_internals/connectors_internals_page_handler.h"
 
-#import "base/i18n/time_formatting.h"
-#import "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
-#import "components/enterprise/client_certificates/core/client_identity.h"
+#import <memory>
+#import <string>
+#import <utility>
+#import <vector>
+
+#import "base/feature_list.h"
+#import "base/functional/bind.h"
+#import "base/json/json_writer.h"
+#import "components/device_signals/core/browser/signals_aggregator.h"
+#import "components/device_signals/core/browser/user_permission_service.h"
+#import "components/enterprise/browser/reporting/chrome_profile_request_generator.h"
+#import "components/enterprise/browser/reporting/report_generation_config.h"
+#import "components/enterprise/browser/reporting/report_scheduler.h"
+#import "components/enterprise/browser/reporting/reporting_features.h"
 #import "components/enterprise/client_certificates/ios/certificate_provisioning_service_ios.h"
 #import "components/enterprise/connectors/core/connectors_internals_utils.h"
+#import "components/enterprise/device_trust/core/device_trust_connector_service.h"
+#import "components/enterprise/device_trust/core/device_trust_service.h"
+#import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/enterprise/client_certificates/certificate_provisioning_service_factory_ios.h"
+#import "ios/chrome/browser/enterprise/connectors/device_trust/features.h"
+#import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_connector_service_factory_ios.h"
+#import "ios/chrome/browser/enterprise/connectors/device_trust/model/device_trust_service_factory_ios.h"
+#import "ios/chrome/browser/enterprise/proxy/model/enterprise_proxy_service_factory_ios.h"
+#import "ios/chrome/browser/enterprise/signals/model/ios_signals_aggregator_factory.h"
+#import "ios/chrome/browser/enterprise/signals/model/ios_user_permission_service_factory.h"
+#import "ios/chrome/browser/policy/model/browser_management_service.h"
+#import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
 #import "ios/chrome/browser/policy/model/browser_policy_connector_ios.h"
+#import "ios/chrome/browser/policy/model/reporting/cloud_profile_reporting_service_factory_ios.h"
+#import "ios/chrome/browser/policy/model/reporting/cloud_profile_reporting_service_ios.h"
+#import "ios/chrome/browser/policy/model/reporting/reporting_delegate_factory_ios.h"
+#import "ios/chrome/browser/policy/model/reporting/reporting_util.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-
-namespace {
-
-constexpr char kProfile[] = "Profile";
-constexpr char kBrowser[] = "Browser";
-
-}  // namespace
 
 ConnectorsInternalsPageHandler::ConnectorsInternalsPageHandler(
     mojo::PendingReceiver<connectors_internals::mojom::PageHandler> receiver,
@@ -30,13 +49,61 @@ ConnectorsInternalsPageHandler::~ConnectorsInternalsPageHandler() = default;
 
 void ConnectorsInternalsPageHandler::GetDeviceTrustState(
     GetDeviceTrustStateCallback callback) {
-  auto state = connectors_internals::mojom::DeviceTrustState::New(
-      false, std::vector<std::string>(),
-      connectors_internals::mojom::KeyInfo::New(
-          connectors_internals::mojom::KeyManagerInitializedValue::UNSUPPORTED,
-          nullptr,
-          connectors_internals::mojom::KeyManagerPermanentFailure::UNSPECIFIED),
-      std::string(), nullptr);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!base::FeatureList::IsEnabled(
+          enterprise_connectors::features::kEnableIOSDeviceTrustConnector)) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateUnsupportedDeviceTrustState());
+    return;
+  }
+
+  // Device trust diagnostics are only shown for managed profiles. Check
+  // management rather than `IsEnabled()` so that managed profiles without an
+  // allowlist policy still see the signals.
+  policy::BrowserManagementService* management_service =
+      policy::BrowserManagementServiceFactory::GetForProfile(profile_);
+  if (!management_service || !management_service->IsManaged()) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateUnsupportedDeviceTrustState());
+    return;
+  }
+
+  enterprise_connectors::DeviceTrustService* device_trust_service =
+      DeviceTrustServiceFactoryIOS::GetForProfile(profile_);
+
+  if (!device_trust_service) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateUnsupportedDeviceTrustState());
+    return;
+  }
+
+  // Since this page is used for debugging purposes, show the signals regardless
+  // of the policy value (i.e. even if `service->IsEnabled` is false).
+  device_trust_service->GetSignals(
+      base::BindOnce(&ConnectorsInternalsPageHandler::OnSignalsCollected,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+                     device_trust_service->IsEnabled()));
+}
+
+void ConnectorsInternalsPageHandler::OnSignalsCollected(
+    GetDeviceTrustStateCallback callback,
+    bool is_device_trust_enabled,
+    base::DictValue signals) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  std::string signals_json;
+  base::JSONWriter::WriteWithOptions(
+      signals, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
+
+  std::vector<std::string> policy_enabled_levels =
+      enterprise_connectors::utils::GetPolicyEnabledLevels(
+          DeviceTrustConnectorServiceFactoryIOS::GetForProfile(profile_));
+
+  connectors_internals::mojom::DeviceTrustStatePtr state =
+      enterprise_connectors::utils::CreateDeviceTrustStateWithNoKey(
+          is_device_trust_enabled, std::move(policy_enabled_levels),
+          std::move(signals_json));
   std::move(callback).Run(std::move(state));
 }
 
@@ -63,44 +130,132 @@ void ConnectorsInternalsPageHandler::GetClientCertificateState(
                           ->GetCertificateProvisioningService();
   }
 
-  if (!profile_service && !browser_service) {
-    std::move(callback).Run(
-        connectors_internals::mojom::ClientCertificateState::New(
-            std::vector<std::string>(), nullptr, nullptr));
-    return;
-  }
-
-  std::vector<std::string> enabled_levels;
-  connectors_internals::mojom::ClientIdentityPtr managed_browser_identity =
-      nullptr;
-  if (browser_service) {
-    managed_browser_identity = enterprise_connectors::utils::GetIdentity(
-        browser_service, enabled_levels, kBrowser);
-  }
-
-  connectors_internals::mojom::ClientIdentityPtr managed_profile_identity =
-      nullptr;
-  if (profile_service) {
-    managed_profile_identity = enterprise_connectors::utils::GetIdentity(
-        profile_service, enabled_levels, kProfile);
-  }
-
   std::move(callback).Run(
-      connectors_internals::mojom::ClientCertificateState::New(
-          std::move(enabled_levels), std::move(managed_profile_identity),
-          std::move(managed_browser_identity)));
+      enterprise_connectors::utils::CreateClientCertificateState(
+          browser_service, profile_service));
 }
 
 void ConnectorsInternalsPageHandler::GetSignalsReportingState(
     GetSignalsReportingStateCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!profile_) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateSignalsReportingState(
+            /*profile_prefs=*/nullptr, /*report_scheduler=*/nullptr,
+            /*can_collect_all_signals=*/false,
+            /*error_info=*/"Profile unavailable"));
+    return;
+  }
+
+  if (!base::FeatureList::IsEnabled(
+          enterprise_reporting::kIOSSignalSharingEnabled)) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateSignalsReportingState(
+            /*profile_prefs=*/nullptr, /*report_scheduler=*/nullptr,
+            /*can_collect_all_signals=*/false,
+            /*error_info=*/
+            "User signals reporting is unsupported on the current platform"));
+    return;
+  }
+
+  PrefService* profile_prefs = profile_->GetPrefs();
+
+  const device_signals::UserPermissionService* user_permission_service =
+      IOSUserPermissionServiceFactory::GetForProfile(profile_);
+  bool can_collect_all_signals =
+      user_permission_service &&
+      user_permission_service->CanCollectReportSignals() ==
+          device_signals::UserPermission::kGranted;
+
+  enterprise_reporting::CloudProfileReportingServiceIOS*
+      profile_reporting_service = enterprise_reporting::
+          CloudProfileReportingServiceFactoryIOS::GetForProfile(profile_);
+
+  if (!profile_reporting_service) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateSignalsReportingState(
+            profile_prefs, /*report_scheduler=*/nullptr,
+            can_collect_all_signals,
+            /*error_info=*/"Profile reporting service unavailable"));
+    return;
+  }
+
+  enterprise_reporting::ReportScheduler* profile_report_scheduler =
+      profile_reporting_service->report_scheduler();
+
+  if (!profile_report_scheduler) {
+    std::move(callback).Run(
+        enterprise_connectors::utils::CreateSignalsReportingState(
+            profile_prefs, /*report_scheduler=*/nullptr,
+            can_collect_all_signals,
+            /*error_info=*/"Profile report scheduler unavailable"));
+    return;
+  }
+
+  connectors_internals::mojom::SignalsReportingStatePtr state =
+      enterprise_connectors::utils::CreateSignalsReportingState(
+          profile_prefs, profile_report_scheduler, can_collect_all_signals);
+
+  device_signals::SignalsAggregator* signals_aggregator =
+      IOSSignalsAggregatorFactory::GetForProfile(profile_);
+
+  if (!state->signals_report_enabled || !signals_aggregator) {
+    std::move(callback).Run(std::move(state));
+    return;
+  }
+
+  if (request_generator_) {
+    state->error_info = "Report generation is already in progress.";
+    std::move(callback).Run(std::move(state));
+    return;
+  }
+
+  enterprise_reporting::ReportingDelegateFactoryIOS delegate_factory;
+
+  request_generator_ =
+      std::make_unique<enterprise_reporting::ChromeProfileRequestGenerator>(
+          base::FilePath(enterprise_reporting::SanitizeProfilePath(
+              profile_->GetProfileName())),
+          &delegate_factory, signals_aggregator);
+
+  enterprise_reporting::ReportGenerationConfig config;
+  config.report_type = enterprise_reporting::ReportType::kProfileReport;
+  config.security_signals_mode = SecuritySignalsMode::kSignalsAttached;
+
+  request_generator_->Generate(
+      std::move(config),
+      base::BindOnce(&ConnectorsInternalsPageHandler::OnReportGenerated,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+                     std::move(state)));
+}
+
+void ConnectorsInternalsPageHandler::OnReportGenerated(
+    GetSignalsReportingStateCallback callback,
+    connectors_internals::mojom::SignalsReportingStatePtr state,
+    base::expected<enterprise_reporting::ReportRequestQueue,
+                   enterprise_reporting::ReportGenerationError> result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto [error_info, signals_json] =
+      enterprise_connectors::utils::ProcessReportGenerationResult(
+          std::move(result));
+  state->error_info = std::move(error_info);
+  state->signals_json = std::move(signals_json);
+  request_generator_.reset();
+  std::move(callback).Run(std::move(state));
+}
+
+void ConnectorsInternalsPageHandler::GetProvisioningDomainState(
+    GetProvisioningDomainStateCallback callback) {
   std::move(callback).Run(
-      connectors_internals::mojom::SignalsReportingState::New(
-          /*error_info=*/"User signals reporting is unsupported on the current "
-                         "platform",
-          /*status_report_enabled=*/false, /*signals_report_enabled=*/false,
-          /*last_upload_attempt_timestamp=*/std::string(),
-          /*last_upload_success_timestamp=*/std::string(),
-          /*last_signals_upload_config=*/std::string(),
-          /*can_collect_all_fields=*/false,
-          /*signals_json=*/std::nullopt));
+      enterprise_connectors::utils::GetProvisioningDomainState(
+          EnterpriseProxyServiceFactoryIOS::GetForProfile(profile_)));
+}
+
+void ConnectorsInternalsPageHandler::RefreshProvisioningDomainConfigs(
+    RefreshProvisioningDomainConfigsCallback callback) {
+  pvd_refresh_helper_.RefreshConfigs(
+      EnterpriseProxyServiceFactoryIOS::GetForProfile(profile_),
+      std::move(callback));
 }

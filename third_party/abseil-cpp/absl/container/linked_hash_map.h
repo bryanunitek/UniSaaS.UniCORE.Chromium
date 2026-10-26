@@ -21,6 +21,7 @@
 // order.
 //
 // This class is thread-compatible.
+// This class is NOT exception-safe.
 //
 // Iterators point into the list and should be stable in the face of
 // mutations, except for an iterator pointing to an element that was just
@@ -156,66 +157,69 @@ class linked_hash_map {
 
   linked_hash_map() {}
 
-  explicit linked_hash_map(size_t bucket_count, const hasher& hash = hasher(),
+  explicit linked_hash_map(size_t reservation_size,
+                           const hasher& hash = hasher(),
                            const key_equal& eq = key_equal(),
                            const allocator_type& alloc = allocator_type())
-      : set_(bucket_count, Wrapped<hasher>(hash), Wrapped<key_equal>(eq),
+      : set_(reservation_size, Wrapped<hasher>(hash), Wrapped<key_equal>(eq),
              alloc),
         list_(alloc) {}
 
-  linked_hash_map(size_t bucket_count, const hasher& hash,
+  linked_hash_map(size_t reservation_size, const hasher& hash,
                   const allocator_type& alloc)
-      : linked_hash_map(bucket_count, hash, key_equal(), alloc) {}
+      : linked_hash_map(reservation_size, hash, key_equal(), alloc) {}
 
-  linked_hash_map(size_t bucket_count, const allocator_type& alloc)
-      : linked_hash_map(bucket_count, hasher(), key_equal(), alloc) {}
+  linked_hash_map(size_t reservation_size, const allocator_type& alloc)
+      : linked_hash_map(reservation_size, hasher(), key_equal(), alloc) {}
 
   explicit linked_hash_map(const allocator_type& alloc)
       : linked_hash_map(0, hasher(), key_equal(), alloc) {}
 
   template <class InputIt>
-  linked_hash_map(InputIt first, InputIt last, size_t bucket_count = 0,
+  linked_hash_map(InputIt first, InputIt last, size_t reservation_size = 0,
                   const hasher& hash = hasher(),
                   const key_equal& eq = key_equal(),
                   const allocator_type& alloc = allocator_type())
-      : linked_hash_map(bucket_count, hash, eq, alloc) {
+      : linked_hash_map(reservation_size, hash, eq, alloc) {
     insert(first, last);
   }
 
   template <class InputIt>
-  linked_hash_map(InputIt first, InputIt last, size_t bucket_count,
+  linked_hash_map(InputIt first, InputIt last, size_t reservation_size,
                   const hasher& hash, const allocator_type& alloc)
-      : linked_hash_map(first, last, bucket_count, hash, key_equal(), alloc) {}
+      : linked_hash_map(first, last, reservation_size, hash, key_equal(),
+                        alloc) {}
 
   template <class InputIt>
-  linked_hash_map(InputIt first, InputIt last, size_t bucket_count,
+  linked_hash_map(InputIt first, InputIt last, size_t reservation_size,
                   const allocator_type& alloc)
-      : linked_hash_map(first, last, bucket_count, hasher(), key_equal(),
+      : linked_hash_map(first, last, reservation_size, hasher(), key_equal(),
                         alloc) {}
 
   template <class InputIt>
   linked_hash_map(InputIt first, InputIt last, const allocator_type& alloc)
-      : linked_hash_map(first, last, /*bucket_count=*/0, hasher(), key_equal(),
-                        alloc) {}
+      : linked_hash_map(first, last, /*reservation_size=*/0, hasher(),
+                        key_equal(), alloc) {}
 
   linked_hash_map(std::initializer_list<value_type> init,
-                  size_t bucket_count = 0, const hasher& hash = hasher(),
+                  size_t reservation_size = 0, const hasher& hash = hasher(),
                   const key_equal& eq = key_equal(),
                   const allocator_type& alloc = allocator_type())
-      : linked_hash_map(init.begin(), init.end(), bucket_count, hash, eq,
+      : linked_hash_map(init.begin(), init.end(), reservation_size, hash, eq,
                         alloc) {}
 
-  linked_hash_map(std::initializer_list<value_type> init, size_t bucket_count,
-                  const hasher& hash, const allocator_type& alloc)
-      : linked_hash_map(init, bucket_count, hash, key_equal(), alloc) {}
-
-  linked_hash_map(std::initializer_list<value_type> init, size_t bucket_count,
+  linked_hash_map(std::initializer_list<value_type> init,
+                  size_t reservation_size, const hasher& hash,
                   const allocator_type& alloc)
-      : linked_hash_map(init, bucket_count, hasher(), key_equal(), alloc) {}
+      : linked_hash_map(init, reservation_size, hash, key_equal(), alloc) {}
+
+  linked_hash_map(std::initializer_list<value_type> init,
+                  size_t reservation_size, const allocator_type& alloc)
+      : linked_hash_map(init, reservation_size, hasher(), key_equal(), alloc) {}
 
   linked_hash_map(std::initializer_list<value_type> init,
                   const allocator_type& alloc)
-      : linked_hash_map(init, /*bucket_count=*/0, hasher(), key_equal(),
+      : linked_hash_map(init, /*reservation_size=*/0, hasher(), key_equal(),
                         alloc) {}
 
   linked_hash_map(const linked_hash_map& other)
@@ -244,6 +248,7 @@ class linked_hash_map {
     if (get_allocator() == other.get_allocator()) {
       *this = std::move(other);
     } else {
+      reserve(other.size());
       CopyFrom(std::move(other));
     }
   }
@@ -263,11 +268,32 @@ class linked_hash_map {
 
   linked_hash_map& operator=(linked_hash_map&& other) noexcept {
     if (this != &other) {
-      // underlying containers will handle progagate_on_container_move details
-      set_ = std::move(other.set_);
-      list_ = std::move(other.list_);
-      other.set_.clear();
-      other.list_.clear();
+      using AllocTraits = std::allocator_traits<Alloc>;
+      if constexpr (AllocTraits::propagate_on_container_move_assignment::
+                        value) {
+        set_ = std::move(other.set_);
+        list_ = std::move(other.list_);
+        other.clear();
+      } else if (AllocTraits::is_always_equal::value ||
+                 get_allocator() == other.get_allocator()) {
+        // The allocators are equal, so the list can take over other's nodes.
+        // std::list's move assignment can not be used here: with an allocator
+        // that does not propagate on move assignment it element-assigns, which
+        // is ill-formed for value_type, std::pair<const K, V>.
+        clear();
+        set_ = std::move(other.set_);
+        list_.splice(list_.end(), other.list_);
+        other.set_.clear();
+      } else if constexpr (!AllocTraits::is_always_equal::value) {
+        // The list can not take over other's nodes, so move each element into
+        // a new node allocated with this map's allocator and rebuild the index
+        // over them, adopting other's hash and equality state. This is the
+        // same pattern as raw_hash_set::move_assign.
+        clear();
+        set_ = SetType(other.size(), other.set_.hash_function(),
+                       other.set_.key_eq(), get_allocator());
+        CopyFrom(std::move(other));
+      }
     }
     return *this;
   }
@@ -410,7 +436,8 @@ class linked_hash_map {
     return LazyEmplaceInternal(key).first->second;
   }
 
-  template <class K = key_type, K* = nullptr>
+  template <class K = key_type,
+            std::enable_if_t<!std::is_reference_v<K>, int> = 0>
   mapped_type& operator[](key_arg<K>&& key) {
     return LazyEmplaceInternal(std::forward<key_arg<K>>(key)).first->second;
   }
@@ -459,19 +486,22 @@ class linked_hash_map {
   //   union { int n : 1; };
   //   linked_hash_map<int, int> m;
   //   m.insert_or_assign(n, n);
-  template <class K = key_type, class V = mapped_type, K* = nullptr,
-            V* = nullptr>
+  template <class K = key_type, class V = mapped_type,
+            std::enable_if_t<!std::is_reference_v<K> && !std::is_reference_v<V>,
+                             int> = 0>
   std::pair<iterator, bool> insert_or_assign(key_arg<K>&& k, V&& v) {
     return InsertOrAssignInternal(std::forward<key_arg<K>>(k),
                                   std::forward<V>(v));
   }
 
-  template <class K = key_type, class V = mapped_type, K* = nullptr>
+  template <class K = key_type, class V = mapped_type,
+            std::enable_if_t<!std::is_reference_v<K>, int> = 0>
   std::pair<iterator, bool> insert_or_assign(key_arg<K>&& k, const V& v) {
     return InsertOrAssignInternal(std::forward<key_arg<K>>(k), v);
   }
 
-  template <class K = key_type, class V = mapped_type, V* = nullptr>
+  template <class K = key_type, class V = mapped_type,
+            std::enable_if_t<!std::is_reference_v<V>, int> = 0>
   std::pair<iterator, bool> insert_or_assign(const key_arg<K>& k, V&& v) {
     return InsertOrAssignInternal(k, std::forward<V>(v));
   }
@@ -481,19 +511,22 @@ class linked_hash_map {
     return InsertOrAssignInternal(k, v);
   }
 
-  template <class K = key_type, class V = mapped_type, K* = nullptr,
-            V* = nullptr>
+  template <class K = key_type, class V = mapped_type,
+            std::enable_if_t<!std::is_reference_v<K> && !std::is_reference_v<V>,
+                             int> = 0>
   iterator insert_or_assign(const_iterator, key_arg<K>&& k, V&& v) {
     return insert_or_assign(std::forward<key_arg<K>>(k), std::forward<V>(v))
         .first;
   }
 
-  template <class K = key_type, class V = mapped_type, K* = nullptr>
+  template <class K = key_type, class V = mapped_type,
+            std::enable_if_t<!std::is_reference_v<K>, int> = 0>
   iterator insert_or_assign(const_iterator, key_arg<K>&& k, const V& v) {
     return insert_or_assign(std::forward<key_arg<K>>(k), v).first;
   }
 
-  template <class K = key_type, class V = mapped_type, V* = nullptr>
+  template <class K = key_type, class V = mapped_type,
+            std::enable_if_t<!std::is_reference_v<V>, int> = 0>
   iterator insert_or_assign(const_iterator, const key_arg<K>& k, V&& v) {
     return insert_or_assign(k, std::forward<V>(v)).first;
   }
@@ -505,7 +538,7 @@ class linked_hash_map {
 
   template <typename... Args>
   std::pair<iterator, bool> emplace(Args&&... args) {
-    ListType node_donor;
+    ListType node_donor(get_allocator());
     auto list_iter =
         node_donor.emplace(node_donor.end(), std::forward<Args>(args)...);
     auto ins = set_.insert(list_iter);
@@ -514,7 +547,8 @@ class linked_hash_map {
     return {list_iter, true};
   }
 
-  template <class K = key_type, class... Args, K* = nullptr>
+  template <class K = key_type, class... Args,
+            std::enable_if_t<!std::is_reference_v<K>, int> = 0>
   iterator try_emplace(const_iterator, key_arg<K>&& k, Args&&... args) {
     return try_emplace(std::forward<key_arg<K>>(k), std::forward<Args>(args)...)
         .first;
@@ -525,7 +559,8 @@ class linked_hash_map {
     return emplace(std::forward<Args>(args)...).first;
   }
 
-  template <class K = key_type, typename... Args, K* = nullptr>
+  template <class K = key_type, typename... Args,
+            std::enable_if_t<!std::is_reference_v<K>, int> = 0>
   std::pair<iterator, bool> try_emplace(key_arg<K>&& key, Args&&... args) {
     return LazyEmplaceInternal(std::forward<key_arg<K>>(key),
                                std::forward<Args>(args)...);
@@ -550,7 +585,7 @@ class linked_hash_map {
 
   node_type extract(const_iterator position) {
     set_.erase(position->first);
-    ListType extracted_node_list;
+    ListType extracted_node_list(get_allocator());
     extracted_node_list.splice(extracted_node_list.end(), list_, position);
     return node_type(std::move(extracted_node_list));
   }
@@ -560,7 +595,7 @@ class linked_hash_map {
   node_type extract(const key_arg<K>& key) {
     auto node = set_.extract(key);
     if (node.empty()) return node_type();
-    ListType extracted_node_list;
+    ListType extracted_node_list(get_allocator());
     extracted_node_list.splice(extracted_node_list.end(), list_, node.value());
     return node_type(std::move(extracted_node_list));
   }
@@ -616,6 +651,12 @@ class linked_hash_map {
   void CopyFrom(Other&& other) {
     for (auto& elem : other.list_) {
       set_.insert(list_.insert(list_.end(), std::move(elem)));
+    }
+    if constexpr (!std::is_const_v<std::remove_reference_t<Other>>) {
+      // When moving from `other`, `std::move(elem)` above mutates the elements
+      // of `other.list_` in place, invalidating `other.set_`'s index over them.
+      // Clear `other` so its `set_` and `list_` remain consistent and empty.
+      other.clear();
     }
     assert(set_.size() == list_.size());
   }

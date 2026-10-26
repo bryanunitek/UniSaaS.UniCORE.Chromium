@@ -7,10 +7,11 @@
 #import "base/test/task_environment.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_manager_metrics_util.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/passwords/password_exporter/coordinator/password_exporter_for_testing.h"
-#import "ios/chrome/common/ui/reauthentication/mock_reauthentication_module.h"
+#import "ios/chrome/common/ui/reauthentication/fake_reauthentication_module.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
@@ -94,11 +95,11 @@ class PasswordExporterTest : public PlatformTest {
  protected:
   void SetUp() override {
     PlatformTest::SetUp();
-    mock_reauthentication_module_ = [[MockReauthenticationModule alloc] init];
+    fake_reauthentication_module_ = [[FakeReauthenticationModule alloc] init];
     password_exporter_delegate_ =
         OCMProtocolMock(@protocol(PasswordExporterDelegate));
     password_exporter_ = [[PasswordExporter alloc]
-        initWithReauthenticationModule:mock_reauthentication_module_
+        initWithReauthenticationModule:fake_reauthentication_module_
                               delegate:password_exporter_delegate_];
   }
 
@@ -106,14 +107,14 @@ class PasswordExporterTest : public PlatformTest {
     password_manager::PasswordForm password_form;
     password_form.url = GURL("http://accounts.google.com/a/LoginAuth");
     password_form.username_value = u"test@testmail.com";
-    password_form.password_value = u"test1";
+    password_form.password_value = password_manager::PasswordString(u"test1");
 
     return {password_manager::CredentialUIEntry(password_form)};
   }
 
   id password_exporter_delegate_;
   PasswordExporter* password_exporter_;
-  MockReauthenticationModule* mock_reauthentication_module_;
+  FakeReauthenticationModule* fake_reauthentication_module_;
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
 };
@@ -121,7 +122,7 @@ class PasswordExporterTest : public PlatformTest {
 // Tests that when reauthentication is successful, writing the passwords file
 // is attempted and a call to show the activity view is made.
 TEST_F(PasswordExporterTest, PasswordFileWriteReauthSucceeded) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
@@ -149,7 +150,7 @@ TEST_F(PasswordExporterTest, PasswordFileWriteReauthSucceeded) {
 // the appropriate error is displayed and the export operation
 // is interrupted.
 TEST_F(PasswordExporterTest, WritingFailedOutOfDiskSpace) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
@@ -188,7 +189,7 @@ TEST_F(PasswordExporterTest, WritingFailedOutOfDiskSpace) {
 // enough disk space, the appropriate error is displayed and the export
 // operation is interrupted.
 TEST_F(PasswordExporterTest, WritingFailedUnknownError) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
@@ -224,7 +225,7 @@ TEST_F(PasswordExporterTest, WritingFailedUnknownError) {
 
 // Tests that when reauthentication fails the export flow is interrupted.
 TEST_F(PasswordExporterTest, ExportInterruptedWhenReauthFails) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kFailure;
   FakePasswordSerialzerBridge* fake_password_serializer_bridge =
       [[FakePasswordSerialzerBridge alloc] init];
@@ -270,7 +271,7 @@ TEST_F(PasswordExporterTest, ExportInterruptedWhenReauthFails) {
 // Tests that cancelling the export while serialization is still ongoing
 // waits for it to finish before cleaning up.
 TEST_F(PasswordExporterTest, CancelWaitsForSerializationFinished) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kSuccess;
   FakePasswordSerialzerBridge* fake_password_serializer_bridge =
       [[FakePasswordSerialzerBridge alloc] init];
@@ -308,7 +309,7 @@ TEST_F(PasswordExporterTest, CancelWaitsForSerializationFinished) {
 // Tests that if the export is cancelled before writing to file finishes
 // successfully the request to show the activity controller isn't made.
 TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFinishesSuccessfully) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
@@ -341,7 +342,7 @@ TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFinishesSuccessfully) {
 // Tests that if the export is cancelled before writing to file fails
 // with an error, the request to show the error alert isn't made.
 TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFails) {
-  mock_reauthentication_module_.expectedResult =
+  fake_reauthentication_module_.expectedResult =
       ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];

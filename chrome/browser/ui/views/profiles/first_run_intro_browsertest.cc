@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
 #include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/profiles/first_run_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
@@ -29,9 +31,10 @@ struct FirstRunTestParam {
   bool use_fixed_size = false;
   bool use_longer_strings = false;
   bool decline_signin_cta_experiment_enabled = false;
-  bool use_primary_and_tonal_buttons_for_promos_enabled = false;
+
   bool use_refresh = false;
   bool use_revamp = false;
+  bool enable_sound = true;
 };
 
 // To be passed as 4th argument to `INSTANTIATE_TEST_SUITE_P()`, allows the test
@@ -43,53 +46,56 @@ std::string ParamToTestSuffix(
 }
 
 // Permutations of supported parameters.
-const FirstRunTestParam kTestParams[] = {
-    {.pixel_test_param = {.test_suffix = "DarkThemeFixedSize",
-                          .use_dark_theme = true},
-     .use_fixed_size = true},
-    {.pixel_test_param = {.test_suffix = "DarkThemeDeclineSigninCTAExperiment",
-                          .use_dark_theme = true},
-     .decline_signin_cta_experiment_enabled = true},
-    {.pixel_test_param = {.test_suffix = "DarkThemeUsePrimaryAndTonalButtons",
-                          .use_dark_theme = true},
-     .use_primary_and_tonal_buttons_for_promos_enabled = true},
+auto GetTestParams() {
+  return std::to_array<FirstRunTestParam>({
+      {.pixel_test_param = {.test_suffix = "DarkThemeFixedSize",
+                            .use_dark_theme = true},
+       .use_fixed_size = true},
+      {.pixel_test_param = {.test_suffix =
+                                "DarkThemeDeclineSigninCTAExperiment",
+                            .use_dark_theme = true},
+       .decline_signin_cta_experiment_enabled = true},
+
 #if !BUILDFLAG(IS_WIN)
-    // TODO(https://crbug.com/40261456): The following test has been frequently
-    // flaking on "Win10 Tests x64" since 2024-05-09:
-    // FirstRunIntroPixelTest.InvokeUi_default/LightTheme
-    {.pixel_test_param = {.test_suffix = "LightTheme"}},
+      // TODO(https://crbug.com/40261456): The following test has been
+      // frequently flaking on "Win10 Tests x64" since 2024-05-09:
+      // FirstRunIntroPixelTest.InvokeUi_default/LightTheme
+      {.pixel_test_param = {.test_suffix = "LightTheme"}},
 #endif
-    {.pixel_test_param = {.test_suffix = "LongerStringsFixedSize"},
-     .use_fixed_size = true,
-     .use_longer_strings = true,
-     .use_refresh = false},
-    {.pixel_test_param = {.test_suffix = "LongerStringsFixedSizeRefreshedUI"},
-     .use_fixed_size = true,
-     .use_longer_strings = true,
-     .use_refresh = true},
-    {.pixel_test_param = {.test_suffix = "RightToLeftLanguage",
-                          .use_right_to_left_language = true}},
-    // Refresh parameters
-    {.pixel_test_param = {.test_suffix = "RefreshDefault"},
-     .use_refresh = true},
-    {.pixel_test_param = {.test_suffix = "RefreshDarkTheme",
-                          .use_dark_theme = true},
-     .use_refresh = true},
-    {.pixel_test_param = {.test_suffix = "RefreshRightToLeftLanguage",
-                          .use_right_to_left_language = true},
-     .use_refresh = true},
-    {.pixel_test_param = {.test_suffix = "RefreshUsePrimaryAndTonalButtons"},
-     .use_primary_and_tonal_buttons_for_promos_enabled = true,
-     .use_refresh = true},
-    // Revamp parameters.
-    {.pixel_test_param = {.test_suffix = "RevampDefault"},
-     .use_refresh = true,
-     .use_revamp = true},
-    {.pixel_test_param = {.test_suffix = "RevampRightToLeftLanguage",
-                          .use_right_to_left_language = true},
-     .use_refresh = true,
-     .use_revamp = true},
-};
+      {.pixel_test_param = {.test_suffix = "LongerStringsFixedSize"},
+       .use_fixed_size = true,
+       .use_longer_strings = true,
+       .use_refresh = false},
+      {.pixel_test_param = {.test_suffix = "LongerStringsFixedSizeRefreshedUI"},
+       .use_fixed_size = true,
+       .use_longer_strings = true,
+       .use_refresh = true},
+      {.pixel_test_param = {.test_suffix = "RightToLeftLanguage",
+                            .use_right_to_left_language = true}},
+      // Refresh parameters
+      {.pixel_test_param = {.test_suffix = "RefreshDefault"},
+       .use_refresh = true},
+      {.pixel_test_param = {.test_suffix = "RefreshDarkTheme",
+                            .use_dark_theme = true},
+       .use_refresh = true},
+      {.pixel_test_param = {.test_suffix = "RefreshRightToLeftLanguage",
+                            .use_right_to_left_language = true},
+       .use_refresh = true},
+
+      // Revamp parameters.
+      {.pixel_test_param = {.test_suffix = "RevampDefault"},
+       .use_refresh = true,
+       .use_revamp = true},
+      {.pixel_test_param = {.test_suffix = "RevampRightToLeftLanguage",
+                            .use_right_to_left_language = true},
+       .use_refresh = true,
+       .use_revamp = true},
+      {.pixel_test_param = {.test_suffix = "RevampSoundDisabled"},
+       .use_refresh = true,
+       .use_revamp = true,
+       .enable_sound = false},
+  });
+}
 
 std::string_view GetMakeCardDescriptionLongerJsString() {
   if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
@@ -118,6 +124,7 @@ std::string_view GetMakeCardDescriptionLongerJsString() {
 
 }  // namespace
 
+// TODO(crbug.com/542896534): Add tests for larger profile picker window.
 class FirstRunIntroPixelTest
     : public ProfilesPixelTestBaseT<UiBrowserTest>,
       public testing::WithParamInterface<FirstRunTestParam> {
@@ -127,12 +134,10 @@ class FirstRunIntroPixelTest
     scoped_feature_list_.InitWithFeatureStates(
         {{switches::kProfileCreationDeclineSigninCTAExperiment,
           GetParam().decline_signin_cta_experiment_enabled},
-         {switches::kUsePrimaryAndTonalButtonsForPromos,
-          GetParam().use_primary_and_tonal_buttons_for_promos_enabled},
          {switches::kFirstRunDesktopRefresh, GetParam().use_refresh},
          {switches::kFirstRunDesktopRevamp, GetParam().use_revamp},
-         {switches::kDisableFirstRunAnimationsForTesting,
-          GetParam().use_refresh}});
+         {switches::kFirstRunDesktopRevampSound, GetParam().enable_sound},
+         {switches::kDisableFirstRunAnimationsForTesting, true}});
   }
 
   void ShowUi(const std::string& name) override {
@@ -150,10 +155,11 @@ class FirstRunIntroPixelTest
         base::BindRepeating([](ProfilePickerWebContentsHost* host) {
           return CreateIntroStep(
               host, /*choice_callback=*/base::DoNothing(),
-              /*enable_animations=*/false,
               /*query_effects_callback=*/base::BindRepeating([] {
                 return false;
-              }));
+              }),
+              /*effects_button_shown_by_default=*/GetParam().use_revamp &&
+                  GetParam().enable_sound);
         }));
     profile_picker_view_->ShowAndWait(
         GetParam().use_fixed_size
@@ -177,8 +183,9 @@ class FirstRunIntroPixelTest
     views::Widget* widget = GetWidgetForScreenshot();
 
     auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
-    const std::string screenshot_name =
-        base::StrCat({test_info->test_suite_name(), "_", test_info->name()});
+    const std::string baseline = "8481376";
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_", baseline});
 
     return VerifyPixelUi(widget, "FirstRunIntroPixelTest", screenshot_name) !=
            ui::test::ActionResult::kFailed;
@@ -205,5 +212,5 @@ IN_PROC_BROWSER_TEST_P(FirstRunIntroPixelTest, InvokeUi_default) {
 
 INSTANTIATE_TEST_SUITE_P(,
                          FirstRunIntroPixelTest,
-                         testing::ValuesIn(kTestParams),
+                         testing::ValuesIn(GetTestParams()),
                          &ParamToTestSuffix);

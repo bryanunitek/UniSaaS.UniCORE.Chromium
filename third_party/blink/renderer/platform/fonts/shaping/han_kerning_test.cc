@@ -1,4 +1,4 @@
-﻿// Copyright 2023 The Chromium Authors
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/platform/fonts/shaping/font_features.h"
 #include "third_party/blink/renderer/platform/testing/font_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -44,8 +45,7 @@ TEST_F(HanKerningTest, MayApply) {
           type == HanKerning::CharType::kOpenQuote ||
           type == HanKerning::CharType::kClose ||
           type == HanKerning::CharType::kCloseQuote) {
-        EXPECT_EQ(HanKerning::MayApply(text), true)
-            << String::Format("U+%06X", ch);
+        EXPECT_EQ(HanKerning::MayApply(text), true) << Format("U+{:06X}", ch);
         break;
       }
     }
@@ -127,9 +127,7 @@ TEST_F(HanKerningTest, FontDataVertical) {
 TEST_F(HanKerningTest, FontDataSizeError) {
   class EnableAntialiasedText {
    public:
-    EnableAntialiasedText()
-        : is_antialiased_text_enabled_(
-              FontCache::Get().AntialiasedTextEnabled()) {
+    EnableAntialiasedText() {
       FontCache::Get().SetAntialiasedTextEnabled(true);
     }
     ~EnableAntialiasedText() {
@@ -137,7 +135,8 @@ TEST_F(HanKerningTest, FontDataSizeError) {
     }
 
    private:
-    bool is_antialiased_text_enabled_;
+    bool is_antialiased_text_enabled_ =
+        FontCache::Get().AntialiasedTextEnabled();
   } enable_antialias_text;
 
   FontDescription font_description;
@@ -175,7 +174,7 @@ TEST_F(HanKerningTest, ResetFeatures) {
   EXPECT_TRUE(noto_cjk_data);
   FontFeatureRanges features;
   features.push_back(FontFeatureRange{
-      {{'T', 'E', 'S', 'T'}, 1}, 0, static_cast<unsigned>(-1)});
+      {{'T', 'E', 'S', 'T'}, 1}, 0, static_cast<wtf_size_t>(-1)});
   EXPECT_EQ(features.size(), 1u);
   const String text(u"国）（国");
   {

@@ -48,7 +48,6 @@
 #include "third_party/blink/renderer/core/animation/element_animations.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect_model.h"
 #include "third_party/blink/renderer/core/css/background_color_paint_image_generator.h"
-#include "third_party/blink/renderer/core/css/box_shadow_paint_image_generator.h"
 #include "third_party/blink/renderer/core/css/clip_path_paint_image_generator.h"
 #include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
@@ -111,11 +110,10 @@ bool ConsiderAnimationAsIncompatible(const Animation& animation,
 }
 
 bool IsTransformRelatedCSSProperty(const PropertyHandle property) {
-  return property.IsCSSProperty() &&
-         (property.GetCSSProperty().IDEquals(CSSPropertyID::kRotate) ||
-          property.GetCSSProperty().IDEquals(CSSPropertyID::kScale) ||
-          property.GetCSSProperty().IDEquals(CSSPropertyID::kTransform) ||
-          property.GetCSSProperty().IDEquals(CSSPropertyID::kTranslate));
+  return property.GetCSSProperty().IDEquals(CSSPropertyID::kRotate) ||
+         property.GetCSSProperty().IDEquals(CSSPropertyID::kScale) ||
+         property.GetCSSProperty().IDEquals(CSSPropertyID::kTransform) ||
+         property.GetCSSProperty().IDEquals(CSSPropertyID::kTranslate);
 }
 
 bool HasNativePaintWorketReason(
@@ -169,13 +167,11 @@ bool HasIncompatibleAnimations(const Element& target_element,
   return false;
 }
 
-void DefaultToUnsupportedProperty(
-    PropertyHandleSet* unsupported_properties_for_tracing,
-    const PropertyHandle& property,
-    CompositorAnimations::FailureReasons* reasons) {
-  (*reasons) |= CompositorAnimations::kUnsupportedCSSProperty;
-  if (unsupported_properties_for_tracing) {
-    unsupported_properties_for_tracing->insert(property);
+void DefaultToUnsupportedProperty(AnimationCompositingDecisionState& state,
+                                  const PropertyHandle& property) {
+  state.disposition |= CompositorAnimations::kUnsupportedCSSProperty;
+  if (state.specific_reasons) {
+    state.specific_reasons->AddUnsupportedProperty(property);
   }
 }
 
@@ -195,8 +191,6 @@ bool IsNoOpVariableAnimation(const PropertyHandle& property,
 
 bool CompositedAnimationRequiresProperties(const PropertyHandle& property,
                                            LayoutObject* layout_object) {
-  if (!property.IsCSSProperty())
-    return false;
   switch (property.GetCSSProperty().PropertyID()) {
     case CSSPropertyID::kRotate:
     case CSSPropertyID::kScale:
@@ -243,7 +237,6 @@ CompositorAnimations::CompositorElementNamespaceForProperty(
     case CSSPropertyID::kFilter:
       return CompositorElementIdNamespace::kEffectFilter;
     case CSSPropertyID::kBackgroundColor:
-    case CSSPropertyID::kBoxShadow:
     case CSSPropertyID::kClipPath:
     case CSSPropertyID::kVariable:
       // TODO(crbug.com/883721): Variables and these raster-inducing properties
@@ -263,32 +256,35 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
     const Timing::NormalizedTiming& normalized_timing,
     const Element& target_element,
     const Animation* animation_to_add,
+    AnimationCompositingDecisionState& state,
     const EffectModel& effect,
     const PaintArtifactCompositor* paint_artifact_compositor,
-    double animation_playback_rate,
-    PropertyHandleSet* unsupported_properties_for_tracing) {
-  FailureReasons reasons = kNoFailure;
+    double animation_playback_rate) {
+  if (state.specific_reasons) {
+    state.specific_reasons->ResetDetails(
+        {SpecificCompositingDecision::kUnsupportedPropertyName});
+  }
   const auto& keyframe_effect = To<KeyframeEffectModelBase>(effect);
 
   // TODO(crbug.com/41133485): Compositor support for iterationComposite.
   if (keyframe_effect.IterationComposite() !=
       EffectModel::kIterationCompositeReplace) {
-    reasons |= kEffectHasNonReplaceIterationCompositeMode;
+    state.disposition |= kEffectHasNonReplaceIterationCompositeMode;
   }
 
   LayoutObject* layout_object = target_element.GetLayoutObject();
   // Elements with subtrees containing will-change: contents are not
   // composited for animations as if the contents change the tiles
   // would need to be rerastered anyways.
-  if (layout_object && layout_object->StyleRef().SubtreeWillChangeContents()) {
-    reasons |= kTargetHasInvalidCompositingState;
+  if (layout_object && layout_object->Style().SubtreeWillChangeContents()) {
+    state.disposition |= kTargetHasInvalidCompositingState;
   }
 
   auto properties = keyframe_effect.DynamicProperties(&target_element);
   // If all properties are static, we don't need to composite. The animation
   // can only change at a phase boundary.
   if (properties.empty()) {
-    reasons |= kAnimationHasNoVisibleChange;
+    state.disposition |= kAnimationHasNoVisibleChange;
   }
   if (keyframe_effect.HasStaticProperty()) {
     UseCounter::Count(target_element.GetDocument(),
@@ -299,13 +295,17 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
       !layout_object ||
       target_element.GetStyleChangeType() != StyleChangeType::kNoStyleChange;
 
-  // Limit to one native property and one CSS custom property per animation.
+  // Limit to one native property and one CSS custom property per animation,
+  // and reject properties with unsupported inheritance.
+  const ElementAnimations* element_animations =
+      target_element.GetElementAnimations();
+  DCHECK(element_animations);
   for (const auto& property : properties) {
-    if (!property.IsCSSProperty()) {
-      // None of the below reasons make any sense if |property| isn't CSS, so we
-      // skip the rest of the loop in that case.
-      reasons |= kAnimationAffectsNonCSSProperties;
-      continue;
+    const std::optional<AnimatedSourceProperty> tracked =
+        GetAnimatedSourceProperty(property.GetCSSProperty().PropertyID());
+    if (tracked &&
+        element_animations->UnsupportedInheritedProperties().Has(*tracked)) {
+      state.disposition |= kUnsupportedInheritance;
     }
 
     if (IsTransformRelatedCSSProperty(property)) {
@@ -314,17 +314,18 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
         // TODO(dbaron): We could consider ignoring the
         // transform-related property and still running the others on
         // the compositor.
-        reasons |= kTransformRelatedPropertyCannotBeAcceleratedOnTarget;
+        state.disposition |=
+            kTransformRelatedPropertyCannotBeAcceleratedOnTarget;
       }
       if (const auto* svg_element = DynamicTo<SVGElement>(target_element)) {
-        reasons |=
+        state.disposition |=
             CheckCanStartTransformAnimationOnCompositorForSVG(*svg_element);
         // TODO(https://crbug.com/1278452): When we make the transform tree
         // structure for SVG work like everything else, we should instead
         // start compositing animations of transform properties other than
         // transform.
         if (!property.GetCSSProperty().IDEquals(CSSPropertyID::kTransform))
-          reasons |= kSVGTargetHasIndependentTransformProperty;
+          state.disposition |= kSVGTargetHasIndependentTransformProperty;
       }
     }
 
@@ -347,15 +348,13 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
           if (HasNativePaintWorketReason(
                   npw_reasons, Animation::NativePaintWorkletProperties::
                                    kBackgroundColorPaintWorklet)) {
-            DCHECK(RuntimeEnabledFeatures::CompositeBGColorAnimationEnabled());
             generator = target_element.GetDocument()
                             .GetFrame()
                             ->GetBackgroundColorPaintImageGenerator();
           }
           if (!generator ||
               !generator->GetAnimationIfCompositable(&target_element)) {
-            DefaultToUnsupportedProperty(unsupported_properties_for_tracing,
-                                         property, &reasons);
+            DefaultToUnsupportedProperty(state, property);
           }
           break;
         }
@@ -372,8 +371,7 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
           }
           if (!generator ||
               !generator->GetAnimationIfCompositable(&target_element)) {
-            DefaultToUnsupportedProperty(unsupported_properties_for_tracing,
-                                         property, &reasons);
+            DefaultToUnsupportedProperty(state, property);
           }
           break;
         }
@@ -389,8 +387,10 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
     for (const auto& keyframe : keyframes) {
       if (keyframe->Composite() != EffectModel::kCompositeReplace &&
           !keyframe->IsNeutral()) {
-        reasons |= kEffectHasNonReplaceCompositeMode;
+        state.disposition |= kEffectHasNonReplaceCompositeMode;
       }
+
+      bool property_not_supported = false;
 
       // FIXME: Determine candidacy based on the CSSValue instead of a snapshot
       // CompositorKeyframeValue.
@@ -408,7 +408,7 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
                   keyframe->GetCompositorKeyframeValue())
                   ->Operations()
                   .HasFilterThatMovesPixels()) {
-            reasons |= kFilterRelatedPropertyMayMovePixels;
+            state.disposition |= kFilterRelatedPropertyMayMovePixels;
           }
           break;
         case CSSPropertyID::kBackdropFilter:
@@ -429,35 +429,33 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
             DCHECK(keyframe_value->IsDouble() || keyframe_value->IsColor());
             // If a custom property is not used by CSS Paint, then we should not
             // support that on the compositor thread.
-            if (layout_object && layout_object->Style() &&
-                !layout_object->StyleRef().HasCSSPaintImagesUsingCustomProperty(
+            if (layout_object &&
+                !layout_object->Style().HasCSSPaintImagesUsingCustomProperty(
                     property.CustomPropertyName(),
                     layout_object->GetDocument())) {
-              DefaultToUnsupportedProperty(unsupported_properties_for_tracing,
-                                           property, &reasons);
+              DefaultToUnsupportedProperty(state, property);
             }
             // TODO: Add support for keyframes containing different types
             if (!keyframes.front() ||
                 !keyframes.front()->GetCompositorKeyframeValue() ||
                 keyframes.front()->GetCompositorKeyframeValue()->GetType() !=
                     keyframe_value->GetType()) {
-              reasons |= kMixedKeyframeValueTypes;
+              state.disposition |= kMixedKeyframeValueTypes;
             }
           } else {
-            // We skip the rest of the loop in this case for the same reason as
-            // unsupported CSS properties - see below.
-            DefaultToUnsupportedProperty(unsupported_properties_for_tracing,
-                                         property, &reasons);
-            continue;
+            property_not_supported = true;
           }
           break;
         }
         default:
-          // We skip the rest of the loop in this case because a
-          // compositor keyframe value is not expected.
-          DefaultToUnsupportedProperty(unsupported_properties_for_tracing,
-                                       property, &reasons);
-          continue;
+          property_not_supported = true;
+      }
+
+      if (property_not_supported) {
+        // We skip the rest of the loop in this case because a
+        // compositor keyframe value is not expected.
+        DefaultToUnsupportedProperty(state, property);
+        break;
       }
 
       // Do not check for snapshots for NPWs (which do not use snapshots) and
@@ -471,12 +469,12 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
           !keyframe->GetCompositorKeyframeValue()) {
         // We cannot create a compositor animation without a compositor keyframe
         // value.
-        reasons |= kInvalidAnimationOrEffect;
+        state.disposition |= kInvalidAnimationOrEffect;
 
         // In theory, this should never be true, but due to the complexity of
         // the document lifecycle, it's possible that this occurs in the wild.
         // We track these cases to better understand them.
-        if (!(reasons & kUnsupportedCSSProperty)) {
+        if (!(state.disposition & kUnsupportedCSSProperty)) {
           if (RuntimeEnabledFeatures::DumpForAbsentKeyframeSnapshotsEnabled()) {
             base::debug::DumpWithoutCrashing();
           }
@@ -490,12 +488,12 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
   if (missing_style_or_layout || CompositorPropertyAnimationsHaveNoEffect(
                                      target_element, animation_to_add, effect,
                                      paint_artifact_compositor)) {
-    reasons |= kAnimationHasNoVisibleChange;
+    state.disposition |= kAnimationHasNoVisibleChange;
   }
 
   if (animation_to_add &&
       HasIncompatibleAnimations(target_element, *animation_to_add, effect)) {
-    reasons |= kTargetHasIncompatibleAnimations;
+    state.disposition |= kTargetHasIncompatibleAnimations;
   }
 
   CompositorTiming out;
@@ -504,10 +502,10 @@ CompositorAnimations::CheckCanStartEffectOnCompositor(
                        : std::nullopt;
   if (!ConvertTimingForCompositor(timing, normalized_timing, hold_time, out,
                                   animation_playback_rate)) {
-    reasons |= kEffectHasUnsupportedTimingParameters;
+    state.disposition |= kEffectHasUnsupportedTimingParameters;
   }
 
-  return reasons;
+  return state.disposition;
 }
 
 bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
@@ -522,7 +520,7 @@ bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
     return false;
   }
 
-  if (layout_object && layout_object->StyleRef().SubtreeWillChangeContents()) {
+  if (layout_object && layout_object->Style().SubtreeWillChangeContents()) {
     // If the element has will-change: contents, then this function cannot
     // return a meaningful result, as we decline to generate layers in this
     // case. See also crbug.com/40061259 - some assumptions made in the below
@@ -535,11 +533,23 @@ bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
 
   const auto& keyframe_effect = To<KeyframeEffectModelBase>(effect);
   const auto& groups = keyframe_effect.GetPropertySpecificKeyframeGroups();
+  // Static properties aren't animated on the compositor (see
+  // GetAnimationOnCompositor()), so they don't need composited property nodes.
+  // E.g. a static backdrop-filter animation isn't composited, see
+  // CompositingReasonFinder::CompositingReasonsForAnimation().
+  const bool skip_static_properties = RuntimeEnabledFeatures::
+      SkipCompositingStaticBackdropFilterAnimationEnabled();
+  const auto dynamic_properties =
+      keyframe_effect.DynamicProperties(&target_element);
   bool has_paint_properties =
       layout_object && layout_object->FirstFragment().PaintProperties();
   for (const PropertyHandle& property : groups.Keys()) {
     if (!CompositedAnimationRequiresProperties(property, layout_object))
       continue;
+
+    if (skip_static_properties && !dynamic_properties.Contains(property)) {
+      continue;
+    }
 
     if (!has_paint_properties) {
       // We have an animated property that requires a property node but no paint
@@ -590,12 +600,11 @@ bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
 CompositorAnimations::FailureReasons
 CompositorAnimations::CheckCanStartElementOnCompositor(
     const Element& target_element,
-    const EffectModel& model) {
-  FailureReasons reasons = kNoFailure;
-
+    const EffectModel& model,
+    AnimationCompositingDecisionState& state) {
   // TODO(crbug.com/1287221): Add a more specific reason.
   if (target_element.GetDocument().ShouldForceReduceMotion())
-    reasons |= kAcceleratedAnimationsDisabled;
+    state.disposition |= kAcceleratedAnimationsDisabled;
 
   // Both of these checks are required. It is legal to enable the compositor
   // thread but disable threaded animations, and there are situations where
@@ -604,11 +613,11 @@ CompositorAnimations::CheckCanStartElementOnCompositor(
   const Settings* settings = target_element.GetDocument().GetSettings();
   if ((settings && !settings->GetAcceleratedCompositingEnabled()) ||
       !Platform::Current()->IsThreadedAnimationEnabled()) {
-    reasons |= kAcceleratedAnimationsDisabled;
+    state.disposition |= kAcceleratedAnimationsDisabled;
   }
 
   if (const auto* svg_element = DynamicTo<SVGElement>(target_element))
-    reasons |= CheckCanStartSVGElementOnCompositor(*svg_element);
+    state.disposition |= CheckCanStartSVGElementOnCompositor(*svg_element);
 
   if (const auto* layout_object = target_element.GetLayoutObject()) {
     // We query paint property tree state below to determine whether the
@@ -621,7 +630,7 @@ CompositorAnimations::CheckCanStartElementOnCompositor(
     bool has_direct_compositing_reasons = false;
     if (layout_object->IsFragmented()) {
       // Composited animation on multiple fragments is not supported.
-      reasons |= kTargetHasInvalidCompositingState;
+      state.disposition |= kTargetHasInvalidCompositingState;
     } else if (const auto* paint_properties =
                    layout_object->FirstFragment().PaintProperties()) {
       const auto* transform = paint_properties->Transform();
@@ -640,13 +649,13 @@ CompositorAnimations::CheckCanStartElementOnCompositor(
     }
     if (!has_direct_compositing_reasons &&
         To<KeyframeEffectModelBase>(model).RequiresPropertyNode()) {
-      reasons |= kTargetHasInvalidCompositingState;
+      state.disposition |= kTargetHasInvalidCompositingState;
     }
   } else {
-    reasons |= kTargetHasInvalidCompositingState;
+    state.disposition |= kTargetHasInvalidCompositingState;
   }
 
-  return reasons;
+  return state.disposition;
 }
 
 // TODO(crbug.com/809685): consider refactor this function.
@@ -656,15 +665,15 @@ CompositorAnimations::CheckCanStartAnimationOnCompositor(
     const Timing::NormalizedTiming& normalized_timing,
     const Element& target_element,
     const Animation* animation_to_add,
+    AnimationCompositingDecisionState& state,
     const EffectModel& effect,
     const PaintArtifactCompositor* paint_artifact_compositor,
-    double animation_playback_rate,
-    PropertyHandleSet* unsupported_properties_for_tracing) {
-  FailureReasons reasons = CheckCanStartEffectOnCompositor(
-      timing, normalized_timing, target_element, animation_to_add, effect,
-      paint_artifact_compositor, animation_playback_rate,
-      unsupported_properties_for_tracing);
-  return reasons | CheckCanStartElementOnCompositor(target_element, effect);
+    double animation_playback_rate) {
+  CheckCanStartEffectOnCompositor(
+      timing, normalized_timing, target_element, animation_to_add, state,
+      effect, paint_artifact_compositor, animation_playback_rate);
+  CheckCanStartElementOnCompositor(target_element, effect, state);
+  return state.disposition;
 }
 
 void CompositorAnimations::CancelIncompatibleAnimationsOnCompositor(
@@ -749,7 +758,12 @@ void CompositorAnimations::PauseAnimationForTestingOnCompositor(
     int id,
     base::TimeDelta hold_time,
     const EffectModel& model) {
-  DCHECK_EQ(CheckCanStartElementOnCompositor(element, model), kNoFailure);
+#if DCHECK_IS_ON()
+  AnimationCompositingDecisionState state;
+  state.disposition = kNoFailure;
+  DCHECK_EQ(CheckCanStartElementOnCompositor(element, model, state),
+            kNoFailure);
+#endif  // DCHECK_IS_ON()
   CompositorAnimation* compositor_animation =
       animation.GetCompositorAnimation();
   DCHECK(compositor_animation);
@@ -863,11 +877,17 @@ namespace {
 void AddKeyframeToCurve(cc::KeyframedFilterAnimationCurve& curve,
                         Keyframe::PropertySpecificKeyframe* keyframe,
                         const CompositorKeyframeValue* value,
-                        const TimingFunction& keyframe_timing_function) {
+                        const TimingFunction& keyframe_timing_function,
+                        bool is_backdrop_filter) {
+  // Composited animations are not supported for html-in-canvas, and
+  // drawElementImage() uses main-thread paint records rather than compositor
+  // animation curves, so `is_in_canvas_subtree` can be false here.
   FilterEffectBuilder builder(gfx::RectF(), std::nullopt, 1, Color::kBlack,
-                              mojom::blink::ColorScheme::kLight);
+                              mojom::blink::ColorScheme::kLight,
+                              /*is_in_canvas_subtree=*/false);
   CompositorFilterOperations operations = builder.BuildFilterOperations(
-      To<CompositorKeyframeFilterOperations>(value)->Operations());
+      To<CompositorKeyframeFilterOperations>(value)->Operations(),
+      is_backdrop_filter);
   std::unique_ptr<cc::FilterKeyframe> filter_keyframe =
       cc::FilterKeyframe::Create(base::Seconds(keyframe->Offset()),
                                  operations.ReleaseCcFilterOperations(),
@@ -1005,7 +1025,8 @@ void CompositorAnimations::GetAnimationOnCompositor(
       case CSSPropertyID::kFilter:
       case CSSPropertyID::kBackdropFilter: {
         auto filter_curve = cc::KeyframedFilterAnimationCurve::Create();
-        AddKeyframesToCurve(*filter_curve, values);
+        AddKeyframesToCurve(*filter_curve, values,
+                            css_property_id == CSSPropertyID::kBackdropFilter);
         filter_curve->SetTimingFunction(timing.timing_function->CloneToCC());
         filter_curve->set_scaled_duration(scale);
         curve = std::move(filter_curve);
@@ -1085,7 +1106,7 @@ void CompositorAnimations::GetAnimationOnCompositor(
         }
         target_property_id = cc::KeyframeModel::TargetPropertyId(
             cc::TargetProperty::CSS_CUSTOM_PROPERTY,
-            property.CustomPropertyName().Utf8().data());
+            property.CustomPropertyName().Utf8());
         break;
       }
       default:
@@ -1190,7 +1211,7 @@ CompositorAnimations::CheckCanStartTransformAnimationOnCompositorForSVG(
     const SVGElement& svg_element) {
   FailureReasons reasons = kNoFailure;
   if (const auto* layout_object = svg_element.GetLayoutObject()) {
-    if (layout_object->StyleRef().EffectiveZoom() != 1) {
+    if (layout_object->Style().EffectiveZoom() != 1) {
       // TODO(crbug.com/1186312): Composited transform animation with non-1
       // effective zoom is incorrectly scaled for now.
       // TODO(crbug.com/1134775): If a foreignObject's effect zoom is not 1,

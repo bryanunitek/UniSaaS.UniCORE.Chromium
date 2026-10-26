@@ -14,8 +14,12 @@ import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 
 import org.chromium.android_webview.AwBrowserContext;
+import org.chromium.android_webview.http_headers.AwHeaderInterceptorStore;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Feature;
+
+import java.util.List;
+import java.util.Set;
 
 /** AwBrowserContext tests. */
 @RunWith(Parameterized.class)
@@ -48,6 +52,51 @@ public class AwBrowserContextTest extends AwParameterizedTest {
                     // Currently the maximum prerendering count is 2
                     context.clearMaxPrerenders();
                     Assert.assertEquals(2, context.getAllowedPrerenderingCount());
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testSetAndGetCrossOriginAllowListSuccess() throws Throwable {
+        AwBrowserContext context = AwBrowserContext.getDefault();
+        Set<String> sample = Set.of("https://*.example.com:433", "https://example.com:433");
+        context.setCrossOriginIsolatedAllowList(sample);
+
+        Set<String> patterns = context.getCrossOriginIsolatedAllowList();
+        Assert.assertEquals(patterns, sample);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testSetAndGetCrossOriginAllowListFailure() throws Throwable {
+        AwBrowserContext context = AwBrowserContext.getDefault();
+        Set<String> sample = Set.of("https://*example.com");
+
+        Assert.assertThrows(
+                IllegalArgumentException.class,
+                () -> {
+                    context.setCrossOriginIsolatedAllowList(sample);
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testHeaderInterceptorStoreThrowsIllegalStateExceptionForNullBrowserContext() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    AwBrowserContext context = new AwBrowserContext(0);
+                    AwHeaderInterceptorStore store = context.getHeaderInterceptorStore();
+                    List<String> urlPatterns = List.of("https://*/*");
+                    Assert.assertThrows(
+                            IllegalStateException.class,
+                            () -> store.addInterceptor(request -> null, urlPatterns));
+                    Assert.assertThrows(
+                            IllegalStateException.class, () -> store.removeInterceptor(1));
+                    Assert.assertThrows(
+                            IllegalStateException.class, () -> store.clearInterceptors());
                 });
     }
 }

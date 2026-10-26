@@ -8,7 +8,6 @@
 #import <utility>
 
 #import "base/functional/callback_helpers.h"
-#import "base/no_destructor.h"
 #import "base/time/time.h"
 #import "components/affiliations/core/browser/affiliation_service.h"
 #import "components/keyed_service/core/service_access_type.h"
@@ -26,47 +25,16 @@
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 
-namespace {
-
-using affiliations::AffiliationService;
-using password_manager::AffiliatedMatchHelper;
-
-}  // namespace
-
-// static
-scoped_refptr<password_manager::PasswordStoreInterface>
-IOSChromeProfilePasswordStoreFactory::GetForProfile(
-    ProfileIOS* profile,
-    ServiceAccessType access_type) {
-  // `profile` gets always redirected to a non-Incognito profile below, so
-  // Incognito & IMPLICIT_ACCESS means that incognito browsing session would
-  // result in traces in the normal profile without the user knowing it.
-  if (access_type == ServiceAccessType::IMPLICIT_ACCESS &&
-      profile->IsOffTheRecord()) {
-    return nullptr;
-  }
-  return GetInstance()
-      ->GetServiceForProfileAs<password_manager::PasswordStoreInterface>(
-          profile, /*create=*/true);
-}
-
-// static
-IOSChromeProfilePasswordStoreFactory*
-IOSChromeProfilePasswordStoreFactory::GetInstance() {
-  static base::NoDestructor<IOSChromeProfilePasswordStoreFactory> instance;
-  return instance.get();
-}
-
-IOSChromeProfilePasswordStoreFactory::IOSChromeProfilePasswordStoreFactory()
-    : RefcountedProfileKeyedServiceFactoryIOS(
+IOSChromeProfilePasswordStoreFactory::IOSChromeProfilePasswordStoreFactory(
+    PassKey key)
+    : TypedRefcountedProfileKeyedServiceFactoryIOS(
+          std::move(key),
           "ProfilePasswordStore",
           ProfileSelection::kRedirectedInIncognito,
           TestingCreation::kNoServiceForTests) {
   DependsOn(CredentialsCleanerRunnerFactory::GetInstance());
   DependsOn(IOSChromeAffiliationServiceFactory::GetInstance());
 }
-
-IOSChromeProfilePasswordStoreFactory::~IOSChromeProfilePasswordStoreFactory() {}
 
 scoped_refptr<RefcountedKeyedService>
 IOSChromeProfilePasswordStoreFactory::BuildServiceInstanceFor(
@@ -75,7 +43,7 @@ IOSChromeProfilePasswordStoreFactory::BuildServiceInstanceFor(
       password_manager::CreateLoginDatabase(password_manager::kProfileStore,
                                             profile->GetStatePath(),
                                             profile->GetPrefs()));
-  AffiliationService* affiliation_service =
+  affiliations::AffiliationService* affiliation_service =
       IOSChromeAffiliationServiceFactory::GetForProfile(profile);
   std::unique_ptr<password_manager::PasswordStoreBackend> backend =
       std::make_unique<password_manager::PasswordStoreBuiltInBackend>(

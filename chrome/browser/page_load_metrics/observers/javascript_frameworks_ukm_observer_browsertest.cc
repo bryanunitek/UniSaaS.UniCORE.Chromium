@@ -5,8 +5,8 @@
 #include <string_view>
 
 #include "chrome/browser/page_load_metrics/observers/foreground_duration_ukm_observer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -15,14 +15,12 @@
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
@@ -146,7 +144,7 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
     EXPECT_EQ(count, expected_count);
   }
   void CloseAllTabs() {
-    TabStripModel* tab_strip_model = browser()->tab_strip_model();
+    TabStripModel* tab_strip_model = browser()->GetTabStripModel();
     content::WebContentsDestroyedWatcher destroyed_watcher(
         tab_strip_model->GetActiveWebContents());
     tab_strip_model->CloseAllTabs();
@@ -159,7 +157,7 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
   void RunSingleFrameworkDetectionTest(const std::string& test_url,
                                        std::string_view framework_name) {
     page_load_metrics::PageLoadMetricsTestWaiter waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     waiter.AddPageExpectation(
         page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
     StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -174,7 +172,7 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
       const std::string& test_url,
       std::string_view cms_name) {
     page_load_metrics::PageLoadMetricsTestWaiter waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     waiter.AddPageExpectation(
         page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
     StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -191,7 +189,7 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
       std::string_view framework,
       std::optional<std::pair<int, int>> expected_version) {
     page_load_metrics::PageLoadMetricsTestWaiter waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     waiter.AddPageExpectation(
         page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
     StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -216,7 +214,7 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
       std::string_view cms,
       std::optional<std::pair<int, int>> expected_version) {
     page_load_metrics::PageLoadMetricsTestWaiter waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     waiter.AddPageExpectation(
         page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
     StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -238,7 +236,7 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
 
   void RunNoFrameworkVersionNotDetectedTest(const std::string& test_url) {
     page_load_metrics::PageLoadMetricsTestWaiter waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     waiter.AddPageExpectation(
         page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
     StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -252,39 +250,6 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
     auto cms_entries = test_ukm_recorder_->GetEntriesByName(
         ukm::builders::Blink_ContentManagementSystem_Versions::kEntryName);
     EXPECT_TRUE(cms_entries.empty());
-  }
-
-  void RunSingleFrameworkDetectionTestForFencedFrames(
-      const std::string& test_url) {
-    StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
-    GURL mainframe_url = https_test_server()->GetURL("/english_page.html");
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), mainframe_url));
-
-    page_load_metrics::PageLoadMetricsTestWaiter waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
-    waiter.AddPageExpectation(
-        page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
-    GURL subframe_url = https_test_server()->GetURL(test_url);
-    content::RenderFrameHost* subframe =
-        fenced_frame_helper_.CreateFencedFrame(browser()
-                                                   ->tab_strip_model()
-                                                   ->GetActiveWebContents()
-                                                   ->GetPrimaryMainFrame(),
-                                               subframe_url);
-    EXPECT_NE(nullptr, subframe);
-    waiter.Wait();
-    CloseAllTabs();
-
-    // No frameworks should be detected.
-    for (std::string_view framework : all_frameworks) {
-      ExpectFrameworkMetricCountForUrl(mainframe_url, framework, 1);
-      ExpectFrameworkMetricValueForUrl(mainframe_url, framework, false);
-    }
-    // No CMSs should be detected.
-    for (std::string_view cms : all_content_management_systems) {
-      ExpectContentManagementSystemMetricCountForUrl(mainframe_url, cms, 1);
-      ExpectContentManagementSystemMetricValueForUrl(mainframe_url, cms, false);
-    }
   }
 
  private:
@@ -316,13 +281,12 @@ class JavascriptFrameworksUkmObserverBrowserTest : public InProcessBrowserTest {
   }
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
   std::unique_ptr<net::EmbeddedTestServer> https_test_server_;
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
 };
 
 IN_PROC_BROWSER_TEST_F(JavascriptFrameworksUkmObserverBrowserTest,
                        NoFrameworkDetected) {
   page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   waiter.AddPageExpectation(
       page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
   StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -373,7 +337,7 @@ IN_PROC_BROWSER_TEST_F(JavascriptFrameworksUkmObserverBrowserTest,
 IN_PROC_BROWSER_TEST_F(JavascriptFrameworksUkmObserverBrowserTest,
                        MultipleFrameworksDetected) {
   page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   waiter.AddPageExpectation(
       page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
   StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
@@ -502,12 +466,6 @@ IN_PROC_BROWSER_TEST_F(JavascriptFrameworksUkmObserverBrowserTest,
                        WordPressCMSDetected) {
   RunSingleContentManagementSystemDetectionTest(
       "/page_load_metrics/wordpress_page.html", kWordPressPageLoad);
-}
-
-IN_PROC_BROWSER_TEST_F(JavascriptFrameworksUkmObserverBrowserTest,
-                       NoFrameworksDetectedInFencedFrame) {
-  RunSingleFrameworkDetectionTestForFencedFrames(
-      "/page_load_metrics/gatsby_page.html");
 }
 
 IN_PROC_BROWSER_TEST_F(JavascriptFrameworksUkmObserverBrowserTest,

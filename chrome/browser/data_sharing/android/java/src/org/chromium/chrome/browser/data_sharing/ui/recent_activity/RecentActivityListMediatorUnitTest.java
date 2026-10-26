@@ -58,7 +58,6 @@ public class RecentActivityListMediatorUnitTest {
     private static final String TEST_DESCRIPTION_1 = "www.foo.com";
     private static final String TEST_TIMESTAMP_1 = "1 day ago";
     private static final String TEST_DESCRIPTION_2 = "user2@gmail.com";
-    private static final String TEST_TIMESTAMP_2 = "1 day ago";
     private static final String TAB_URL1 = "https://google.com";
     private static final int TAB_ID1 = 5;
 
@@ -75,8 +74,8 @@ public class RecentActivityListMediatorUnitTest {
     @Mock private Drawable mDrawable;
     @Mock private Runnable mCloseBottomSheetRunnable;
     @Mock private Runnable mCallback1;
-    @Mock private ImageView mAvatarView;
-    @Mock private ImageView mFaviconView;
+    private ImageView mAvatarView;
+    private ImageView mFaviconView;
     private PropertyModel mPropertyModel;
     private ModelList mModelList;
     private RecentActivityListMediator mMediator;
@@ -85,6 +84,8 @@ public class RecentActivityListMediatorUnitTest {
     @Before
     public void setup() {
         mContext = ApplicationProvider.getApplicationContext();
+        mAvatarView = new ImageView(mContext);
+        mFaviconView = new ImageView(mContext);
         when(mMessagingBackendService.getActivityLog(any())).thenReturn(mTestItems);
         when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {});
         doNothing()
@@ -191,7 +192,7 @@ public class RecentActivityListMediatorUnitTest {
         verify(mAvatarProvider, times(1))
                 .getAvatarBitmap(eq(logItem.activityMetadata.triggeringUser), any());
         mAvatarResponseCallbackCaptor.getValue().onResult(mDrawable);
-        verify(mAvatarView, times(1)).setImageDrawable(mDrawable);
+        Assert.assertEquals(mDrawable, mAvatarView.getDrawable());
     }
 
     @Test
@@ -208,7 +209,7 @@ public class RecentActivityListMediatorUnitTest {
                 .onResult(mFaviconView);
         verify(mFaviconProvider, times(1)).fetchFavicon(eq(new GURL(TAB_URL1)), any());
         mFaviconResponseCallbackCaptor.getValue().onResult(mDrawable);
-        verify(mFaviconView, times(1)).setImageDrawable(mDrawable);
+        Assert.assertEquals(mDrawable, mFaviconView.getDrawable());
     }
 
     @Test

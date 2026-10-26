@@ -73,12 +73,12 @@ class SyncSessionsClientImpl final : public sync_sessions::SyncSessionsClient {
     const syncer::DeviceInfoTracker* tracker = service->GetDeviceInfoTracker();
     CHECK(tracker);
 
-    const syncer::DeviceInfo* device_info = tracker->GetDeviceInfo(session_tag);
+    const syncer::DeviceInfo* device_info =
+        tracker->GetChromeDeviceInfo(session_tag);
     if (!device_info) {
       return std::nullopt;
     }
-    return syncer::GetDisplayNameCandidates(device_info)
-        .preferred_name_if_unique;
+    return syncer::GetDeviceDisplayName(device_info);
   }
 
   // SyncSessionsClient implementation.
@@ -157,9 +157,8 @@ SessionSyncServiceFactory* SessionSyncServiceFactory::GetInstance() {
   return instance.get();
 }
 
-// static - exposed for testing and metrics.
-bool SessionSyncServiceFactory::ShouldSyncURLForTestingAndMetrics(
-    const GURL& url) {
+// static
+bool SessionSyncServiceFactory::ShouldSyncURL(const GURL& url) {
   return ShouldSyncURLImpl(url);
 }
 

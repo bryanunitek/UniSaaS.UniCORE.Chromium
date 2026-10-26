@@ -23,6 +23,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/header_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
@@ -70,6 +71,7 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/core/streams/readable_stream.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/workers/shared_worker_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
@@ -112,6 +114,7 @@
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8/include/v8.h"
@@ -283,9 +286,9 @@ class ResponseResolver final : public GarbageCollected<ResponseResolver> {
   // channel that is inaccessible to the page (so additional information
   // stored in the `issue_summary` about for example CORS policy violations
   // is not leaked to the page).
-  void RejectBecauseFailed(std::optional<String> devtools_request_id,
+  void RejectBecauseFailed(const String& devtools_request_id,
                            std::optional<base::UnguessableToken> issue_id,
-                           std::optional<String> issue_summary);
+                           const String& issue_summary);
 
   void Trace(Visitor* visitor) const {
     visitor->Trace(resolver_);
@@ -332,32 +335,32 @@ void ResponseResolver::Reject(DOMException* dom_exception) {
 }
 
 void ResponseResolver::RejectBecauseFailed(
-    std::optional<String> devtools_request_id,
+    const String& devtools_request_id,
     std::optional<base::UnguessableToken> issue_id,
-    std::optional<String> issue_summary) {
+    const String& issue_summary) {
   CHECK(resolver_);
   auto* script_state = resolver_->GetScriptState();
   auto* isolate = script_state->GetIsolate();
   auto context = script_state->GetContext();
   v8::Local<v8::Value> value = exception_.Get(isolate);
   exception_.Reset();
-  if (devtools_request_id || issue_id || issue_summary) {
+  if (!devtools_request_id.IsNull() || issue_id || !issue_summary.IsNull()) {
     ThreadDebugger* debugger = ThreadDebugger::From(isolate);
     auto* inspector = debugger->GetV8Inspector();
-    if (devtools_request_id) {
+    if (!devtools_request_id.IsNull()) {
       inspector->associateExceptionData(
           context, value, V8AtomicString(isolate, "requestId"),
-          V8String(isolate, *devtools_request_id));
+          V8String(isolate, devtools_request_id));
     }
     if (issue_id) {
       inspector->associateExceptionData(
           context, value, V8AtomicString(isolate, "issueId"),
           V8String(isolate, IdentifiersFactory::IdFromToken(*issue_id)));
     }
-    if (issue_summary) {
+    if (!issue_summary.IsNull()) {
       inspector->associateExceptionData(context, value,
                                         V8AtomicString(isolate, "issueSummary"),
-                                        V8String(isolate, *issue_summary));
+                                        V8String(isolate, issue_summary));
     }
   }
   resolver_->Reject(value);
@@ -420,9 +423,9 @@ class FetchLoaderBase : public GarbageCollectedMixin {
   virtual void Failed(
       const String& message,
       DOMException* dom_exception,
-      std::optional<String> devtools_request_id = std::nullopt,
+      const String& devtools_request_id = String(),
       std::optional<base::UnguessableToken> issue_id = std::nullopt,
-      std::optional<String> issue_summary = std::nullopt) = 0;
+      const String& issue_summary = String()) = 0;
 
   void PerformSchemeFetch(ExceptionState&);
   void PerformNetworkError(
@@ -434,14 +437,16 @@ class FetchLoaderBase : public GarbageCollectedMixin {
   bool AddConsoleMessage(const String& message,
                          std::optional<base::UnguessableToken> issue_id);
 
-  ExecutionContext* GetExecutionContext() { return execution_context_.Get(); }
+  ExecutionContext* GetExecutionContext() const {
+    return execution_context_.Get();
+  }
   void SetExecutionContext(ExecutionContext* ec) { execution_context_ = ec; }
   FetchRequestData* GetFetchRequestData() const {
     return fetch_request_data_.Get();
   }
   ScriptState* GetScriptState() { return script_state_.Get(); }
   const DOMWrapperWorld* World() { return world_; }
-  AbortSignal* Signal() { return signal_.Get(); }
+  AbortSignal* Signal() const { return signal_.Get(); }
 
  private:
   Member<ExecutionContext> execution_context_;
@@ -606,9 +611,19 @@ class FetchManager::Loader final
   // of the usual "Failed to fetch" TypeError.
   void Failed(const String& message,
               DOMException* dom_exception,
-              std::optional<String> devtools_request_id = std::nullopt,
+              const String& devtools_request_id = String(),
               std::optional<base::UnguessableToken> issue_id = std::nullopt,
-              std::optional<String> issue_summary = std::nullopt) override;
+              const String& issue_summary = String()) override;
+
+  // Classifies why a request that ended with `net::ERR_ABORTED` was cancelled,
+  // inspecting the AbortSignal, the owning frame's attachment state, and
+  // execution context destruction.
+  FetchAbortedReason DeduceAbortedReason() const;
+
+  // Records the terminal state of this fetch() request. Called at most once,
+  // from DidFinishLoading(), WillFollowRedirect() (for manual redirects), or
+  // DidFail().
+  void RecordFetchCompletion(int net_error);
 
   Member<FetchManager> fetch_manager_;
   Member<ResponseResolver> response_resolver_;
@@ -618,6 +633,10 @@ class FetchManager::Loader final
   bool finished_;
   int response_http_status_code_;
   bool response_has_no_store_header_ = false;
+  // Distinguishes the two failures script can observe: a failure while this is
+  // false rejects the fetch() promise with "Failed to fetch", while a failure
+  // afterwards errors the response body stream with "network error".
+  bool received_response_headers_ = false;
   Member<IntegrityVerifier> integrity_verifier_;
   Vector<KURL> url_list_;
   Member<ScriptCachedMetadataHandler> cached_metadata_handler_;
@@ -682,8 +701,11 @@ bool FetchManager::Loader::WillFollowRedirect(
     DidReceiveResponse(unused, response);
     DidStartLoadingResponseBody(*BytesConsumer::CreateClosed());
 
-    if (threadable_loader_)
+    if (threadable_loader_) {
+      finished_ = true;
+      RecordFetchCompletion(net::OK);
       NotifyFinished();
+    }
 
     Dispose();
     return false;
@@ -697,6 +719,8 @@ bool FetchManager::Loader::WillFollowRedirect(
 void FetchManager::Loader::DidReceiveResponse(
     uint64_t,
     const ResourceResponse& response) {
+  received_response_headers_ = true;
+
   // Record the blob fetch request status.
   if (GetFetchRequestData() &&
       GetFetchRequestData()->Url().ProtocolIs("blob")) {
@@ -839,6 +863,7 @@ void FetchManager::Loader::DidFinishLoading(uint64_t) {
   DCHECK(!failed_);
 
   finished_ = true;
+  RecordFetchCompletion(net::OK);
 
   auto* window = DynamicTo<LocalDOMWindow>(GetExecutionContext());
   if (window && window->GetFrame() &&
@@ -846,11 +871,32 @@ void FetchManager::Loader::DidFinishLoading(uint64_t) {
     window->GetFrame()->GetPage()->GetChromeClient().AjaxSucceeded(
         window->GetFrame());
   }
+
+  // Record success metrics and clean up race network request loader state if
+  // this fetch was initiated with a ServiceWorkerRaceNetworkRequest token.
+  // Non-race fetches do not track success metrics.
+  if (GetExecutionContext() && GetFetchRequestData() &&
+      GetFetchRequestData()->ServiceWorkerRaceNetworkRequestToken()) {
+    GetExecutionContext()->MaybeRecordFetchError(net::OK,
+                                                 GetFetchRequestData());
+  }
   NotifyFinished();
 }
 
 void FetchManager::Loader::DidFail(uint64_t identifier,
                                    const ResourceError& error) {
+  // Dispose() cancels `threadable_loader_` after a request has already
+  // completed (e.g. `redirect: 'manual'`) or failed a pre-network check (e.g.
+  // `redirect: 'error'`), which synchronously re-enters DidFail(ERR_ABORTED).
+  if (!failed_ && !finished_) {
+    RecordFetchCompletion(error.ErrorCode());
+  }
+
+  if (GetExecutionContext()) {
+    GetExecutionContext()->MaybeRecordFetchError(error.ErrorCode(),
+                                                 GetFetchRequestData());
+  }
+
   // Record the failures for blob fetch request.
   if (GetFetchRequestData() &&
       GetFetchRequestData()->Url().ProtocolIs("blob")) {
@@ -872,7 +918,7 @@ void FetchManager::Loader::DidFail(uint64_t identifier,
   }
 
   std::optional<base::UnguessableToken> issue_id;
-  std::optional<String> issue_summary;
+  String issue_summary;
   if (const auto& cors_error_status = error.CorsErrorStatus()) {
     issue_id = cors_error_status->issue_id;
     if (base::FeatureList::IsEnabled(features::kDevToolsImprovedNetworkError)) {
@@ -1100,7 +1146,7 @@ void FetchLoaderBase::PerformNetworkError(
   Failed(
       StrCat({"Fetch API cannot load ",
               fetch_request_data_->Url().ElidedString(), ". ", issue_summary}),
-      nullptr, std::nullopt, issue_id, issue_summary);
+      nullptr, String(), issue_id, issue_summary);
 }
 
 void FetchLoaderBase::PerformHTTPFetch(ExceptionState& exception_state) {
@@ -1179,15 +1225,6 @@ void FetchLoaderBase::PerformHTTPFetch(ExceptionState& exception_state) {
     request.SetFetchRetryOptions(fetch_request_data_->RetryOptions().value());
   }
 
-  request.SetBrowsingTopics(fetch_request_data_->BrowsingTopics());
-  request.SetAdAuctionHeaders(fetch_request_data_->AdAuctionHeaders());
-  request.SetAttributionReportingEligibility(
-      fetch_request_data_->AttributionReportingEligibility());
-  request.SetAttributionReportingSupport(
-      fetch_request_data_->AttributionSupport());
-  request.SetSharedStorageWritableOptedIn(
-      fetch_request_data_->SharedStorageWritable());
-
   request.SetOriginalDestination(fetch_request_data_->OriginalDestination());
 
   request.SetServiceWorkerRaceNetworkRequestToken(
@@ -1214,7 +1251,8 @@ void FetchLoaderBase::PerformHTTPFetch(ExceptionState& exception_state) {
   // mode is |include|, or |HTTPRequest|'s credentials mode is |same-origin|
   // and the |CORS flag| is unset, and unset otherwise."
 
-  ResourceLoaderOptions resource_loader_options(world_);
+  ResourceLoaderOptions resource_loader_options =
+      ResourceLoaderOptions::CreateForTargetWorld(world_);
   resource_loader_options.initiator_info.name =
       fetch_initiator_type_names::kFetch;
   resource_loader_options.data_buffering_policy = kDoNotBufferData;
@@ -1257,7 +1295,8 @@ void FetchLoaderBase::PerformDataFetch() {
   // We intentionally skip 'setExternalRequestStateFromRequestorAddressSpace',
   // as 'data:' can never be external.
 
-  ResourceLoaderOptions resource_loader_options(world_);
+  ResourceLoaderOptions resource_loader_options =
+      ResourceLoaderOptions::CreateForTargetWorld(world_);
   resource_loader_options.data_buffering_policy = kDoNotBufferData;
 
   CreateLoader(std::move(request), resource_loader_options);
@@ -1296,9 +1335,9 @@ bool FetchLoaderBase::AddConsoleMessage(
 void FetchManager::Loader::Failed(
     const String& message,
     DOMException* dom_exception,
-    std::optional<String> devtools_request_id,
+    const String& devtools_request_id,
     std::optional<base::UnguessableToken> issue_id,
-    std::optional<String> issue_summary) {
+    const String& issue_summary) {
   if (failed_ || finished_) {
     return;
   }
@@ -1311,8 +1350,8 @@ void FetchManager::Loader::Failed(
     if (dom_exception) {
       response_resolver_->Reject(dom_exception);
     } else {
-      response_resolver_->RejectBecauseFailed(
-          std::move(devtools_request_id), issue_id, std::move(issue_summary));
+      response_resolver_->RejectBecauseFailed(devtools_request_id, issue_id,
+                                              issue_summary);
       LogIfKeepalive("Failed");
     }
     response_resolver_.Clear();
@@ -1323,6 +1362,84 @@ void FetchManager::Loader::Failed(
 void FetchManager::Loader::NotifyFinished() {
   if (fetch_manager_)
     fetch_manager_->OnLoaderFinished(this);
+}
+
+namespace {
+
+// For documents, Frame::Detach() advances the frame lifecycle to kDetaching and
+// stops active loaders before LocalDOMWindow::FrameDestroyed runs. Any
+// unattached frame or destroyed window context indicates page navigation, tab
+// close, or iframe removal.
+bool IsFrameDetaching(const LocalDOMWindow* window) {
+  return window && (!window->GetFrame() || !window->GetFrame()->IsAttached() ||
+                    window->IsContextDestroyed());
+}
+
+}  // namespace
+
+FetchAbortedReason FetchManager::Loader::DeduceAbortedReason() const {
+  if (Signal()->aborted()) {
+    // Explicit script abort via AbortController is the primary cause, even if
+    // the execution context or frame is concurrently undergoing teardown.
+    return FetchAbortedReason::kAbortSignal;
+  }
+
+  ExecutionContext* context = GetExecutionContext();
+  if (auto* window = DynamicTo<LocalDOMWindow>(context)) {
+    if (IsFrameDetaching(window)) {
+      return FetchAbortedReason::kFrameDetaching;
+    }
+  } else if (!context || context->IsContextDestroyed()) {
+    // Non-window execution contexts (e.g. workers) shutting down without a
+    // parent frame.
+    return FetchAbortedReason::kExecutionContextDestroyed;
+  }
+
+  return FetchAbortedReason::kOther;
+}
+
+void FetchManager::Loader::RecordFetchCompletion(int net_error) {
+  base::UmaHistogramSparse(kErrorCodesHistogramName, -net_error);
+
+  const char* phase_histogram =
+      received_response_headers_
+          ? kErrorCodesAfterResponseHeadersHistogramName
+          : kErrorCodesBeforeResponseHeadersHistogramName;
+  base::UmaHistogramSparse(phase_histogram, -net_error);
+
+  std::optional<FetchAbortedReason> aborted_reason;
+  if (net_error == net::ERR_ABORTED) {
+    aborted_reason = DeduceAbortedReason();
+    base::UmaHistogramEnumeration(kAbortedReasonHistogramName, *aborted_reason);
+  }
+
+  ExecutionContext* context = GetExecutionContext();
+  if (!context || url_list_.empty()) {
+    return;
+  }
+
+  std::optional<uint32_t> category_id =
+      network_utils::GetFetchCategoryIdFromUrl(url_list_.front());
+  if (!category_id.has_value()) {
+    return;
+  }
+
+  if (auto* recorder = context->UkmRecorder()) {
+    const bool is_context_detached =
+        IsFrameDetaching(DynamicTo<LocalDOMWindow>(context)) ||
+        context->IsContextDestroyed();
+    ukm::builders::FetchRequest_WithCategory builder(context->UkmSourceID());
+    builder.SetCategory(*category_id)
+        .SetHttpStatusCode(response_http_status_code_)
+        .SetIsAbortSignalled(Signal()->aborted() ? 1 : 0)
+        .SetIsContextDetached(is_context_detached ? 1 : 0)
+        .SetNetError(-net_error)
+        .SetResponseReceived(received_response_headers_ ? 1 : 0);
+    if (aborted_reason.has_value()) {
+      builder.SetFetchAbortedReason(static_cast<int64_t>(*aborted_reason));
+    }
+    builder.Record(recorder);
+  }
 }
 
 bool FetchManager::Loader::IsDeferred() const {
@@ -1553,9 +1670,9 @@ class FetchLaterManager::DeferredLoader final
   }
   void Failed(const String& message,
               DOMException* dom_exception,
-              std::optional<String> devtools_request_id = std::nullopt,
+              const String& devtools_request_id = String(),
               std::optional<base::UnguessableToken> issue_id = std::nullopt,
-              std::optional<String> issue_summary = std::nullopt) override {
+              const String& issue_summary = String()) override {
     AddConsoleMessage(message, issue_id);
     NotifyFinished();
   }
@@ -1689,7 +1806,7 @@ FetchLaterResult* FetchLaterManager::FetchLater(
 
   // 10. If request’s body is not null, and request's body length is null, then
   // throw a TypeError.
-  if (request->Buffer() && request->BufferByteLength() == 0) {
+  if (request->Buffer() && request->Buffer()->IsMadeFromReadableStream()) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kFetchLaterErrorUnknownBodyLength);
     exception_state.ThrowTypeError(
@@ -1709,10 +1826,9 @@ FetchLaterResult* FetchLaterManager::FetchLater(
                       WebFeature::kFetchLaterErrorQuotaExceeded);
     QuotaExceededError::Throw(
         exception_state,
-        String::Format(
-            "fetchLater exceeds its quota for the origin: got %" PRIu64 " "
-            "bytes, expected less than %" PRIu64 " bytes.",
-            total_request_length, available_quota));
+        Format("fetchLater exceeds its quota for the origin: got {} bytes, "
+               "expected less than {} bytes.",
+               total_request_length, available_quota));
     return nullptr;
   }
 

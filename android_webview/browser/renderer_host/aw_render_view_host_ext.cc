@@ -31,14 +31,17 @@ void AwRenderViewHostExt::BindFrameHost(
     mojo::PendingAssociatedReceiver<mojom::FrameHost> receiver,
     content::RenderFrameHost* rfh) {
   auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
-  if (!web_contents)
+  if (!web_contents) {
     return;
+  }
   auto* aw_contents = AwContents::FromWebContents(web_contents);
-  if (!aw_contents)
+  if (!aw_contents) {
     return;
+  }
   auto* aw_rvh_ext = aw_contents->render_view_host_ext();
-  if (!aw_rvh_ext)
+  if (!aw_rvh_ext) {
     return;
+  }
   aw_rvh_ext->frame_host_receivers_.Bind(rfh, std::move(receiver));
 }
 
@@ -77,20 +80,23 @@ mojom::HitTestDataPtr AwRenderViewHostExt::TakeLastHitTestData() {
 
 void AwRenderViewHostExt::SetTextZoomFactor(float factor) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (auto* local_main_frame_remote = GetLocalMainFrameRemote())
+  if (auto* local_main_frame_remote = GetLocalMainFrameRemote()) {
     local_main_frame_remote->SetTextZoomFactor(factor);
+  }
 }
 
 void AwRenderViewHostExt::ResetScrollAndScaleState() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (auto* local_main_frame_remote = GetLocalMainFrameRemote())
+  if (auto* local_main_frame_remote = GetLocalMainFrameRemote()) {
     local_main_frame_remote->ResetScrollAndScaleState();
+  }
 }
 
 void AwRenderViewHostExt::SetInitialPageScale(double page_scale_factor) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (auto* local_main_frame_remote = GetLocalMainFrameRemote())
+  if (auto* local_main_frame_remote = GetLocalMainFrameRemote()) {
     local_main_frame_remote->SetInitialPageScale(page_scale_factor);
+  }
 }
 
 void AwRenderViewHostExt::SetWillSuppressErrorPage(bool suppress) {
@@ -100,22 +106,35 @@ void AwRenderViewHostExt::SetWillSuppressErrorPage(bool suppress) {
 void AwRenderViewHostExt::SmoothScroll(int target_x,
                                        int target_y,
                                        base::TimeDelta duration) {
-  if (auto* local_main_frame_remote = GetLocalMainFrameRemote())
+  if (auto* local_main_frame_remote = GetLocalMainFrameRemote()) {
     local_main_frame_remote->SmoothScroll(target_x, target_y, duration);
+  }
+}
+
+void AwRenderViewHostExt::PostEmbedderMessageEvent(
+    const std::optional<url::Origin>& target_origin,
+    mojom::EmbedderTransferableMessagePtr message) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (auto* local_main_frame_remote = GetLocalMainFrameRemote()) {
+    local_main_frame_remote->PostEmbedderMessageEvent(target_origin,
+                                                      std::move(message));
+  }
 }
 
 void AwRenderViewHostExt::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
-  if (will_suppress_error_page_)
+  if (will_suppress_error_page_) {
     navigation_handle->SetSilentlyIgnoreErrors();
+  }
 }
 
 void AwRenderViewHostExt::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!navigation_handle->HasCommitted())
+  if (!navigation_handle->HasCommitted()) {
     return;
+  }
 
   // Only record a visit if the navigation affects user-facing session history
   // (i.e. it occurs in the primary frame tree).
@@ -161,18 +180,20 @@ void AwRenderViewHostExt::ContentsSizeChanged(const gfx::Size& contents_size) {
 void AwRenderViewHostExt::ShouldOverrideUrlLoading(
     const std::u16string& url,
     bool has_user_gesture,
-    bool is_redirect,
-    bool is_main_frame,
     ShouldOverrideUrlLoadingCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  content::RenderFrameHost& render_frame_host =
+      frame_host_receivers_.CurrentTargetFrame();
 
   bool ignore_navigation = false;
   AwContentsClientBridge* client =
       AwContentsClientBridge::FromWebContents(web_contents());
   if (client) {
     if (!client->ShouldOverrideUrlLoading(
-            url, has_user_gesture, is_redirect, is_main_frame,
-            net::HttpRequestHeaders(), &ignore_navigation)) {
+            url, has_user_gesture, /*is_redirect=*/false,
+            render_frame_host.IsInPrimaryMainFrame(), net::HttpRequestHeaders(),
+            &ignore_navigation)) {
       // If the shouldOverrideUrlLoading call caused a java exception we should
       // always return immediately here!
       return;

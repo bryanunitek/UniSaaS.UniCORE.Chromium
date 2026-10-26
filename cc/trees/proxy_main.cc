@@ -153,7 +153,7 @@ void ProxyMain::RecordBeginMainFrameMetrics(
     const BeginMainFrameReasons& begin_main_frame_reason,
     const base::ElapsedTimer& timer,
     std::string_view suffix) const {
-  constexpr size_t num_buckets = 1 << begin_main_frame_reason.size();
+  constexpr size_t num_buckets = 1 << BeginMainFrameReasons::size();
 
   base::UmaHistogramCustomMicrosecondsTimes(
       base::StrCat({"Compositing.BeginMainFrame.TimeUs", suffix}),
@@ -201,6 +201,9 @@ void ProxyMain::BeginMainFrame(
     }
     MaybeIdleMainThread();
   };
+
+  consecutive_no_damage_main_frames_ =
+      begin_main_frame_state->consecutive_no_damage_main_frames;
 
   base::TimeTicks begin_main_frame_start_time = base::TimeTicks::Now();
   main_frames_in_flight_++;
@@ -273,6 +276,7 @@ void ProxyMain::BeginMainFrame(
   final_pipeline_stage_ = max_requested_pipeline_stage_;
   max_requested_pipeline_stage_ = NO_PIPELINE_STAGE;
   has_sent_urgent_commit_request_ = false;
+  has_sent_unthrottled_commit_request_ = false;
 
   // If main frame updates and commits are deferred, skip the entire pipeline.
   if (defer_main_frame_update_ || pause_rendering_) {
@@ -650,6 +654,18 @@ void ProxyMain::SetUnboundedFrameSink(
                      std::move(unbounded_frame_sink), local_surface_id));
 }
 
+void ProxyMain::SetUnboundedFrameSinkId(
+    const viz::FrameSinkId& frame_sink_id,
+    const viz::LocalSurfaceId& local_surface_id) {
+  DCHECK(IsMainThread());
+  DCHECK(layer_tree_host_->GetSettings().enable_unbounded_element);
+  CHECK(base::FeatureList::IsEnabled(features::kTreesInViz));
+  ImplThreadTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&ProxyImpl::SetUnboundedFrameSinkId,
+                                base::Unretained(proxy_impl_.get()),
+                                frame_sink_id, local_surface_id));
+}
+
 void ProxyMain::DismissUnboundedFrameSink() {
   DCHECK(IsMainThread());
   DCHECK(layer_tree_host_->GetSettings().enable_unbounded_element);
@@ -699,7 +715,7 @@ void ProxyMain::SetShouldWarmUp() {
 void ProxyMain::SetNeedsAnimate(BeginMainFrameReason reason, bool urgent) {
   DCHECK(IsMainThread());
   needs_begin_main_frame_ = true;
-  set_begin_main_frame_reason(reason);
+  begin_main_frame_reason_ |= reason;
   if (SendCommitRequestToImplThreadIfNeeded(reason, ANIMATE_PIPELINE_STAGE,
                                             urgent)) {
     TRACE_EVENT_INSTANT("cc", "ProxyMain::SetNeedsAnimate", "urgent", urgent);
@@ -755,6 +771,13 @@ void ProxyMain::SetTargetLocalSurfaceId(
       FROM_HERE, base::BindOnce(&ProxyImpl::SetTargetLocalSurfaceIdOnImpl,
                                 base::Unretained(proxy_impl_.get()),
                                 target_local_surface_id));
+}
+
+void ProxyMain::SetMemoryPolicy(const ManagedMemoryPolicy& policy) {
+  DCHECK(IsMainThread());
+  ImplThreadTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&ProxyImpl::SetMemoryPolicyOnImpl,
+                                base::Unretained(proxy_impl_.get()), policy));
 }
 
 void ProxyMain::DetachInputDelegateAndRenderFrameObserver() {
@@ -1094,7 +1117,7 @@ void ProxyMain::RequestBeginMainFrameNotExpected(bool new_state) {
 }
 
 bool ProxyMain::SendCommitRequestToImplThreadIfNeeded(
-    BeginMainFrameReason reason,
+    BeginMainFrameReasons reason,
     CommitPipelineStage required_stage,
     bool urgent) {
   DCHECK(IsMainThread());
@@ -1102,15 +1125,39 @@ bool ProxyMain::SendCommitRequestToImplThreadIfNeeded(
   bool already_posted = max_requested_pipeline_stage_ != NO_PIPELINE_STAGE;
   max_requested_pipeline_stage_ =
       std::max(max_requested_pipeline_stage_, required_stage);
-  if (already_posted && (!urgent || has_sent_urgent_commit_request_)) {
+  bool unthrottle_next = reason != BeginMainFrameReason::kRAF;
+  // When we are throttled, we may not get the next frame immediately. This
+  // means that our count of no-damage frames may be delayed. To make sure
+  // we still unthrottle quickly in this case, we add 2 to our count (one for
+  // the current frame, and potentially one more if we are pipelined). If we
+  // are wrong, we post one extra task, for these two frames only, but there is
+  // no correctness issue.
+  bool next_frame_may_be_throttled =
+      GetThrottlingFactor(consecutive_no_damage_main_frames_ + 2);
+
+  // Urgent commit requests, while mainly used when 60Hz throttling is enabled,
+  // can also be used to end independent throttling. Always forward them in this
+  // case.
+  bool main_frame_may_be_throttled =
+      next_frame_may_be_throttled ||
+      features::IsThrottleMainFrameTo60HzEnabled(
+          layer_tree_host_->GetSettings()
+              .using_synchronous_renderer_compositor);
+  urgent = urgent && main_frame_may_be_throttled;
+
+  if (already_posted && (!urgent || has_sent_urgent_commit_request_) &&
+      (!next_frame_may_be_throttled || !unthrottle_next ||
+       has_sent_unthrottled_commit_request_)) {
     return false;
   }
   ImplThreadTaskRunner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&ProxyImpl::SetNeedsCommitOnImpl,
-                     base::Unretained(proxy_impl_.get()), reason, urgent));
+      FROM_HERE, base::BindOnce(&ProxyImpl::SetNeedsCommitOnImpl,
+                                base::Unretained(proxy_impl_.get()), reason,
+                                urgent, unthrottle_next));
   layer_tree_host_->OnCommitRequested();
   has_sent_urgent_commit_request_ |= urgent;
+  has_sent_unthrottled_commit_request_ |=
+      next_frame_may_be_throttled && unthrottle_next;
   return true;
 }
 

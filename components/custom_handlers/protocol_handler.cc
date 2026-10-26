@@ -25,13 +25,6 @@ using content::BrowserThread;
 
 namespace custom_handlers {
 
-namespace features {
-
-// https://html.spec.whatwg.org/multipage/system-state.html#security-and-privacy
-BASE_FEATURE(kStripCredentialsForExternalProtocolHandler,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-}  // namespace features
-
 ProtocolHandler::ProtocolHandler(
     const std::string& protocol,
     const GURL& url,
@@ -118,6 +111,24 @@ bool ProtocolHandler::IsValid() const {
   return blink::IsValidCustomHandlerScheme(protocol_, security_level_);
 }
 
+bool ProtocolHandler::IsAllowedExtensionHandler() const {
+  // A handler that claims extension-level privileges (kExtensionFeatures, which
+  // relaxes the HTML-spec restrictions to allow e.g. cross-origin target URLs
+  // and the ext+/chrome-extension schemes) must be associated with the
+  // extension that registered it. Extension cleanup -- uninstall/disable
+  // handling and the periodic sanity check -- keys off the extension id, so a
+  // handler with the elevated level but no id can never be removed and its
+  // privileges would persist even after the extension is gone. This also drops
+  // orphaned handlers persisted by builds that predate recording the extension
+  // id at registration time. This check is layered on top of, and kept
+  // separate from, the HTML-spec validity enforced by IsValid().
+  if (security_level_ ==
+      blink::ProtocolHandlerSecurityLevel::kExtensionFeatures) {
+    return IsExtensionHandler();
+  }
+  return true;
+}
+
 bool ProtocolHandler::IsSameOrigin(const ProtocolHandler& handler) const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   return handler.url().DeprecatedGetOriginAsURL() ==
@@ -190,9 +201,7 @@ GURL ProtocolHandler::TranslateUrl(const GURL& url) const {
 
   // Remove credentials from the url if present, in order to mitigate the risk
   // of credential leakage
-  if ((url.has_username() || url.has_password()) &&
-      base::FeatureList::IsEnabled(
-          features::kStripCredentialsForExternalProtocolHandler)) {
+  if (url.has_username() || url.has_password()) {
     GURL::Replacements replacements;
     replacements.ClearUsername();
     replacements.ClearPassword();

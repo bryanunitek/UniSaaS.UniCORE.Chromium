@@ -51,6 +51,7 @@
 #include "services/network/public/mojom/load_timing_info.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
+#include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -58,6 +59,12 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_cross_origin_mode.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_navigation_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_preconnect_data.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_preload_data.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_speculation_data.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_speculation_eagerness_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_speculation_navigation_data.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_speculation_navigation_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
@@ -85,6 +92,8 @@
 #include "third_party/blink/renderer/core/speculation_rules/document_speculation_rules.h"
 #include "third_party/blink/renderer/core/speculation_rules/speculation_candidate.h"
 #include "third_party/blink/renderer/core/timing/animation_frame_timing_info.h"
+#include "third_party/blink/renderer/core/timing/cross_origin_mode_converter.h"
+#include "third_party/blink/renderer/core/timing/event_timing.h"
 #include "third_party/blink/renderer/core/timing/global_performance.h"
 #include "third_party/blink/renderer/core/timing/interaction_contentful_paint.h"
 #include "third_party/blink/renderer/core/timing/largest_contentful_paint.h"
@@ -102,13 +111,9 @@
 #include "third_party/blink/renderer/core/timing/performance_soft_navigation.h"
 #include "third_party/blink/renderer/core/timing/performance_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_timing_for_reporting.h"
-#include "third_party/blink/renderer/core/timing/preconnect_data.h"
-#include "third_party/blink/renderer/core/timing/preload_data.h"
 #include "third_party/blink/renderer/core/timing/responsiveness_metrics.h"
 #include "third_party/blink/renderer/core/timing/soft_navigation_context.h"
 #include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
-#include "third_party/blink/renderer/core/timing/speculation_data.h"
-#include "third_party/blink/renderer/core/timing/speculation_navigation_data.h"
 #include "third_party/blink/renderer/core/timing/timing_utils.h"
 #include "third_party/blink/renderer/core/timing/visibility_state_entry.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
@@ -160,6 +165,8 @@ AtomicString GetFrameOwnerType(HTMLFrameOwnerElement* frame_owner) {
       return html_names::kFrameTag.LocalName();
     case FrameOwnerElementType::kFencedframe:
       return html_names::kFencedframeTag.LocalName();
+    case FrameOwnerElementType::kPersistentwidget:
+      return html_names::kPersistentwidgetTag.LocalName();
   }
   NOTREACHED();
 }
@@ -475,7 +482,8 @@ void WindowPerformance::CreateNavigationTimingInstance(
   }
 
   navigation_timing_ = MakeGarbageCollected<PerformanceNavigationTiming>(
-      *DomWindow(), std::move(info), time_origin_, NavigationId());
+      *DomWindow(), std::move(info), time_origin_,
+      NavigationId().web_exposed_id);
 }
 
 void WindowPerformance::OnBodyLoadFinished(int64_t encoded_body_size,
@@ -586,11 +594,24 @@ void WindowPerformance::markConditional(ScriptState* script_state,
     return;
   }
 
-  ExecutionContext* execution_context = ExecutionContext::From(script_state);
-  DCHECK(execution_context);
   base::TimeTicks start_time = base::TimeTicks::Now();
   window->GetFrame()->GetWidgetForLocalRoot()->MarkConditional(mark_name,
                                                                start_time);
+}
+
+void WindowPerformance::measureConditional(ScriptState* script_state,
+                                           const AtomicString& measure_name,
+                                           const AtomicString& start_mark,
+                                           const AtomicString& end_mark) {
+  LocalDOMWindow* window = LocalDOMWindow::From(script_state);
+  if (!window || !window->GetFrame() ||
+      !window->GetFrame()->GetWidgetForLocalRoot()) {
+    return;
+  }
+
+  base::TimeTicks end_time = base::TimeTicks::Now();
+  window->GetFrame()->GetWidgetForLocalRoot()->MeasureConditional(
+      measure_name, start_mark, end_mark, end_time);
 }
 
 void WindowPerformance::ReportLongTask(base::TimeTicks start_time,
@@ -642,10 +663,11 @@ PerformanceEventTiming* WindowPerformance::EventTimingProcessingStart(
   PerformanceEventTiming::EventTimingReportingInfo reporting_info{
       .frame_index = current_frame_index_,
       .enqueued_to_main_thread_time =
-          responsiveness_metrics_->CurrentInteractionEventQueuedTimestamp(),
+          EventQueuedTimestampScope::CurrentQueuedTimestamp(),
       .processing_start_time = processing_start,
       .is_processing_fully_nested_in_another_event =
           !active_event_timing_entries_.empty(),
+      .is_main_frame = DomWindow()->GetFrame()->IsMainFrame(),
   };
 
   if (pointer_event) {
@@ -664,6 +686,25 @@ PerformanceEventTiming* WindowPerformance::EventTimingProcessingStart(
     if (key_event) {
       reporting_info.key_code = key_event->keyCode();
     }
+  }
+
+  if (reporting_info.creation_time > processing_start) {
+    // TODO(crbug.com/503294875): Creation time can be in the future relative to
+    // processing start due to clock skew, faulty hardware timestamps, or bad
+    // test mocks. We cannot adjust creation_time to fake the expected invariant
+    // because it must match event.timeStamp exactly.
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kEventTimingCreationTimeInFuture);
+  }
+
+  if (reporting_info.enqueued_to_main_thread_time.is_null() ||
+      reporting_info.enqueued_to_main_thread_time <
+          reporting_info.creation_time) {
+    // TODO(crbug.com/503340988): Enqueued time can be missing or earlier than
+    // creation time due to synthetic events that skip normal input dispatch,
+    // clock skew, or bad test mocks. We can fallback to processing_start since
+    // this is only used for tracing/histograms.
+    reporting_info.enqueued_to_main_thread_time = processing_start;
   }
 
   // Set prevent_counting_as_interaction to true for all the event entries when
@@ -687,7 +728,7 @@ PerformanceEventTiming* WindowPerformance::EventTimingProcessingStart(
   // fires.
   PerformanceEventTiming* entry = PerformanceEventTiming::Create(
       event_type, reporting_info, event.cancelable(), DomWindow(),
-      NavigationId());
+      NavigationId().web_exposed_id);
   active_event_timing_entries_.push_back(entry);
   event_timing_entries_.push_back(entry);
   current_event_ = &event;
@@ -991,7 +1032,6 @@ void WindowPerformance::TryFlushEventTimingQueue() {
   InteractiveDetector* interactive_detector =
       InteractiveDetector::From(*(DomWindow()->document()));
 
-
   bool tracing_enabled = TRACE_EVENT_CATEGORY_ENABLED("latency");
 
   while (!event_timing_entries_.empty()) {
@@ -1068,9 +1108,8 @@ void WindowPerformance::TryFlushEventTimingQueue() {
 
       FlushEventTiming(interactive_detector, entry, primary_entry);
 
-      if (auto interaction_id = entry->GetInteractionIdInfo();
-          interaction_id &&
-          interaction_id->id != PerformanceTimelineEntryIdInfo::kNoId) {
+      if (entry->GetInteractionIdInfo() !=
+          PerformanceTimelineEntryIdInfo::kNone) {
         had_interaction_in_animation_frame = true;
         if (entry->GetEventTimingReportingInfo()->key_code.has_value()) {
           had_key_interaction = true;
@@ -1264,7 +1303,7 @@ void WindowPerformance::ReportEventTimingToPerformanceTimeline(
     NotifyObserversOfEntry(*entry);
   }
 
-  // TODO(npm): is 104 a reasonable buffering threshold or should it be
+  // TODO: is 104 a reasonable buffering threshold or should it be
   // relaxed?
   if (entry->duration() >= PerformanceObserver::kDefaultDurationThreshold) {
     AddToEventTimingBuffer(*entry);
@@ -1392,7 +1431,7 @@ void WindowPerformance::QueueLongAnimationFrameTiming(
   if (auto* window = DomWindow()) {
     AddLongAnimationFrameEntry(PerformanceLongAnimationFrameTiming::Create(
         info, time_origin_, cross_origin_isolated_capability_, window,
-        paint_timing_info, NavigationId()));
+        paint_timing_info, NavigationId().web_exposed_id));
   }
 }
 
@@ -1416,31 +1455,16 @@ void WindowPerformance::AddLongAnimationFrameEntry(PerformanceEntry* entry) {
   NotifyObserversOfEntry(*entry);
 }
 
-void WindowPerformance::AddElementTiming(
-    const AtomicString& name,
-    const String& url,
-    const gfx::RectF& rect,
-    const DOMPaintTimingInfo& paint_timing_info,
-    base::TimeTicks load_time,
-    const AtomicString& identifier,
-    const gfx::Size& intrinsic_size,
-    const AtomicString& id,
-    Element* element) {
+void WindowPerformance::AddElementTiming(PerformanceElementTiming* entry) {
   if (!DomWindow()) {
     return;
   }
 
-  DOMHighResTimeStamp coarsened_load_time =
-      MonotonicTimeToDOMHighResTimeStamp(load_time);
-
-  PerformanceElementTiming* entry = PerformanceElementTiming::Create(
-      name, url, rect, paint_timing_info.presentation_time, coarsened_load_time,
-      identifier, intrinsic_size.width(), intrinsic_size.height(), id, element,
-      DomWindow(), NavigationId());
   TRACE_EVENT2("loading", "PerformanceElementTiming", "data",
                entry->ToTracedValue(), "frame",
                GetFrameIdForTracing(DomWindow()->GetFrame()));
-  entry->SetPaintTimingInfo(paint_timing_info);
+  UseCounter::Count(GetExecutionContext(),
+                    WebFeature::kElementTimingEntryEmitted);
   if (HasObserverFor(PerformanceEntry::kElement)) {
     NotifyObserversOfEntry(*entry);
   }
@@ -1463,13 +1487,16 @@ void WindowPerformance::AddContainerTiming(
   }
 
   PerformanceContainerTiming* entry = PerformanceContainerTiming::Create(
-      AtomicString("container-paints"), paint_timing_info.presentation_time,
-      rect, size, root_element, identifier, last_painted_element,
-      first_paint_timing_info.presentation_time, DomWindow(), NavigationId());
+      g_empty_atom, paint_timing_info.presentation_time, rect, size,
+      root_element, identifier, last_painted_element,
+      first_paint_timing_info.presentation_time, DomWindow(),
+      NavigationId().web_exposed_id);
   TRACE_EVENT2("loading", "PerformanceContainerTiming", "data",
                entry->ToTracedValue(), "frame",
                GetFrameIdForTracing(DomWindow()->GetFrame()));
   entry->SetPaintTimingInfo(paint_timing_info);
+  UseCounter::Count(GetExecutionContext(),
+                    WebFeature::kContainerTimingEntryEmitted);
   if (HasObserverFor(PerformanceEntry::kContainer)) {
     NotifyObserversOfContainerEntry(*entry);
   }
@@ -1502,8 +1529,6 @@ void WindowPerformance::AddScrollTiming(base::TimeTicks start_time,
                                         base::TimeTicks end_time,
                                         ui::ScrollInputType input_type,
                                         Node* target) {
-  // The only production caller already CHECKs the feature, so catch any
-  // unguarded caller early rather than silently no-op'ing.
   CHECK(RuntimeEnabledFeatures::ScrollPerformanceTimingEnabled(
       GetExecutionContext()));
   if (!DomWindow()) {
@@ -1517,8 +1542,6 @@ void WindowPerformance::AddScrollTiming(base::TimeTicks start_time,
 
   const DOMHighResTimeStamp start_dom_time =
       MonotonicTimeToDOMHighResTimeStamp(start_time);
-  // `cc::ScrollTimingController` guarantees both timestamps are non-null and
-  // `end_time >= start_time`.
   CHECK(!start_time.is_null());
   CHECK(!end_time.is_null());
   CHECK_GE(end_time, start_time);
@@ -1531,7 +1554,7 @@ void WindowPerformance::AddScrollTiming(base::TimeTicks start_time,
   // also defends in its `target()` getter, but filtering here keeps the stored
   // entry consistent with the intended design.
   Node* exposable_target =
-      Performance::CanExposeNode(target) ? target : nullptr;
+      Performance::CanExposeNode(target, DomWindow()) ? target : nullptr;
 
   PerformanceScrollTiming* entry =
       MakeGarbageCollected<PerformanceScrollTiming>(
@@ -1539,7 +1562,7 @@ void WindowPerformance::AddScrollTiming(base::TimeTicks start_time,
           /*delta_x=*/0, /*delta_y=*/0, scroll_source,
           /*frames_expected=*/0u, /*frames_produced=*/0u,
           /*checkerboard_time=*/0.0, exposable_target, DomWindow(),
-          NavigationId());
+          NavigationId().web_exposed_id);
 
   if (HasObserverFor(PerformanceEntry::kScroll)) {
     NotifyObserversOfEntry(*entry);
@@ -1587,7 +1610,7 @@ void WindowPerformance::AddVisibilityStateEntry(bool is_visible,
   VisibilityStateEntry* entry = MakeGarbageCollected<VisibilityStateEntry>(
       PageHiddenStateString(!is_visible),
       MonotonicTimeToDOMHighResTimeStamp(timestamp), DomWindow(),
-      NavigationId());
+      NavigationId().web_exposed_id);
 
   if (HasObserverFor(PerformanceEntry::kVisibilityState)) {
     NotifyObserversOfEntry(*entry);
@@ -1602,16 +1625,19 @@ PerformanceSoftNavigation* WindowPerformance::AddSoftNavigation(
     base::TimeTicks timestamp,
     const DOMPaintTimingInfo& paint_timing_info,
     SoftNavigationContext* context) {
-  CHECK(RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
-      GetExecutionContext()));
   PerformanceSoftNavigation* entry =
       MakeGarbageCollected<PerformanceSoftNavigation>(
           MonotonicTimeToDOMHighResTimeStamp(timestamp), paint_timing_info,
           context);
 
+  UseCounter::Count(GetExecutionContext(),
+                    WebFeature::kSoftNavigationEntryEmitted);
+
   if (HasObserverFor(PerformanceEntry::kSoftNavigation)) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kSoftNavigationHeuristics);
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kSoftNavigationObserved);
     NotifyObserversOfEntry(*entry);
   }
 
@@ -1649,12 +1675,58 @@ EventCounts* WindowPerformance::eventCounts() {
   return event_counts_.Get();
 }
 
+namespace {
+
+V8SpeculationNavigationType::Enum ToV8SpeculationNavigationType(
+    mojom::blink::SpeculationAction action) {
+  switch (action) {
+    case mojom::blink::SpeculationAction::kPrefetch:
+      return V8SpeculationNavigationType::Enum::kPrefetch;
+    case mojom::blink::SpeculationAction::kPrerender:
+      return V8SpeculationNavigationType::Enum::kPrerender;
+    case mojom::blink::SpeculationAction::kPrerenderUntilScript:
+      return V8SpeculationNavigationType::Enum::kPrerenderUntilScript;
+  }
+}
+
+V8SpeculationEagernessValue::Enum ToV8SpeculationEagernessValue(
+    mojom::blink::SpeculationEagerness eagerness) {
+  switch (eagerness) {
+    case mojom::blink::SpeculationEagerness::kConservative:
+      return V8SpeculationEagernessValue::Enum::kConservative;
+    case mojom::blink::SpeculationEagerness::kModerate:
+      return V8SpeculationEagernessValue::Enum::kModerate;
+    case mojom::blink::SpeculationEagerness::kImmediate:
+      return V8SpeculationEagernessValue::Enum::kImmediate;
+    case mojom::blink::SpeculationEagerness::kEager:
+      return V8SpeculationEagernessValue::Enum::kEager;
+  }
+}
+
+// The returned dictionaries are converted to plain JS objects, so the result
+// can be serialized (e.g. with JSON.stringify() or structuredClone()). All of
+// their members are required, so they're always present, even when empty or
+// null.
+SpeculationData* CreateSpeculationData(
+    HeapVector<Member<PreloadData>> preloads,
+    HeapVector<Member<PreconnectData>> preconnects,
+    HeapVector<Member<SpeculationNavigationData>> navigations,
+    const KURL& navigation_destination_url) {
+  auto* data = SpeculationData::Create();
+  data->setPreloads(std::move(preloads));
+  data->setPreconnects(std::move(preconnects));
+  data->setNavigations(std::move(navigations));
+  // A null KURL has a null string, which is exposed as `null`.
+  data->setNavigationDestinationURL(navigation_destination_url.GetString());
+  return data;
+}
+
+}  // namespace
+
 SpeculationData* WindowPerformance::getSpeculations() {
   LocalDOMWindow* window = DomWindow();
   if (!window || !window->document()) {
-    return MakeGarbageCollected<SpeculationData>(
-        HeapVector<Member<PreloadData>>(), HeapVector<Member<PreconnectData>>(),
-        HeapVector<Member<SpeculationNavigationData>>(), KURL());
+    return CreateSpeculationData({}, {}, {}, KURL());
   }
 
   Document* document = window->document();
@@ -1665,16 +1737,28 @@ SpeculationData* WindowPerformance::getSpeculations() {
   if (document->Fetcher()) {
     const auto& preload_records = document->Fetcher()->GetPreloadRecords();
     for (const auto& [url, info] : preload_records) {
-      preloads.push_back(MakeGarbageCollected<PreloadData>(
-          url, info.as, info.crossorigin, info.early_hints, info.used_time));
+      auto* preload = PreloadData::Create();
+      preload->setUrl(url.GetString());
+      preload->setAs(info.as);
+      preload->setCrossorigin(ToV8CrossOriginMode(info.crossorigin));
+      preload->setEarlyhint(info.early_hints);
+      std::optional<DOMHighResTimeStamp> used;
+      if (info.used_time.has_value()) {
+        used = MonotonicTimeToDOMHighResTimeStamp(info.used_time.value());
+      }
+      preload->setUsed(used);
+      preloads.push_back(preload);
     }
 
     // Collect preconnects.
     const auto& preconnect_records =
         document->Fetcher()->GetPreconnectRecords();
     for (const auto& [key, info] : preconnect_records) {
-      preconnects.push_back(MakeGarbageCollected<PreconnectData>(
-          info.origin, info.crossorigin, info.early_hints));
+      auto* preconnect = PreconnectData::Create();
+      preconnect->setOrigin(info.origin);
+      preconnect->setCrossorigin(ToV8CrossOriginMode(info.crossorigin));
+      preconnect->setEarlyhint(info.early_hints);
+      preconnects.push_back(preconnect);
     }
   }
 
@@ -1682,7 +1766,10 @@ SpeculationData* WindowPerformance::getSpeculations() {
   HeapVector<Member<SpeculationNavigationData>> navigations;
   if (DocumentSpeculationRules* spec_rules =
           DocumentSpeculationRules::FromIfExists(*document)) {
-    const auto& candidates = spec_rules->sent_candidates();
+    // The renderer knows exactly which candidates were activated (immediate
+    // ones plus those enacted by the pointerdown/hover/viewport heuristics),
+    // so report that enacted set instead of every proposed candidate.
+    const auto& candidates = spec_rules->activated_candidates();
     for (const SpeculationCandidate* candidate : candidates) {
       std::optional<Vector<String>> tags;
       // When no tag is specified, the candidate has tags=[""]
@@ -1691,14 +1778,19 @@ SpeculationData* WindowPerformance::getSpeculations() {
       if (!(candidate_tags.size() == 1 && candidate_tags[0].empty())) {
         tags = candidate_tags;
       }
-      navigations.push_back(MakeGarbageCollected<SpeculationNavigationData>(
-          candidate->action(), candidate->url(), tags, candidate->eagerness()));
+      auto* navigation = SpeculationNavigationData::Create();
+      navigation->setType(ToV8SpeculationNavigationType(candidate->action()));
+      navigation->setUrl(candidate->url().GetString());
+      navigation->setTags(std::move(tags));
+      navigation->setEagerness(
+          ToV8SpeculationEagernessValue(candidate->eagerness()));
+      navigations.push_back(navigation);
     }
   }
 
-  return MakeGarbageCollected<SpeculationData>(
-      std::move(preloads), std::move(preconnects), std::move(navigations),
-      navigation_destination_url_);
+  return CreateSpeculationData(std::move(preloads), std::move(preconnects),
+                               std::move(navigations),
+                               navigation_destination_url_);
 }
 
 uint64_t WindowPerformance::interactionCount() const {
@@ -1716,7 +1808,7 @@ void WindowPerformance::OnLargestContentfulPaintUpdated(
       /*start_time=*/paint_timing_info.presentation_time,
       /*render_time=*/paint_timing_info.presentation_time, paint_size,
       MonotonicTimeToDOMHighResTimeStamp(load_time), id, url, element,
-      DomWindow(), NavigationId());
+      DomWindow(), NavigationId().web_exposed_id);
   entry->SetPaintTimingInfo(paint_timing_info);
 
   if (HasObserverFor(PerformanceEntry::kLargestContentfulPaint)) {
@@ -1749,9 +1841,11 @@ void WindowPerformance::OnLargestContentfulPaintUpdated(
 
 void WindowPerformance::OnInteractionContentfulPaintUpdated(
     InteractionContentfulPaint* entry) {
-  CHECK(RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
-      GetExecutionContext()));
+  UseCounter::Count(GetExecutionContext(),
+                    WebFeature::kInteractionContentfulPaintEntryEmitted);
   if (HasObserverFor(PerformanceEntry::kInteractionContentfulPaint)) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kInteractionContentfulPaintObserved);
     NotifyObserversOfEntry(*entry);
   }
   AddInteractionContentfulPaint(entry);

@@ -18,6 +18,7 @@
 #include "base/task/thread_pool.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
@@ -27,6 +28,7 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/cloud/chrome_browser_cloud_management_browsertest_delegate.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_result_codes.h"
 #include "chrome/common/chrome_switches.h"
@@ -46,21 +48,32 @@
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/mock_cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/mock_device_management_service.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_switches.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
+#include "components/policy/proto/cloud_policy.pb.h"
 #include "components/policy/test_support/client_storage.h"
 #include "components/policy/test_support/embedded_policy_test_server.h"
 #include "components/policy/test_support/policy_storage.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/test/browser_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/upload_bytes_element_reader.h"
 #include "net/base/upload_data_stream.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/policy/cloud/extension_install_policy_service.h"
+#include "chrome/browser/policy/cloud/extension_install_policy_service_factory.h"
+#include "extensions/browser/pref_names.h"
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/policy/cloud/chrome_browser_cloud_management_browsertest_delegate_android.h"
@@ -68,12 +81,6 @@
 #include "chrome/browser/device_identity/device_oauth2_token_service.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
 #include "chrome/browser/policy/cloud/chrome_browser_cloud_management_browsertest_delegate_desktop.h"
-#include "chrome/browser/policy/cloud/extension_install_policy_service.h"
-#include "chrome/browser/policy/cloud/extension_install_policy_service_factory.h"
-#include "chrome/browser/profiles/profile.h"
-#include "components/policy/core/common/features.h"
-#include "components/prefs/pref_service.h"
-#include "extensions/browser/pref_names.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_MAC)
@@ -103,10 +110,12 @@ const char kUnenrollmentSuccessMetrics[] =
 const char kDmTokenDeletionMetrics[] =
     "Enterprise.MachineLevelUserCloudPolicyEnrollment.DMTokenDeletion";
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 constexpr char kExtensionId1[] = "extension1";
 constexpr char kExtensionVersion1[] = "1.0.0.0";
+#endif
 
+#if !BUILDFLAG(IS_ANDROID)
 typedef ChromeBrowserCloudManagementBrowserTestDelegateDesktop
     ChromeBrowserCloudManagementBrowserTestDelegateType;
 #else
@@ -184,7 +193,7 @@ class ChromeBrowserCloudManagementControllerObserver
 class ChromeBrowserExtraSetUp : public ChromeBrowserMainExtraParts {
  public:
   explicit ChromeBrowserExtraSetUp(
-      ChromeBrowserCloudManagementControllerObserver* observer)
+      ChromeBrowserCloudManagementController::Observer* observer)
       : observer_(observer) {}
   ChromeBrowserExtraSetUp(const ChromeBrowserExtraSetUp&) = delete;
   ChromeBrowserExtraSetUp& operator=(const ChromeBrowserExtraSetUp&) = delete;
@@ -195,7 +204,7 @@ class ChromeBrowserExtraSetUp : public ChromeBrowserMainExtraParts {
   }
 
  private:
-  raw_ptr<ChromeBrowserCloudManagementControllerObserver> observer_;
+  raw_ptr<ChromeBrowserCloudManagementController::Observer> observer_;
 };
 
 class PolicyFetchClientObserver : public CloudPolicyClient::Observer {
@@ -250,36 +259,6 @@ class PolicyFetchStoreObserver : public CloudPolicyStore::Observer {
   raw_ptr<CloudPolicyStore> store_;
   base::OnceClosure quit_closure_;
   bool is_succesfully_loaded_;
-};
-
-class PolicyFetchCoreObserver : public CloudPolicyCore::Observer {
- public:
-  PolicyFetchCoreObserver(CloudPolicyCore* core, base::OnceClosure quit_closure)
-      : core_(core), quit_closure_(std::move(quit_closure)) {
-    core_->AddObserver(this);
-  }
-  ~PolicyFetchCoreObserver() override { core_->RemoveObserver(this); }
-
-  void OnCoreConnected(CloudPolicyCore* core) override {}
-
-  void OnRefreshSchedulerStarted(CloudPolicyCore* core) override {}
-
-  void OnCoreDisconnecting(CloudPolicyCore* core) override {
-    // This is called when policy fetching fails and is used in
-    // ChromeBrowserCloudManagementController to unenroll the browser. The
-    // status must be either `DM_STATUS_SERVICE_DEVICE_NOT_FOUND` or
-    // `DM_STATUS_SERVICE_DEVICE_NEEDS_RESET` for this to happen.
-    EXPECT_THAT((std::array{DM_STATUS_SERVICE_DEVICE_NOT_FOUND,
-                            DM_STATUS_SERVICE_DEVICE_NEEDS_RESET}),
-                testing::Contains(core->client()->last_dm_status()));
-    std::move(quit_closure_).Run();
-  }
-
-  void OnRemoteCommandsServiceStarted(CloudPolicyCore* core) override {}
-
- private:
-  raw_ptr<CloudPolicyCore> core_;
-  base::OnceClosure quit_closure_;
 };
 
 }  // namespace
@@ -450,6 +429,27 @@ IN_PROC_BROWSER_TEST_P(ChromeBrowserCloudManagementServiceIntegrationTest,
   em::ChromeDesktopReportRequest chrome_desktop_report;
   UploadChromeDesktopReport(&chrome_desktop_report);
 }
+
+// Desktop only.
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_P(ChromeBrowserCloudManagementServiceIntegrationTest,
+                       ChromeProfileReport) {
+  CloudPolicyClient client("fake_profile_id", service_.get(),
+                           g_browser_process->system_network_context_manager()
+                               ->GetSharedURLLoaderFactory(),
+                           CloudPolicyClient::DeviceDMTokenCallback());
+  client.SetupRegistration(kDMToken, kClientID,
+                           /*user_affiliation_ids=*/{});
+
+  auto report = std::make_unique<em::ChromeProfileReportRequest>();
+  report->mutable_browser_report()->set_browser_version("1.2.3");
+
+  base::test::TestFuture<CloudPolicyClient::Result> future;
+  client.UploadChromeProfileReport(/*use_cookies=*/false, std::move(report),
+                                   future.GetCallback());
+  EXPECT_TRUE(future.Get().IsSuccess());
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 INSTANTIATE_TEST_SUITE_P(
     ChromeBrowserCloudManagementServiceIntegrationTestInstance,
@@ -674,26 +674,41 @@ INSTANTIATE_TEST_SUITE_P(ChromeBrowserCloudManagementEnrollmentTest,
 #endif  // BUILDFLAG(IS_ANDROID)
 
 class MachineLevelUserCloudPolicyPolicyFetchObserver
-    : public ChromeBrowserCloudManagementControllerObserver {
+    : public ChromeBrowserCloudManagementController::Observer {
  public:
-  MachineLevelUserCloudPolicyPolicyFetchObserver(
-      ChromeBrowserCloudManagementBrowserTestDelegate* delegate)
-      : ChromeBrowserCloudManagementControllerObserver(delegate) {}
+  MachineLevelUserCloudPolicyPolicyFetchObserver() = default;
   ~MachineLevelUserCloudPolicyPolicyFetchObserver() override = default;
 
-  void QuitOnUnenroll(base::RepeatingClosure quit_closure) {
-    quit_closure_ = std::move(quit_closure);
+  void WaitUntilUnenrolled() {
+    if (is_unenrolled_) {
+      return;
+    }
+    base::RunLoop run_loop;
+    quit_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
   }
 
   void OnBrowserUnenrolled(bool succeeded) override {
+    is_unenrolled_ = true;
+    unenroll_succeeded_ = succeeded;
     if (!quit_closure_.is_null()) {
-      EXPECT_FALSE(succeeded);
       std::move(quit_closure_).Run();
     }
   }
 
+  void OnPolicyRegisterFinished(bool succeeded) override {
+    is_registration_finished_ = true;
+  }
+
+  bool is_registration_finished() const { return is_registration_finished_; }
+  bool is_unenrolled() const { return is_unenrolled_; }
+  bool unenroll_succeeded() const { return unenroll_succeeded_; }
+
  private:
-  base::RepeatingClosure quit_closure_;
+  bool is_registration_finished_ = false;
+  bool is_unenrolled_ = false;
+  bool unenroll_succeeded_ = false;
+  base::OnceClosure quit_closure_;
 };
 
 class MachineLevelUserCloudPolicyPolicyFetchTest
@@ -703,7 +718,7 @@ class MachineLevelUserCloudPolicyPolicyFetchTest
           /*storage_enabled=*/bool,
           /*is_policy_fetch_with_sha256_enabled=*/bool>> {
  public:
-  MachineLevelUserCloudPolicyPolicyFetchTest() : observer_(&delegate_) {
+  MachineLevelUserCloudPolicyPolicyFetchTest() {
     BrowserDMTokenStorage::SetForTesting(&storage_);
     storage_.SetEnrollmentToken(kEnrollmentToken);
     storage_.SetClientId(kClientID);
@@ -724,10 +739,10 @@ class MachineLevelUserCloudPolicyPolicyFetchTest
   MachineLevelUserCloudPolicyPolicyFetchTest& operator=(
       const MachineLevelUserCloudPolicyPolicyFetchTest&) = delete;
 
-  void SetUpOnMainThread() override {
-    g_browser_process->browser_policy_connector()
-        ->chrome_browser_cloud_management_controller()
-        ->AddObserver(&observer_);
+  void CreatedBrowserMainParts(content::BrowserMainParts* parts) override {
+    PlatformBrowserTest::CreatedBrowserMainParts(parts);
+    static_cast<ChromeBrowserMainParts*>(parts)->AddParts(
+        std::make_unique<ChromeBrowserExtraSetUp>(&observer_));
   }
 
   void TearDownOnMainThread() override {
@@ -782,46 +797,40 @@ class MachineLevelUserCloudPolicyPolicyFetchTest
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_WIN)
-// TODO(crbug.com/40782028): Test is flaky.
-IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyPolicyFetchTest,
-                       DISABLED_Test) {
-#else
 IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyPolicyFetchTest, Test) {
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+  if (dm_token().empty() && !observer_.is_registration_finished()) {
+    delegate_.MaybeWaitForEnrollmentConfirmation(kEnrollmentToken);
+  }
   MachineLevelUserCloudPolicyManager* manager =
       g_browser_process->browser_policy_connector()
           ->machine_level_user_cloud_policy_manager();
   ASSERT_TRUE(manager);
-  // If the policy hasn't been updated, wait for it.
-  if (manager->core()->client()->last_policy_timestamp().is_null()) {
-    base::RunLoop run_loop;
-    // Listen to store event which is fired after policy validation if token is
-    // valid. Otherwise listen to the core since it gets disconnected by
-    // unenrollment.
-    std::unique_ptr<PolicyFetchCoreObserver> core_observer;
-    std::unique_ptr<PolicyFetchStoreObserver> store_observer;
-    if (dm_token() == kInvalidDMToken || dm_token() == kDeletionDMToken) {
-      if (storage_enabled()) {
-        // |run_loop|'s QuitClosure will be called after the core is
-        // disconnected following unenrollment.
-        core_observer = std::make_unique<PolicyFetchCoreObserver>(
-            manager->core(), run_loop.QuitClosure());
-      } else {
-        // |run_loop|'s QuitClosure will be called after the browser attempts to
-        // unenroll from CBCM. This is necessary to quit the loop in the case
-        // the storage fails since the core is not disconnected.
-        observer_.QuitOnUnenroll(run_loop.QuitClosure());
-      }
-    } else {
-      store_observer = std::make_unique<PolicyFetchStoreObserver>(
-          manager->store(), run_loop.QuitClosure());
+  if (dm_token() == kInvalidDMToken || dm_token() == kDeletionDMToken) {
+    if (!observer_.is_unenrolled()) {
+      g_browser_process->browser_policy_connector()
+          ->device_management_service()
+          ->ScheduleInitialization(0);
+      observer_.WaitUntilUnenrolled();
     }
-    g_browser_process->browser_policy_connector()
-        ->device_management_service()
-        ->ScheduleInitialization(0);
-    run_loop.Run();
+    // Verify unenrollment outcome matches storage availability.
+    EXPECT_EQ(storage_enabled(), observer_.unenroll_succeeded());
+    if (storage_enabled()) {
+      EXPECT_FALSE(manager->core()->IsConnected());
+    } else {
+      EXPECT_TRUE(manager->core()->IsConnected());
+    }
+  } else {
+    ASSERT_TRUE(manager->core()->client());
+    // If the policy hasn't been updated, wait for it.
+    if (manager->core()->client()->last_policy_timestamp().is_null()) {
+      base::RunLoop run_loop;
+      PolicyFetchStoreObserver store_observer(manager->store(),
+                                              run_loop.QuitClosure());
+      g_browser_process->browser_policy_connector()
+          ->device_management_service()
+          ->ScheduleInitialization(0);
+      run_loop.Run();
+    }
   }
   EXPECT_TRUE(
       manager->IsInitializationComplete(PolicyDomain::POLICY_DOMAIN_CHROME));
@@ -975,7 +984,9 @@ INSTANTIATE_TEST_SUITE_P(
         /*dm_token=*/::testing::Values(kDMToken),
         /*storage_enabled=*/::testing::Values(true),
         /*is_policy_fetch_with_sha256_enabled=*/::testing::Bool()));
+#endif  // !BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 class MachineLevelUserCloudPolicyExtensionInstallPolicyTest
     : public MachineLevelUserCloudPolicyPolicyFetchTest {
  public:
@@ -1026,7 +1037,7 @@ IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyExtensionInstallPolicyTest,
   ExtensionInstallPolicyServiceImpl* extension_install_policy_service =
       static_cast<ExtensionInstallPolicyServiceImpl*>(
           ExtensionInstallPolicyServiceFactory::GetForBrowserContext(
-              browser()->GetProfile()));
+              chrome_test_utils::GetProfile(this)));
   ASSERT_TRUE(extension_install_policy_service);
   std::set<ExtensionIdAndVersion> extensions = {
       ExtensionIdAndVersion(kExtensionId1, kExtensionVersion1)};
@@ -1038,11 +1049,11 @@ IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyExtensionInstallPolicyTest,
   // Configure new policies on the server and refresh policies on the client.
   {
     em::CloudPolicySettings settings;
-    em::BooleanPolicyProto* allow_dinosaur_easter_egg =
-        settings.mutable_allowdinosaureasteregg();
-    allow_dinosaur_easter_egg->mutable_policy_options()->set_mode(
+    em::BooleanPolicyProto* metrics_reporting_enabled =
+        settings.mutable_metricsreportingenabled();
+    metrics_reporting_enabled->mutable_policy_options()->set_mode(
         em::PolicyOptions::MANDATORY);
-    allow_dinosaur_easter_egg->set_value(false);
+    metrics_reporting_enabled->set_value(false);
     test_server_->policy_storage()->SetPolicyPayload(
         dm_protocol::kChromeMachineLevelUserCloudPolicyType,
         settings.SerializeAsString());
@@ -1075,7 +1086,7 @@ IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyExtensionInstallPolicyTest,
 
   // Verify new policy.
   EXPECT_EQ(manager->store()->policy_map().size(), 1u);
-  EXPECT_EQ(base::Value(false), *(policy_map.Get(key::kAllowDinosaurEasterEgg)
+  EXPECT_EQ(base::Value(false), *(policy_map.Get(key::kMetricsReportingEnabled)
                                       ->value(base::Value::Type::BOOLEAN)));
 
   EXPECT_EQ(extension_install_policy_map.size(), 1u);
@@ -1144,7 +1155,7 @@ IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyExtensionInstallPolicyTest,
   ExtensionInstallPolicyServiceImpl* extension_install_policy_service =
       static_cast<ExtensionInstallPolicyServiceImpl*>(
           ExtensionInstallPolicyServiceFactory::GetForBrowserContext(
-              browser()->GetProfile()));
+              chrome_test_utils::GetProfile(this)));
   ASSERT_TRUE(extension_install_policy_service);
   std::set<ExtensionIdAndVersion> extensions = {
       ExtensionIdAndVersion(kExtensionId1, kExtensionVersion1)};
@@ -1156,11 +1167,11 @@ IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyExtensionInstallPolicyTest,
   // Configure new policies on the server and refresh policies on the client.
   {
     em::CloudPolicySettings settings;
-    em::BooleanPolicyProto* allow_dinosaur_easter_egg =
-        settings.mutable_allowdinosaureasteregg();
-    allow_dinosaur_easter_egg->mutable_policy_options()->set_mode(
+    em::BooleanPolicyProto* metrics_reporting_enabled =
+        settings.mutable_metricsreportingenabled();
+    metrics_reporting_enabled->mutable_policy_options()->set_mode(
         em::PolicyOptions::MANDATORY);
-    allow_dinosaur_easter_egg->set_value(false);
+    metrics_reporting_enabled->set_value(false);
     test_server_->policy_storage()->SetPolicyPayload(
         dm_protocol::kChromeMachineLevelUserCloudPolicyType,
         settings.SerializeAsString());
@@ -1186,7 +1197,7 @@ IN_PROC_BROWSER_TEST_P(MachineLevelUserCloudPolicyExtensionInstallPolicyTest,
 
   // Verify new policy.
   EXPECT_EQ(manager->store()->policy_map().size(), 1u);
-  EXPECT_EQ(base::Value(false), *(policy_map.Get(key::kAllowDinosaurEasterEgg)
+  EXPECT_EQ(base::Value(false), *(policy_map.Get(key::kMetricsReportingEnabled)
                                       ->value(base::Value::Type::BOOLEAN)));
 
   // The extension install policy map should be empty due to the invalid policy.
@@ -1227,7 +1238,9 @@ INSTANTIATE_TEST_SUITE_P(
         /*dm_token=*/::testing::Values(kDMToken),
         /*storage_enabled=*/::testing::Values(true),
         /*is_policy_fetch_with_sha256_enabled=*/::testing::Bool()));
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
+#if !BUILDFLAG(IS_ANDROID)
 class MachineLevelUserCloudPolicyRobotAuthTest : public PlatformBrowserTest {
  public:
   MachineLevelUserCloudPolicyRobotAuthTest() : observer_(&delegate_) {

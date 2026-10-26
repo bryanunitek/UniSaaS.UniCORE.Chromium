@@ -29,14 +29,14 @@
 #include "base/task/thread_pool.h"
 #include "components/account_manager_core/account.h"
 #include "components/account_manager_core/chromeos/tokens.pb.h"
-#include "components/account_manager_core/pref_names.h"
-#include "components/prefs/pref_registry_simple.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "google_apis/gaia/gaia_access_token_fetcher.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_access_token_consumer.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -195,12 +195,21 @@ class AccountManager::AccessTokenFetcher : public OAuth2AccessTokenFetcher {
   }
 
   // OAuth2AccessTokenFetcher override:
+  // Note: OAuth2AccessTokenManager relies on asynchronous completions from
+  // OAuth2AccessTokenFetcher::Start(). Firing the callback synchronously can
+  // cause re-entrancy crashes, as observed e.g. in
+  // BookmarkMessageHandlerTest.CanNotUploadInSigninPending.
   void Start(const std::string& client_id,
              const std::string& client_secret,
              const std::vector<std::string>& scopes) override {
     DCHECK(!is_request_pending_);
-    client_id_ = client_id;
-    client_secret_ = client_secret;
+    client_id_ = client_id.empty()
+                     ? GaiaUrls::GetInstance()->oauth2_chrome_client_id()
+                     : client_id;
+    client_secret_ =
+        client_secret.empty()
+            ? GaiaUrls::GetInstance()->oauth2_chrome_client_secret()
+            : client_secret;
     scopes_ = scopes;
     if (!are_token_requests_allowed_) {
       is_request_pending_ = true;
@@ -227,14 +236,24 @@ class AccountManager::AccessTokenFetcher : public OAuth2AccessTokenFetcher {
     is_request_pending_ = false;
 
     if (account_key_.account_type() != ::account_manager::AccountType::kGaia) {
-      FireOnGetTokenFailure(GoogleServiceAuthError::CreateAccountNotFound());
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &AccountManager::AccessTokenFetcher::FireOnGetTokenFailure,
+              weak_factory_.GetWeakPtr(),
+              GoogleServiceAuthError::CreateAccountNotFound()));
       return;
     }
 
     std::optional<std::string> maybe_token =
         account_manager_->GetRefreshToken(account_key_);
     if (!maybe_token.has_value()) {
-      FireOnGetTokenFailure(GoogleServiceAuthError::CreateAccountNotFound());
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &AccountManager::AccessTokenFetcher::FireOnGetTokenFailure,
+              weak_factory_.GetWeakPtr(),
+              GoogleServiceAuthError::CreateAccountNotFound()));
       return;
     }
 
@@ -265,13 +284,6 @@ AccountManager::Observer::Observer() = default;
 AccountManager::Observer::~Observer() = default;
 
 AccountManager::AccountManager() = default;
-
-// static
-void AccountManager::RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(
-      ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed,
-      /*default_value=*/true);
-}
 
 void AccountManager::SetPrefService(PrefService* pref_service) {
   DCHECK(pref_service);
@@ -538,14 +550,14 @@ void AccountManager::RemoveAccount(
 
 void AccountManager::UpsertAccount(
     const ::account_manager::AccountKey& account_key,
-    const std::string& raw_email,
-    const std::string& token) {
+    std::string_view raw_email,
+    std::string_view token) {
   DCHECK_NE(init_state_, InitializationState::kNotStarted);
   DCHECK(!raw_email.empty());
 
   base::OnceClosure closure = base::BindOnce(
       &AccountManager::UpsertAccountInternal, weak_factory_.GetWeakPtr(),
-      account_key, AccountInfo{raw_email, token});
+      account_key, AccountInfo{std::string(raw_email), std::string(token)});
   RunOnInitialization(std::move(closure));
 }
 
@@ -596,7 +608,7 @@ void AccountManager::UpsertAccountInternal(
     // turn guarantees that |pref_service_| is not null.
     DCHECK(pref_service_);
     if (!pref_service_->GetBoolean(
-            ::account_manager::prefs::kSecondaryGoogleAccountSigninAllowed)) {
+            policy::policy_prefs::kSecondaryGoogleAccountSigninAllowed)) {
       // Secondary Account additions are disabled by policy and all flows for
       // adding a Secondary Account are already blocked.
       CHECK(accounts_.empty());

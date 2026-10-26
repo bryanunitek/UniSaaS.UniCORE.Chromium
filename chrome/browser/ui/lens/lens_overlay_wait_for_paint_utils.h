@@ -9,16 +9,16 @@
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace lens {
 
 // Opens the given URL in the given browser and waits for the first paint to
 // complete.
 void WaitForPaint(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const GURL& url,
-    WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB,
+    WindowOpenDisposition disposition = WindowOpenDisposition::kCurrentTab,
     int browser_test_flags = ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
 }  // namespace lens

@@ -16,7 +16,6 @@
 #include "chrome/browser/feature_engagement/non_iph_promo.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/commerce/commerce_page_action_controller.h"
@@ -355,7 +354,7 @@ void CommerceUiTabHelper::SetPriceTrackingState(
         shopping_service_.get(), bookmark_model_.get(), node, enable,
         std::move(wrapped_callback), enable && is_new_bookmark);
   } else {
-    DCHECK(!enable);
+    CHECK(!enable, base::NotFatalUntil::M162);
     std::optional<commerce::ProductInfo> info =
         shopping_service_->GetAvailableProductInfoForUrl(
             web_contents()->GetLastCommittedURL());
@@ -370,10 +369,10 @@ void CommerceUiTabHelper::SetPriceTrackingState(
 
 void CommerceUiTabHelper::OnPriceInsightsIconClicked() {
   auto* side_panel_ui = GetSidePanelUI();
-  DCHECK(side_panel_ui);
+  CHECK(side_panel_ui, base::NotFatalUntil::M162);
   SidePanelEntry* const entry = side_panel_registry_->GetEntryForKey(
       SidePanelEntryKey(SidePanelEntry::Id::kShoppingInsights));
-  DCHECK(entry);
+  CHECK(entry, base::NotFatalUntil::M162);
 
   if (side_panel_ui->IsSidePanelEntryShowing(
           SidePanelEntryKey(SidePanelEntryId::kShoppingInsights))) {
@@ -444,7 +443,7 @@ std::unique_ptr<views::View> CommerceUiTabHelper::CreateShoppingInsightsWebView(
 
 SidePanelUI* CommerceUiTabHelper::GetSidePanelUI() {
   if (BrowserWindowInterface* bwi = tab().GetBrowserWindowInterface()) {
-    return bwi->GetFeatures().side_panel_ui();
+    return SidePanelUI::From(bwi);
   }
 
   return nullptr;
@@ -483,11 +482,7 @@ views::BubbleAnchor CommerceUiTabHelper::GetDiscountsBubbleAnchor() {
   BrowserWindowInterface* bwi = tab().GetBrowserWindowInterface();
   CHECK(bwi);
 
-  // TODO(https://crbug.com/425953501): Remove GetBrowserForMigrationOnly since
-  // Browser* will not be needed once ToolBarButtonProvider is migrated to
-  // BrowserWindowInterface.
-  auto* browser_view =
-      BrowserView::GetBrowserViewForBrowser(bwi->GetBrowserForMigrationOnly());
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(bwi);
   if (!browser_view) {
     return views::BubbleAnchor();
   }
@@ -692,13 +687,6 @@ CommerceUiTabHelper::GetPageActionControllerNotificationCallback(
       std::move(page_action_icon_update_callback));
 }
 
-void CommerceUiTabHelper::UpdatePageActionIconView(PageActionIconType type) {
-  BrowserWindowInterface* bwi = tab().GetBrowserWindowInterface();
-  if (!bwi) {
-    return;
-  }
 
-  BrowserWindow::FromBrowser(bwi)->UpdatePageActionIcon(type);
-}
 
 }  // namespace commerce

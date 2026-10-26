@@ -217,7 +217,10 @@
   std::unique_ptr<payments::CurrencyFormatter> formatter =
       std::make_unique<payments::CurrencyFormatter>(
           specifics.previous_price().currency_code(),
-          GetApplicationContext()->GetApplicationLocaleStorage()->Get());
+          std::string(GetApplicationContext()
+                          ->GetApplicationLocaleStorage()
+                          ->GetTag()
+                          .tag_string()));
 
   float current_price_micros =
       static_cast<float>(specifics.current_price().amount_micros());
@@ -312,8 +315,7 @@ std::u16string GetHostnameFromGURL(const GURL& url) {
 
 - (void)openShopCardItem:(ShopCardConfig*)config {
   [self.NTPActionsDelegate shopCardOpened];
-  [self.contentSuggestionsMetricsRecorder
-      recordShopCardOpened:config.shopCardData];
+  [ContentSuggestionsMetricsRecorder recordShopCardOpened:config.shopCardData];
   [self.shopCardActionDelegate openURL:config.shopCardData.productURL];
   [self.delegate removeShopCard];
   [self logEngagementForItem:config];
@@ -329,7 +331,7 @@ std::u16string GetHostnameFromGURL(const GURL& url) {
     DCHECK(magicStackModule);
     [self logImpressionForItem:static_cast<ShopCardConfig*>(magicStackModule)];
   }
-  [self.contentSuggestionsMetricsRecorder
+  [ContentSuggestionsMetricsRecorder
       recordShopCardImpression:static_cast<ShopCardConfig*>(magicStackModule)
                                    .shopCardData
                        atIndex:index];

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
+
 // The percent of a view that must be visible to be considered "mostly visible"
 // for the purpose of determining what's likely being actually read in the
 // reading mode panel.
@@ -30,10 +32,7 @@ export function isRectVisible(rect: DOMRect): boolean {
 }
 
 function isPointVisible(point: number) {
-  return (
-      (point >= 0) &&
-      ((point <= window.innerHeight) ||
-       (point <= document.documentElement.clientHeight)));
+  return (point >= 0) && (point <= window.innerHeight);
 }
 
 // Recalculates line positions based on the container and height.
@@ -57,10 +56,11 @@ function combineIntersectingRects(unsortedRects: DOMRect[]): DOMRect[] {
   // The smaller the line spacing, the larger the threshold needs to be, since
   // it is more likely for lines to have overlapping bounds. Thus, invert the
   // line spacing value and multiply by 10 to ensure it is above 1.
-  const lineHeight =
-      chrome.readingMode.getLineSpacingValue(chrome.readingMode.lineSpacing);
+  const visualBrowserProxy = VisualBrowserProxyImpl.getInstance();
+  const lineHeight = visualBrowserProxy.getLineSpacingValue(
+      visualBrowserProxy.getLineSpacing());
   const threshold =
-      Math.max(1, chrome.readingMode.fontSize) * (1 / lineHeight) * 10;
+      Math.max(1, visualBrowserProxy.getFontSize()) * (1 / lineHeight) * 10;
 
   for (let i = 1; i < sortedRects.length; i++) {
     const currentRect = sortedRects[i]!;
@@ -133,4 +133,93 @@ export function getMostCommonPitch(bounds: DOMRect[]): number {
   }, {pitches: new Map<number, number>(), maxPCount: 0, modePitch: 0});
 
   return modeResult.modePitch;
+}
+
+// Binary searches for the first rect whose bottom is >= y.
+// Returns the index of that rect, or rects.length if all rects have bottom < y.
+function findFirstRectAtY(rects: DOMRect[], y: number): number {
+  let low = 0;
+  let high = rects.length - 1;
+  let targetIndex = rects.length;
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (rects[mid]!.bottom >= y) {
+      targetIndex = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  return targetIndex;
+}
+
+// Returns the index of the first rect in the given list that matches the
+// given y position.
+export function getRectIndexAtY(
+    y: number, rects: DOMRect[], isForward: boolean): number {
+  if (rects.length === 0) {
+    return -1;
+  }
+
+  const targetIndex = findFirstRectAtY(rects, y);
+  if (targetIndex >= rects.length) {
+    return rects.length - 1;
+  }
+
+  return (isForward || targetIndex === 0) ? targetIndex : targetIndex - 1;
+}
+
+// Finds the line in `lines` with the greatest vertical overlap with `wordRect`.
+// If no line directly overlaps, finds the line closest to the vertical midpoint
+// of `wordRect`.
+export function getLineForRect(wordRect: DOMRect, lines: DOMRect[]): DOMRect|
+    null {
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const wordCenterY = (wordRect.top + wordRect.bottom) / 2;
+  const candidateIndex =
+      getRectIndexAtY(wordCenterY, lines, /*isForward=*/ true);
+  if (candidateIndex < 0 || candidateIndex >= lines.length) {
+    return null;
+  }
+
+  // Check candidate line and adjacent neighbors to pick the line with
+  // maximum vertical overlap (e.g. for superscripts that may cross line
+  // boundaries).
+  let bestLine = lines[candidateIndex]!;
+  let maxOverlap = 0;
+  const start = Math.max(0, candidateIndex - 1);
+  const end = Math.min(lines.length - 1, candidateIndex + 1);
+  for (let i = start; i <= end; i++) {
+    const line = lines[i]!;
+    const overlapTop = Math.max(wordRect.top, line.top);
+    const overlapBottom = Math.min(wordRect.bottom, line.bottom);
+    const overlap = Math.max(0, overlapBottom - overlapTop);
+    if (overlap > maxOverlap) {
+      maxOverlap = overlap;
+      bestLine = line;
+    }
+  }
+
+  if (maxOverlap > 0) {
+    return bestLine;
+  }
+
+  // Fallback: If no line directly overlaps vertically, compare adjacent
+  // candidate lines closest to the word's vertical midpoint.
+  let minDistance = Infinity;
+  for (let i = start; i <= end; i++) {
+    const line = lines[i]!;
+    const lineCenterY = (line.top + line.bottom) / 2;
+    const distance = Math.abs(wordCenterY - lineCenterY);
+    if (distance < minDistance) {
+      minDistance = distance;
+      bestLine = line;
+    }
+  }
+  return bestLine;
 }

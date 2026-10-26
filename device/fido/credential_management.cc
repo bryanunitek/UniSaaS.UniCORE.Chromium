@@ -6,9 +6,9 @@
 
 #include "base/check_op.h"
 #include "base/containers/span.h"
+#include "base/containers/to_array.h"
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/pin.h"
 #include "device/fido/public/fido_constants.h"
 #include "third_party/boringssl/src/include/openssl/hmac.h"
@@ -71,8 +71,7 @@ CredentialManagementRequest::ForEnumerateCredentialsBegin(
   params_map.emplace(
       static_cast<int>(CredentialManagementRequestParamKey::kRPIDHash),
       std::move(rp_id_hash));
-  std::vector<uint8_t> pin_auth_bytes =
-      *cbor::Writer::Write(cbor::Value(params_map));
+  std::vector<uint8_t> pin_auth_bytes = *cbor::Writer::Write(params_map);
   CredentialManagementRequest request(
       version, CredentialManagementSubCommand::kEnumerateCredentialsBegin,
       std::move(params_map));
@@ -103,8 +102,7 @@ CredentialManagementRequest CredentialManagementRequest::ForDeleteCredential(
   params_map.emplace(
       static_cast<int>(CredentialManagementRequestParamKey::kCredentialID),
       AsCBOR(credential_id));
-  std::vector<uint8_t> pin_auth_bytes =
-      *cbor::Writer::Write(cbor::Value(params_map));
+  std::vector<uint8_t> pin_auth_bytes = *cbor::Writer::Write(params_map);
   CredentialManagementRequest request(
       version, CredentialManagementSubCommand::kDeleteCredential,
       std::move(params_map));
@@ -131,8 +129,7 @@ CredentialManagementRequest::ForUpdateUserInformation(
       static_cast<int>(CredentialManagementRequestParamKey::kUser),
       AsCBOR(updated_user));
 
-  std::vector<uint8_t> pin_auth_bytes =
-      *cbor::Writer::Write(cbor::Value(params_map));
+  std::vector<uint8_t> pin_auth_bytes = *cbor::Writer::Write(params_map);
   CredentialManagementRequest request(
       version, CredentialManagementSubCommand::kUpdateUserInformation,
       std::move(params_map));
@@ -321,7 +318,7 @@ std::optional<EnumerateCredentialsResponse> EnumerateCredentialsResponse::Parse(
     if (!sized_large_blob_span) {
       return std::nullopt;
     }
-    large_blob_key = fido_parsing_utils::Materialize(*sized_large_blob_span);
+    large_blob_key = base::ToArray(*sized_large_blob_span);
   }
 
   size_t credential_count = 0;

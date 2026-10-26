@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "components/device_signals/core/browser/user_delegate.h"
 
 namespace device_signals {
@@ -32,8 +31,7 @@ UserPermission UserPermissionServiceAsh::CanCollectSignals() const {
     return UserPermission::kGranted;
   }
 
-  if (ash::features::IsUnmanagedDeviceDeviceTrustConnectorFeatureEnabled() &&
-      !IsDeviceCloudManaged() && user_delegate_->IsManagedUser()) {
+  if (!IsDeviceCloudManaged() && user_delegate_->IsManagedUser()) {
     return UserPermission::kGranted;
   }
 
@@ -43,8 +41,17 @@ UserPermission UserPermissionServiceAsh::CanCollectSignals() const {
 }
 
 UserPermission UserPermissionServiceAsh::CanCollectReportSignals() const {
-  // Ash/ChromeOS are out of scope for signals reporting for now.
-  return UserPermission::kUnsupported;
+  if (!user_delegate_->IsManagedUser()) {
+    return UserPermission::kUnsupported;
+  }
+
+  if (IsDeviceCloudManaged() && user_delegate_->IsAffiliated()) {
+    return UserPermission::kGranted;
+  }
+
+  // In unaffiliated or unmanaged device contexts, return kMissingConsent to
+  // collect posture-only signals while redacting device-identifying PII.
+  return UserPermission::kMissingConsent;
 }
 
 }  // namespace device_signals

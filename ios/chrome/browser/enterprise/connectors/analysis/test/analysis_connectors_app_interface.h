@@ -13,8 +13,17 @@
 // Sets the prefs to enable download connectors.
 + (void)setDownloadProtectionRules;
 
+// Sets the prefs to enable download connectors for non-blocking scan.
++ (void)setNonBlockingDownloadProtectionRules;
+
 // Clears all download protection rules.
 + (void)clearDownloadProtectionRules;
+
+// Sets the prefs to enable Bulk Data Entry connectors.
++ (void)setBulkDataEntryRules;
+
+// Clears all Bulk Data Entry rules.
++ (void)clearBulkDataEntryRules;
 
 // Set the browser DM Token.
 + (void)setBrowserDMToken;

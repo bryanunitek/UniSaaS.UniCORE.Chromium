@@ -42,7 +42,13 @@ BASE_FEATURE(kCtmColorManagement, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDrmColorSpaceDefaultIsRec709, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
+#if BUILDFLAG(IS_MAC)
 BASE_FEATURE(kCADisplayLinkInBrowser, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kCADisplayLinkInGpu, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSkipPostTaskForCallbacks, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 // TODO(gildekel): A temporary flag to control whether EDID-based (vs.
 // port-based) display IDs are generated per display. Remove once the migration
@@ -108,18 +114,6 @@ BASE_FEATURE(kOpsDisplayScaleFactor, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsOpsDisplayScaleFactorEnabled() {
   return base::FeatureList::IsEnabled(kOpsDisplayScaleFactor);
-}
-
-// Optimizes ScreenWinDisplay lookup by caching an HMONITOR for each display.
-// This is part of a combined performance experiment so requires both this flag
-// and "ReducePPMs". In case of errors this flag can be disabled without
-// affecting the rest of the experiment.
-BASE_FEATURE(kScreenWinDisplayLookupByHMONITOR,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsScreenWinDisplayLookupByHMONITOREnabled() {
-  return base::FeatureList::IsEnabled(base::features::kReducePPMs) &&
-         base::FeatureList::IsEnabled(kScreenWinDisplayLookupByHMONITOR);
 }
 
 // When this feature is enabled, a different notification will be displayed to

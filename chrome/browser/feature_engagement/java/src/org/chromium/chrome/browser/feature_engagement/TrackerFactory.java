@@ -10,8 +10,12 @@ import org.jni_zero.NativeMethods;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.preferences.Pref;
+import org.chromium.chrome.browser.prefs.LocalStatePrefs;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.components.prefs.PrefService;
 
 import java.util.function.Supplier;
 
@@ -33,7 +37,22 @@ public final class TrackerFactory {
     public static Tracker getTrackerForProfile(Profile profile) {
         if (sTrackerForTesting != null) return sTrackerForTesting;
         profile.ensureNativeInitialized();
-        return TrackerFactoryJni.get().getTrackerForProfile(profile);
+        Tracker tracker = TrackerFactoryJni.get().getTrackerForProfile(profile);
+        // TODO(crbug.com/571067805): Move `android` from `future_on` to `supported_on` in
+        // PromotionsEnabled.yaml when ready to launch.
+        tracker.setPromotionsEnabledSupplier(
+                () -> {
+                    if (!ChromeFeatureList.sAndroidUserEducationFramework.isEnabled()) {
+                        return true;
+                    }
+                    PrefService localState = LocalStatePrefs.get();
+                    return localState == null || localState.getBoolean(Pref.PROMOTIONS_ENABLED);
+                });
+        tracker.setAggressivelyCooldownIphsSupplier(
+                () ->
+                        ChromeFeatureList.sAndroidUserEducationFramework.isEnabled()
+                                && ChromeFeatureList.sAggressivelyCooldownIphs.isEnabled());
+        return tracker;
     }
 
     public static @Nullable Tracker getTrackerForProfile(
@@ -54,11 +73,11 @@ public final class TrackerFactory {
     }
 
     /**
-     * Set a {@Tracker} to use for testing. All calls to {@link #getTrackerForProfile( Profile )}
-     * will return the test tracker rather than the real tracker.
+     * Set a {@link Tracker} to use for testing. All calls to {@link #getTrackerForProfile( Profile
+     * )} will return the test tracker rather than the real tracker.
      *
-     * @param testTracker The {@Tracker} to use for testing, or null if the real tracker should be
-     *                    used.
+     * @param testTracker The {@link Tracker} to use for testing, or null if the real tracker should
+     *     be used.
      */
     public static void setTrackerForTests(@Nullable Tracker testTracker) {
         sTrackerForTesting = testTracker;

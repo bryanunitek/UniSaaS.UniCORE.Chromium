@@ -8,7 +8,7 @@
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "media/base/video_codecs.h"
-#include "media/gpu/windows/d3d11_picture_buffer.h"
+#include "media/gpu/windows/d3d_picture_buffer.h"
 #include "media/gpu/windows/format_utils.h"
 #include "media/gpu/windows/supported_profile_helpers.h"
 #include "third_party/microsoft_dxheaders/src/include/directx/d3dx12_core.h"
@@ -45,7 +45,7 @@ D3D12ReferenceFrameList::D3D12ReferenceFrameList(
     const D3D12ReferenceFrameList& other) = default;
 
 void D3D12ReferenceFrameList::SetPictureBuffers(
-    base::span<scoped_refptr<D3D11PictureBuffer>> picture_buffers) {
+    base::span<scoped_refptr<D3DPictureBuffer>> picture_buffers) {
   for (size_t i = 0; i < picture_buffers.size(); i++) {
     picture_buffers_[i] = picture_buffers[i].get();
   }
@@ -184,13 +184,6 @@ GUID GetD3D12VideoDecodeGUID(VideoCodecProfile profile,
     case H264PROFILE_MAIN:
     case H264PROFILE_EXTENDED:
     case H264PROFILE_HIGH:
-    case H264PROFILE_HIGH10PROFILE:
-    case H264PROFILE_HIGH422PROFILE:
-    case H264PROFILE_HIGH444PREDICTIVEPROFILE:
-    case H264PROFILE_SCALABLEBASELINE:
-    case H264PROFILE_SCALABLEHIGH:
-    case H264PROFILE_STEREOHIGH:
-    case H264PROFILE_MULTIVIEWHIGH:
       return D3D12_VIDEO_DECODE_PROFILE_H264;
     case VP9PROFILE_PROFILE0:
       return D3D12_VIDEO_DECODE_PROFILE_VP9;

@@ -10,7 +10,10 @@ import static android.view.KeyEvent.META_CTRL_ON;
 import static android.view.KeyEvent.META_SHIFT_ON;
 
 import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.action.ViewActions.longClick;
+import static androidx.test.espresso.action.ViewActions.pressKey;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.RootMatchers.isPlatformPopup;
@@ -37,12 +40,12 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewStub;
 
-import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
 import androidx.test.espresso.ViewInteraction;
 import androidx.test.espresso.action.EspressoKey;
+import androidx.test.espresso.action.ViewActions;
 import androidx.test.filters.MediumTest;
 
 import org.hamcrest.Matcher;
@@ -57,10 +60,12 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils.BookmarkBarSettingChangeOrigin;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -68,6 +73,7 @@ import org.chromium.chrome.test.OverrideContextWrapperTestRule;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
+import org.chromium.components.bookmarks.BookmarkBarVisibilityState;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -85,7 +91,6 @@ import java.util.stream.IntStream;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
 @RunWith(ChromeJUnit4ClassRunner.class)
-@DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288719
 public class BookmarkBarTest {
 
     @Rule
@@ -103,9 +108,9 @@ public class BookmarkBarTest {
     @Before
     public void setUp() {
         mOverrideContextRule.setIsDesktop(true);
+        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
 
         mCtaTestRule.startOnBlankPage();
-        BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
         ThreadUtils.runOnUiThreadBlocking(() -> setBookmarkBarSetting(/* enabled= */ true));
         waitForBookmarkBarVisibility(/* visible= */ true);
         BookmarkTestUtil.waitForBookmarkModelLoaded();
@@ -123,13 +128,14 @@ public class BookmarkBarTest {
             ThreadUtils.runOnUiThreadBlocking(() -> mItemIds.forEach(mModel::deleteBookmark));
             mItemIds = null;
         }
+        ThreadUtils.runOnUiThreadBlocking(() -> setBookmarkBarSetting(/* enabled= */ false));
     }
 
     @Test
     @MediumTest
     public void testOnAllBookmarksButtonClick() {
         onViewDisplayed(bookmarkBarItemWithText("All bookmarks")).perform(click());
-        onViewDisplayed(bookmarkManagerToolbarWithText("Bookmarks"));
+        onViewDisplayed(withClassName(endsWith("BookmarkToolbar")));
     }
 
     @Test
@@ -163,6 +169,51 @@ public class BookmarkBarTest {
 
     @Test
     @MediumTest
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_NTP)
+    public void testOnBookmarkBarToggledViaKeyboard_TriState() {
+        final var activity = mCtaTestRule.getActivity();
+        final var evt =
+                new KeyEvent(
+                        /* downTime= */ SystemClock.uptimeMillis(),
+                        /* eventTime= */ SystemClock.uptimeMillis(),
+                        KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_B,
+                        /* repeat= */ 0,
+                        KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON);
+
+        // Case 1: Initial state ALWAYS_HIDE -> toggles to ALWAYS_SHOW.
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        BookmarkBarUtils.setBookmarkBarVisibilityState(
+                                activity.getProfileProviderSupplier().get().getOriginalProfile(),
+                                BookmarkBarVisibilityState.ALWAYS_HIDE,
+                                BookmarkBarSettingChangeOrigin.APPEARANCE_SETTINGS));
+        waitForBookmarkBarVisibility(/* visible= */ false);
+
+        ThreadUtils.runOnUiThreadBlocking(() -> activity.onKeyDown(evt.getKeyCode(), evt));
+        waitForBookmarkBarVisibility(/* visible= */ true);
+
+        // Case 2: Toggle when ALWAYS_SHOW -> toggles to ALWAYS_HIDE.
+        ThreadUtils.runOnUiThreadBlocking(() -> activity.onKeyDown(evt.getKeyCode(), evt));
+        waitForBookmarkBarVisibility(/* visible= */ false);
+
+        // Case 3: Initial state ONLY_SHOW_ON_NTP (on blank page, not NTP) -> toggles to
+        // ALWAYS_SHOW.
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        BookmarkBarUtils.setBookmarkBarVisibilityState(
+                                activity.getProfileProviderSupplier().get().getOriginalProfile(),
+                                BookmarkBarVisibilityState.ONLY_SHOW_ON_NTP,
+                                BookmarkBarSettingChangeOrigin.APPEARANCE_SETTINGS));
+        waitForBookmarkBarVisibility(/* visible= */ false);
+
+        ThreadUtils.runOnUiThreadBlocking(() -> activity.onKeyDown(evt.getKeyCode(), evt));
+        waitForBookmarkBarVisibility(/* visible= */ true);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.FLYOUT_IN_BOOKMARKS_BAR)
     public void testOnBookmarkFolderClick() throws ExecutionException {
         final String title = "Folder";
         mItemIds = List.of(addFolder(title));
@@ -172,11 +223,11 @@ public class BookmarkBarTest {
         // clicked.
         onView(withClassName(endsWith("BookmarkToolbar"))).check(doesNotExist());
 
-        // When the folder is empty, the list should not be displayed.
-        onView(withId(R.id.menu_list)).inRoot(isPlatformPopup()).check(matches(not(isDisplayed())));
+        // When the folder is empty, the list should be displayed.
+        onView(withId(R.id.menu_list)).inRoot(isPlatformPopup()).check(matches(isDisplayed()));
 
-        // The empty view should be displayed.
-        onView(withText(R.string.bookmarks_bar_empty_message))
+        // The empty message should be displayed.
+        onView(allOf(withText(R.string.bookmarks_bar_empty_message), isDisplayed()))
                 .inRoot(isPlatformPopup())
                 .check(matches(isDisplayed()));
     }
@@ -272,9 +323,52 @@ public class BookmarkBarTest {
         onView(bookmarkManagerToolbarWithText("Bookmarks bar")).check(doesNotExist());
         // Check that a popup menu list is displayed.
         onView(withId(R.id.menu_list)).inRoot(isPlatformPopup()).check(matches(isDisplayed()));
+        pressBack(); // Dismiss for batched test.
     }
 
-    private @Nullable BookmarkId addBookmark(int index, @NonNull String title, @NonNull GURL url)
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_CONTEXT_MENU)
+    public void testOnBookmarkItemLongClick() throws ExecutionException {
+        final String title = "Google";
+        final GURL url = getTestServerUrl("/chrome/test/data/android/google.html");
+        mItemIds = List.of(addBookmark(/* index= */ 0, title, url));
+
+        onViewWaiting(bookmarkBarItemWithText(title)).perform(longClick());
+
+        // Check that a popup menu list is displayed.
+        onView(withId(R.id.menu_list)).inRoot(isPlatformPopup()).check(matches(isDisplayed()));
+        pressBack(); // Dismiss for batched test.
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_CONTEXT_MENU)
+    public void testOnBookmarkBarEmptySpaceLongClick() {
+        onViewWaiting(withId(R.id.bookmark_bar)).perform(longClick());
+
+        // Check that a popup menu list is displayed.
+        onView(withId(R.id.menu_list)).inRoot(isPlatformPopup()).check(matches(isDisplayed()));
+        pressBack(); // Dismiss for batched test.
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.BOOKMARKS_BAR_CONTEXT_MENU)
+    public void testOnBookmarkBarItemsContainerEmptySpaceLongClick() throws ExecutionException {
+        // Add a single bookmark so the items container has a non-zero height.
+        final String title = "Test Bookmark";
+        final GURL url = getTestServerUrl("/chrome/test/data/android/google.html");
+        mItemIds = List.of(addBookmark(/* index= */ 0, title, url));
+
+        onViewWaiting(withId(R.id.bookmark_bar_items_container)).perform(longClick());
+
+        // Check that a popup menu list is displayed.
+        onView(withId(R.id.menu_list)).inRoot(isPlatformPopup()).check(matches(isDisplayed()));
+        pressBack(); // Dismiss for batched test.
+    }
+
+    private @Nullable BookmarkId addBookmark(int index, String title, GURL url)
             throws ExecutionException {
         return BookmarkTestUtil.addBookmark(
                 mCtaTestRule.getActivityTestRule(),
@@ -285,29 +379,29 @@ public class BookmarkBarTest {
                 /* parent= */ mDesktopFolderId);
     }
 
-    private @Nullable BookmarkId addFolder(@NonNull String title) throws ExecutionException {
+    private @Nullable BookmarkId addFolder(String title) throws ExecutionException {
         return BookmarkTestUtil.addFolder(
                 mCtaTestRule.getActivityTestRule(), mModel, title, /* parent= */ mDesktopFolderId);
     }
 
-    private @NonNull Matcher<View> bookmarkBarItemWithText(@NonNull String text) {
+    private Matcher<View> bookmarkBarItemWithText(String text) {
         return allOf(
                 isDescendantOfA(withClassName(endsWith("BookmarkBar"))),
                 withClassName(endsWith("BookmarkBarButton")),
                 hasDescendant(withText(text)));
     }
 
-    private @NonNull Matcher<View> bookmarkBarOverflowButton() {
+    private Matcher<View> bookmarkBarOverflowButton() {
         return allOf(
                 isDescendantOfA(withClassName(endsWith("BookmarkBar"))),
                 withId(R.id.bookmark_bar_overflow_button));
     }
 
-    private @NonNull Matcher<View> bookmarkManagerToolbarWithText(@NonNull String text) {
+    private Matcher<View> bookmarkManagerToolbarWithText(String text) {
         return allOf(isDescendantOfA(withClassName(endsWith("BookmarkToolbar"))), withText(text));
     }
 
-    private @NonNull ViewAction clickWith(int metaState) {
+    private ViewAction clickWith(int metaState) {
         return new ViewAction() {
             @Override
             public Matcher<View> getConstraints() {
@@ -320,13 +414,13 @@ public class BookmarkBarTest {
             }
 
             @Override
-            public void perform(@NonNull UiController uiController, @NonNull View view) {
+            public void perform(UiController uiController, View view) {
                 TouchCommon.singleClickView(view, metaState);
             }
         };
     }
 
-    private @NonNull ViewAction focus() {
+    private ViewAction focus() {
         return new ViewAction() {
             @Override
             public Matcher<View> getConstraints() {
@@ -339,7 +433,7 @@ public class BookmarkBarTest {
             }
 
             @Override
-            public void perform(@NonNull UiController uiController, @NonNull View view) {
+            public void perform(UiController uiController, View view) {
                 // NOTE: Focus doesn't exist in touch mode except under special circumstances.
                 // Temporarily enable focusability to ensure the focus request can succeed.
                 // See https://android-developers.googleblog.com/2008/12/touch-mode.html.
@@ -361,7 +455,7 @@ public class BookmarkBarTest {
         return ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(tabModel.getCount() - 1));
     }
 
-    private @NonNull GURL getTestServerUrl(@NonNull String relativeUrl) {
+    private GURL getTestServerUrl(String relativeUrl) {
         return new GURL(mCtaTestRule.getTestServer().getURL(relativeUrl));
     }
 
@@ -371,27 +465,27 @@ public class BookmarkBarTest {
         activity.onConfigurationChanged(newConfig);
     }
 
-    private ViewInteraction onViewDisplayed(@NonNull Matcher<View> viewMatcher) {
+    private ViewInteraction onViewDisplayed(Matcher<View> viewMatcher) {
         return onViewWaiting(allOf(viewMatcher, isDisplayed()));
     }
 
-    private @Nullable <T> T itemOrNull(@NonNull Callable<T> callable) {
+    private @Nullable <T> T itemOrNull(Callable<T> callable) {
         try {
             return callable.call();
-        } catch (@NonNull Throwable e) {
+        } catch (Throwable e) {
             return null;
         }
     }
 
-    private @NonNull ViewAction pressKey(int keyCode) {
+    private ViewAction pressKey(int keyCode) {
         return pressKey(keyCode, /* metaState= */ 0);
     }
 
-    private @NonNull ViewAction pressKey(int keyCode, int metaState) {
+    private ViewAction pressKey(int keyCode, int metaState) {
         final var isAltPressed = (metaState & META_ALT_ON) != 0;
         final var isCtrlPressed = (metaState & META_CTRL_ON) != 0;
         final var isShiftPressed = (metaState & META_SHIFT_ON) != 0;
-        return androidx.test.espresso.action.ViewActions.pressKey(
+        return ViewActions.pressKey(
                 new EspressoKey.Builder()
                         .withAltPressed(isAltPressed)
                         .withCtrlPressed(isCtrlPressed)
@@ -403,8 +497,17 @@ public class BookmarkBarTest {
     private void setBookmarkBarSetting(boolean enabled) {
         final var activity = mCtaTestRule.getActivity();
         final var profile = activity.getProfileProviderSupplier().get().getOriginalProfile();
-        BookmarkBarUtils.setUserPrefsShowBookmarksBar(
-                profile, enabled, /* fromKeyboardShortcut= */ false);
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.BOOKMARKS_BAR_NTP)) {
+            BookmarkBarUtils.setBookmarkBarVisibilityState(
+                    profile,
+                    enabled
+                            ? BookmarkBarVisibilityState.ALWAYS_SHOW
+                            : BookmarkBarVisibilityState.ALWAYS_HIDE,
+                    BookmarkBarSettingChangeOrigin.APPEARANCE_SETTINGS);
+        } else {
+            BookmarkBarUtils.setUserPrefsShowBookmarksBar(
+                    profile, enabled, /* fromKeyboardShortcut= */ false);
+        }
     }
 
     private void waitForBookmarkBarVisibility(boolean visible) {

@@ -14,22 +14,24 @@ public interface AutofillDelegate {
     void dismissed();
 
     /**
-     * Handles the selection of an Autofill suggestion from an AutofillPopup or
+     * Handles the acceptance of an Autofill suggestion from an AutofillPopup or
      * AutofillKeyboardAccessory.
      *
-     * @param listIndex The index of the selected Autofill suggestion.
+     * @param listIndex The index of the accepted Autofill suggestion.
      */
-    void suggestionSelected(int listIndex);
+    void suggestionAccepted(int listIndex);
 
     /**
-     * Handles the selection of an Autofill suggestion, with metadata about whether the suggestion
+     * Handles the acceptance of an Autofill suggestion, with metadata about whether the suggestion
      * triggers a loading state.
      *
-     * @param listIndex The index of the selected Autofill suggestion.
+     * @param listIndex The index of the accepted Autofill suggestion.
      * @param showLoadingOnAcceptance True if the suggestion shows a loading UI on acceptance.
+     * @param wasObscured True if the view was obscured when clicked.
      */
-    default void suggestionSelected(int listIndex, boolean showLoadingOnAcceptance) {
-        suggestionSelected(listIndex);
+    default void suggestionAccepted(
+            int listIndex, boolean showLoadingOnAcceptance, boolean wasObscured) {
+        suggestionAccepted(listIndex);
     }
 
     /**
@@ -38,6 +40,14 @@ public interface AutofillDelegate {
      * @param listIndex The index of the suggestion to delete.
      */
     void deleteSuggestion(int listIndex);
+
+    /**
+     * Initiates the flow to show Autofill AI suggestion details (such as attribution and
+     * suppression dialog).
+     *
+     * @param listIndex The index of the suggestion.
+     */
+    default void showAutofillAiSuggestionDetails(int listIndex) {}
 
     /**
      * Informs the controller the AutofillPopup received a {@code
@@ -51,4 +61,12 @@ public interface AutofillDelegate {
      * @param entityType The entity type for which to open settings.
      */
     default void openSettingsForEntityType(@EntityTypeName int entityType) {}
+
+    /**
+     * Handles the selection state change of an Autofill suggestion.
+     *
+     * @param listIndex The index of the Autofill suggestion.
+     * @param isSelected True if the suggestion is selected, false otherwise.
+     */
+    default void suggestionSelectionStateChanged(int listIndex, boolean isSelected) {}
 }

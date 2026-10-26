@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/animation/transition_keyframe.h"
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/core/animation/animation_input_helpers.h"
 #include "third_party/blink/renderer/core/animation/animation_utils.h"
@@ -33,7 +34,9 @@ class PropertyIterator : public Keyframe::VirtualPropertyIterator {
   bool AtEnd(const Keyframe*) const override { return !property_; }
 
  private:
-  const PropertyHandle* property_ = nullptr;
+  // Excluded for performance reasons: this iterator is short-lived, so BRP
+  // ref-count churn would cost more than the protection is worth.
+  RAW_PTR_EXCLUSION const PropertyHandle* property_ = nullptr;
 };
 
 }  // namespace
@@ -66,7 +69,7 @@ void TransitionKeyframe::AddKeyframePropertiesToV8Object(
   state.CreateNewClonedStyle(document.GetStyleResolver().InitialStyle());
   state.EnsureParentStyle();
   InterpolationTypesMap map(document.GetPropertyRegistry(), document);
-  CSSInterpolationEnvironment environment(map, state);
+  CSSInterpolationEnvironment environment(Property(), map, state);
   value_->GetType()->Apply(value_->GetInterpolableValue(),
                            value_->GetNonInterpolableValue(), environment);
 
@@ -97,8 +100,8 @@ TransitionKeyframe::CreatePropertySpecificKeyframe(
   EffectModel::CompositeOperation composite =
       composite_.value_or(effect_composite);
   return MakeGarbageCollected<PropertySpecificKeyframe>(
-      CheckedOffset(), &Easing(), composite, value_->Clone(),
-      compositor_value_);
+      CheckedOffset(), &Easing(), composite, value_->Clone(), compositor_value_,
+      is_attr_tainted_);
 }
 
 Interpolation*
@@ -110,8 +113,8 @@ TransitionKeyframe::PropertySpecificKeyframe::CreateInterpolation(
   DCHECK(value_->GetType() == other.value_->GetType());
   return MakeGarbageCollected<TransitionInterpolation>(
       property, value_->GetType(), value_->Value().Clone(),
-      other.value_->Value().Clone(), compositor_value_,
-      other.compositor_value_);
+      other.value_->Value().Clone(), compositor_value_, other.compositor_value_,
+      is_attr_tainted_ || other.is_attr_tainted_);
 }
 
 void TransitionKeyframe::PropertySpecificKeyframe::Trace(

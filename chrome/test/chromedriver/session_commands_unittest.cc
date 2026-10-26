@@ -47,6 +47,31 @@ TEST(SessionCommandsTest, ExecuteGetTimeouts) {
   ASSERT_EQ(implicit, 0);
 }
 
+TEST(SessionCommandsTest, ExecuteGetTimeouts_Nulls) {
+  Session session("id");
+  session.script_timeout = base::TimeDelta::Max();
+  session.page_load_timeout = base::TimeDelta::Max();
+  session.implicit_wait = base::TimeDelta::Max();
+
+  base::DictValue params;
+  std::unique_ptr<base::Value> value;
+
+  Status status = ExecuteGetTimeouts(&session, params, &value);
+  ASSERT_EQ(kOk, status.code());
+  base::DictValue* response = value->GetIfDict();
+  ASSERT_TRUE(response);
+
+  const base::Value* script = response->Find("script");
+  ASSERT_TRUE(script);
+  ASSERT_TRUE(script->is_none());
+  const base::Value* page_load = response->Find("pageLoad");
+  ASSERT_TRUE(page_load);
+  ASSERT_TRUE(page_load->is_none());
+  const base::Value* implicit = response->Find("implicit");
+  ASSERT_TRUE(implicit);
+  ASSERT_TRUE(implicit->is_none());
+}
+
 TEST(SessionCommandsTest, ExecuteSetTimeouts) {
   Session session("id");
   base::DictValue params;
@@ -68,6 +93,16 @@ TEST(SessionCommandsTest, ExecuteSetTimeouts) {
   params.Set("implicit", -5000);
   status = ExecuteSetTimeouts(&session, params, &value);
   ASSERT_EQ(kInvalidArgument, status.code());
+
+  params.clear();
+  params.Set("implicit", base::Value());
+  params.Set("pageLoad", base::Value());
+  params.Set("script", base::Value());
+  status = ExecuteSetTimeouts(&session, params, &value);
+  ASSERT_EQ(kOk, status.code());
+  ASSERT_EQ(base::TimeDelta::Max(), session.implicit_wait);
+  ASSERT_EQ(base::TimeDelta::Max(), session.page_load_timeout);
+  ASSERT_EQ(base::TimeDelta::Max(), session.script_timeout);
 
   params.clear();
   params.Set("unknown", 5000);
@@ -490,6 +525,22 @@ class MockChrome : public StubChrome {
 
 }  // namespace
 
+TEST(SessionCommandsTest, CreateCapabilitiesIncludesUserAgent) {
+  BrowserInfo browser_info;
+  browser_info.user_agent = "test user agent";
+  MockChrome* chrome = new MockChrome(browser_info);
+  Session session("id", std::unique_ptr<Chrome>(chrome));
+  Capabilities capabilities;
+  base::DictValue desired_caps;
+
+  base::DictValue result = internal::CreateCapabilitiesForTesting(
+      &session, capabilities, desired_caps);
+
+  const std::string* user_agent = result.FindString("userAgent");
+  ASSERT_NE(nullptr, user_agent);
+  EXPECT_EQ("test user agent", *user_agent);
+}
+
 TEST(SessionCommandsTest, ConfigureHeadlessSession_dotNotation) {
   Capabilities capabilities;
   base::DictValue caps;
@@ -649,6 +700,40 @@ TEST(SessionCommandsTest, ConfigureSession_defaults) {
             session.unhandled_prompt_behavior.CapabilityView().GetString());
 }
 
+TEST(SessionCommandsTest, ConfigureSession_nullTimeouts) {
+  BrowserInfo binfo;
+  MockChrome* chrome = new MockChrome(binfo);
+  Session session("id", std::unique_ptr<Chrome>(chrome));
+
+  base::DictValue params_in = base::test::ParseJsonDict(
+      R"({
+        "capabilities": {
+          "alwaysMatch": {
+            "timeouts": {
+              "implicit": null,
+              "pageLoad": null,
+              "script": null
+            }
+          },
+          "firstMatch": [ { } ]
+        }
+      })");
+  const base::DictValue* desired_caps_out = nullptr;
+  base::DictValue merged_out;
+  Capabilities capabilities_out;
+
+  Status status = internal::ConfigureSession(
+      &session, params_in, desired_caps_out, merged_out, &capabilities_out);
+  ASSERT_EQ(kOk, status.code()) << status.message();
+  ASSERT_NE(desired_caps_out, nullptr);
+  ASSERT_EQ(base::TimeDelta::Max(), session.implicit_wait);
+  ASSERT_EQ(base::TimeDelta::Max(), session.page_load_timeout);
+  ASSERT_EQ(base::TimeDelta::Max(), session.script_timeout);
+  ASSERT_EQ(base::TimeDelta::Max(), capabilities_out.implicit_wait_timeout);
+  ASSERT_EQ(base::TimeDelta::Max(), capabilities_out.page_load_timeout);
+  ASSERT_EQ(base::TimeDelta::Max(), capabilities_out.script_timeout);
+}
+
 TEST(SessionCommandsTest, ConfigureSession_legacyDefault) {
   BrowserInfo binfo;
   MockChrome* chrome = new MockChrome(binfo);
@@ -743,4 +828,152 @@ TEST(SessionCommandsTest, ForwardBidiCommand_noConnectionId) {
   ASSERT_EQ(kUnknownCommand, status.code()) << status.message();
   EXPECT_THAT(status.message(),
               ContainsRegex("connectionId is missing in params"));
+}
+
+namespace {
+
+class DetachingSessionChrome;
+
+class DetachingWebView : public StubWebView {
+ public:
+  explicit DetachingWebView(DetachingSessionChrome* chrome)
+      : StubWebView("1"), chrome_(chrome) {}
+  ~DetachingWebView() override = default;
+
+  std::unique_ptr<WebViewHolder> GetHolder() override;
+
+  Status IsPendingNavigation(const Timeout* timeout,
+                             bool* is_pending) override;
+  Status HandleReceivedEvents() override;
+  bool IsDialogOpen() const override;
+
+ private:
+  class Holder : public WebViewHolder {
+   public:
+    explicit Holder(int* count) : count_(count) { ++*count_; }
+    ~Holder() override { --*count_; }
+
+   private:
+    raw_ptr<int> count_;
+  };
+
+  raw_ptr<DetachingSessionChrome> chrome_;
+  int hold_count_ = 0;
+  bool detach_handled_ = false;
+};
+
+class DetachingSessionChrome : public StubChrome {
+ public:
+  DetachingSessionChrome() {
+    web_view_ = std::make_unique<DetachingWebView>(this);
+  }
+  ~DetachingSessionChrome() override = default;
+
+  Status GetWebViewById(const std::string& id, WebView** web_view) override {
+    if (!web_view_) {
+      return Status(kNoSuchWindow);
+    }
+    *web_view = web_view_.get();
+    return Status(kOk);
+  }
+
+  Status GetTopLevelWebViewIds(std::list<std::string>* web_view_ids,
+                               bool w3c_compliant) override {
+    if (web_view_) {
+      web_view_ids->push_back("1");
+    }
+    return Status(kOk);
+  }
+
+  void DropWebView() {
+    web_view_dropped_ = true;
+    web_view_.reset();
+  }
+
+  bool web_view_dropped() const { return web_view_dropped_; }
+
+ private:
+  std::unique_ptr<DetachingWebView> web_view_;
+  bool web_view_dropped_ = false;
+};
+
+std::unique_ptr<WebViewHolder> DetachingWebView::GetHolder() {
+  return std::make_unique<Holder>(&hold_count_);
+}
+
+Status DetachingWebView::IsPendingNavigation(const Timeout* timeout,
+                                            bool* is_pending) {
+  *is_pending = false;
+  if (detach_handled_) {
+    return Status(kOk);
+  }
+  detach_handled_ = true;
+  if (hold_count_ == 0) {
+    chrome_.ExtractAsDangling()->DropWebView();
+  }
+  return Status(kOk);
+}
+
+Status DetachingWebView::HandleReceivedEvents() {
+  if (detach_handled_) {
+    return Status(kOk);
+  }
+  detach_handled_ = true;
+  if (hold_count_ == 0) {
+    chrome_.ExtractAsDangling()->DropWebView();
+  }
+  return Status(kOk);
+}
+
+bool DetachingWebView::IsDialogOpen() const {
+  return false;
+}
+
+}  // namespace
+
+// Tests for http://crbug.com/541754668: Ensure session commands keep a
+// WebViewHolder so they survive target detachment mid-execution.
+TEST(SessionCommandsTest, ExecuteIsLoadingSurvivesTargetDetach) {
+  auto chrome_holder = std::make_unique<DetachingSessionChrome>();
+  DetachingSessionChrome* chrome = chrome_holder.get();
+  Session session("id", std::move(chrome_holder));
+  session.window = "1";
+
+  base::DictValue params;
+  std::unique_ptr<base::Value> value;
+  Status status = ExecuteIsLoading(&session, params, &value);
+  EXPECT_TRUE(status.IsOk()) << status.message();
+  EXPECT_FALSE(chrome->web_view_dropped())
+      << "The target was destroyed while ExecuteIsLoading still held a raw "
+         "pointer to it.";
+}
+
+TEST(SessionCommandsTest, ExecuteCloseSurvivesTargetDetach) {
+  auto chrome_holder = std::make_unique<DetachingSessionChrome>();
+  DetachingSessionChrome* chrome = chrome_holder.get();
+  Session session("id", std::move(chrome_holder));
+  session.window = "1";
+
+  base::DictValue params;
+  std::unique_ptr<base::Value> value;
+  Status status = ExecuteClose(&session, params, &value);
+  EXPECT_TRUE(status.IsOk()) << status.message();
+  EXPECT_FALSE(chrome->web_view_dropped())
+      << "The target was destroyed while ExecuteClose still held a raw "
+         "pointer to it.";
+}
+
+TEST(SessionCommandsTest, ExecuteBidiSessionEndSurvivesTargetDetach) {
+  auto chrome_holder = std::make_unique<DetachingSessionChrome>();
+  DetachingSessionChrome* chrome = chrome_holder.get();
+  Session session("id", std::move(chrome_holder));
+  session.bidi_mapper_web_view_id = "1";
+
+  base::DictValue params;
+  std::unique_ptr<base::Value> value;
+  Status status = ExecuteBidiSessionEnd(&session, params, &value);
+  EXPECT_TRUE(status.IsOk()) << status.message();
+  EXPECT_FALSE(chrome->web_view_dropped())
+      << "The target was destroyed while ExecuteBidiSessionEnd still held a raw "
+         "pointer to it.";
 }

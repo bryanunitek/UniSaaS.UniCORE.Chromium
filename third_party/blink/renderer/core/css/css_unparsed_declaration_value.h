@@ -49,11 +49,15 @@ class CORE_EXPORT CSSUnparsedDeclarationValue final : public CSSValue {
     return parser_context_.Get();
   }
 
+  bool HasRandomFunctions() const {
+    return data_ && data_->HasRandomFunctions();
+  }
+
   bool Equals(const CSSUnparsedDeclarationValue& other) const {
     return base::ValuesEquivalent(data_, other.data_);
   }
   String CustomCSSText() const;
-  unsigned CustomHash() const;
+  uint32_t CustomHash() const;
 
   void TraceAfterDispatch(blink::Visitor*) const;
 

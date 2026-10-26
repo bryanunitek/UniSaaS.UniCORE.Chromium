@@ -46,7 +46,8 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
   // Creates a shallow copy of |other| but uses the "post-layout" fragments to
   // ensure fragment-tree consistency.
   static const PhysicalBoxFragment* CloneWithPostLayoutFragments(
-      const PhysicalBoxFragment& other);
+      const PhysicalBoxFragment& other,
+      const std::optional<PhysicalRect> new_scrollable_overflow = std::nullopt);
 
   using PassKey = base::PassKey<PhysicalBoxFragment>;
   PhysicalBoxFragment(PassKey,
@@ -357,16 +358,10 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
   // update them to use LayoutNG based overflow information from the fragment
   // and change them to use NG geometry types once LayoutNG supports overflow.
   PhysicalRect OverflowClipRect(
-      const PhysicalOffset& location,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize) const;
   PhysicalRect OverflowClipRect(
-      const PhysicalOffset& location,
       const BlockBreakToken* incoming_break_token,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize) const;
-  // Returns the total offset of all overscroll area parents. This is used to
-  // shift content which is not within an overscroll area.
-  gfx::Vector2d PixelSnappedOverscrollContentOffset() const;
-  gfx::Vector2d PixelSnappedScrolledContentOffset() const;
   PhysicalSize ScrollSize() const;
 
   InkOverflow::Type InkOverflowType() const {
@@ -467,6 +462,12 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
   // `BoxFragmentBuilder::MoveChildrenInDirection`.
   bool HasMovedChildren() const {
     return bit_field_.get<HasMovedChildrenFlag>();
+  }
+
+  // Returns true if this is a float which must be clipped to the bottom-end
+  // content edge of its line-clamp container.
+  bool IsLineClampClippedFloat() const {
+    return bit_field_.get<IsLineClampClippedFloatFlag>();
   }
 
 #if DCHECK_IS_ON()
@@ -660,6 +661,8 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
       IsMonolithicFlag::DefineNextValue<bool, 1>;
   using HasMovedChildrenFlag =
       IsMonolithicOverflowPropagationDisabledFlag::DefineNextValue<bool, 1>;
+  using IsLineClampClippedFloatFlag =
+      HasMovedChildrenFlag::DefineNextValue<bool, 1>;
 
   bool IncludeBorderTop() const {
     return bit_field_.get<IncludeBorderTopFlag>();
@@ -674,7 +677,7 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
     return bit_field_.get<IncludeBorderLeftFlag>();
   }
 
-  static size_t AdditionalByteSize(bool has_fragment_items);
+  static uint32_t AdditionalByteSize(bool has_fragment_items);
 
   using FieldId = PhysicalFragmentRareData::FieldId;
   ALWAYS_INLINE const PhysicalFragmentRareData::RareField* GetRareField(

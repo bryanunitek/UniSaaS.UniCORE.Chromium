@@ -58,6 +58,10 @@ class MockSyncService : public SyncService {
               (),
               (const override));
   MOCK_METHOD(bool, IsLocalSyncEnabled, (), (const override));
+  MOCK_METHOD(base::flat_set<std::string>,
+              GetCurrentDeviceCacheGuidsForAllGaiaIds,
+              (),
+              (const override));
   MOCK_METHOD(CoreAccountInfo, GetAccountInfo, (), (const override));
   MOCK_METHOD(bool, HasSyncConsent, (), (const override));
   MOCK_METHOD(GoogleServiceAuthError, GetAuthError, (), (const override));
@@ -90,10 +94,12 @@ class MockSyncService : public SyncService {
               DataTypePreconditionChanged,
               (syncer::DataType type),
               (override));
+#if BUILDFLAG(IS_ANDROID)
   MOCK_METHOD(void,
               SetInvalidationsForSessionsEnabled,
               (bool enabled),
               (override));
+#endif  // BUILDFLAG(IS_ANDROID)
   MOCK_METHOD(void, SendExplicitPassphraseToPlatformClient, (), (override));
   MOCK_METHOD(void, AddObserver, (SyncServiceObserver * observer), (override));
   MOCK_METHOD(void,
@@ -126,6 +132,10 @@ class MockSyncService : public SyncService {
               (base::RepeatingCallback<void(const TypeEntitiesCount&)>),
               (const override));
   MOCK_METHOD(const GURL&, GetSyncServiceUrlForDebugging, (), (const override));
+  MOCK_METHOD(base::FilePath,
+              GetLocalSyncBackendFolderForDebugging,
+              (),
+              (const override));
   MOCK_METHOD(std::string,
               GetUnrecoverableErrorMessageForDebugging,
               (),

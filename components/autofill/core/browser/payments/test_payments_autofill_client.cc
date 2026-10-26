@@ -25,11 +25,13 @@
 #include "components/autofill/core/browser/payments/mandatory_reauth_manager.h"
 #include "components/autofill/core/browser/payments/test/mock_payments_window_manager.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_manager.h"
+#include "components/autofill/core/browser/payments/wallet_reminder_notice_manager.h"
 #include "components/autofill/core/browser/single_field_fillers/payments/merchant_promo_code_manager.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_ui_delegate.h"
+#include "components/autofill/core/browser/ui/payments/payments_churned_users_ui_delegate.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -71,7 +73,11 @@ TestPaymentsAutofillClient::~TestPaymentsAutofillClient() = default;
 void TestPaymentsAutofillClient::LoadRiskData(
     base::OnceCallback<void(const std::string&)> callback) {
   risk_data_loaded_ = true;
-  std::move(callback).Run("some risk data");
+  if (defer_load_risk_data_responses_) {
+    load_risk_data_callbacks_.push_back(std::move(callback));
+  } else {
+    std::move(callback).Run("some risk data");
+  }
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -175,6 +181,7 @@ void TestPaymentsAutofillClient::ConfirmUploadIbanToCloud(
   confirm_upload_iban_to_cloud_called_ = true;
   legal_message_lines_ = std::move(legal_message_lines);
   offer_to_save_iban_bubble_was_shown_ = should_show_prompt;
+  confirm_upload_iban_to_cloud_callbacks_.push_back(std::move(callback));
 }
 
 void TestPaymentsAutofillClient::IbanUploadCompleted(bool iban_saved,
@@ -184,12 +191,15 @@ void TestPaymentsAutofillClient::ShowAutofillProgressDialog(
     AutofillProgressUiType autofill_progress_dialog_type,
     base::OnceClosure cancel_callback) {
   autofill_progress_dialog_shown_ = true;
+  autofill_progress_dialog_closed_ = false;
   autofill_progress_dialog_type_ = autofill_progress_dialog_type;
+  autofill_progress_dialog_cancel_callback_ = std::move(cancel_callback);
 }
 
 void TestPaymentsAutofillClient::CloseAutofillProgressDialog(
     bool show_confirmation_before_closing,
     base::OnceClosure no_user_perceived_authentication_callback) {
+  autofill_progress_dialog_closed_ = true;
   if (no_user_perceived_authentication_callback) {
     std::move(no_user_perceived_authentication_callback).Run();
   }
@@ -344,10 +354,12 @@ MockIbanAccessManager* TestPaymentsAutofillClient::GetIbanAccessManager() {
 
 MockMerchantPromoCodeManager*
 TestPaymentsAutofillClient::GetMerchantPromoCodeManager() {
-  return &mock_merchant_promo_code_manager_;
-}
-
-void TestPaymentsAutofillClient::OpenPromoCodeOfferDetailsURL(const GURL& url) {
+  if (!mock_merchant_promo_code_manager_) {
+    mock_merchant_promo_code_manager_ =
+        std::make_unique<testing::NiceMock<MockMerchantPromoCodeManager>>(
+            &client_.get());
+  }
+  return mock_merchant_promo_code_manager_.get();
 }
 
 AutofillOfferManager* TestPaymentsAutofillClient::GetAutofillOfferManager() {
@@ -359,6 +371,10 @@ void TestPaymentsAutofillClient::UpdateOfferNotification(
     const OfferNotificationOptions& options) {}
 
 void TestPaymentsAutofillClient::DismissOfferNotification() {}
+
+bool TestPaymentsAutofillClient::IsTabVisibleForOfferNotification() const {
+  return is_tab_visible_for_offer_notification_;
+}
 
 bool TestPaymentsAutofillClient::ShowTouchToFillCreditCard(
     base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
@@ -481,24 +497,48 @@ BnplUiDelegate* TestPaymentsAutofillClient::GetBnplUiDelegate() {
   return bnpl_ui_delegate_.get();
 }
 
+WalletReminderNoticeUiDelegate*
+TestPaymentsAutofillClient::GetWalletReminderNoticeUiDelegate() {
+  return wallet_reminder_notice_ui_delegate_.get();
+}
+
+WalletReminderNoticeManager*
+TestPaymentsAutofillClient::GetWalletReminderNoticeManager() {
+  if (!wallet_reminder_notice_manager_) {
+    wallet_reminder_notice_manager_ =
+        std::make_unique<WalletReminderNoticeManager>(&client_.get());
+  }
+  return wallet_reminder_notice_manager_.get();
+}
+
+PaymentsChurnedUsersUiDelegate*
+TestPaymentsAutofillClient::GetPaymentsChurnedUsersUiDelegate() {
+  return payments_churned_users_ui_delegate_.get();
+}
+
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 OmniboxAutofillDelegate*
 TestPaymentsAutofillClient::GetOmniboxAutofillDelegate() {
   return omnibox_autofill_delegate_.get();
 }
 
-void TestPaymentsAutofillClient::ShowOmniboxAutofillChip(
+void TestPaymentsAutofillClient::ShowExpandedOmniboxAutofillChip(
     std::vector<Suggestion> suggestions,
+    base::OnceClosure on_chip_shown,
     base::RepeatingCallback<void(base::span<const Suggestion>)>
         on_suggestions_shown,
     base::RepeatingCallback<void(SuggestionHidingReason)> on_suggestions_hidden,
     base::RepeatingCallback<void(const Suggestion&)> did_select_suggestion,
+    base::RepeatingClosure did_deselect_suggestion,
     base::RepeatingCallback<
         void(const Suggestion&,
              const AutofillSuggestionDelegate::SuggestionMetadata&)>
         did_accept_suggestion) {
   omnibox_autofill_chip_shown_ = true;
   omnibox_autofill_chip_hidden_ = false;
+  if (on_chip_shown) {
+    std::move(on_chip_shown).Run();
+  }
 }
 
 void TestPaymentsAutofillClient::HideOmniboxAutofillChip() {

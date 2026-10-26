@@ -7,15 +7,21 @@ package org.chromium.chrome.browser.ui.system;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
+import android.app.ActivityManager.TaskDescription;
 import android.graphics.Color;
+import android.os.Build;
 
 import androidx.annotation.ColorInt;
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
@@ -24,6 +30,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
@@ -31,20 +38,22 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.layouts.LayoutManager;
+import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorUtils;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
@@ -73,8 +82,10 @@ public class StatusBarColorControllerUnitTest {
     @Mock private BrowserControlsStateProvider mBrowserControlsStateProvider;
     @Mock private Tab mNtpTab;
     @Mock private NewTabPage mNewTabPage;
+    @Mock private LayoutManager mLayoutManager1;
+    @Mock private LayoutManager mLayoutManager2;
 
-    private final MonotonicObservableSupplier<LayoutManager> mLayoutManagerSupplier =
+    private MonotonicObservableSupplier<LayoutManager> mLayoutManagerSupplier =
             ObservableSuppliers.alwaysNull();
 
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
@@ -95,6 +106,8 @@ public class StatusBarColorControllerUnitTest {
     @Test
     @Config(sdk = 30) // Min version needed for e2e everywhere
     public void testSetStatusBarColor_EdgeToEdgeEnabled() {
+        when(mSystemBarColorHelper.canSetStatusBarColor()).thenReturn(true);
+
         StatusBarColorController.setStatusBarColor(mSystemBarColorHelper, mActivity, Color.BLUE);
         verify(mSystemBarColorHelper).setStatusBarColor(Color.BLUE, false);
 
@@ -105,12 +118,22 @@ public class StatusBarColorControllerUnitTest {
     @Test
     @Config(sdk = 30) // Min version needed for e2e everywhere
     public void testSetStatusBarColor_EdgeToEdgeEnabled_UseLightIconColor() {
+        when(mSystemBarColorHelper.canSetStatusBarColor()).thenReturn(true);
+
         StatusBarColorController.setStatusBarColor(
-                mSystemBarColorHelper, mActivity, Color.BLUE, /* forceLightIconColor= */ true);
+                mSystemBarColorHelper,
+                mActivity,
+                Color.BLUE,
+                /* forceLightIconColor= */ true,
+                Color.TRANSPARENT);
         verify(mSystemBarColorHelper).setStatusBarColor(Color.BLUE, true);
 
         StatusBarColorController.setStatusBarColor(
-                mSystemBarColorHelper, mActivity, Color.RED, /* forceLightIconColor= */ true);
+                mSystemBarColorHelper,
+                mActivity,
+                Color.RED,
+                /* forceLightIconColor= */ true,
+                Color.TRANSPARENT);
         verify(mSystemBarColorHelper).setStatusBarColor(Color.RED, true);
     }
 
@@ -231,13 +254,30 @@ public class StatusBarColorControllerUnitTest {
     }
 
     @Test
+    public void testLayoutManagerSwapMovesLayoutStateObserver() {
+        SettableMonotonicObservableSupplier<LayoutManager> layoutManagerSupplier =
+                ObservableSuppliers.createMonotonic();
+        mLayoutManagerSupplier = layoutManagerSupplier;
+        initialize(/* isTablet= */ false, /* isInDesktopWindow= */ false);
+
+        layoutManagerSupplier.set(mLayoutManager1);
+        ArgumentCaptor<LayoutStateObserver> observerCaptor =
+                ArgumentCaptor.forClass(LayoutStateObserver.class);
+        verify(mLayoutManager1).addObserver(observerCaptor.capture());
+
+        layoutManagerSupplier.set(mLayoutManager2);
+        verify(mLayoutManager1).removeObserver(observerCaptor.getValue());
+        verify(mLayoutManager2).addObserver(observerCaptor.getValue());
+    }
+
+    @Test
     public void testBackgroundColorForNtp() {
         @ColorInt
         int defaultNtpBackground =
                 ChromeSemanticColorUtils.getHomeSurfaceBackgroundColor(mActivity);
         NtpBackgroundDataColor dataColor =
                 new NtpBackgroundDataColor(
-                        NtpBackgroundDataBase.PlatformType.ANDROID_LOCAL,
+                        PlatformType.ANDROID,
                         /* isChromeColorDailyRefreshEnabled= */ false,
                         NtpThemeColorUtils.createNtpThemeColorInfo(
                                 mActivity, NtpThemeColorId.NTP_COLORS_AQUA));
@@ -316,6 +356,7 @@ public class StatusBarColorControllerUnitTest {
     public void testForceLightIconColorForNtp_DisabledWhenOmniboxFocused() {
         // Set up a mock NTP tab.
         when(mNtpTab.getNativePage()).thenReturn(mNewTabPage);
+        when(mSystemBarColorHelper.canSetStatusBarColor()).thenReturn(true);
 
         initialize(
                 /* isTablet= */ false,
@@ -333,6 +374,34 @@ public class StatusBarColorControllerUnitTest {
         // When omnibox gains focus, should NOT force light icon color.
         mStatusBarColorController.onUrlFocusChange(/* hasFocus= */ true);
         verify(mSystemBarColorHelper, atLeastOnce()).setStatusBarColor(anyInt(), eq(false));
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.TIRAMISU)
+    @SuppressWarnings("DoNotMock") // Spying real TestActivity to verify setTaskDescription calls.
+    public void testUpdateStatusBarColor_CoalescesAndDeduplicatesSetTaskDescription() {
+        mActivity = spy(mActivity);
+        when(mSystemBarColorHelper.canSetStatusBarColor()).thenReturn(true);
+        initialize(/* isTablet= */ false, /* isInDesktopWindow= */ false);
+        clearInvocations(mActivity);
+
+        // Changing toolbar color should invoke setTaskDescription once with both primary and
+        // background colors, and a subsequent update with identical colors should be a no-op.
+        mStatusBarColorController.onToolbarColorChanged(Color.BLUE);
+        ArgumentCaptor<TaskDescription> taskDescriptionCaptor =
+                ArgumentCaptor.forClass(TaskDescription.class);
+        verify(mActivity, times(1)).setTaskDescription(taskDescriptionCaptor.capture());
+        TaskDescription taskDescription = taskDescriptionCaptor.getValue();
+        assertEquals(Color.BLUE, taskDescription.getPrimaryColor());
+        assertEquals(
+                ColorUtils.getOpaqueColor(
+                        TabUiThemeUtil.getTabStripBackgroundColor(
+                                mActivity, /* isIncognito= */ false)),
+                taskDescription.getBackgroundColor());
+
+        clearInvocations(mActivity);
+        mStatusBarColorController.updateStatusBarColor();
+        verify(mActivity, never()).setTaskDescription(any());
     }
 
     private void initialize(boolean isTablet, boolean isInDesktopWindow) {

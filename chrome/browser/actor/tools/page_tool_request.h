@@ -10,12 +10,12 @@
 #include <string>
 #include <variant>
 
+#include "chrome/browser/actor/actor_surface_handle.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "components/actor/core/shared_types.h"
 #include "components/actor/core/task_id.h"
 #include "ui/gfx/geometry/point.h"
-#include "url/gurl.h"
 
 namespace content {
 class RenderFrameHost;
@@ -35,7 +35,8 @@ mojom::ToolTargetPtr ToMojo(const PageTarget& target);
 // ready to invoke.
 class PageToolRequest : public TabToolRequest {
  public:
-  PageToolRequest(tabs::TabHandle tab_handle, const PageTarget& target);
+  PageToolRequest(ActorSurfaceHandle actor_surface_handle,
+                  const PageTarget& target);
   ~PageToolRequest() override;
   PageToolRequest(const PageToolRequest& other);
 
@@ -57,6 +58,12 @@ class PageToolRequest : public TabToolRequest {
   // Returns what in the page the tool should act upon.
   const PageTarget& GetTarget() const;
 
+  // Returns whether a non-root DOM target must appear in the last APC.
+  virtual bool RequiresTargetInLastApc() const;
+
+  // Returns whether the action may target a node outside the main frame.
+  virtual bool IsSubframeTargetingAllowed() const;
+
   // Called just before the tool action is sent to the renderer.
   // TODO(https://crbug.com/470325962): Implement this in all child classes and
   // make this pure virtual.
@@ -64,6 +71,10 @@ class PageToolRequest : public TabToolRequest {
       content::RenderWidgetHost* render_widget_host) {}
 
  private:
+  // Returns whether the target is a non-root DOM node rather than a coordinate
+  // or the viewport.
+  bool HasApcNodeTarget() const;
+
   PageTarget target_;
 };
 

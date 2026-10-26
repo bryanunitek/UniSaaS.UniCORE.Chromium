@@ -121,12 +121,12 @@ scoped_refptr<VideoFrame> SharedMemoryVideoFramePool::WrapBuffer(
                                    pooled_buffer.mapping, base::TimeDelta());
   CHECK(frame);
   // Sanity-check the assumption being made for SetMarkedBuffer():
-  CHECK_EQ(frame->data(0), pooled_buffer.mapping.memory());
+  CHECK_EQ(frame->data(0), pooled_buffer.mapping.data());
   utilized_buffers_.emplace(frame.get(), std::move(pooled_buffer.region));
   frame->AddDestructionObserver(
       base::BindOnce(&SharedMemoryVideoFramePool::OnFrameWrapperDestroyed,
                      weak_factory_.GetWeakPtr(), base::Unretained(frame.get()),
-                     std::move(pooled_buffer.mapping)));
+                     pool_generation_, std::move(pooled_buffer.mapping)));
   if (format == media::PIXEL_FORMAT_I420 ||
       format == media::PIXEL_FORMAT_NV12) {
     frame->set_color_space(gfx::ColorSpace::CreateREC709());
@@ -142,17 +142,21 @@ scoped_refptr<VideoFrame> SharedMemoryVideoFramePool::WrapBuffer(
 
 void SharedMemoryVideoFramePool::OnFrameWrapperDestroyed(
     const VideoFrame* frame,
+    uint32_t frame_pool_generation,
     base::WritableSharedMemoryMapping mapping) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(mapping.IsValid());
 
-  // Return the buffer to the pool by moving the PooledBuffer back into
-  // |available_buffers_|.
   const auto it = utilized_buffers_.find(frame);
   CHECK(it != utilized_buffers_.end());
-  available_buffers_.emplace_back(
-      PooledBuffer{std::move(it->second), std::move(mapping)});
-  CHECK(available_buffers_.back().IsValid());
+
+  // Return the buffer to the pool by moving the PooledBuffer back into
+  // |available_buffers_|.
+  if (frame_pool_generation == pool_generation_) {
+    available_buffers_.emplace_back(
+        PooledBuffer{std::move(it->second), std::move(mapping)});
+    CHECK(available_buffers_.back().IsValid());
+  }
   utilized_buffers_.erase(it);
   CHECK_LE(available_buffers_.size() + utilized_buffers_.size(), capacity());
 }
@@ -166,6 +170,12 @@ bool SharedMemoryVideoFramePool::CanLogSharedMemoryFailure() {
     return true;
   }
   return false;
+}
+
+void SharedMemoryVideoFramePool::InvalidateBuffers() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  pool_generation_++;
+  available_buffers_.clear();
 }
 
 }  // namespace viz

@@ -10,18 +10,17 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "chrome/browser/notifications/win/notification_image_retainer.h"
 #include "chrome/browser/notifications/win/notification_launch_id.h"
-#include "chrome/common/notifications/notification_image_retainer.h"
 #include "chrome/grit/branded_strings.h"
 #include "components/url_formatter/elide_url.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/libxml/chromium/xml_writer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_skia.h"
@@ -88,12 +87,33 @@ const char kDefaultTemplate[] = "ToastGeneric";
 // The XML version header that has to be stripped from the output.
 const char kXmlVersionHeader[] = "<?xml version=\"1.0\"?>\n";
 
+// Maximum length of the origin string to be displayed in the notification.
+// 27 characters is the maximum number of characters that can fit in a single
+// line when there is an icon included in the toast notification.
+constexpr size_t kMaxAllowedOriginLength = 27;
+
 // Formats the |origin| for display in the notification template.
 std::string FormatOrigin(const GURL& origin) {
   std::u16string origin_string = url_formatter::FormatOriginForSecurityDisplay(
       url::Origin::Create(origin),
       url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
-  DCHECK(origin_string.size());
+  CHECK(!origin_string.empty(), base::NotFatalUntil::M161);
+
+  // If the origin exceeds the max allowed length, reduce it to the registrable
+  // domain (eTLD+1) to prevent tail truncation of the domain.
+  if (origin_string.size() > kMaxAllowedOriginLength) {
+    std::string domain_and_registry =
+        net::registry_controlled_domains::GetDomainAndRegistry(
+            origin,
+            net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    if (!domain_and_registry.empty()) {
+      GURL::Replacements replacements;
+      replacements.SetHostStr(domain_and_registry);
+      origin_string = url_formatter::FormatOriginForSecurityDisplay(
+          url::Origin::Create(origin.ReplaceComponents(replacements)),
+          url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
+    }
+  }
 
   return base::UTF16ToUTF8(origin_string);
 }
@@ -121,11 +141,12 @@ void StartToastElement(XmlWriter* xml_writer,
   if (notification.timestamp().is_null())
     return;
 
-  xml_writer->AddAttribute(
-      kToastElementDisplayTimestamp,
-      base::UnlocalizedTimeFormatWithPattern(notification.timestamp(),
-                                             "yyyy-MM-dd'T'HH:mm:ssX",
-                                             icu::TimeZone::getGMT()));
+  base::Time::Exploded exploded;
+  notification.timestamp().UTCExplode(&exploded);
+  std::string timestamp_str = base::StringPrintf(
+      "%04d-%02d-%02dT%02d:%02d:%02dZ", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+  xml_writer->AddAttribute(kToastElementDisplayTimestamp, timestamp_str);
 }
 
 void EndToastElement(XmlWriter* xml_writer) {
@@ -379,7 +400,7 @@ std::wstring BuildNotificationTemplate(
     NotificationImageRetainer* image_retainer,
     const NotificationLaunchId& launch_id,
     const message_center::Notification& notification) {
-  DCHECK(image_retainer);
+  CHECK(image_retainer, base::NotFatalUntil::M161);
 
   XmlWriter xml_writer;
   xml_writer.StartWriting();
@@ -449,8 +470,9 @@ std::wstring BuildNotificationTemplate(
   xml_writer.StopWriting();
 
   std::string template_xml = xml_writer.GetWrittenString();
-  DCHECK(base::StartsWith(template_xml, kXmlVersionHeader,
-                          base::CompareCase::SENSITIVE));
+  CHECK(base::StartsWith(template_xml, kXmlVersionHeader,
+                         base::CompareCase::SENSITIVE),
+        base::NotFatalUntil::M161);
 
   // The |kXmlVersionHeader| is automatically appended by libxml, but the toast
   // system in the Windows Action Center expects it to be absent.

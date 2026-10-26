@@ -39,9 +39,7 @@ const base::FeatureParam<int> kLocalWebApprovalBottomSheetLoadTimeoutMs{
 #endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_WIN)
 
-BASE_FEATURE(kLocalWebApprovalsWidgetSupportsUrlPayload,
-             "PacpWidgetSupportsUrlPayload",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kFilterDownloadUrls, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsGoogleBrandedBuild() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -68,15 +66,13 @@ bool IsLocalWebApprovalsEnabledForSubframes() {
   return base::FeatureList::IsEnabled(kAllowSubframeLocalWebApprovals);
 }
 
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kSupervisedUserVerificationPageOnAndroid,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 BASE_FEATURE(kEnableSupervisedUserVersionSignOutDialog,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
-
-BASE_FEATURE(kSupervisedUserUseUrlFilteringService,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kSupervisedUserMergeDeviceParentalControlsAndFamilyLinkPrefs,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kSupervisedUserEmitLogRecordSeparately,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 }  // namespace supervised_user

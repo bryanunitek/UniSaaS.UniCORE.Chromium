@@ -29,6 +29,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "google_apis/gaia/gaia_features.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_api_call_flow.h"
@@ -77,9 +78,8 @@ constexpr char kTokenBindingChallengeHeader[] =
 constexpr char kTokenBindingResponseKey[] = "tokenBindingResponse";
 constexpr char kDirectedResponseKey[] = "directedResponse";
 
-constexpr std::array kDefaultAlgorithms = {
-    crypto::SignatureVerifier::ECDSA_SHA256,
-    crypto::SignatureVerifier::RSA_PKCS1_SHA256};
+constexpr std::array kDefaultAlgorithms = {crypto::sign::ECDSA_SHA256,
+                                           crypto::sign::RSA_PKCS1_SHA256};
 
 constexpr auto kOAuth2ResponseByErrorReason =
     base::MakeFixedFlatMap<std::string_view, OAuth2Response>({
@@ -262,15 +262,24 @@ void RecordApiCallMetrics(OAuth2MintTokenApiCallResult result,
   }
 }
 
-std::optional<crypto::SignatureVerifier::SignatureAlgorithm>
-ParseSignatureAlgorithm(std::string_view algo_str) {
+std::optional<crypto::sign::SignatureKind> ParseSignatureAlgorithm(
+    std::string_view algo_str) {
   if (base::EqualsCaseInsensitiveASCII(algo_str, "ES256")) {
-    return crypto::SignatureVerifier::ECDSA_SHA256;
+    return crypto::sign::ECDSA_SHA256;
   }
   if (base::EqualsCaseInsensitiveASCII(algo_str, "RS256")) {
-    return crypto::SignatureVerifier::RSA_PKCS1_SHA256;
+    return crypto::sign::RSA_PKCS1_SHA256;
   }
   return std::nullopt;
+}
+
+GoogleServiceAuthError CreateUnexpectedResponseBodyError(
+    const std::string& error_message) {
+  if (base::FeatureList::IsEnabled(
+          gaia::features::kOAuth2MintTokenUnexpectedResponseBodyIsTransient)) {
+    return GoogleServiceAuthError::FromServiceUnavailable(error_message);
+  }
+  return GoogleServiceAuthError::FromUnexpectedServiceResponse(error_message);
 }
 
 }  // namespace
@@ -474,7 +483,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
   if (!dict) {
     RecordApiCallMetrics(OAuth2MintTokenApiCallResult::kParseJsonFailure,
                          OAuth2Response::kOkUnexpectedFormat);
-    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+    ReportFailure(CreateUnexpectedResponseBodyError(
         "Not able to parse a JSON object from a service response."));
     return;
   }
@@ -484,7 +493,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
     RecordApiCallMetrics(
         OAuth2MintTokenApiCallResult::kIssueAdviceKeyNotFoundFailure,
         OAuth2Response::kOkUnexpectedFormat);
-    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+    ReportFailure(CreateUnexpectedResponseBodyError(
         "Not able to find an issueAdvice in a service response."));
     return;
   }
@@ -499,7 +508,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
       RecordApiCallMetrics(
           OAuth2MintTokenApiCallResult::kParseRemoteConsentFailure,
           OAuth2Response::kOkUnexpectedFormat);
-      ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+      ReportFailure(CreateUnexpectedResponseBodyError(
           "Not able to parse the contents of remote consent from a service "
           "response."));
     }
@@ -514,7 +523,7 @@ void OAuth2MintTokenFlow::ProcessApiCallSuccess(
   } else {
     RecordApiCallMetrics(OAuth2MintTokenApiCallResult::kParseMintTokenFailure,
                          OAuth2Response::kOkUnexpectedFormat);
-    ReportFailure(GoogleServiceAuthError::FromUnexpectedServiceResponse(
+    ReportFailure(CreateUnexpectedResponseBodyError(
         "Not able to parse the contents of access token "
         "from a service response."));
   }
@@ -601,7 +610,7 @@ OAuth2MintTokenFlow::ParseMintTokenResponse(const base::DictValue& dict) {
         continue;
       }
 
-      std::optional<crypto::SignatureVerifier::SignatureAlgorithm> algo =
+      std::optional<crypto::sign::SignatureKind> algo =
           ParseSignatureAlgorithm(*algo_str);
       if (algo.has_value()) {
         result.bound_token_upgrade_supported_algorithms.push_back(*algo);

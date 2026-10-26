@@ -60,17 +60,20 @@ media::VideoFrameMetadata GetFullVideoFrameMetadata() {
   // make sure values are preserved across serialization.
   media::VideoFrameMetadata metadata;
 
-  // ints
-  metadata.capture_counter = 123;
-
-  // gfx::Rects
-  metadata.capture_update_rect = gfx::Rect(12, 34, 360, 480);
+  // media::CaptureMetadata
+  metadata.capture.counter = 123;
+  metadata.capture.update_rect = gfx::Rect(12, 34, 360, 480);
+  metadata.capture.source_size = gfx::Size(720, 960);
+  metadata.capture.region_capture_rect = gfx::Rect(56, 78, 180, 240);
+  metadata.capture.region_capture_bounds = {
+      {base::Token(0x12345678, 0x9abcdef0), gfx::Rect(10, 20, 100, 200)}};
+  metadata.capture.version =
+      media::CaptureVersion(/*source=*/123, /*sub_capture=*/456);
 
   // media::VideoTransformation
   metadata.transformation = media::VIDEO_ROTATION_90;
 
   // bools
-  metadata.allow_overlay = true;
   metadata.copy_required = true;
   metadata.end_of_stream = true;
   metadata.in_surface_view = true;
@@ -112,11 +115,9 @@ media::VideoFrameMetadata GetFullVideoFrameMetadata() {
 
 void VerifyVideoFrameMetadataEquality(const media::VideoFrameMetadata& a,
                                       const media::VideoFrameMetadata& b) {
-  EXPECT_EQ(a.allow_overlay, b.allow_overlay);
   EXPECT_EQ(a.capture_begin_time, b.capture_begin_time);
   EXPECT_EQ(a.capture_end_time, b.capture_end_time);
-  EXPECT_EQ(a.capture_counter, b.capture_counter);
-  EXPECT_EQ(a.capture_update_rect, b.capture_update_rect);
+  EXPECT_EQ(a.capture, b.capture);
   EXPECT_EQ(a.copy_required, b.copy_required);
   EXPECT_EQ(a.end_of_stream, b.end_of_stream);
   EXPECT_EQ(a.frame_duration, b.frame_duration);
@@ -508,7 +509,7 @@ TEST(VideoFrame, WrapSharedMemory) {
   ASSERT_TRUE(mapped_region.IsValid());
   gfx::Size coded_size(256, 256);
   gfx::Rect visible_rect(coded_size);
-  CreateTestY16Frame(coded_size, visible_rect, mapped_region.mapping.memory());
+  CreateTestY16Frame(coded_size, visible_rect, mapped_region.mapping.data());
   auto timestamp = base::Milliseconds(1);
   auto frame = VideoFrame::WrapExternalData(
       PIXEL_FORMAT_Y16, coded_size, visible_rect, visible_rect.size(),
@@ -664,7 +665,7 @@ TEST(VideoFrame, WrapSharedImageUnsetReleaseSyncToken) {
   {
     auto si_size = gfx::Size(10, 10);
     gpu::SharedImageMetadata metadata;
-    metadata.format = viz::SinglePlaneFormat::kRGBA_8888;
+    metadata.format = viz::SinglePlaneFormat::kBGRA_8888;
     metadata.size = si_size;
     metadata.color_space = gfx::ColorSpace::CreateSRGB();
     metadata.surface_origin = kTopLeft_GrSurfaceOrigin;
@@ -697,9 +698,9 @@ TEST(VideoFrame, WrapSharedImageSetReleaseSyncToken) {
       gpu::CommandBufferId::FromUnsafeValue(0x123);
   auto si_size = gfx::Size(10, 10);
   gpu::SharedImageMetadata metadata;
-  metadata.format = viz::SinglePlaneFormat::kRGBA_8888;
+  metadata.format = viz::MultiPlaneFormat::kI420;
   metadata.size = si_size;
-  metadata.color_space = gfx::ColorSpace::CreateSRGB();
+  metadata.color_space = gfx::ColorSpace::CreateREC709();
   metadata.surface_origin = kTopLeft_GrSurfaceOrigin;
   metadata.alpha_type = kOpaque_SkAlphaType;
   metadata.usage = gpu::SharedImageUsageSet();
@@ -1034,46 +1035,75 @@ TEST(VideoFrameMetadata, MergeMetadata) {
 
 TEST(VideoFrameMetadata, ClearTextureMetadata) {
   VideoFrameMetadata reference_md = GetFullVideoFrameMetadata();
-  reference_md.is_webgpu_compatible = true;
   reference_md.read_lock_fences_enabled = true;
 
   VideoFrameMetadata copy_md;
   copy_md.MergeMetadataFrom(reference_md);
 
   copy_md.ClearTextureFrameMetadata();
-  EXPECT_FALSE(copy_md.is_webgpu_compatible);
   EXPECT_FALSE(copy_md.read_lock_fences_enabled);
 
-  reference_md.is_webgpu_compatible = false;
   reference_md.read_lock_fences_enabled = false;
   VerifyVideoFrameMetadataEquality(copy_md, reference_md);
 }
 
 TEST(VideoFrameMetadata, PartialMergeMetadata) {
   VideoFrameMetadata full_metadata = GetFullVideoFrameMetadata();
+  const CaptureMetadata original_capture = full_metadata.capture;
 
   const gfx::Rect kTempRect{100, 200, 300, 400};
   const base::TimeTicks kTempTicks = base::TimeTicks::Now() + base::Seconds(2);
   const base::TimeDelta kTempDelta = base::Milliseconds(31415);
 
   VideoFrameMetadata partial_metadata;
-  partial_metadata.capture_update_rect = kTempRect;
+  partial_metadata.capture.update_rect = kTempRect;
   partial_metadata.reference_time = kTempTicks;
   partial_metadata.processing_time = kTempDelta;
-  partial_metadata.allow_overlay = false;
 
-  // Merging partial metadata into full metadata partially override it.
+  // Merging partial metadata into full metadata partially overrides it while
+  // preserving unset CaptureMetadata fields.
   full_metadata.MergeMetadataFrom(partial_metadata);
 
-  EXPECT_EQ(partial_metadata.capture_update_rect, kTempRect);
-  EXPECT_EQ(partial_metadata.reference_time, kTempTicks);
-  EXPECT_EQ(partial_metadata.processing_time, kTempDelta);
-  EXPECT_EQ(partial_metadata.allow_overlay, false);
+  EXPECT_EQ(full_metadata.capture.counter, original_capture.counter);
+  EXPECT_EQ(full_metadata.capture.update_rect, kTempRect);
+  EXPECT_EQ(full_metadata.capture.source_size, original_capture.source_size);
+  EXPECT_EQ(full_metadata.capture.region_capture_rect,
+            original_capture.region_capture_rect);
+  EXPECT_EQ(full_metadata.capture.region_capture_bounds,
+            original_capture.region_capture_bounds);
+  EXPECT_EQ(full_metadata.capture.version, original_capture.version);
+  EXPECT_EQ(full_metadata.reference_time, kTempTicks);
+  EXPECT_EQ(full_metadata.processing_time, kTempDelta);
+
+  // Merging non-default values for the remaining CaptureMetadata fields
+  // overrides them on full_metadata.capture.
+  const int kTempCounter = 456;
+  const gfx::Size kTempSize{1280, 720};
+  const gfx::Rect kTempRegionRect{5, 10, 50, 100};
+  const base::flat_map<base::Token, gfx::Rect> kTempBounds{
+      {base::Token(0xabcdef01, 0x23456789), gfx::Rect(1, 2, 30, 40)}};
+  const CaptureVersion kTempVersion(/*source=*/999, /*sub_capture=*/888);
+
+  VideoFrameMetadata partial_capture_metadata;
+  partial_capture_metadata.capture.counter = kTempCounter;
+  partial_capture_metadata.capture.source_size = kTempSize;
+  partial_capture_metadata.capture.region_capture_rect = kTempRegionRect;
+  partial_capture_metadata.capture.region_capture_bounds = kTempBounds;
+  partial_capture_metadata.capture.version = kTempVersion;
+
+  full_metadata.MergeMetadataFrom(partial_capture_metadata);
+
+  EXPECT_EQ(full_metadata.capture.counter, kTempCounter);
+  EXPECT_EQ(full_metadata.capture.update_rect, kTempRect);
+  EXPECT_EQ(full_metadata.capture.source_size, kTempSize);
+  EXPECT_EQ(full_metadata.capture.region_capture_rect, kTempRegionRect);
+  EXPECT_EQ(full_metadata.capture.region_capture_bounds, kTempBounds);
+  EXPECT_EQ(full_metadata.capture.version, kTempVersion);
 }
 
 TEST(VideoFrame, AccessPlaneDataSpans) {
-  for (auto format :
-       {PIXEL_FORMAT_XRGB, PIXEL_FORMAT_I420, PIXEL_FORMAT_NV12}) {
+  for (auto format : {PIXEL_FORMAT_XRGB, PIXEL_FORMAT_I420, PIXEL_FORMAT_NV12,
+                      PIXEL_FORMAT_P010LE}) {
     gfx::Size coded_size(100, 100);
     gfx::Rect visible_rect(10, 10, 60, 20);
     std::vector<uint8_t> pixels;
@@ -1283,6 +1313,32 @@ TEST(VideoFrame, GetVisibleSkYUVAPixmaps) {
     auto pixmaps = frame->GetVisiblePlanesSkPixmaps();
     EXPECT_TRUE(pixmaps.empty());
   }
+}
+
+TEST(VideoFrame, WrapTrackingToken) {
+  const gfx::Size coded_size(320, 240);
+  const gfx::Rect visible_rect(10, 10, 300, 220);
+  const gfx::Size natural_size(640, 480);
+  const base::TimeDelta timestamp = base::Seconds(1);
+  const auto tracking_token = base::UnguessableToken::Create();
+
+  auto frame = VideoFrame::WrapTrackingToken(PIXEL_FORMAT_NV12, tracking_token,
+                                             coded_size, visible_rect,
+                                             natural_size, timestamp);
+  ASSERT_TRUE(frame);
+  EXPECT_EQ(frame->format(), PIXEL_FORMAT_NV12);
+  EXPECT_EQ(frame->coded_size(), coded_size);
+  EXPECT_EQ(frame->visible_rect(), visible_rect);
+  EXPECT_EQ(frame->natural_size(), natural_size);
+  EXPECT_EQ(frame->timestamp(), timestamp);
+  EXPECT_EQ(frame->metadata().tracking_token, tracking_token);
+
+  // Invalid config (visible_rect outside coded_size) should return nullptr.
+  const gfx::Rect invalid_visible_rect(0, 0, 400, 400);
+  auto invalid_frame = VideoFrame::WrapTrackingToken(
+      PIXEL_FORMAT_NV12, tracking_token, coded_size, invalid_visible_rect,
+      natural_size, timestamp);
+  EXPECT_FALSE(invalid_frame);
 }
 
 }  // namespace media

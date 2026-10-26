@@ -16,13 +16,11 @@
 #include "chrome/grit/theme_resources.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
@@ -64,8 +62,8 @@ CredentialsItemView::CredentialsItemView(
   image_view_->SetCanProcessEventsWithinSubtree(false);
   gfx::Image image = ui::ResourceBundle::GetSharedInstance().GetImageNamed(
       IDR_PROFILE_AVATAR_PLACEHOLDER_LARGE);
-  DCHECK(image.Width() >= kAvatarImageSize &&
-         image.Height() >= kAvatarImageSize);
+  CHECK(image.Width() >= kAvatarImageSize && image.Height() >= kAvatarImageSize,
+        base::NotFatalUntil::M162);
   UpdateAvatar(image.AsImageSkia());
   if (form->icon_url.is_valid()) {
     // Fetch the actual avatar.

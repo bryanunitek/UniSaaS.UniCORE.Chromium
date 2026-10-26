@@ -104,16 +104,6 @@ class PermissionsPolicyTest : public testing::Test {
               network::PermissionsPolicyFeatureDefault::EnableForSelf},
              {network::mojom::PermissionsPolicyFeature::kClientHintDPR,
               network::PermissionsPolicyFeatureDefault::EnableForSelf},
-             {network::mojom::PermissionsPolicyFeature::kAttributionReporting,
-              network::PermissionsPolicyFeatureDefault::EnableForSelf},
-             {network::mojom::PermissionsPolicyFeature::kJoinAdInterestGroup,
-              network::PermissionsPolicyFeatureDefault::EnableForSelf},
-             {network::mojom::PermissionsPolicyFeature::kSharedStorage,
-              network::PermissionsPolicyFeatureDefault::EnableForSelf},
-             {network::mojom::PermissionsPolicyFeature::kSharedStorageSelectUrl,
-              network::PermissionsPolicyFeatureDefault::EnableForSelf},
-             {network::mojom::PermissionsPolicyFeature::kPrivateAggregation,
-              network::PermissionsPolicyFeatureDefault::EnableForSelf},
              {network::mojom::PermissionsPolicyFeature::kLocalNetworkAccess,
               network::PermissionsPolicyFeatureDefault::EnableForSelf},
              {network::mojom::PermissionsPolicyFeature::kLocalNetwork,
@@ -231,6 +221,72 @@ TEST_F(PermissionsPolicyTest, TestCanEnableOffFeatureWithSelf) {
                                 /*matches_opaque_src=*/false}}},
                              origin_a_);
   EXPECT_TRUE(policy1->IsFeatureEnabled(kDefaultOffFeature));
+}
+
+TEST_F(PermissionsPolicyTest, CanDelegateFeatureToOriginNoDeclaredPolicy) {
+  // With no declared policy, features with a default allowlist of '*' or
+  // 'self' can be delegated to any origin (including opaque origins), even
+  // though IsFeatureEnabledForOrigin() returns false for 'self' features and
+  // origins other than the document's own origin.
+  url::Origin opaque_origin;
+  std::unique_ptr<PermissionsPolicy> policy =
+      CreateFromParentPolicy(nullptr, /*header_policy=*/{}, origin_a_);
+
+  EXPECT_TRUE(policy->CanDelegateFeatureToOrigin(kDefaultOnFeature, origin_a_));
+  EXPECT_TRUE(policy->CanDelegateFeatureToOrigin(kDefaultOnFeature, origin_b_));
+  EXPECT_TRUE(
+      policy->CanDelegateFeatureToOrigin(kDefaultOnFeature, opaque_origin));
+
+  EXPECT_TRUE(
+      policy->CanDelegateFeatureToOrigin(kDefaultSelfFeature, origin_a_));
+  EXPECT_FALSE(
+      policy->IsFeatureEnabledForOrigin(kDefaultSelfFeature, origin_b_));
+  EXPECT_TRUE(
+      policy->CanDelegateFeatureToOrigin(kDefaultSelfFeature, origin_b_));
+  EXPECT_FALSE(
+      policy->IsFeatureEnabledForOrigin(kDefaultSelfFeature, opaque_origin));
+  EXPECT_TRUE(
+      policy->CanDelegateFeatureToOrigin(kDefaultSelfFeature, opaque_origin));
+
+  EXPECT_FALSE(
+      policy->CanDelegateFeatureToOrigin(kDefaultOffFeature, origin_a_));
+  EXPECT_FALSE(
+      policy->CanDelegateFeatureToOrigin(kDefaultOffFeature, opaque_origin));
+}
+
+TEST_F(PermissionsPolicyTest, CanDelegateFeatureToOriginDeclaredSelfPolicy) {
+  // With a declared `default-self=self` policy, the feature cannot be
+  // delegated to an opaque origin.
+  url::Origin opaque_origin;
+  std::unique_ptr<PermissionsPolicy> policy =
+      CreateFromParentPolicy(nullptr,
+                             {{{kDefaultSelfFeature,
+                                /*allowed_origins=*/{},
+                                /*self_if_matches=*/origin_a_,
+                                /*matches_all_origins=*/false,
+                                /*matches_opaque_src=*/false}}},
+                             origin_a_);
+  EXPECT_TRUE(
+      policy->CanDelegateFeatureToOrigin(kDefaultSelfFeature, origin_a_));
+  EXPECT_FALSE(
+      policy->CanDelegateFeatureToOrigin(kDefaultSelfFeature, origin_b_));
+  EXPECT_FALSE(
+      policy->CanDelegateFeatureToOrigin(kDefaultSelfFeature, opaque_origin));
+}
+
+TEST_F(PermissionsPolicyTest, CanDelegateFeatureToOriginDisabledByInheritance) {
+  // If the feature is disabled in the document by inherited policy, it cannot
+  // be delegated to an opaque origin even without a declared policy.
+  url::Origin opaque_origin;
+  std::unique_ptr<PermissionsPolicy> policy1 =
+      CreateFromParentPolicy(nullptr, /*header_policy=*/{}, origin_a_);
+  std::unique_ptr<PermissionsPolicy> policy2 =
+      CreateFromParentPolicy(policy1.get(), /*header_policy=*/{}, origin_b_);
+  ASSERT_FALSE(policy2->IsFeatureEnabled(kDefaultSelfFeature));
+  EXPECT_FALSE(
+      policy2->CanDelegateFeatureToOrigin(kDefaultSelfFeature, origin_b_));
+  EXPECT_FALSE(
+      policy2->CanDelegateFeatureToOrigin(kDefaultSelfFeature, opaque_origin));
 }
 
 TEST_F(PermissionsPolicyTest, TestInitialSameOriginChildPolicy) {
@@ -2247,13 +2303,9 @@ TEST_F(PermissionsPolicyTest, TestSandboxedFrameFromHeaderPolicy) {
                                 /*matches_opaque_src=*/false}}},
                              origin_a_);
   url::Origin sandboxed_origin = url::Origin();
-  network::ParsedPermissionsPolicy frame_policy = {
-      {{kDefaultSelfFeature, /*allowed_origins=*/{},
-        /*self_if_matches=*/std::nullopt,
-        /*matches_all_origins=*/false,
-        /*matches_opaque_src=*/true}}};
-  std::unique_ptr<PermissionsPolicy> policy2 = CreateFromParentWithFramePolicy(
-      policy1.get(), /*header_policy=*/{}, frame_policy, sandboxed_origin);
+  std::unique_ptr<PermissionsPolicy> policy2 =
+      CreateFromParentWithFramePolicy(policy1.get(), /*header_policy=*/{},
+                                      /*frame_policy=*/{}, sandboxed_origin);
   EXPECT_FALSE(policy2->IsFeatureEnabled(kDefaultSelfFeature));
   EXPECT_FALSE(policy2->IsFeatureEnabledForOrigin(kDefaultSelfFeature,
                                                   sandboxed_origin));
@@ -2391,132 +2443,131 @@ TEST_F(PermissionsPolicyTest, TestUndefinedFeaturesInFramePolicy) {
 // x-origin to the calling context, allow the request if and only if
 // a subframe for the origin with allow=feature would be allowed.
 TEST_F(PermissionsPolicyTest, ProposedTestIsFeatureEnabledForOriginDefaultAll) {
-  const mojom::PermissionsPolicyFeature kJoinFeature =
-      network::mojom::PermissionsPolicyFeature::kSharedStorage;
+  const mojom::PermissionsPolicyFeature kTopicsFeature =
+      network::mojom::PermissionsPolicyFeature::kBrowsingTopics;
 
   {
-    // In these tests, we have a  x-origin js method, `joinAdInterestGroup` that
-    // is backed by permission with default self. Since the method acts on an
-    // owner origin that may be different from the caller, it must check the
+    // In these tests, we have a x-origin js method, `document.browsingTopics()`
+    // that is backed by permission with default self. Since the method acts on
+    // an owner origin that may be different from the caller, it must check the
     // destination origin with IsFeatureEnabledInOrigin, and set
     // override_default_policy_to_all to true since the owner has opted in.
     // +--------------------------------------------------------+
     // |(1)Origin A                                             |
     // |No Policy                                               |
     // |                                                        |
-    // | joinAdInterestGroup({owner: origin-b})                 |
+    // | document.browsingTopics()                              |
     // +--------------------------------------------------------+
 
     std::unique_ptr<PermissionsPolicy> policy =
         CreateFromParentPolicy(nullptr, /*header_policy=*/{}, origin_a_);
 
-    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_a_));
+    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_a_));
     EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_a_,
+        kTopicsFeature, origin_a_,
         /*override_default_policy_to_all=*/true));
 
-    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_b_));
+    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_b_));
     EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_b_,
+        kTopicsFeature, origin_b_,
         /*override_default_policy_to_all=*/true));
   }
 
   {
     // +--------------------------------------------------------+
     // |(1)Origin A                                             |
-    // |Permissions-Policy: join-ad-interest-group=(self)       |
+    // |Permissions-Policy: browsing-topics=(self)              |
     // |                                                        |
-    // | joinAdInterestGroup({owner: origin-b})                 |
+    // | document.browsingTopics()                              |
     // +--------------------------------------------------------+
 
     std::unique_ptr<PermissionsPolicy> policy =
         CreateFromParentPolicy(nullptr,
-                               {{{kJoinFeature,
+                               {{{kTopicsFeature,
                                   /*allowed_origins=*/{},
                                   /*self_if_matches=*/origin_a_,
                                   /*matches_all_origins=*/false,
                                   /*matches_opaque_src=*/false}}},
                                origin_a_);
 
-    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_a_));
+    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_a_));
     EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_a_,
+        kTopicsFeature, origin_a_,
         /*override_default_policy_to_all=*/true));
 
-    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_b_));
+    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_b_));
     EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_b_,
+        kTopicsFeature, origin_b_,
         /*override_default_policy_to_all=*/true));
   }
 
   {
     // +--------------------------------------------------------+
     // |(1)Origin A                                             |
-    // |Permissions-Policy: join-ad-interest-group=(none)       |
+    // |Permissions-Policy: browsing-topics=(none)              |
     // |                                                        |
-    // | joinAdInterestGroup({owner: origin-b})                 |
+    // | document.browsingTopics()                              |
     // +--------------------------------------------------------+
 
     std::unique_ptr<PermissionsPolicy> policy =
         CreateFromParentPolicy(nullptr,
-                               {{{kJoinFeature,
+                               {{{kTopicsFeature,
                                   /*allowed_origins=*/{},
                                   /*self_if_matches=*/std::nullopt,
                                   /*matches_all_origins=*/false,
                                   /*matches_opaque_src=*/false}}},
                                origin_a_);
 
-    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_a_));
+    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_a_));
     EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_a_,
+        kTopicsFeature, origin_a_,
         /*override_default_policy_to_all=*/true));
 
-    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_b_));
+    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_b_));
     EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_b_,
+        kTopicsFeature, origin_b_,
         /*override_default_policy_to_all=*/true));
   }
 
   {
     // +--------------------------------------------------------+
     // |(1)Origin A                                             |
-    // |Permissions-Policy: join-ad-interest-group=*            |
+    // |Permissions-Policy: browsing-topics=*                   |
     // |                                                        |
-    // | joinAdInterestGroup({owner: origin-b})                 |
+    // | document.browsingTopics()                              |
     // +--------------------------------------------------------+
 
     std::unique_ptr<PermissionsPolicy> policy =
         CreateFromParentPolicy(nullptr,
-                               {{{kJoinFeature,
+                               {{{kTopicsFeature,
                                   /*allowed_origins=*/{},
                                   /*self_if_matches=*/std::nullopt,
                                   /*matches_all_origins=*/true,
                                   /*matches_opaque_src=*/false}}},
                                origin_a_);
 
-    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_a_));
+    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_a_));
     EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_a_,
+        kTopicsFeature, origin_a_,
         /*override_default_policy_to_all=*/true));
 
-    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_b_));
+    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_b_));
     EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_b_,
+        kTopicsFeature, origin_b_,
         /*override_default_policy_to_all=*/true));
   }
 
   {
     // +--------------------------------------------------------+
     // |(1)Origin A                                             |
-    // |Permissions-Policy: join-ad-interest-group=(Origin B)   |
+    // |Permissions-Policy: browsing-topics=(Origin B)          |
     // |                                                        |
-    // | joinAdInterestGroup({owner: origin-b})                 |
-    // | joinAdInterestGroup({owner: origin-c})                 |
+    // | document.browsingTopics()                              |
     // +--------------------------------------------------------+
 
     std::unique_ptr<PermissionsPolicy> policy =
         CreateFromParentPolicy(nullptr,
-                               {{{kJoinFeature, /*allowed_origins=*/
+                               {{{kTopicsFeature, /*allowed_origins=*/
                                   {*network::OriginWithPossibleWildcards::
                                        FromOriginAndWildcardsForTest(
                                            origin_b_,
@@ -2526,18 +2577,19 @@ TEST_F(PermissionsPolicyTest, ProposedTestIsFeatureEnabledForOriginDefaultAll) {
                                   /*matches_opaque_src=*/false}}},
                                origin_a_);
 
-    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_a_));
+    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_a_));
     EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_a_ /*override_default_policy_to_all=*/));
+        kTopicsFeature, origin_a_,
+        /*override_default_policy_to_all=*/false));
 
-    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_b_));
+    EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_b_));
     EXPECT_TRUE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_b_,
+        kTopicsFeature, origin_b_,
         /*override_default_policy_to_all=*/true));
 
-    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kJoinFeature, origin_c_));
+    EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(kTopicsFeature, origin_c_));
     EXPECT_FALSE(policy->IsFeatureEnabledForOrigin(
-        kJoinFeature, origin_c_,
+        kTopicsFeature, origin_c_,
         /*override_default_policy_to_all=*/true));
   }
 }
@@ -2954,50 +3006,6 @@ TEST_F(PermissionsPolicyTest, CreateFlexibleForFencedFrame) {
       policy1.get(), /*header_policy=*/{}, origin_a_);
   EXPECT_FALSE(policy->IsFeatureEnabled(kDefaultOnFeature));
   EXPECT_FALSE(policy->IsFeatureEnabled(kDefaultSelfFeature));
-  EXPECT_FALSE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kAttributionReporting));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kSharedStorage));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kSharedStorageSelectUrl));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kPrivateAggregation));
-}
-
-TEST_F(PermissionsPolicyTest, CreateForFledgeFencedFrame) {
-  std::vector<network::mojom::PermissionsPolicyFeature>
-      effective_enabled_permissions;
-  effective_enabled_permissions.insert(
-      effective_enabled_permissions.end(),
-      std::begin(network::kFencedFrameFledgeDefaultRequiredFeatures),
-      std::end(network::kFencedFrameFledgeDefaultRequiredFeatures));
-
-  std::unique_ptr<PermissionsPolicy> policy = CreateFixedForFencedFrame(
-      origin_a_, /*header_policy=*/{}, effective_enabled_permissions);
-  EXPECT_FALSE(policy->IsFeatureEnabled(kDefaultOnFeature));
-  EXPECT_FALSE(policy->IsFeatureEnabled(kDefaultSelfFeature));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kAttributionReporting));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kSharedStorage));
-}
-
-TEST_F(PermissionsPolicyTest, CreateForSharedStorageFencedFrame) {
-  std::vector<network::mojom::PermissionsPolicyFeature>
-      effective_enabled_permissions;
-  effective_enabled_permissions.insert(
-      effective_enabled_permissions.end(),
-      std::begin(network::kFencedFrameSharedStorageDefaultRequiredFeatures),
-      std::end(network::kFencedFrameSharedStorageDefaultRequiredFeatures));
-
-  std::unique_ptr<PermissionsPolicy> policy = CreateFixedForFencedFrame(
-      origin_a_, /*header_policy=*/{}, effective_enabled_permissions);
-  EXPECT_FALSE(policy->IsFeatureEnabled(kDefaultOnFeature));
-  EXPECT_FALSE(policy->IsFeatureEnabled(kDefaultSelfFeature));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kAttributionReporting));
-  EXPECT_TRUE(policy->IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kSharedStorage));
 }
 
 TEST_F(PermissionsPolicyTest, CreateFromParsedPolicy) {
@@ -3470,6 +3478,94 @@ TEST_F(DeprecateUnloadTest, Headerless) {
   EXPECT_TRUE(PermissionsPolicy::IsHeaderlessUrl(GURL("about:blank")));
   EXPECT_TRUE(PermissionsPolicy::IsHeaderlessUrl(GURL("data:abc")));
   EXPECT_TRUE(PermissionsPolicy::IsHeaderlessUrl(GURL("blob:abc")));
+}
+
+// Tests for PermissionsPolicy::Allowlist::Contains.
+// Regression test for crbug.com/565859110: Allowlist with matches_all_origins =
+// true must match opaque origins, per W3C Permissions Policy §Allowlist
+// matching algorithm step 1.
+TEST(PermissionsPolicyAllowlistTest, Contains) {
+  const url::Origin kTestOrigin =
+      url::Origin::Create(GURL("https://example.test/"));
+  const url::Origin kOpaqueOrigin = url::Origin();
+
+  // Empty allowlist.
+  PermissionsPolicy::Allowlist empty_allowlist;
+  EXPECT_FALSE(empty_allowlist.Contains(kTestOrigin));
+  EXPECT_FALSE(empty_allowlist.Contains(kOpaqueOrigin));
+
+  // Matches opaque src.
+  PermissionsPolicy::Allowlist opaque_allowlist;
+  opaque_allowlist.AddOpaqueSrc();
+  EXPECT_FALSE(opaque_allowlist.Contains(kTestOrigin));
+  EXPECT_TRUE(opaque_allowlist.Contains(kOpaqueOrigin));
+
+  // Matches all origins (wildcard '*').
+  // Must match both tuple origin and opaque origin.
+  PermissionsPolicy::Allowlist all_allowlist;
+  all_allowlist.AddAll();
+  EXPECT_TRUE(all_allowlist.Contains(kTestOrigin));
+  EXPECT_TRUE(all_allowlist.Contains(kOpaqueOrigin));
+
+  // Matches all origins with RemoveMatchesAll.
+  all_allowlist.RemoveMatchesAll();
+  EXPECT_FALSE(all_allowlist.Contains(kTestOrigin));
+  EXPECT_FALSE(all_allowlist.Contains(kOpaqueOrigin));
+
+  // Matches self.
+  ParsedPermissionsPolicyDeclaration self_decl;
+  self_decl.self_if_matches = kTestOrigin;
+  PermissionsPolicy::Allowlist self_allowlist =
+      PermissionsPolicy::Allowlist::FromDeclaration(self_decl);
+  EXPECT_TRUE(self_allowlist.Contains(kTestOrigin));
+  EXPECT_FALSE(self_allowlist.Contains(kOpaqueOrigin));
+
+  // Matches allowed origins.
+  ParsedPermissionsPolicyDeclaration match_decl;
+  match_decl.allowed_origins.emplace_back(
+      *network::OriginWithPossibleWildcards::FromOrigin(kTestOrigin));
+  PermissionsPolicy::Allowlist match_allowlist =
+      PermissionsPolicy::Allowlist::FromDeclaration(match_decl);
+  EXPECT_TRUE(match_allowlist.Contains(kTestOrigin));
+  EXPECT_FALSE(match_allowlist.Contains(kOpaqueOrigin));
+}
+
+// Verifies that a PermissionsPolicy created from a parsed policy with
+// matches_all_origins = true enables features for an opaque origin.
+TEST_F(PermissionsPolicyTest, MatchesAllEnablesFeatureForOpaqueOrigin) {
+  const url::Origin kOpaqueOrigin = url::Origin();
+
+  // Header policy enabling kDefaultSelfFeature for all origins ('*').
+  network::ParsedPermissionsPolicy header_policy = {
+      {kDefaultSelfFeature,
+       /*allowed_origins=*/{},
+       /*self_if_matches=*/std::nullopt,
+       /*matches_all_origins=*/true,
+       /*matches_opaque_src=*/false}};
+
+  std::unique_ptr<PermissionsPolicy> policy =
+      CreateFromParsedPolicy(header_policy, kOpaqueOrigin);
+  EXPECT_TRUE(policy->IsFeatureEnabled(kDefaultSelfFeature));
+}
+
+// Verifies that an iframe container policy with wildcard '*' allows a feature
+// in a child frame with an opaque origin (e.g. sandboxed iframe or data: URL).
+TEST_F(PermissionsPolicyTest, ContainerPolicyMatchesAllForOpaqueChildFrame) {
+  const url::Origin kOpaqueOrigin = url::Origin();
+
+  std::unique_ptr<PermissionsPolicy> parent =
+      CreateFromParentPolicy(nullptr, /*header_policy=*/{}, origin_a_);
+
+  network::ParsedPermissionsPolicy container_policy = {
+      {kDefaultSelfFeature,
+       /*allowed_origins=*/{},
+       /*self_if_matches=*/std::nullopt,
+       /*matches_all_origins=*/true,
+       /*matches_opaque_src=*/false}};
+
+  std::unique_ptr<PermissionsPolicy> child = CreateFromParentWithFramePolicy(
+      parent.get(), /*header_policy=*/{}, container_policy, kOpaqueOrigin);
+  EXPECT_TRUE(child->IsFeatureEnabled(kDefaultSelfFeature));
 }
 
 }  // namespace network

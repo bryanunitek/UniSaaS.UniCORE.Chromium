@@ -9,9 +9,6 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/task/sequenced_task_runner.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
-#import "ios/chrome/browser/snapshots/model/features.h"
-#import "ios/chrome/browser/snapshots/model/legacy_snapshot_generator.h"
-#import "ios/chrome/browser/snapshots/model/legacy_snapshot_manager.h"
 #import "ios/chrome/browser/snapshots/model/model_swift.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_id.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_id_wrapper.h"
@@ -89,6 +86,12 @@ UIImage* SnapshotTabHelper::GenerateSnapshotWithoutOverlays() {
   return [snapshot_manager_ generateUIViewSnapshot];
 }
 
+void SnapshotTabHelper::GenerateSnapshotWithoutOverlaysWithCallback(
+    SnapshotRetrievedBlock callback) {
+  CHECK(snapshot_manager_);
+  [snapshot_manager_ generateSnapshotWithoutOverlaysWithCompletion:callback];
+}
+
 void SnapshotTabHelper::IgnoreNextLoad() {
   ignore_next_load_ = true;
 }
@@ -97,20 +100,13 @@ SnapshotTabHelper::SnapshotTabHelper(web::WebState* web_state)
     : web_state_(web_state) {
   DCHECK(web_state_);
   const SnapshotID snapshot_id(web_state_->GetUniqueIdentifier());
-  if (base::FeatureList::IsEnabled(kSnapshotInSwift)) {
-    snapshot_manager_ = [[SnapshotManagerImpl alloc]
-        initWithGenerator:
-            [[SnapshotGenerator alloc]
-                initWithWebStateInfo:[[WebStateSnapshotInfo alloc]
-                                         initWithWebState:web_state_]]
-               snapshotID:[[SnapshotIDWrapper alloc]
-                              initWithSnapshotID:snapshot_id]];
-  } else {
-    snapshot_manager_ = [[LegacySnapshotManager alloc]
-        initWithGenerator:[[LegacySnapshotGenerator alloc]
-                              initWithWebState:web_state_]
-               snapshotID:snapshot_id];
-  }
+  snapshot_manager_ = [[SnapshotManagerImpl alloc]
+      initWithGenerator:
+          [[SnapshotGenerator alloc]
+              initWithWebStateInfo:[[WebStateSnapshotInfo alloc]
+                                       initWithWebState:web_state_]]
+             snapshotID:[[SnapshotIDWrapper alloc]
+                            initWithSnapshotID:snapshot_id]];
 
   web_state_observation_.Observe(web_state_.get());
 }

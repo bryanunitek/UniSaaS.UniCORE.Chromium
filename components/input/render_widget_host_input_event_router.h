@@ -55,6 +55,8 @@ FORWARD_DECLARE_TEST(
 FORWARD_DECLARE_TEST(
       WebContentsImplBrowserTest,
       MouseUpInOOPIframeShouldCancelMainFrameAutoscrollSelection);
+FORWARD_DECLARE_TEST(FencedFrameMPArchBrowserTest,
+                     AutoscrollSelectionFromFencedFrameIgnored);
 FORWARD_DECLARE_TEST(SitePerProcessHitTestBrowserTest,
                            CacheCoordinateTransformUponMouseDown);
 FORWARD_DECLARE_TEST(SitePerProcessHitTestBrowserTest,
@@ -266,6 +268,8 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
   FRIEND_TEST_ALL_PREFIXES(
       content::WebContentsImplBrowserTest,
       MouseUpInOOPIframeShouldCancelMainFrameAutoscrollSelection);
+  FRIEND_TEST_ALL_PREFIXES(content::FencedFrameMPArchBrowserTest,
+                           AutoscrollSelectionFromFencedFrameIgnored);
 
   using FrameSinkIdOwnerMap =
       std::unordered_map<viz::FrameSinkId,
@@ -314,7 +318,9 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
           blink::WebInputEvent::Modifiers::kNoModifiers,
       bool include_target_view = false);
 
-  void CancelScrollBubbling();
+  // Cancels scroll bubbling without sending GestureScrollEnd to a target that
+  // is being destroyed.
+  void CancelScrollBubbling(bool bubbling_view_is_being_destroyed = false);
 
   // Cancels scroll bubbling if it is unsafe to send a gesture event sequence
   // to |target| considering the views involved in an ongoing scroll.
@@ -473,6 +479,7 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
    public:
     TouchscreenPinchState();
 
+    bool IsBubblingToRoot() const;
     bool IsInPinch() const;
     bool NeedsWrappingScrollSequence() const;
 
@@ -504,6 +511,14 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
     PinchState state_;
   };
   TouchscreenPinchState touchscreen_pinch_state_;
+
+  // An OOPIF delegates touchscreen pinch to the page-scale owner of its
+  // WebContents. Keep that target latched for the duration of the pinch.
+  base::WeakPtr<RenderWidgetHostViewInput>
+      embedded_touchscreen_pinch_zoom_target_;
+  base::WeakPtr<RenderWidgetHostViewInput> embedded_touchscreen_pinch_source_;
+  bool embedded_touchscreen_pinch_in_progress_ = false;
+  bool embedded_touchscreen_pinch_needs_wrapping_scroll_sequence_ = false;
 
   // Logs debug data for https://crbug.com/346629231.
   struct TouchscreenGestureEventDebugData {

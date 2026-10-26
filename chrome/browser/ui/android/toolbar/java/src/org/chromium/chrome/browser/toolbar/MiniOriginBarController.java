@@ -36,7 +36,6 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.browser_ui.widget.TouchEventObserver;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.KeyboardVisibilityDelegate.KeyboardVisibilityListener;
@@ -257,7 +256,7 @@ public class MiniOriginBarController implements Observer {
 
         mIsCobrowseSheetOpen = isCobrowseSheetOpen();
         mBottomSheetObserver =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetContentChanged(@Nullable BottomSheetContent newContent) {
                         updateCobrowseSheetOpen();
@@ -340,6 +339,7 @@ public class MiniOriginBarController implements Observer {
                 mMiniOriginBarHeight
                         + mContext.getResources()
                                 .getDimensionPixelSize(R.dimen.toolbar_hairline_height);
+        mControlContainer.doSynchronousLayout(/* forceCaptureAfterLayout= */ false);
         var minifiedLayoutParams =
                 new CoordinatorLayout.LayoutParams(LayoutParams.WRAP_CONTENT, mMiniOriginBarHeight);
         minifiedLayoutParams.gravity = Gravity.CENTER_VERTICAL;
@@ -388,9 +388,6 @@ public class MiniOriginBarController implements Observer {
         mSuppressToolbarSceneLayerSupplier.set(false);
         mControlContainer.toggleLocationBarOnlyMode(false);
 
-        mControlContainer.mutateLayoutParams().height = LayoutParams.WRAP_CONTENT;
-        mControlContainer.doSynchronousLayout(/* forceCaptureAfterLayout= */ false);
-
         var locationBarView = mLocationBar.getContainerView();
         locationBarView.setLayoutParams(mDefaultLocationBarLayoutParams);
         locationBarView.setPadding(
@@ -398,7 +395,11 @@ public class MiniOriginBarController implements Observer {
                 locationBarView.getPaddingTop(),
                 mDefaultLocationBarRightPadding,
                 locationBarView.getPaddingBottom());
+        locationBarView.setTranslationX(0.0f);
         mLocationBar.setUrlBarUsesSmallText(false);
+
+        mControlContainer.mutateLayoutParams().height = LayoutParams.WRAP_CONTENT;
+        mControlContainer.doSynchronousLayout(/* forceCaptureAfterLayout= */ false);
     }
 
     public void destroy() {

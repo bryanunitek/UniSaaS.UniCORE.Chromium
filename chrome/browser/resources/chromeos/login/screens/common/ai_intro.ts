@@ -48,15 +48,14 @@ export class AiIntroScreen extends AiIntroScreenElementBase {
     };
   }
 
-  private autoTransition: boolean;
-  private callbackRouter: AiIntroPageCallbackRouter;
-  private handler: AiIntroPageHandlerRemote;
+  declare private autoTransition: boolean;
+  private callbackRouter = new AiIntroPageCallbackRouter();
+  private handler = new AiIntroPageHandlerRemote();
 
   override ready(): void {
     super.ready();
+
     this.initializeLoginScreen('AiIntro');
-    this.callbackRouter = new AiIntroPageCallbackRouter();
-    this.handler = new AiIntroPageHandlerRemote();
     OobeScreensFactoryBrowserProxy.getInstance()
         .screenFactory
         .establishAiIntroScreenPipe(this.handler.$.bindNewPipeAndPassReceiver())

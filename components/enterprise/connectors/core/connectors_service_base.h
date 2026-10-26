@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "base/types/expected.h"
+#include "build/build_config.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/enterprise/connectors/core/connectors_manager_base.h"
 #include "components/policy/core/common/policy_types.h"
@@ -83,6 +84,18 @@ class ConnectorsServiceBase {
       const GURL& url,
       AnalysisConnector connector);
 
+#if !BUILDFLAG(IS_IOS)
+  // Get the AnalysisSettings that apply to a network request made to
+  // `request_url` from a tab whose URL is `tab_url`. This returns
+  // std::nullopt if Connectors are disabled, if `tab_url` is exempt from
+  // analysis, if the "OnNetworkRequestEnterpriseConnector" policy doesn't
+  // match the two URLs or if there is no DM token to use for the scope of the
+  // policy.
+  std::optional<AnalysisSettings> GetNetworkRequestAnalysisSettings(
+      const GURL& tab_url,
+      const GURL& request_url);
+#endif  // !BUILDFLAG(IS_IOS)
+
   virtual std::optional<std::string> GetBrowserDmToken() const = 0;
 
   // Gets custom message if set by the admin.
@@ -92,6 +105,11 @@ class ConnectorsServiceBase {
   // Gets custom learn more URL if provided by the admin.
   std::optional<GURL> GetLearnMoreUrl(AnalysisConnector connector,
                                       const std::string& tag);
+
+  // Returns the profile email if real-time URL check is set for the profile,
+  // the device ID if it is set for the device, or an empty string if it is
+  // unset.
+  std::string GetRealTimeUrlCheckIdentifier() const;
 
   // Obtain a ClientMetadata instance corresponding to the current
   // OnSecurityEvent policy value.  `is_cloud` is true when using a cloud-
@@ -133,6 +151,10 @@ class ConnectorsServiceBase {
   // Returns whether Connectors are enabled at all. This can be false if the
   // profile is incognito
   virtual bool ConnectorsEnabled() const = 0;
+
+  virtual bool IsProfileAffiliated() const = 0;
+  virtual std::string GetProfileEmail() const = 0;
+  virtual std::string GetDeviceClientId() const = 0;
 
   // Returns a more specific AnalysisSettings based on pref like cloud or local
   // analysis, or if it should be a profile or browser level scan.

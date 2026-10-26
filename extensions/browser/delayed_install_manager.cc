@@ -59,7 +59,7 @@ void DelayedInstallManager::FinishInstallationsDelayedByShutdown() {
   TRACE_EVENT0("browser,startup",
                "DelayedInstallManager::FinishInstallationsDelayedByShutdown");
 
-  const ExtensionPrefs::ExtensionsInfo delayed_info =
+  const ExtensionPrefs::InstallRecords delayed_info =
       extension_prefs_->GetAllDelayedInstallInfo();
   for (const auto& info : delayed_info) {
     scoped_refptr<const Extension> extension;
@@ -130,8 +130,7 @@ bool DelayedInstallManager::FinishDelayedInstallationIfReady(
 void DelayedInstallManager::RegisterInstallGate(
     ExtensionPrefs::DelayReason reason,
     InstallGate* install_delayer) {
-  DCHECK(install_delayer_registry_.end() ==
-         install_delayer_registry_.find(reason));
+  DCHECK(!install_delayer_registry_.contains(reason));
   install_delayer_registry_[reason] = install_delayer;
 }
 

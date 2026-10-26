@@ -238,6 +238,14 @@ bool TextFinder::FindInternal(int identifier,
   if (active_selection) {
     active_match_ = CreateRange(FirstEphemeralRangeOf(selection));
     OwnerFrame().GetFrame()->Selection().Clear();
+
+    // If scroll_to_match is false, the find-in-page session is initialized
+    // from the selection. Collapse the reference range using the search
+    // direction to prevent Editor::FindRangeOfString from skipping the
+    // selection itself.
+    if (!options.scroll_to_match) {
+      active_match_->collapse(options.forward);
+    }
   }
 
   DCHECK(OwnerFrame().GetFrame());
@@ -285,25 +293,28 @@ bool TextFinder::FindInternal(int identifier,
     }
   }
 
-  std::unique_ptr<AsyncScrollContext> scroll_context =
-      std::make_unique<AsyncScrollContext>();
-  scroll_context->identifier = identifier;
-  scroll_context->search_text = search_text;
-  scroll_context->options = options;
-  // Set new_session to false to make sure that subsequent searches are
-  // incremental instead of repeatedly finding the same match.
-  scroll_context->options.new_session = false;
-  scroll_context->wrap_within_frame = wrap_within_frame;
-  scroll_context->range = active_match_.Get();
-  scroll_context->first_match = first_match ? first_match : active_match_.Get();
-  scroll_context->wrapped_around = wrapped_around;
-  if (options.run_synchronously_for_testing) {
-    Scroll(std::move(scroll_context));
-  } else {
-    scroll_task_.Reset(BindOnce(&TextFinder::Scroll, WrapWeakPersistent(this),
-                                std::move(scroll_context)));
-    GetFrame()->GetDocument()->EnqueueAnimationFrameTask(
-        scroll_task_.callback());
+  if (options.scroll_to_match) {
+    std::unique_ptr<AsyncScrollContext> scroll_context =
+        std::make_unique<AsyncScrollContext>();
+    scroll_context->identifier = identifier;
+    scroll_context->search_text = search_text;
+    scroll_context->options = options;
+    // Set new_session to false to make sure that subsequent searches are
+    // incremental instead of repeatedly finding the same match.
+    scroll_context->options.new_session = false;
+    scroll_context->wrap_within_frame = wrap_within_frame;
+    scroll_context->range = active_match_.Get();
+    scroll_context->first_match =
+        first_match ? first_match : active_match_.Get();
+    scroll_context->wrapped_around = wrapped_around;
+    if (options.run_synchronously_for_testing) {
+      Scroll(std::move(scroll_context));
+    } else {
+      scroll_task_.Reset(BindOnce(&TextFinder::Scroll, WrapWeakPersistent(this),
+                                  std::move(scroll_context)));
+      GetFrame()->GetDocument()->EnqueueAnimationFrameTask(
+          scroll_task_.callback());
+    }
   }
 
   bool was_active_frame = current_active_match_frame_;
@@ -724,20 +735,21 @@ Vector<gfx::RectF> TextFinder::FindMatchRects() {
   return match_rects;
 }
 
-int TextFinder::SelectNearestFindMatch(const gfx::PointF& point,
-                                       gfx::Rect* selection_rect) {
-  int index = NearestFindMatch(point, nullptr);
-  if (index != -1)
-    return SelectFindMatch(static_cast<unsigned>(index), selection_rect);
-
-  return -1;
+std::optional<wtf_size_t> TextFinder::SelectNearestFindMatch(
+    const gfx::PointF& point,
+    gfx::Rect* selection_rect) {
+  if (auto index = NearestFindMatch(point, nullptr)) {
+    return SelectFindMatch(*index, selection_rect);
+  }
+  return std::nullopt;
 }
 
-int TextFinder::NearestFindMatch(const gfx::PointF& point,
-                                 float* distance_squared) {
+std::optional<wtf_size_t> TextFinder::NearestFindMatch(
+    const gfx::PointF& point,
+    float* distance_squared) {
   UpdateFindMatchRects();
 
-  int nearest = -1;
+  std::optional<wtf_size_t> nearest;
   float nearest_distance_squared = FLT_MAX;
   for (wtf_size_t i = 0; i < find_matches_cache_.size(); ++i) {
     DCHECK(!find_matches_cache_[i].rect_.IsEmpty());
@@ -755,12 +767,14 @@ int TextFinder::NearestFindMatch(const gfx::PointF& point,
   return nearest;
 }
 
-int TextFinder::SelectFindMatch(unsigned index, gfx::Rect* selection_rect) {
+std::optional<wtf_size_t> TextFinder::SelectFindMatch(
+    wtf_size_t index,
+    gfx::Rect* selection_rect) {
   SECURITY_DCHECK(index < find_matches_cache_.size());
 
   Range* range = find_matches_cache_[index].range_;
   if (!range->BoundaryPointsValid() || !range->startContainer()->isConnected())
-    return -1;
+    return std::nullopt;
 
   // Check if the match is already selected.
   if (!current_active_match_frame_ || !active_match_ ||
@@ -828,17 +842,7 @@ int TextFinder::SelectFindMatch(unsigned index, gfx::Rect* selection_rect) {
 TextFinder::TextFinder(WebLocalFrameImpl& owner_frame)
     : owner_frame_(&owner_frame),
       find_task_controller_(
-          MakeGarbageCollected<FindTaskController>(owner_frame, *this)),
-      current_active_match_frame_(false),
-      active_match_index_(-1),
-      total_match_count_(-1),
-      frame_scoping_(false),
-      find_request_identifier_(-1),
-      next_invalidate_after_(0),
-      find_match_markers_version_(0),
-      should_locate_active_rect_(false),
-      scoping_in_progress_(false),
-      find_match_rects_are_valid_(false) {}
+          MakeGarbageCollected<FindTaskController>(owner_frame, *this)) {}
 
 bool TextFinder::SetMarkerActive(Range* range, bool active) {
   if (!range || range->collapsed())

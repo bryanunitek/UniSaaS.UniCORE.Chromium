@@ -42,6 +42,15 @@ void ConfirmInfobarBannerInteractionHandler::BannerVisibilityChanged(
   }
 }
 
+void ConfirmInfobarBannerInteractionHandler::ShowModalButtonTapped(
+    InfoBarIOS* infobar,
+    web::WebState* web_state) {
+  if (infobar->infobar_type() != infobar_type_) {
+    return;
+  }
+  InfobarBannerInteractionHandler::ShowModalButtonTapped(infobar, web_state);
+}
+
 #pragma mark - Private
 
 ConfirmInfoBarDelegate*

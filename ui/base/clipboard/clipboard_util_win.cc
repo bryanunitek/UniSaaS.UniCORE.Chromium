@@ -21,7 +21,6 @@
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/numerics/checked_math.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -89,15 +88,6 @@ using VirtualFileResults =
 struct VirtualFileNameWithIndex {
   base::FilePath display_name;
   LONG content_index;
-};
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class AsyncVirtualFileExtractionError {
-  kCoGetInterfaceAndReleaseStreamFailed = 0,
-  kCoMarshalInterThreadInterfaceInStreamFailed = 1,
-  kSourceStreamSOKWithZeroBytesRead = 2,
-  kMaxValue = kSourceStreamSOKWithZeroBytesRead,
 };
 
 bool HasData(IDataObject* data_object, const ClipboardFormatType& format) {
@@ -434,10 +424,6 @@ HGLOBAL CopyFileContentsToHGlobal(IDataObject* data_object, LONG index) {
             }
           }
           if (hr == S_OK && bytes_read == 0) {
-            base::UmaHistogramEnumeration(
-                "Clipboard.AsyncVirtualFileExtractionError",
-                AsyncVirtualFileExtractionError::
-                    kSourceStreamSOKWithZeroBytesRead);
             LOG(WARNING) << "Source stream returned S_OK with zero bytes read.";
           }
         } else {
@@ -501,9 +487,6 @@ VirtualFileResults ExtractVirtualFiles(
   marshaled_data_object_stream.Detach();
 
   if (FAILED(hr) || !data_object) {
-    base::UmaHistogramEnumeration(
-        "Clipboard.AsyncVirtualFileExtractionError",
-        AsyncVirtualFileExtractionError::kCoGetInterfaceAndReleaseStreamFailed);
     LOG(WARNING) << "CoGetInterfaceAndReleaseStream failed: "
                  << (FAILED(hr) ? hr : E_UNEXPECTED);
     return {};
@@ -798,9 +781,11 @@ bool GetUrlInfos(IDataObject* data_object,
     if (!GetFilenames(data_object, &filenames))
       return false;
     DCHECK_GT(filenames.size(), 0U);
-    GURL file_url = net::FilePathToFileURL(base::FilePath(filenames[0]));
-    if (file_url.is_valid()) {
-      url_infos.emplace_back(file_url, u"");
+    for (const auto& filename : filenames) {
+      GURL file_url = net::FilePathToFileURL(base::FilePath(filename));
+      if (file_url.is_valid()) {
+        url_infos.emplace_back(file_url, u"");
+      }
     }
     return !url_infos.empty();
   }
@@ -978,10 +963,6 @@ Microsoft::WRL::ComPtr<IStream> MarshalDataObjectToStream(
   HRESULT hr = ::CoMarshalInterThreadInterfaceInStream(
       IID_IDataObject, data_object, &marshaled_stream);
   if (FAILED(hr) || !marshaled_stream) {
-    base::UmaHistogramEnumeration(
-        "Clipboard.AsyncVirtualFileExtractionError",
-        AsyncVirtualFileExtractionError::
-            kCoMarshalInterThreadInterfaceInStreamFailed);
     LOG(WARNING) << "CoMarshalInterThreadInterfaceInStream failed: " << hr;
     return nullptr;
   }

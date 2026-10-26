@@ -124,6 +124,17 @@ std::string GetTransformString(
       ->CssText()
       .Utf8();
 }
+
+void AppendProperties(
+    const ViewTransitionStyleBuilder::CapturedCssProperties& properties,
+    StringBuilder& builder) {
+  for (const auto& [id, value] : properties) {
+    builder.Append(CSSProperty::Get(id).GetPropertyNameAtomicString());
+    builder.Append(": ");
+    builder.Append(value);
+    builder.Append(";\n");
+  }
+}
 }  // namespace
 
 String ViewTransitionStyleBuilder::AddKeyframes(
@@ -131,32 +142,23 @@ String ViewTransitionStyleBuilder::AddKeyframes(
     const ContainerProperties& source_properties,
     const CapturedCssProperties& animated_css_properties,
     const gfx::Transform& parent_transform) {
-  String keyframe_name = [&tag]() {
-    StringBuilder builder;
-    builder.Append(kKeyframeNamePrefix);
-    builder.Append(DOMWindowCSS::escape(tag));
-    return builder.ReleaseString();
-  }();
+  String keyframe_name =
+      StrCat({kKeyframeNamePrefix, DOMWindowCSS::escape(tag)});
 
   builder_.Append("@keyframes ");
   builder_.Append(keyframe_name);
-  builder_.AppendFormat(
-      R"CSS({
-        from {
-          transform: %s;
-          width: %.3fpx;
-          height: %3fpx;
+  FormatTo(builder_,
+           R"CSS({{
+        from {{
+          transform: {};
+          width: {:.3f}px;
+          height: {:.3f}px;
       )CSS",
-      GetTransformString(source_properties, parent_transform).c_str(),
-      source_properties.GroupSize().width.ToFloat(),
-      source_properties.GroupSize().height.ToFloat());
+           GetTransformString(source_properties, parent_transform),
+           source_properties.GroupSize().width.ToFloat(),
+           source_properties.GroupSize().height.ToFloat());
 
-  for (const auto& [id, value] : animated_css_properties) {
-    builder_.AppendFormat(
-        "%s: %s;\n",
-        CSSProperty::Get(id).GetPropertyNameAtomicString().Utf8().c_str(),
-        value.Utf8().c_str());
-  }
+  AppendProperties(animated_css_properties, builder_);
   builder_.Append("}}");
   return keyframe_name;
 }
@@ -164,23 +166,14 @@ String ViewTransitionStyleBuilder::AddKeyframes(
 String ViewTransitionStyleBuilder::AddGroupChildrenKeyframes(
     const String& tag,
     const CapturedCssProperties& properties) {
-  String keyframe_name = [&tag]() {
-    StringBuilder builder;
-    builder.Append(kGroupChildrenKeyframeNamePrefix);
-    builder.Append(DOMWindowCSS::escape(tag));
-    return builder.ReleaseString();
-  }();
+  String keyframe_name =
+      StrCat({kGroupChildrenKeyframeNamePrefix, DOMWindowCSS::escape(tag)});
 
   builder_.Append("@keyframes ");
   builder_.Append(keyframe_name);
   builder_.Append("{\n from {\n");
 
-  for (const auto& [id, value] : properties) {
-    builder_.AppendFormat(
-        "%s: %s;\n",
-        CSSProperty::Get(id).GetPropertyNameAtomicString().Utf8().c_str(),
-        value.Utf8().c_str());
-  }
+  AppendProperties(properties, builder_);
   builder_.Append("}}");
   return keyframe_name;
 }
@@ -191,22 +184,17 @@ void ViewTransitionStyleBuilder::AddContainerStyles(
     const CapturedCssProperties& captured_css_properties,
     const gfx::Transform& parent_transform) {
   StringBuilder group_rule_builder;
-  group_rule_builder.AppendFormat(
-      R"CSS(
-        width: %.3fpx;
-        height: %.3fpx;
-        transform: %s;
+  FormatTo(group_rule_builder,
+           R"CSS(
+        width: {:.3f}px;
+        height: {:.3f}px;
+        transform: {};
       )CSS",
-      properties.GroupSize().width.ToFloat(),
-      properties.GroupSize().height.ToFloat(),
-      GetTransformString(properties, parent_transform).c_str());
-  for (const auto& [id, value] : captured_css_properties) {
-    group_rule_builder.AppendFormat(
-        "%s: %s;\n",
-        CSSProperty::Get(id).GetPropertyNameAtomicString().Utf8().c_str(),
-        value.Utf8().c_str());
-  }
+           properties.GroupSize().width.ToFloat(),
+           properties.GroupSize().height.ToFloat(),
+           GetTransformString(properties, parent_transform));
 
+  AppendProperties(captured_css_properties, group_rule_builder);
   AddRules(kGroupTagName, tag, group_rule_builder.ReleaseString());
 }
 
@@ -218,12 +206,7 @@ void ViewTransitionStyleBuilder::AddGroupChildrenStyles(
   }
 
   StringBuilder builder;
-  for (const auto& [id, value] : captured_css_properties) {
-    builder.Append(CSSProperty::Get(id).GetPropertyNameAtomicString());
-    builder.Append(": ");
-    builder.Append(value);
-    builder.Append(";\n");
-  }
+  AppendProperties(captured_css_properties, builder);
   AddRules(kGroupChildrenTagName, name, builder.ReleaseString());
 }
 

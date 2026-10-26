@@ -6,19 +6,20 @@
 
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string_view>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "base/containers/adapters.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/input_method/mock_input_method_engine.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
@@ -51,8 +52,10 @@ constexpr GaiaId::Literal kTestUserGaiaId{"9876543210"};
 
 class TestAccessibilityHandler : public AccessibilityHandler {
  public:
-  explicit TestAccessibilityHandler(Profile* profile)
-      : AccessibilityHandler(profile) {}
+  TestAccessibilityHandler(
+      const ApplicationLocaleStorage* application_locale_storage,
+      Profile* profile)
+      : AccessibilityHandler(application_locale_storage, profile) {}
   ~TestAccessibilityHandler() override = default;
 };
 
@@ -85,12 +88,12 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   }
 
   void SetUpOnMainThread() override {
-    handler_ =
-        std::make_unique<TestAccessibilityHandler>(browser()->GetProfile());
+    handler_ = std::make_unique<TestAccessibilityHandler>(
+        g_browser_process->GetFeatures()->application_locale_storage(),
+        browser()->GetProfile());
     handler_->set_web_ui(&web_ui_);
     handler_->RegisterMessages();
     handler_->AllowJavascriptForTesting();
-    base::RunLoop().RunUntilIdle();
 
     // Set the Dictation locale for tests.
     SetDictationLocale("en-US");
@@ -111,7 +114,7 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
       const std::string& expected_listener,
       const std::string& expected_argument) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       std::string listener = data->arg1()->GetString();
       if (!data->arg2()->is_string()) {
         // Only look for listeners with a single string argument. Continue
@@ -133,7 +136,7 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   bool GetWebUIListenerArgumentListValue(const std::string& expected_listener,
                                          const base::ListValue*& argument) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       std::string listener;
       if (data->arg1()->is_string()) {
         listener = data->arg1()->GetString();
@@ -289,7 +292,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest, DictationLocalesCalculation) {
     }
 
     // Set up fake preferred languages.
-    browser()->profile()->GetPrefs()->SetString(
+    browser()->GetProfile()->GetPrefs()->SetString(
         language::prefs::kPreferredLanguages, testcase.preferred_languages);
 
     MaybeAddDictationLocales();

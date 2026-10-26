@@ -22,7 +22,6 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/account_id/account_id.h"
@@ -47,8 +46,8 @@ std::optional<std::u16string> MapAppIdToShortName(
     apps::AppCapabilityAccessCache* capability_cache,
     apps::AppRegistryCache* registry_cache,
     const std::set<std::string>& apps_accessing_sensor) {
-  DCHECK(capability_cache);
-  DCHECK(registry_cache);
+  CHECK(capability_cache, base::NotFatalUntil::M162);
+  CHECK(registry_cache, base::NotFatalUntil::M162);
 
   for (const std::string& app : apps_accessing_sensor) {
     std::optional<std::u16string> name;
@@ -278,7 +277,7 @@ void AppAccessNotifier::LaunchAppSettings(const std::string& app_id) {
 
   // We don't have the capability to launch privacy settings for system web
   // app, so settings button is disabled for this type of app.
-  DCHECK(app_type != apps::AppType::kSystemWeb);
+  CHECK(app_type != apps::AppType::kSystemWeb, base::NotFatalUntil::M162);
 
   if (app_type == apps::AppType::kWeb) {
     const user_manager::User* user =

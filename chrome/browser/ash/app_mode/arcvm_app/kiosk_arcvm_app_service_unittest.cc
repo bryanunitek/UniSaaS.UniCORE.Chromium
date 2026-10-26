@@ -15,7 +15,6 @@
 #include "chrome/browser/ash/app_mode/arcvm_app/kiosk_arcvm_app_manager.h"
 #include "chrome/browser/ash/app_mode/kiosk_cryptohome_remover.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
-#include "chrome/browser/ash/ownership/fake_owner_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -59,7 +58,8 @@ class FakeController : public KioskAppLauncher::NetworkDelegate,
   // KioskAppLauncher::Delegate:
   bool IsNetworkReady() const override { return true; }
 
-  void OnAppWindowCreated(const std::optional<std::string>& app_name) override {
+  void OnAppWindowCreated(
+      const std::optional<webapps::AppId>& app_id) override {
     window_created_signal_.SetValue();
   }
 

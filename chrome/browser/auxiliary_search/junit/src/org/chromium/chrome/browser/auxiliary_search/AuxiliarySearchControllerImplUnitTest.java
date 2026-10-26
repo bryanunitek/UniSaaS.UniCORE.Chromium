@@ -21,8 +21,6 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 
-import androidx.test.filters.SmallTest;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -36,6 +34,7 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.FakeTimeTestRule;
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -93,9 +92,10 @@ public class AuxiliarySearchControllerImplUnitTest {
 
     @Before
     public void setUp() {
+        when(mContext.getApplicationContext()).thenReturn(mContext);
         when(mContext.getResources()).thenReturn(mResources);
 
-        AuxiliarySearchControllerFactory.getInstance().setHooksForTesting(mHooks);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, mHooks);
         createController();
     }
 
@@ -334,7 +334,6 @@ public class AuxiliarySearchControllerImplUnitTest {
     }
 
     @Test
-    @SmallTest
     @EnableFeatures({ChromeFeatureList.ANDROID_APP_INTEGRATION_MULTI_DATA_SOURCE})
     public void testOnNonSensitiveDataAvailable_AuxiliarySearchDataEntry() {
         long now = TimeUtils.uptimeMillis();

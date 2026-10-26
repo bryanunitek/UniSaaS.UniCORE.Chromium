@@ -21,6 +21,7 @@
 #include "chrome/browser/web_applications/extensions/launch.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -34,6 +35,7 @@
 #import "ui/base/test/scoped_fake_nswindow_focus.h"
 #include "ui/base/test/scoped_fake_nswindow_fullscreen.h"
 #import "ui/base/test/windowed_nsnotification_observer.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/test/views_test_utils.h"
 
 using extensions::AppWindow;
@@ -69,7 +71,7 @@ class NativeAppWindowCocoaBrowserTest : public PlatformAppBrowserTest {
           profile(),
           apps::AppLaunchParams(
               app->id(), apps::LaunchContainer::kLaunchContainerNone,
-              WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest),
+              WindowOpenDisposition::kNewWindow, apps::LaunchSource::kFromTest),
           base::DoNothing());
       app_loaded_observer.Wait();
     }
@@ -373,7 +375,10 @@ IN_PROC_BROWSER_TEST_F(NativeAppWindowCocoaBrowserTest, MaximizeConstrained) {
 }
 
 // Test Minimize, Maximize, Restore combinations with their native equivalents.
-IN_PROC_BROWSER_TEST_F(NativeAppWindowCocoaBrowserTest, MinimizeMaximize) {
+// TODO(crbug.com/544159510): Flaky on macOS; the minimize can take longer than
+// the PropertyWaiter's default 1s timeout. Re-enable once fixed.
+IN_PROC_BROWSER_TEST_F(NativeAppWindowCocoaBrowserTest,
+                       DISABLED_MinimizeMaximize) {
   SetUpAppWithWindows(1);
   AppWindow* app_window = GetFirstAppWindow();
   extensions::NativeAppWindow* window = app_window->GetBaseWindow();

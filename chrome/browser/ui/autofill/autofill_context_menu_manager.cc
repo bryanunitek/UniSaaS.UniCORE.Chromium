@@ -11,7 +11,6 @@
 #include "base/feature_list.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/notreached.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -20,10 +19,8 @@
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
-#include "chrome/browser/password_manager/factories/password_counter_factory.h"
-#include "chrome/browser/personal_context/personal_context_eligibility_service_factory.h"
-#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/autofill/autofill_context_menu_utils.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
@@ -33,7 +30,6 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
-#include "components/autofill/core/browser/at_memory/at_memory_enablement_utils.h"
 #include "components/autofill/core/browser/autofill_feedback_data.h"
 #include "components/autofill/core/browser/foundations/autofill_driver.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
@@ -42,15 +38,10 @@
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/password_autofill_manager.h"
-#include "components/password_manager/core/browser/password_counter.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/password_manager/core/browser/password_manual_fallback_metrics_recorder.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
-#include "components/personal_context/core/personal_context_types.h"
-#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
-#include "components/plus_addresses/core/browser/plus_address_service.h"
-#include "components/plus_addresses/core/common/features.h"
 #include "components/prefs/pref_service.h"
 #include "components/renderer_context_menu/render_view_context_menu_base.h"
 #include "components/variations/service/variations_service.h"
@@ -62,10 +53,6 @@
 #include "ui/color/color_id.h"
 #include "ui/menus/simple_menu_model.h"
 #include "url/origin.h"
-
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-#include "components/plus_addresses/core/browser/resources/vector_icons.h"
-#endif
 
 namespace autofill {
 
@@ -86,75 +73,10 @@ constexpr char kFeedbackPlaceholder[] =
 // Constant determining the icon size in the context menu.
 constexpr int kContextMenuIconSize = 16;
 
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-const gfx::VectorIcon& GetPlusAddressLogoIcon() {
-  return plus_addresses::kPlusAddressLogoSmallIcon;
-}
-#else
-const gfx::VectorIcon& GetPlusAddressLogoIcon() {
-  return ::features::IsRoundedIconsEnabled() ? vector_icons::kMailFilledIcon
-                                             : vector_icons::kEmailOldIcon;
-}
-#endif
-
-bool ShouldShowAutofillContextMenu(const content::ContextMenuParams& params) {
-  if (params.is_content_editable_for_autofill) {
-    return true;
-  }
-  if (!params.form_control_type) {
-    return false;
-  }
-  // Return true (only) on text fields.
-  //
-  // Note that this switch is over `blink::mojom::FormControlType`, not
-  // `autofill::FormControlType`. Standard form controls are handled by this
-  // switch, while `contenteditable` elements are handled by the
-  // `is_content_editable_for_autofill` check above.
-  //
-  // TODO(crbug.com/40285492): Unify with functions from form_autofill_util.cc.
-  switch (*params.form_control_type) {
-    case blink::mojom::FormControlType::kInputEmail:
-    case blink::mojom::FormControlType::kInputMonth:
-    case blink::mojom::FormControlType::kInputNumber:
-    case blink::mojom::FormControlType::kInputPassword:
-    case blink::mojom::FormControlType::kInputSearch:
-    case blink::mojom::FormControlType::kInputTelephone:
-    case blink::mojom::FormControlType::kInputText:
-    case blink::mojom::FormControlType::kInputUrl:
-    case blink::mojom::FormControlType::kTextArea:
-      return true;
-    case blink::mojom::FormControlType::kButtonButton:
-    case blink::mojom::FormControlType::kButtonSubmit:
-    case blink::mojom::FormControlType::kButtonReset:
-    case blink::mojom::FormControlType::kButtonPopover:
-    case blink::mojom::FormControlType::kFieldset:
-    case blink::mojom::FormControlType::kInputButton:
-    case blink::mojom::FormControlType::kInputCheckbox:
-    case blink::mojom::FormControlType::kInputColor:
-    case blink::mojom::FormControlType::kInputDate:
-    case blink::mojom::FormControlType::kInputDatetimeLocal:
-    case blink::mojom::FormControlType::kInputFile:
-    case blink::mojom::FormControlType::kInputHidden:
-    case blink::mojom::FormControlType::kInputImage:
-    case blink::mojom::FormControlType::kInputRadio:
-    case blink::mojom::FormControlType::kInputRange:
-    case blink::mojom::FormControlType::kInputReset:
-    case blink::mojom::FormControlType::kInputSubmit:
-    case blink::mojom::FormControlType::kInputTime:
-    case blink::mojom::FormControlType::kInputWeek:
-    case blink::mojom::FormControlType::kOutput:
-    case blink::mojom::FormControlType::kSelectOne:
-    case blink::mojom::FormControlType::kSelectMultiple:
-      return false;
-  }
-  NOTREACHED();
-}
-
 // Returns true if the given id is one generated for autofill context menu.
 bool IsAutofillCustomCommandId(
     AutofillContextMenuManager::CommandId command_id) {
   static constexpr auto kAutofillCommands = base::MakeFixedFlatSet<int>({
-      IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PLUS_ADDRESS,
       IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_AT_MEMORY,
       IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK,
       IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PASSWORDS_SELECT_PASSWORD,
@@ -216,7 +138,7 @@ AutofillContextMenuManager::AutofillContextMenuManager(
     RenderViewContextMenuBase* delegate,
     ui::SimpleMenuModel* menu_model)
     : menu_model_(menu_model), delegate_(delegate) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M162);
   params_ = delegate_->params();
 }
 
@@ -224,12 +146,13 @@ AutofillContextMenuManager::~AutofillContextMenuManager() = default;
 
 void AutofillContextMenuManager::AppendItems() {
   if (params_.is_content_editable_for_autofill) {
-    MaybeAddAutofillAtMemoryItem();
+    if (MaybeAddAtMemoryItem()) {
+      menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+    }
     return;
   }
 
   MaybeAddAutofillManualFallbackItems();
-  MaybeAddAutofillAtMemoryItem();
   MaybeAddAutofillFeedbackItem();
 }
 
@@ -265,7 +188,7 @@ void AutofillContextMenuManager::ExecuteCommand(int command_id) {
   }
 
   if (command_id == IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_AT_MEMORY) {
-    ExecuteFallbackForAtMemoryCommand(*autofill_driver);
+    ExecuteAtMemoryContextMenuCommand(*rfh, params_);
     return;
   }
 
@@ -326,45 +249,16 @@ void AutofillContextMenuManager::MaybeAddAutofillFeedbackItem() {
   }
 }
 
-void AutofillContextMenuManager::MaybeAddAutofillAtMemoryItem() {
+bool AutofillContextMenuManager::MaybeAddAtMemoryItem() {
   content::RenderFrameHost* const rfh = delegate_->GetRenderFrameHost();
-  if (!rfh) {
-    return;
+  if (!rfh || !ShouldShowAtMemoryContextMenuItem(*rfh, params_)) {
+    return false;
   }
 
-  if (params_.form_control_type &&
-      params_.form_control_type.value() ==
-          blink::mojom::FormControlType::kInputPassword) {
-    return;
-  }
-
-  if (!ShouldShowAutofillContextMenu(params_)) {
-    return;
-  }
-
-  ContentAutofillDriver* autofill_driver =
-      ContentAutofillDriver::GetForRenderFrameHost(rfh);
-  if (!autofill_driver || !autofill_driver->CanShowAutofillUi()) {
-    return;
-  }
-
-  if (!MayPerformAtMemoryAction(AtMemoryAction::kTriggerSearchUI,
-                                autofill_driver->GetAutofillClient(),
-                                params_.page_url) ||
-      !MayPerformAtMemoryAction(AtMemoryAction::kTriggerSearchUI,
-                                autofill_driver->GetAutofillClient(),
-                                params_.frame_url)) {
-    return;
-  }
-
-  menu_model_->AddItemWithStringIdAndIcon(
+  menu_model_->AddItemWithStringId(
       IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_AT_MEMORY,
-      IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_AT_MEMORY,
-      ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
-                                         ? vector_icons::kSearchIcon
-                                         : vector_icons::kSearchOldIcon,
-                                     ui::kColorIcon, kContextMenuIconSize));
-  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
+      IDS_CONTENT_CONTEXT_AUTOFILL_FALLBACK_AT_MEMORY);
+  return true;
 }
 
 void AutofillContextMenuManager::MaybeAddAutofillManualFallbackItems() {
@@ -378,99 +272,29 @@ void AutofillContextMenuManager::MaybeAddAutofillManualFallbackItems() {
     return;
   }
 
-  ContentAutofillDriver* autofill_driver =
-      ContentAutofillDriver::GetForRenderFrameHost(rfh);
-  ContentPasswordManagerDriver* password_manager_driver =
-      ContentPasswordManagerDriver::GetForRenderFrameHost(rfh);
-
-  bool add_plus_address_fallback = false;
-  bool add_passwords_fallback = false;
-
-  // Do not show autofill context menu options for input fields that cannot be
-  // filled by the driver. See crbug.com/40061116.
-  if (autofill_driver && autofill_driver->CanShowAutofillUi()) {
-    add_plus_address_fallback =
-        ShouldAddPlusAddressManualFallbackItem(*autofill_driver);
-  }
-
   // Do not show password manager context menu options for input fields that
   // cannot be filled by the driver. See crbug.com/40061116.
-  if (password_manager_driver) {
-    add_passwords_fallback =
-        ShouldAddPasswordsManualFallbackItem(*password_manager_driver);
-  }
-
-  if (!add_plus_address_fallback && !add_passwords_fallback) {
-    return;
-  }
+  const bool add_passwords_fallback =
+      ShouldAddPasswordsManualFallbackItem(*rfh, params_);
 
   if (add_passwords_fallback) {
-    Profile* profile = Profile::FromBrowserContext(rfh->GetBrowserContext());
-    password_manager::PasswordCounter* counter =
-        PasswordCounterFactory::GetForProfile(profile);
+    ContentPasswordManagerDriver& password_manager_driver =
+        CHECK_DEREF(ContentPasswordManagerDriver::GetForRenderFrameHost(rfh));
     const bool select_passwords_option_shown =
-        counter && counter->autofillable_passwords() > 0;
-    AddPasswordsManualFallbackItems(*password_manager_driver,
+        ShouldShowSelectPasswordContextMenuItem(*rfh, params_);
+    AddPasswordsManualFallbackItems(password_manager_driver,
                                     select_passwords_option_shown);
 
     if (select_passwords_option_shown) {
       LogSelectPasswordManualFallbackContextMenuEntryShown(
-          CHECK_DEREF(password_manager_driver));
+          password_manager_driver);
     }
   }
-  if (add_plus_address_fallback) {
-    menu_model_->AddItemWithStringIdAndIcon(
-        IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PLUS_ADDRESS,
-        IDS_PLUS_ADDRESS_FALLBACK_LABEL_CONTEXT_MENU,
-        ui::ImageModel::FromVectorIcon(GetPlusAddressLogoIcon(), ui::kColorIcon,
-                                       kContextMenuIconSize));
-    MaybeMarkLastItemAsNewFeature(
-        plus_addresses::features::kPlusAddressFallbackFromContextMenu);
-    // TODO(crbug.com/327566698): Log metrics for plus address fallbacks, too.
-  }
-  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
-}
+  const bool add_at_memory_fallback = MaybeAddAtMemoryItem();
 
-bool AutofillContextMenuManager::ShouldAddPlusAddressManualFallbackItem(
-    ContentAutofillDriver& autofill_driver) {
-  if (params_.form_control_type &&
-      params_.form_control_type.value() ==
-          blink::mojom::FormControlType::kInputPassword) {
-    return false;
+  if (add_passwords_fallback || add_at_memory_fallback) {
+    menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
   }
-
-  auto* web_contents = content::WebContents::FromRenderFrameHost(
-      autofill_driver.render_frame_host());
-  const plus_addresses::PlusAddressService* plus_address_service =
-      PlusAddressServiceFactory::GetForBrowserContext(
-          web_contents->GetBrowserContext());
-  AutofillClient& client = autofill_driver.GetAutofillManager().client();
-  return plus_address_service &&
-         plus_address_service->ShouldShowManualFallback(
-             client.GetLastCommittedPrimaryMainFrameOrigin(),
-             client.IsOffTheRecord()) &&
-         base::FeatureList::IsEnabled(
-             plus_addresses::features::kPlusAddressFallbackFromContextMenu);
-}
-
-bool AutofillContextMenuManager::ShouldAddPasswordsManualFallbackItem(
-    ContentPasswordManagerDriver& driver) {
-  if (!driver.CanShowAutofillUi()) {
-    return false;
-  }
-  // Password suggestions should not be triggered on text areas.
-  if (params_.form_control_type == blink::mojom::FormControlType::kTextArea) {
-    return false;
-  }
-
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordManualFallbackSecurityChecks) &&
-      (!driver.HasValidURL(/*may_kill_renderer*/ false) ||
-       !driver.IsRenderFrameHostSupported())) {
-    return false;
-  }
-  return driver.GetPasswordManager()->GetClient()->IsFillingEnabled(
-      driver.GetLastCommittedOrigin(), driver.GetLastCommittedURL());
 }
 
 void AutofillContextMenuManager::AddPasswordsManualFallbackItems(
@@ -543,14 +367,6 @@ void AutofillContextMenuManager::
                                   IsPasswordFormField(*password_manager_driver,
                                                       params_));
   }
-}
-
-void AutofillContextMenuManager::ExecuteFallbackForAtMemoryCommand(
-    AutofillDriver& driver) {
-  driver.RendererShouldTriggerSuggestions(
-      {driver.GetFrameToken(),
-       FieldRendererId(params_.field_renderer_id.value())},
-      AutofillSuggestionTriggerSource::kAtMemoryContextMenu);
 }
 
 void AutofillContextMenuManager::ExecuteAutofillFeedbackCommand(

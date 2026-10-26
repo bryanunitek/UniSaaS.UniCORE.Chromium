@@ -43,6 +43,7 @@
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/gc_plugin.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -201,9 +202,9 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
     double DynamicHeight() const { return dynamic_height_; }
 
     String ToString() const {
-      return String::Format(
-          "large_width: %f, large_height: %f, small_width: %f, small_height: "
-          "%f, dynamic_width: %f, dynamic_height: %f",
+      return Format(
+          "large_width: {:f}, large_height: {:f}, small_width: {:f}, "
+          "small_height: {:f}, dynamic_width: {:f}, dynamic_height: {:f}",
           large_width_, large_height_, small_width_, small_height_,
           dynamic_width_, dynamic_height_);
     }
@@ -338,6 +339,8 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
     kSiblingRelative = 1u << 19,
     // random() without element-shared
     kElementDependentRandom = 1u << 20,
+    // anchor(), anchor-size() referencing default anchor
+    kDefaultAnchorRelative = 1u << 21,
     // Adjust the Flags type above if adding more bits below.
   };
 
@@ -411,6 +414,7 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
   }
 
   void ReferenceAnchor() const override;
+  void ReferenceDefaultAnchor() const override;
   void ReferenceSibling() const override;
 
   void ReferenceElementDependentRandom() const override;
@@ -442,6 +446,17 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
   CSSToLengthConversionData Unzoomed() const {
     return CopyWithAdjustedZoom(1.0f);
   }
+
+  // Returns the viewport sizes, recording the viewport-unit dependencies
+  // present in `types` so that the resulting style is invalidated when the
+  // viewport is resized.
+  //
+  // This is for values that are not resolved during style resolution (e.g.
+  // gradient color stops), and which therefore never reach the
+  // ViewportWidth()/ViewportHeight()/etc. accessors that record the
+  // dependency themselves.
+  const ViewportSize& ViewportSizes(
+      const CSSPrimitiveValue::LengthTypeFlags& types) const;
 
  private:
   void SetFlag(Flag flag) const {

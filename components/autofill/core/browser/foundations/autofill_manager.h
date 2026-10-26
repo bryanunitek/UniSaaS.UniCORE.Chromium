@@ -20,6 +20,7 @@
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
@@ -79,6 +80,22 @@ class FormInteractionsUkmLogger;
 class AutofillManager
     : public translate::TranslateDriver::LanguageDetectionObserver {
  public:
+  class RendererEventPassKey {
+   private:
+    RendererEventPassKey() = default;
+    friend class ContentAutofillDriver;
+    friend class AutofillDriverIOS;
+    friend class AutofillManagerTestApi;
+  };
+  class FormMutationPassKey {
+   private:
+    FormMutationPassKey() = default;
+    friend class AutofillManager;
+    friend class AutofillManagerTestApi;
+    friend class BrowserAutofillManager;
+    friend class FormFiller;
+  };
+
   using LifecycleState = AutofillDriver::LifecycleState;
 
   // Observer of AutofillManager events.
@@ -115,7 +132,7 @@ class AutofillManager
     // complete (if it started at all). Whether the server types have been
     // determined by then or not is unspecified.
     //
-    // TODO(crbug.com/470949499): Consider calling OnAfterFormsSeen() after the
+    // TODO(crbug.com/40232021): Consider calling OnAfterFormsSeen() after the
     // heuristics *and* the server predictions have been determined. The main
     // challenge is likely the server's possibly slow response time.
     virtual void OnBeforeFormsSeen(
@@ -197,8 +214,15 @@ class AutofillManager
         FormGlobalId form,
         FieldGlobalId field) {}
 
-    virtual void OnBeforeLoadedServerPredictions(AutofillManager& manager) {}
-    virtual void OnAfterLoadedServerPredictions(AutofillManager& manager) {}
+    // The set of `forms` for the before and after call are guaranteed to be
+    // identical, even in case the server did not send responses for some forms
+    // or the server request failed.
+    virtual void OnBeforeLoadedServerPredictions(
+        AutofillManager& manager,
+        base::span<const FormGlobalId> forms) {}
+    virtual void OnAfterLoadedServerPredictions(
+        AutofillManager& manager,
+        base::span<const FormGlobalId> forms) {}
 
     // Fired when the field types predictions of a form *may* have changed.
     // At the moment, we cannot distinguish whether autocomplete attributes or
@@ -269,11 +293,11 @@ class AutofillManager
     virtual void OnBeforeFormWithEmailVerificationTokenSubmitted(
         AutofillManager& manager,
         const FormData& form,
-        const FieldGlobalId& field) {}
+        const FieldGlobalId& email_field_id) {}
     virtual void OnAfterFormWithEmailVerificationTokenSubmitted(
         AutofillManager& manager,
         const FormData& form,
-        const FieldGlobalId& field) {}
+        const FieldGlobalId& email_field_id) {}
   };
 
   template <bool IsConst>
@@ -306,59 +330,6 @@ class AutofillManager
   // Returns a WeakPtr to the leaf class.
   virtual base::WeakPtr<AutofillManager> GetWeakPtr() = 0;
 
-  // Events triggered by the renderer.
-  // See autofill_driver.mojom for documentation.
-  // Some functions are virtual for testing.
-  virtual void OnFormsSeen(std::vector<FormData> updated_forms,
-                           std::vector<FormGlobalId> removed_form_ids);
-  virtual void OnFormSubmitted(const FormData& form,
-                               mojom::SubmissionSource source);
-  virtual void OnTextFieldValueChanged(const FormData& form,
-                                       const FieldGlobalId& field_id,
-                                       const base::TimeTicks timestamp);
-  virtual void OnDidEndTextFieldEditing();
-  virtual void OnTextFieldDidScroll(const FormData& form,
-                                    const FieldGlobalId& field_id);
-  virtual void OnSelectControlSelectionChanged(const FormData& form,
-                                               const FieldGlobalId& field_id);
-  virtual void OnSelectFieldOptionsDidChange(const FormData& form,
-                                             const FieldGlobalId& field_id);
-  virtual void OnFocusOnFormField(const FormData& form,
-                                  const FieldGlobalId& field_id);
-  void OnFocusOnNonFormField();
-  virtual void OnAskForValuesToFill(
-      const FormData& form,
-      const FieldGlobalId& field_id,
-      const gfx::Rect& caret_bounds,
-      AutofillSuggestionTriggerSource trigger_source,
-      std::optional<PasswordSuggestionRequest> password_request);
-  void OnHidePopup();
-  virtual void OnCaretMovedInFormField(const FormData& form,
-                                       const FieldGlobalId& field_id,
-                                       const gfx::Rect& caret_bounds);
-  virtual void OnDidAutofillForm(const FormData& form);
-  void SuppressAutomaticRefills(const FillId& fill_id);
-  void RequestRefill(const FillId& fill_id);
-  virtual void OnJavaScriptChangedAutofilledValue(
-      const FormData& form,
-      const FieldGlobalId& field_id,
-      const std::u16string& old_value);
-
-  // Invoked when the suggestions are actually hidden.
-  virtual void OnSuggestionsHidden(SuggestionHidingReason reason);
-
-  // Invoked when a form with an email verification token is submitted.
-  virtual void OnFormWithEmailVerificationTokenSubmitted(
-      const FormData& form,
-      const FieldGlobalId& field_id);
-
-  // Invoked when the renderer suspects a custom JavaScript autofill event has
-  // occurred.
-  virtual void OnDidDetectJavaScriptAutofill(
-      const FormData& form,
-      const FieldGlobalId& trigger_field_id,
-      const std::vector<FieldGlobalId>& field_ids);
-
   // Routes calls from external components to FormFiller::FillOrPreviewField.
   // Virtual for testing.
   virtual void FillOrPreviewField(mojom::ActionPersistence action_persistence,
@@ -369,7 +340,75 @@ class AutofillManager
                                   FillingProduct filling_product,
                                   std::optional<FieldType> field_type_used) = 0;
 
+  // Events triggered by the renderer.
+  // See autofill_driver.mojom for documentation.
+  // Some functions are virtual for testing.
+  virtual void OnFormsSeen(std::vector<FormData> updated_forms,
+                           std::vector<FormGlobalId> removed_form_ids,
+                           RendererEventPassKey pass_key);
+  virtual void OnFormSubmitted(const FormData& form,
+                               mojom::SubmissionSource source,
+                               RendererEventPassKey pass_key);
+  virtual void OnTextFieldValueChanged(const FormData& form,
+                                       const FieldGlobalId& field_id,
+                                       const base::TimeTicks timestamp,
+                                       RendererEventPassKey pass_key);
+  virtual void OnDidEndTextFieldEditing(RendererEventPassKey pass_key);
+  virtual void OnTextFieldDidScroll(const FormData& form,
+                                    const FieldGlobalId& field_id,
+                                    RendererEventPassKey pass_key);
+  virtual void OnSelectControlSelectionChanged(const FormData& form,
+                                               const FieldGlobalId& field_id,
+                                               RendererEventPassKey pass_key);
+  virtual void OnSelectFieldOptionsDidChange(const FormData& form,
+                                             const FieldGlobalId& field_id,
+                                             RendererEventPassKey pass_key);
+  virtual void OnFocusOnFormField(const FormData& form,
+                                  const FieldGlobalId& field_id,
+                                  RendererEventPassKey pass_key);
+  void OnFocusOnNonFormField(RendererEventPassKey pass_key);
+  virtual void OnAskForValuesToFill(
+      const FormData& form,
+      const FieldGlobalId& field_id,
+      const gfx::Rect& caret_bounds,
+      AutofillSuggestionTriggerSource trigger_source,
+      std::optional<PasswordSuggestionRequest> password_request,
+      RendererEventPassKey pass_key);
+  void OnHidePopup(RendererEventPassKey pass_key);
+  virtual void OnCaretMovedInFormField(const FormData& form,
+                                       const FieldGlobalId& field_id,
+                                       const gfx::Rect& caret_bounds,
+                                       RendererEventPassKey pass_key);
+  virtual void OnDidAutofillForm(const FormData& form,
+                                 RendererEventPassKey pass_key);
+  void SuppressAutomaticRefills(const FillId& fill_id,
+                                RendererEventPassKey pass_key);
+  void RequestRefill(const FillId& fill_id, RendererEventPassKey pass_key);
+  virtual void OnJavaScriptChangedAutofilledValue(
+      const FormData& form,
+      const FieldGlobalId& field_id,
+      const std::u16string& old_value,
+      RendererEventPassKey pass_key);
+
+  // Invoked when a form with an email verification token is submitted.
+  virtual void OnFormWithEmailVerificationTokenSubmitted(
+      const FormData& form,
+      const FieldGlobalId& field_id,
+      RendererEventPassKey pass_key);
+
+  // Invoked when the renderer suspects a custom JavaScript autofill event has
+  // occurred.
+  virtual void OnDidDetectJavaScriptAutofill(
+      const FormData& form,
+      const FieldGlobalId& trigger_field_id,
+      const std::vector<JavaScriptFieldModification>& field_modifications,
+      base::TimeTicks detection_start_timestamp,
+      RendererEventPassKey pass_key);
+
   // Other events.
+
+  // Invoked when the suggestions are actually hidden.
+  virtual void OnSuggestionsHidden(SuggestionHidingReason reason);
 
   virtual void ReportAutofillWebOTPMetrics(bool used_web_otp) = 0;
 
@@ -383,15 +422,6 @@ class AutofillManager
   // language, its predictions are not recomputed.
   void OnLanguageDetermined(
       const translate::LanguageDetectionDetails& details) override;
-
-  class FormMutationPassKey {
-   private:
-    FormMutationPassKey() = default;
-    friend class AutofillManager;
-    friend class AutofillManagerTestApi;
-    friend class BrowserAutofillManager;
-    friend class FormFiller;
-  };
 
   FormStructure* FindCachedFormById(const FormGlobalId& form_id,
                                     const FormMutationPassKey& pass_key);
@@ -477,52 +507,6 @@ class AutofillManager
   // Retrieves the page language from |client_|
   LanguageCode GetCurrentPageLanguage();
 
-  // OnFooImpl() is called, potentially asynchronously after parsing the form,
-  // by the renderer event OnFoo().
-  virtual void OnFormSubmittedImpl(const FormData& form,
-                                   mojom::SubmissionSource source) = 0;
-  virtual void OnFormWithEmailVerificationTokenSubmittedImpl(
-      const FormData& form,
-      const FieldGlobalId& field_id) = 0;
-  virtual void OnCaretMovedInFormFieldImpl(const FormData& form,
-                                           const FieldGlobalId& field_id,
-                                           const gfx::Rect& caret_bounds) = 0;
-  virtual void OnTextFieldValueChangedImpl(const FormData& form,
-                                           const FieldGlobalId& field_id,
-                                           const base::TimeTicks timestamp) = 0;
-  virtual void OnDidEndTextFieldEditingImpl() = 0;
-  virtual void OnTextFieldDidScrollImpl(const FormData& form,
-                                        const FieldGlobalId& field_id) = 0;
-  virtual void OnSelectControlSelectionChangedImpl(
-      const FormData& form,
-      const FieldGlobalId& field_id) = 0;
-  virtual void OnSelectFieldOptionsDidChangeImpl(
-      const FormData& form,
-      const FieldGlobalId& field_id) = 0;
-  virtual void OnFocusOnFormFieldImpl(const FormData& form,
-                                      const FieldGlobalId& field_id) = 0;
-  virtual void OnFocusOnNonFormFieldImpl() = 0;
-  virtual void OnAskForValuesToFillImpl(
-      const FormData& form,
-      const FieldGlobalId& field_id,
-      const gfx::Rect& caret_bounds,
-      AutofillSuggestionTriggerSource trigger_source,
-      std::optional<PasswordSuggestionRequest> password_request) = 0;
-  virtual void OnDidAutofillFormImpl(const FormData& form) = 0;
-  virtual void SuppressAutomaticRefillsImpl(const FillId& fill_id) = 0;
-  virtual void RequestRefillImpl(const FillId& fill_id) = 0;
-  virtual void OnHidePopupImpl() = 0;
-  virtual void OnJavaScriptChangedAutofilledValueImpl(
-      const FormData& form,
-      const FieldGlobalId& field_id,
-      const std::u16string& old_value) = 0;
-  virtual void OnDidDetectJavaScriptAutofillImpl(
-      const FormData& form,
-      const FieldGlobalId& trigger_field_id,
-      const std::vector<FieldGlobalId>& field_ids) = 0;
-  virtual void OnLoadedServerPredictionsImpl(
-      base::span<const raw_ref<FormStructure>> forms) = 0;
-
   // Return whether the |forms| from OnFormSeen() should be parsed to
   // form_structures.
   virtual bool ShouldParseForms() = 0;
@@ -549,14 +533,58 @@ class AutofillManager
 
   struct AsyncContext;
 
+  // OnFooImpl() is called, potentially asynchronously after parsing the form,
+  // by the renderer event OnFoo(). There should be no other callers.
+  virtual void OnFormSubmittedImpl(const FormData& form,
+                                   mojom::SubmissionSource source) = 0;
+  virtual void OnFormWithEmailVerificationTokenSubmittedImpl(
+      const FormData& form,
+      const FieldGlobalId& email_field_id) = 0;
+  virtual void OnCaretMovedInFormFieldImpl(const FormData& form,
+                                           const FieldGlobalId& field_id,
+                                           const gfx::Rect& caret_bounds) = 0;
+  virtual void OnTextFieldValueChangedImpl(const FormData& form,
+                                           const FieldGlobalId& field_id,
+                                           const base::TimeTicks timestamp) = 0;
+  virtual void OnDidEndTextFieldEditingImpl() = 0;
+  virtual void OnTextFieldDidScrollImpl(const FormData& form,
+                                        const FieldGlobalId& field_id) = 0;
+  virtual void OnSelectControlSelectionChangedImpl(
+      const FormData& form,
+      const FieldGlobalId& field_id) = 0;
+  virtual void OnSelectFieldOptionsDidChangeImpl(
+      const FormData& form,
+      const FieldGlobalId& field_id) = 0;
+  virtual void OnFocusOnFormFieldImpl(const FormData& form,
+                                      const FieldGlobalId& field_id) = 0;
+  virtual void OnFocusOnNonFormFieldImpl() = 0;
+  virtual void OnAskForValuesToFillImpl(
+      const FormData& form,
+      const FieldGlobalId& field_id,
+      const gfx::Rect& caret_bounds,
+      AutofillSuggestionTriggerSource trigger_source,
+      std::optional<PasswordSuggestionRequest> password_request,
+      base::ScopedClosureRunner scoped_on_after_ask_for_values_to_fill) = 0;
+  virtual void OnDidAutofillFormImpl(const FormData& form) = 0;
+  virtual void SuppressAutomaticRefillsImpl(const FillId& fill_id) = 0;
+  virtual void RequestRefillImpl(const FillId& fill_id) = 0;
+  virtual void OnHidePopupImpl() = 0;
+  virtual void OnJavaScriptChangedAutofilledValueImpl(
+      const FormData& form,
+      const FieldGlobalId& field_id,
+      const std::u16string& old_value) = 0;
+  virtual void OnDidDetectJavaScriptAutofillImpl(
+      const FormData& form,
+      const FieldGlobalId& trigger_field_id,
+      const std::vector<JavaScriptFieldModification>& field_modifications,
+      base::TimeTicks detection_start_timestamp) = 0;
+  virtual void OnLoadedServerPredictionsImpl(
+      base::span<const raw_ref<FormStructure>> forms) = 0;
+
   // Parses multiple forms in one go. The function proceeds in five stages:
   //
   // 1. Turn (almost) every FormData into a FormStructure.
-  // 2. Potentially query server predictions if the
-  //    `kAutofillServerQueryPredictionsEarly` feature is enabled. When the
-  //    feature is disabled, this step does nothing as server predictions are
-  //    queried in a separate call to OnFormsParsed() normally as part of the
-  //    passed in callback.
+  // 2. Query server predictions.
   // 3. Runs ML models on all FormStructures, if the necessary features are
   //    enabled.
   // 4. Run DetermineHeuristicTypes() on all FormStructures.
@@ -596,14 +624,12 @@ class AutofillManager
   void RunMlModels(AsyncContext context,
                    base::OnceCallback<void(AsyncContext)> done_callback);
 
-  // Triggers the server predictions query for all `forms` that
-  // `ShouldBeQueried()`. This is used when kAutofillServerQueryPredictionsEarly
-  // is enabled.
+  // Triggers the server predictions query for all `forms` that have
+  // `FormParsingPermission::kServerQuery`.
   void QueryServerPredictions(base::span<const FormData> forms,
                               base::TimeTicks form_seen_timestamp);
 
-  // Populates the form cache with the queried form signatures from `response`
-  // if the feature kAutofillServerQueryPredictionsEarly is enabled.
+  // Populates the form cache with the queried form signatures from `response`.
   void PopulateCacheForQueryResponse(
       base::span<const FormData> forms,
       const AutofillCrowdsourcingManager::QueryResponse& response);
@@ -620,9 +646,8 @@ class AutofillManager
       const std::vector<raw_ref<FormStructure>>& forms);
 
   // Invoked when forms from OnFormsSeen() have been parsed to
-  // |form_structures|.
-  void OnFormsParsed(const std::vector<FormData>& forms,
-                     base::TimeTicks form_seen_timestamp);
+  // `form_structures_`.
+  void OnFormsParsed(const std::vector<FormData>& forms);
 
   // Updates `form_structures_` with the information in `forms` and `context`,
   // if available. `context` is available when this function is called as a

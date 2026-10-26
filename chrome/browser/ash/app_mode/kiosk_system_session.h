@@ -13,10 +13,10 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_types.h"
+#include "chrome/browser/ash/app_mode/kiosk_browser_session.h"
 #include "chrome/browser/ash/app_mode/kiosk_network_state_observer.h"
 #include "chrome/browser/ash/app_mode/metrics/low_disk_metrics_service.h"
 #include "chrome/browser/ash/app_mode/metrics/periodic_metrics_service.h"
-#include "chrome/browser/chromeos/app_mode/kiosk_browser_session.h"
 #include "chrome/browser/profiles/profile.h"
 
 class PrefService;
@@ -24,6 +24,7 @@ class PrefRegistrySimple;
 
 namespace ash {
 
+class BrowserDelegate;
 class NetworkConnectivityMetricsService;
 
 // Maintains system-level services tied to a Kiosk session.
@@ -31,10 +32,11 @@ class NetworkConnectivityMetricsService;
 // Example services are accessibility, metrics and browser crash recovery.
 class KioskSystemSession {
  public:
-  KioskSystemSession(PrefService& local_state,
-                     Profile* profile,
-                     const KioskAppId& kiosk_app_id,
-                     const std::optional<std::string>& app_name = std::nullopt);
+  KioskSystemSession(
+      PrefService& local_state,
+      Profile* profile,
+      const KioskAppId& kiosk_app_id,
+      const std::optional<webapps::AppId>& app_id = std::nullopt);
   KioskSystemSession(const KioskSystemSession&) = delete;
   KioskSystemSession& operator=(const KioskSystemSession&) = delete;
   ~KioskSystemSession();
@@ -48,7 +50,7 @@ class KioskSystemSession {
 
   bool is_shutting_down() const;
 
-  Browser* GetSettingsBrowserForTesting();
+  BrowserDelegate* GetSettingsBrowserForTesting();
 
   void SetOnHandleBrowserCallbackForTesting(
       base::RepeatingCallback<void(bool)> callback);
@@ -59,8 +61,8 @@ class KioskSystemSession {
 
  private:
   void InitForChromeAppKiosk();
-  void InitForWebKiosk(const std::optional<std::string>& app_name);
-  void InitForIwaKiosk(const std::optional<std::string>& app_name);
+  void InitForWebKiosk(const webapps::AppId& app_id);
+  void InitForIwaKiosk(const webapps::AppId& app_id);
 
   void InitCommon();
 

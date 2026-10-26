@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <ranges>
 
 #include "base/check.h"
 #include "base/logging.h"
@@ -16,7 +17,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_constants.mojom.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_id_forward.h"
@@ -64,9 +64,10 @@ bool BrowserAccessibility::ignore_hovered_state_for_testing_ = false;
 // static
 BrowserAccessibility* BrowserAccessibility::FromAXPlatformNodeDelegate(
     AXPlatformNodeDelegate* delegate) {
-  if (!delegate || !delegate->IsWebContent())
+  if (!delegate) {
     return nullptr;
-  return static_cast<BrowserAccessibility*>(delegate);
+  }
+  return delegate->ToBrowserAccessibility();
 }
 
 BrowserAccessibility::BrowserAccessibility(BrowserAccessibilityManager* manager,
@@ -136,10 +137,26 @@ bool BrowserAccessibility::IsValid() const {
 
 void BrowserAccessibility::OnDataChanged() {
   DCHECK(IsValid()) << "Invalid node: " << *this;
+  // See `ShouldHavePlatformNode` for an explanation on why it must be ignored
+  // if false.
+  DCHECK(ShouldHavePlatformNode() || node()->IsIgnored())
+      << "Only an ignored node may go without a platform node: " << *this;
+  UpdatePlatformNode();
+}
+
+bool BrowserAccessibility::ShouldHavePlatformNode() const {
+  // A hosted tree takes the place of its host, thus no platform API can reach
+  // that host. Whether the tree is connected does not matter here: the host is
+  // ignored either way, and a platform node that came and went with another
+  // tree would make an event fire on a node that no client can reach.
+  return !(node()->IsIgnored() && node()->data().HasChildTreeID());
 }
 
 bool BrowserAccessibility::CanFireEvents() const {
-  return node()->CanFireEvents();
+  // A platform event names a platform node, thus a BrowserAccessibility that
+  // owns none can fire no event. Each platform gives the node of an event to
+  // its own API, and it has no result to give for a node that is not there.
+  return ShouldHavePlatformNode() && node()->CanFireEvents();
 }
 
 AXPlatformNode* BrowserAccessibility::GetAXPlatformNode() const {
@@ -206,10 +223,12 @@ BrowserAccessibility* BrowserAccessibility::PlatformGetNextSibling() const {
   // On some platforms, we rely on extra announcement nodes to support aria
   // notify.
   BrowserAccessibility* parent = PlatformGetParent();
-  size_t next_child_index = node()->GetUnignoredIndexInParent() + 1;
+  size_t next_child_index =
+      node()->GetUnignoredIndexInParentCrossingTreeBoundary() + 1;
   if (!manager()->TreeHasExtraAnnouncementNodes() || !parent ||
       next_child_index < parent->InternalChildCount()) {
-    return InternalGetNextSibling();
+    return manager()->GetFromAXNode(
+        node()->GetNextUnignoredSiblingCrossingTreeBoundary());
   }
 
   // The InternalChildCount() will not include extra announcement nodes, but
@@ -226,10 +245,11 @@ BrowserAccessibility* BrowserAccessibility::PlatformGetPreviousSibling() const {
   // On some platforms, we rely on extra announcement nodes to support aria
   // notify.
   BrowserAccessibility* parent = PlatformGetParent();
-  size_t child_index = node()->GetUnignoredIndexInParent();
+  size_t child_index = node()->GetUnignoredIndexInParentCrossingTreeBoundary();
   if (!manager()->TreeHasExtraAnnouncementNodes() || !parent ||
       child_index < parent->InternalChildCount()) {
-    return InternalGetPreviousSibling();
+    return manager()->GetFromAXNode(
+        node()->GetPreviousUnignoredSiblingCrossingTreeBoundary());
   }
 
   // The InternalChildCount() will not include extra announcement nodes, but
@@ -870,7 +890,10 @@ gfx::Rect BrowserAccessibility::RelativeToAbsoluteBounds(
       }
     }
 
-    if (coordinate_system == AXCoordinateSystem::kFrame) {
+    // Only child web frames compose bounds across tree boundaries. Root web
+    // frames and other sources are anchored by their own native view.
+    if (coordinate_system == AXCoordinateSystem::kFrame ||
+        manager->IsRootFrameManager() || !manager->IsWebContentSource()) {
       break;
     }
 
@@ -925,13 +948,19 @@ bool BrowserAccessibility::IsWebContent() const {
   return delegate->AccessibilityIsWebContentSource();
 }
 
+bool BrowserAccessibility::IsTopLevelWebContentRoot() const {
+  return manager_->IsRootFrameManager() &&
+         manager_->GetBrowserAccessibilityRoot() == this;
+}
+
 bool BrowserAccessibility::HasVisibleCaretOrSelection() const {
-  // The caret should be visible if Caret Browsing is enabled.
+  // The caret should be visible if Caret Browsing is enabled, but only in the
+  // node which contains it.
   //
   // TODO(crbug.com/40674120): Caret Browsing should be looking at leaf text
   // nodes so it might not return expected results in this method.
   if (AXPlatform::GetInstance().IsCaretBrowsingEnabled()) {
-    return true;
+    return node()->HasSelectionFocusInSubtree();
   }
   return node()->HasVisibleCaretOrSelection();
 }
@@ -972,19 +1001,27 @@ AXPlatformNodeId BrowserAccessibility::GetUniqueId() const {
   return unique_id_;
 }
 
-std::string BrowserAccessibility::SubtreeToStringHelper(size_t level) {
+std::string BrowserAccessibility::SubtreeToStringHelper(size_t level,
+                                                        bool stop_at_document) {
   std::string result(level * 2, '+');
   result += ToString();
+  if (stop_at_document && ui::IsPlatformDocument(GetRole())) {
+    return result + " [document contents omitted]\n";
+  }
   result += '\n';
 
   for (InternalChildIterator it = InternalChildrenBegin();
        it != InternalChildrenEnd(); ++it) {
     BrowserAccessibility* child = it.get();
     DCHECK(child);
-    result += child->SubtreeToStringHelper(level + 1);
+    result += child->SubtreeToStringHelper(level + 1, stop_at_document);
   }
 
   return result;
+}
+
+BrowserAccessibility* BrowserAccessibility::ToBrowserAccessibility() {
+  return this;
 }
 
 const std::vector<gfx::NativeViewAccessible>
@@ -1003,6 +1040,14 @@ gfx::NativeViewAccessible BrowserAccessibility::GetParent() const {
   BrowserAccessibility* parent = PlatformGetParent();
   if (parent)
     return parent->GetNativeViewAccessible();
+
+  // Hiding an <iframe> can remove its element from the outer document's
+  // accessibility tree while leaving the embedded document's tree alive.
+  // The embedded document then has no accessible parent. Only the main frame
+  // may use the native view as a fallback parent.
+  if (!manager_->IsRootFrameManager()) {
+    return gfx::NativeViewAccessible();
+  }
 
   AXPlatformTreeManagerDelegate* delegate =
       manager_->GetDelegateFromRootManager();
@@ -1132,9 +1177,18 @@ gfx::NativeViewAccessible BrowserAccessibility::GetTableAncestor() const {
   return gfx::NativeViewAccessible();
 }
 
+static_assert(std::ranges::bidirectional_range<
+              BrowserAccessibility::PlatformChildrenRange>);
+
+BrowserAccessibility::PlatformChildIterator::PlatformChildIterator() = default;
+
 BrowserAccessibility::PlatformChildIterator::PlatformChildIterator(
     const PlatformChildIterator& it)
     : parent_(it.parent_), platform_iterator(it.platform_iterator) {}
+
+BrowserAccessibility::PlatformChildIterator&
+BrowserAccessibility::PlatformChildIterator::operator=(
+    const PlatformChildIterator& it) = default;
 
 BrowserAccessibility::PlatformChildIterator::PlatformChildIterator(
     const BrowserAccessibility* parent,
@@ -1182,6 +1236,11 @@ BrowserAccessibility::PlatformChildIterator::GetNativeViewAccessible() const {
 
 std::optional<size_t>
 BrowserAccessibility::PlatformChildIterator::GetIndexInParent() const {
+  // A default-constructed iterator has no parent. Return std::nullopt so that
+  // two such iterators compare equal in `ChildIterator::operator==`.
+  if (!parent_) {
+    return std::nullopt;
+  }
   if (platform_iterator == parent_->PlatformChildrenEnd().platform_iterator)
     return parent_->PlatformChildCount();
 
@@ -1261,19 +1320,13 @@ std::optional<size_t> BrowserAccessibility::GetIndexInParent() const {
     // index at AXPlatformNodeBase.
     return std::nullopt;
   }
-  return node()->GetUnignoredIndexInParent();
+  return node()->GetUnignoredIndexInParentCrossingTreeBoundary();
 }
 
 gfx::AcceleratedWidget
 BrowserAccessibility::GetTargetForNativeAccessibilityEvent() {
-  // Views trees can use their manager's delegate because it always maps to a
-  // native widget, but web trees need the root manager's delegate so nested
-  // iframes get the right target.
   AXPlatformTreeManagerDelegate* delegate =
-      features::IsAccessibilityTreeForViewsEnabled() && !IsWebContent()
-          ? manager()->delegate()
-          : manager()->GetDelegateFromRootManager();
-
+      manager()->GetDelegateForNativeView();
   if (!delegate) {
     return gfx::kNullAcceleratedWidget;
   }
@@ -2009,13 +2062,13 @@ TextAttributeMap BrowserAccessibility::GetSpellingAndGrammarAttributes() const {
 
   TextAttributeMap spelling_attributes;
   if (IsText()) {
-    const std::vector<int32_t>& marker_types =
+    base::span<const int32_t> marker_types =
         GetIntListAttribute(ax::mojom::IntListAttribute::kMarkerTypes);
-    const std::vector<int32_t>& highlight_types =
+    base::span<const int32_t> highlight_types =
         GetIntListAttribute(ax::mojom::IntListAttribute::kHighlightTypes);
-    const std::vector<int>& marker_starts =
+    base::span<const int> marker_starts =
         GetIntListAttribute(ax::mojom::IntListAttribute::kMarkerStarts);
-    const std::vector<int>& marker_ends =
+    base::span<const int> marker_ends =
         GetIntListAttribute(ax::mojom::IntListAttribute::kMarkerEnds);
 
     CHECK_EQ(marker_types.size(), highlight_types.size());
@@ -2168,7 +2221,7 @@ TextAttributeMap BrowserAccessibility::ComputeTextAttributeMap(
     return attributes_map;
   }
 
-  DCHECK(PlatformChildCount());
+  DCHECK(PlatformChildCount()) << GetData().ToString();
 
   int start_offset = 0;
   for (const auto& child : PlatformChildren()) {

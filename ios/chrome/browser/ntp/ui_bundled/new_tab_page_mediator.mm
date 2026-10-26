@@ -19,11 +19,13 @@
 #import "base/task/thread_pool.h"
 #import "base/time/time.h"
 #import "base/trace_event/trace_event.h"
+#import "base/values.h"
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/image_fetcher/core/image_fetcher.h"
 #import "components/image_fetcher/core/image_fetcher_service.h"
 #import "components/image_fetcher/core/request_metadata.h"
+#import "components/ntp_tiles/features.h"
 #import "components/ntp_tiles/pref_names.h"
 #import "components/omnibox/browser/aim_eligibility_service.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
@@ -31,17 +33,23 @@
 #import "components/omnibox/common/omnibox_features.h"
 #import "components/prefs/ios/pref_observer_bridge.h"
 #import "components/prefs/pref_change_registrar.h"
+#import "components/prefs/pref_service.h"
 #import "components/regional_capabilities/regional_capabilities_service.h"
 #import "components/search/search.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/strings/grit/components_strings.h"
+#import "components/subscription_eligibility/objc/subscription_eligibility_observer_bridge.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
+#import "ios/chrome/browser/aim/model/ai_mode_button_service_ios.h"
 #import "ios/chrome/browser/browser_view/model/browser_view_visibility_notifier_browser_agent.h"
 #import "ios/chrome/browser/content_suggestions/coordinator/content_suggestions_mediator.h"
 #import "ios/chrome/browser/content_suggestions/ui/user_account_image_update_delegate.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_service.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_service_factory.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_data_conversion.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service_observer_bridge.h"
@@ -51,7 +59,6 @@
 #import "ios/chrome/browser/home_customization/utils/home_customization_constants.h"
 #import "ios/chrome/browser/metrics/model/new_tab_page_uma.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
-#import "ios/chrome/browser/ntp/model/ntp_background_image_cache_service.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_item_type.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_prefs.h"
 #import "ios/chrome/browser/ntp/search_engine_logo/mediator/search_engine_logo_mediator.h"
@@ -87,11 +94,14 @@
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
+#import "ios/chrome/browser/signin/model/constants.h"
+#import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/sync/model/sync_observer_bridge.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/common/NSString+Chromium.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
+#import "ios/chrome/common/ui/util/image_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/voice_search/voice_search_api.h"
 #import "ios/web/public/navigation/navigation_item.h"
@@ -99,7 +109,9 @@
 #import "ios/web/public/navigation/referrer.h"
 #import "ios/web/public/web_state.h"
 #import "skia/ext/skia_utils_ios.h"
-#import "ui/base/device_form_factor.h"
+#import "third_party/omnibox_proto/searchbox_config.pb.h"
+#import "third_party/omnibox_proto/tool_config.pb.h"
+#import "third_party/omnibox_proto/tool_mode.pb.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "url/gurl.h"
 
@@ -122,9 +134,6 @@ enum class IOSNTPNewBadgeShownResult {
   // kNotShownButtonPressed = 2,  // Obsolete in M140
   kMaxValue = kShown,
 };
-
-// The point size of the entry point's symbol.
-const CGFloat kIconPointSize = 18.0;
 
 // The holdback period to wait after FRE completion before showing new badges
 // on the homepage.
@@ -286,14 +295,42 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   pref_service->SetBoolean(prefs::kIosImageFetcherShouldClearCache, false);
 }
 
+// Returns whether AIM image generation is allowed.
+BOOL IsAimImageGenerationAllowed(
+    const AimEligibilityService* aim_eligibility_service) {
+  CHECK_EQ(ntp_tiles::GetAimButtonRefactorArm(),
+           ntp_tiles::AimButtonRefactorArm::kImageGenerationQuickAction);
+  if (!aim_eligibility_service || !aim_eligibility_service->IsAimEligible() ||
+      !aim_eligibility_service->IsServerEligibilityEnabled()) {
+    return NO;
+  }
+
+  const omnibox::SearchboxConfig* config =
+      aim_eligibility_service->GetSearchboxConfig();
+
+  if (!config) {
+    return NO;
+  }
+
+  for (const auto& tool_config : config->tool_configs()) {
+    if (tool_config.tool() == omnibox::ToolMode::TOOL_MODE_IMAGE_GEN) {
+      return YES;
+    }
+  }
+
+  return NO;
+}
+
 }  // namespace
 
 @interface NewTabPageMediator () <BooleanObserver,
+                                  FullscreenBrowserAgentObserving,
                                   HomeBackgroundCustomizationServiceObserving,
-                                  IdentityManagerObserverBridgeDelegate,
+                                  IdentityManagerObserving,
                                   PlaceholderServiceObserving,
                                   PrefObserverDelegate,
                                   SearchEngineObserving,
+                                  SubscriptionEligibilityServiceObserving,
                                   SyncObserverModelBridge>
 
 @property(nonatomic, assign) ChromeAccountManagerService* accountManagerService;
@@ -307,10 +344,15 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
 @end
 
 @implementation NewTabPageMediator {
+  raw_ptr<FullscreenBrowserAgent> _fullscreenBrowserAgent;
+  std::unique_ptr<FullscreenBrowserAgentObserverBridge>
+      _fullscreenBrowserAgentObserverBridge;
   // AIM eligibility service.
   raw_ptr<AimEligibilityService> _aimEligibilityService;
-  // AIM eligibility subscription.
-  base::CallbackListSubscription _aimEligibilitySubscription;
+  // Service vending the AI Mode button configuration.
+  raw_ptr<AIModeButtonServiceIOS> _aiModeButtonServiceIOS;
+  // AI Mode button state change subscription.
+  base::CallbackListSubscription _aiModeButtonStateSubscription;
   // Whether AIM is currently allowed.
   BOOL _isAIMAllowed;
   // Listen for default search engine changes.
@@ -318,6 +360,10 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   // Observes changes in identity and updates the Identity Disc.
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityObserverBridge;
+  // Observes changes in AI subscription tier.
+  std::unique_ptr<
+      subscription_eligibility::SubscriptionEligibilityObserverBridge>
+      _subscriptionEligibilityObserverBridge;
   // Observes changes of the browser view visibility state.
   raw_ptr<BrowserViewVisibilityNotifierBrowserAgent, DanglingUntriaged>
       _browserViewVisibilityNotifierBrowserAgent;
@@ -345,8 +391,6 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   // Observer for the customization service.
   std::unique_ptr<HomeBackgroundCustomizationServiceObserverBridge>
       _backgroundCustomizationServiceObserverBridge;
-  // Used to cache the background image.
-  raw_ptr<NTPBackgroundImageCacheService> _backgroundImageCacheService;
   // Used to fetch and cache images for the background.
   raw_ptr<image_fetcher::ImageFetcherService> _imageFetcherService;
   raw_ptr<UserUploadedImageManager, DanglingUntriaged>
@@ -376,6 +420,8 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   uint64_t _fetchSequenceNumber;
   // Holds whether the omnibox should be pinned to the bottom position.
   PrefBackedBoolean* _bottomOmniboxEnabled;
+  raw_ptr<subscription_eligibility::SubscriptionEligibilityService>
+      _subscriptionEligibilityService;
 }
 
 // Synthesized from NewTabPageMutator.
@@ -392,14 +438,15 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
                   (id<UserAccountImageUpdateDelegate>)imageUpdater
                    discoverFeedService:(DiscoverFeedService*)discoverFeedService
                            prefService:(PrefService*)prefService
+        subscriptionEligibilityService:
+            (subscription_eligibility::SubscriptionEligibilityService*)
+                subscriptionEligibilityService
                            syncService:(syncer::SyncService*)syncService
            regionalCapabilitiesService:
                (regional_capabilities::RegionalCapabilitiesService*)
                    regionalCapabilitiesService
         backgroundCustomizationService:
             (HomeBackgroundCustomizationService*)backgroundCustomizationService
-           backgroundImageCacheService:
-               (NTPBackgroundImageCacheService*)backgroundImageCacheService
                    imageFetcherService:
                        (image_fetcher::ImageFetcherService*)imageFetcherService
               userUploadedImageManager:
@@ -411,7 +458,11 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
         (DiscoverFeedVisibilityBrowserAgent*)discoverFeedVisibilityBrowserAgent
               featureEngagementTracker:(feature_engagement::Tracker*)tracker
                  aimEligibilityService:
-                     (AimEligibilityService*)aimEligibilityService {
+                     (AimEligibilityService*)aimEligibilityService
+                aiModeButtonServiceIOS:
+                    (AIModeButtonServiceIOS*)aiModeButtonServiceIOS
+                fullscreenBrowserAgent:
+                    (FullscreenBrowserAgent*)fullscreenBrowserAgent {
   self = [super init];
   if (self) {
     CHECK(identityManager);
@@ -426,6 +477,10 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
     _identityObserverBridge =
         std::make_unique<signin::IdentityManagerObserverBridge>(identityManager,
                                                                 self);
+    CHECK(subscriptionEligibilityService);
+    _subscriptionEligibilityObserverBridge = std::make_unique<
+        subscription_eligibility::SubscriptionEligibilityObserverBridge>(
+        subscriptionEligibilityService, self);
     _browserViewVisibilityNotifierBrowserAgent =
         browserViewVisibilityNotifierBrowserAgent;
     // Listen for default search engine changes.
@@ -437,18 +492,19 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
     _discoverFeedService = discoverFeedService;
     _discoverFeedVisibilityBrowserAgent = discoverFeedVisibilityBrowserAgent;
     _prefService = prefService;
+    _subscriptionEligibilityService = subscriptionEligibilityService;
     _regionalCapabilitiesService = regionalCapabilitiesService;
     _backgroundCustomizationService = backgroundCustomizationService;
-    _backgroundImageCacheService = backgroundImageCacheService;
     _imageFetcherService = imageFetcherService;
     _userUploadedImageManager = userUploadedImageManager;
     _signedInIdentity = _authService->GetPrimaryIdentity();
     _tracker = tracker;
     _aimEligibilityService = aimEligibilityService;
-    if (_aimEligibilityService) {
+    _aiModeButtonServiceIOS = aiModeButtonServiceIOS;
+    if (_aiModeButtonServiceIOS) {
       __weak __typeof(self) weakSelf = self;
-      _aimEligibilitySubscription =
-          _aimEligibilityService->RegisterEligibilityChangedCallback(
+      _aiModeButtonStateSubscription =
+          _aiModeButtonServiceIOS->RegisterStateChangedCallback(
               base::BindRepeating(^(void) {
                 [weakSelf updateAIMAvailability];
               }));
@@ -460,8 +516,33 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
       _bottomOmniboxEnabled.observer = self;
       [_bottomOmniboxEnabled.observer booleanDidChange:_bottomOmniboxEnabled];
     }
+    if (IsFullscreenRefactoringEnabled() && fullscreenBrowserAgent) {
+      _fullscreenBrowserAgent = fullscreenBrowserAgent;
+      _fullscreenBrowserAgentObserverBridge =
+          std::make_unique<FullscreenBrowserAgentObserverBridge>(
+              self, _fullscreenBrowserAgent);
+    }
   }
   return self;
+}
+
+- (void)setConsumer:(id<NewTabPageConsumer>)consumer {
+  _consumer = consumer;
+  if (IsChromeNextIaEnabled()) {
+    if (IsBottomOmniboxAvailable()) {
+      [self.consumer setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
+    }
+  }
+}
+
+- (void)setScrollConsumer:(id<NewTabPageScrollConsumer>)scrollConsumer {
+  _scrollConsumer = scrollConsumer;
+  if (IsChromeNextIaEnabled()) {
+    if (_fullscreenBrowserAgent && IsFullscreenRefactoringEnabled()) {
+      [self.scrollConsumer
+          setFeedBottomInset:_fullscreenBrowserAgent->max_insets().bottom];
+    }
+  }
 }
 
 - (void)setHeaderConsumer:(id<NewTabPageHeaderConsumer>)headerConsumer {
@@ -536,8 +617,8 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
     // The DSE icon might have already been fetched. In this case, no updated
     // will be delivered. Therefore we should query the cache, as the icon store
     // might have already been updated.
-    UIImage* fetchedIcon =
-        self.placeholderService->GetDefaultSearchEngineIcon(kIconPointSize);
+    UIImage* fetchedIcon = self.placeholderService->GetDefaultSearchEngineIcon(
+        PlaceholderService::IconSize::k18pt);
     if (fetchedIcon) {
       [self.headerConsumer setDefaultSearchEngineImage:fetchedIcon];
     }
@@ -560,6 +641,9 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
       std::make_unique<HomeBackgroundCustomizationServiceObserverBridge>(
           _backgroundCustomizationService, self);
   [self updateAIMAvailability];
+  if (_aiModeButtonServiceIOS) {
+    _aiModeButtonServiceIOS->RecordEntrypointShown(_isAIMAllowed);
+  }
   _mediatorSetUp = YES;
 }
 
@@ -571,24 +655,28 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
       self.feedVisibilityObserver);
   _searchEngineObserver.reset();
   _identityObserverBridge.reset();
+  _subscriptionEligibilityObserverBridge.reset();
   self.accountManagerService = nil;
   self.discoverFeedService = nullptr;
   _prefChangeRegistrar.reset();
   _prefObserverBridge.reset();
   _prefService = nullptr;
+  _subscriptionEligibilityService = nullptr;
   _syncObserver.reset();
   _syncService = nullptr;
   _regionalCapabilitiesService = nullptr;
   _identityManager = nullptr;
-  _aimEligibilitySubscription = {};
+  _aiModeButtonStateSubscription = {};
   _aimEligibilityService = nullptr;
+  _aiModeButtonServiceIOS = nullptr;
   _isAIMAllowed = NO;
   self.feedControlDelegate = nil;
   _backgroundCustomizationServiceObserverBridge = nullptr;
   _backgroundCustomizationService = nullptr;
   _imageFetcherService = nullptr;
-  _backgroundImageCacheService = nullptr;
   self.placeholderService = nullptr;
+  _fullscreenBrowserAgentObserverBridge.reset();
+  _fullscreenBrowserAgent = nullptr;
   base::UmaHistogramBoolean("IOS.NTP.LandscapeMode", _wasNTPInLandscape);
 }
 
@@ -598,7 +686,7 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
 }
 
 - (void)restoreNTPScrollPositionForWebState:(web::WebState*)webState {
-  [self.consumer
+  [self.scrollConsumer
       restoreScrollPosition:NewTabPageTabHelper::FromWebState(webState)
                                 ->GetNTPScrollPosition()];
 }
@@ -631,12 +719,19 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   }
 }
 
+#pragma mark - FullscreenBrowserAgentObserving
+
+- (void)fullscreenDidUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  [self.scrollConsumer setFeedBottomInset:agent->max_insets().bottom];
+}
+
 #pragma mark - BooleanObserver
 
 - (void)booleanDidChange:(id<ObservableBoolean>)observableBoolean {
   CHECK(IsChromeNextIaEnabled());
   if (observableBoolean == _bottomOmniboxEnabled) {
     CHECK(IsBottomOmniboxAvailable());
+    [self.consumer setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
     [self.headerConsumer
         setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
   }
@@ -664,16 +759,16 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   [self.headerConsumer setDefaultSearchEngineName:dseName];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onEndBatchOfPrimaryAccountChanges {
+- (void)batchOfPrimaryAccountChangesDidEnd {
   _signedInIdentity = self.authService->GetPrimaryIdentity();
   [self updateAccountImage];
   [self updateAccountErrorBadge];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
-  if (info.gaia != _signedInIdentity.gaiaId) {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
+  if (info.GetGaiaId() != _signedInIdentity.gaiaId) {
     return;
   }
   [self updateAccountImage];
@@ -690,7 +785,8 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   __weak __typeof(self) weakSelf = self;
   if (self.placeholderService) {
     self.placeholderService->FetchDefaultSearchEngineIcon(
-        kIconPointSize, base::BindRepeating(^(UIImage* image) {
+        PlaceholderService::IconSize::k18pt,
+        base::BindRepeating(^(UIImage* image) {
           [weakSelf.headerConsumer setDefaultSearchEngineImage:image];
         }));
   }
@@ -740,28 +836,22 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
 }
 
 // Sets the background image through the consumer and updates the traits.
-// Caches the image when `cache` is YES.
 - (void)setCustomBackground:(HomeCustomBackground)customBackground
-                      image:(UIImage*)image
-                      cache:(BOOL)cache {
+                      image:(UIImage*)image {
   [self setCustomBackground:customBackground
                       image:image
-          originalImageSize:CGSizeZero
-                      cache:cache];
+          originalImageSize:CGSizeZero];
 }
 
 - (void)setCustomBackground:(HomeCustomBackground)customBackground
                       image:(UIImage*)image
-          originalImageSize:(CGSize)originalImageSize
-                      cache:(BOOL)cache {
-  if (cache && _backgroundImageCacheService &&
-      IsNTPBackgroundImageCacheEnabled()) {
-    _backgroundImageCacheService->SetCachedBackgroundImage(image,
-                                                           originalImageSize);
-  }
+          originalImageSize:(CGSize)originalImageSize {
   HomeCustomizationFramingCoordinates* coordinates =
       [self framingCoordinatesForCustomBackground:customBackground];
   coordinates.originalImageSize = originalImageSize;
+  [self.consumer setAnimatedBackgroundPath:nil
+                    lightModeColorProvider:nil
+                     darkModeColorProvider:nil];
   [self.consumer setBackgroundImage:image framingCoordinates:coordinates];
 
   CustomUITraitAccessor* traitAccessor = [[CustomUITraitAccessor alloc]
@@ -776,27 +866,6 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
     CleanupImageFetcherCacheIfNeeded(
         _prefService, self.webState->GetBrowserState(), self, customBackground);
   }
-}
-
-// Attempts to apply the cached background image. Returns YES if a cached image
-// was found and applied, NO otherwise.
-- (BOOL)applyCachedBackground:(const HomeCustomBackground&)customBackground {
-  if (!_backgroundImageCacheService) {
-    return NO;
-  }
-  UIImage* cachedImage =
-      _backgroundImageCacheService->GetCachedBackgroundImage();
-  if (!cachedImage) {
-    return NO;
-  }
-
-  CGSize originalImageSize =
-      _backgroundImageCacheService->GetCachedOriginalImageSize();
-  [self setCustomBackground:customBackground
-                      image:cachedImage
-          originalImageSize:originalImageSize
-                      cache:NO];
-  return YES;
 }
 
 // Records any necessary logging for after a custom background loaded..
@@ -814,22 +883,35 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
 - (void)updateAIMAvailability {
   BOOL aimAllowed = NO;
   BOOL fuseboxEligible = NO;
+  if (_aiModeButtonServiceIOS) {
+    aimAllowed = _aiModeButtonServiceIOS->IsButtonAvailable();
+  }
   if (_aimEligibilityService) {
-    const BOOL allowedOnDevice =
-        ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE ||
-        IsAIMNTPEntrypointTabletEnabled();
-    aimAllowed = _aimEligibilityService->IsAimEligible() && allowedOnDevice;
     fuseboxEligible = _aimEligibilityService->IsFuseboxEligible();
   }
 
   [self.consumer setAIMAllowed:aimAllowed];
   [self.headerConsumer setAIMAllowed:aimAllowed];
   [self.headerConsumer setFuseboxEligible:fuseboxEligible];
+  if (ntp_tiles::GetAimButtonRefactorArm() ==
+      ntp_tiles::AimButtonRefactorArm::kImageGenerationQuickAction) {
+    [self.consumer setAIMImageGenerationAllowed:IsAimImageGenerationAllowed(
+                                                    _aimEligibilityService)];
+  }
+  if (_aiModeButtonServiceIOS) {
+    [self.consumer
+               setAIMTitle:_aiModeButtonServiceIOS->GetTitle()
+                      icon:_aiModeButtonServiceIOS->GetIcon()
+        accessibilityLabel:_aiModeButtonServiceIOS->GetAccessibilityLabel()];
+  }
 
   if (aimAllowed == _isAIMAllowed) {
     return;
   }
   _isAIMAllowed = aimAllowed;
+  if (_mediatorSetUp && _aiModeButtonServiceIOS) {
+    _aiModeButtonServiceIOS->RecordEntrypointShown(aimAllowed);
+  }
   // Only update the modules if the mediator has already been set up.
   if (IsAIMEligibilityRefreshNTPModulesEnabled() && _mediatorSetUp) {
     [self.NTPContentDelegate updateModuleVisibility];
@@ -842,12 +924,17 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   // Fetches user's identity from Authentication Service.
   if (_signedInIdentity) {
     // Only show an avatar if the user is signed in.
-    UIImage* image =
+    UIImage* avatarImage =
         GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
             _signedInIdentity, IdentityAvatarSize::SmallSize);
-    [self.imageUpdater updateAccountImage:image
-                                     name:_signedInIdentity.userFullName
-                                    email:_signedInIdentity.userEmail];
+
+    BOOL hasAITier =
+        IsAiSubscriptionAvatarRingIOSEnabled() &&
+        _subscriptionEligibilityService->GetAiSubscriptionTier() > 0;
+    [self.imageUpdater updateAccountWithName:_signedInIdentity.userFullName
+                                       email:_signedInIdentity.userEmail
+                                 avatarImage:avatarImage
+                                   hasAITier:hasAITier];
   } else {
     [self.imageUpdater setSignedOutAccountImage];
     signin_metrics::LogSignInOffered(
@@ -930,10 +1017,8 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
       _backgroundCustomizationService->GetCurrentCustomBackground();
 
   if (customBackground) {
-    if (initialLoad && [self applyCachedBackground:customBackground.value()]) {
-      // Cached background image applied. Nothing else to do.
-    } else if (std::holds_alternative<sync_pb::NtpCustomBackground>(
-                   customBackground.value())) {
+    if (std::holds_alternative<sync_pb::NtpCustomBackground>(
+            customBackground.value())) {
       sync_pb::NtpCustomBackground background =
           std::get<sync_pb::NtpCustomBackground>(customBackground.value());
       [self fetchCustomBackground:background];
@@ -948,8 +1033,7 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
                            UserUploadedImageError error) {
             [weakSelf setCustomBackground:userBackground
                                     image:image
-                        originalImageSize:originalSize
-                                    cache:YES];
+                        originalImageSize:originalSize];
             if (!image) {
               base::UmaHistogramEnumeration("IOS.HomeCustomization.Background."
                                             "Ntp.ImageUserUploadedFetchError",
@@ -963,6 +1047,9 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
     return;
   }
 
+  [self.consumer setAnimatedBackgroundPath:nil
+                    lightModeColorProvider:nil
+                     darkModeColorProvider:nil];
   [self.consumer setBackgroundImage:nil framingCoordinates:nil];
 
   std::optional<sync_pb::UserColorTheme> colorTheme =
@@ -979,6 +1066,27 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
     [traitAccessor setBoolForNewTabPageImageBackgroundTrait:NO];
     UIColor* tintColor = colorPalette.tintColor;
     [self.logoMediator setLogoTintColor:tintColor];
+    if (_backgroundCustomizationService->IsCurrentEphemeralTheme() &&
+        IsNTPEphemeralThemeEnabled()) {
+      NSDictionary<NSString*, UIColor*>* lightModeColorProvider = nil;
+      NSDictionary<NSString*, UIColor*>* darkModeColorProvider = nil;
+      if (_prefService) {
+        const base::DictValue& themeData =
+            _prefService->GetDict(prefs::kIosNtpEphemeralThemeData);
+        const base::DictValue* colorMapping =
+            themeData.FindDict(kEphemeralThemeAnimationColorMappingKey);
+        if (colorMapping) {
+          lightModeColorProvider = ColorProviderDictionaryFromDict(
+              colorMapping->FindDict(kEphemeralThemeLightModeColorsKey));
+          darkModeColorProvider = ColorProviderDictionaryFromDict(
+              colorMapping->FindDict(kEphemeralThemeDarkModeColorsKey));
+        }
+      }
+      [self.consumer
+          setAnimatedBackgroundPath:[self ephemeralThemeAnimatedBackgroundPath]
+             lightModeColorProvider:lightModeColorProvider
+              darkModeColorProvider:darkModeColorProvider];
+    }
     if (initialLoad) {
       base::UmaHistogramEnumeration(
           "IOS.HomeCustomization.Background.Ntp.Loaded",
@@ -992,8 +1100,26 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   [traitAccessor setObjectForNewTabPageTrait:[NewTabPageTrait defaultValue]];
   [traitAccessor setBoolForNewTabPageImageBackgroundTrait:NO];
   [self.logoMediator setLogoTintColor:nil];
-  base::UmaHistogramEnumeration("IOS.HomeCustomization.Background.Ntp.Loaded",
-                                HomeCustomizationBackgroundStyle::kDefault);
+  if (initialLoad) {
+    base::UmaHistogramEnumeration("IOS.HomeCustomization.Background.Ntp.Loaded",
+                                  HomeCustomizationBackgroundStyle::kDefault);
+  }
+}
+
+// Returns the local file path for the ephemeral theme animated background from
+// preferences, or nil if unavailable.
+- (NSString*)ephemeralThemeAnimatedBackgroundPath {
+  if (!_prefService || !IsNTPEphemeralThemeEnabled()) {
+    return nil;
+  }
+  const base::DictValue& themeData =
+      _prefService->GetDict(prefs::kIosNtpEphemeralThemeData);
+  const std::string* path =
+      themeData.FindString(kEphemeralThemeAnimationPathKey);
+  if (!path || path->empty()) {
+    return nil;
+  }
+  return base::SysUTF8ToNSString(*path);
 }
 
 // Fetches and applies a custom background image.
@@ -1041,7 +1167,7 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
           if (image) {
             // Temporarily sets the thumbnail as the background until the
             // high-resolution image is loaded.
-            [weakSelf setCustomBackground:background image:image cache:NO];
+            [weakSelf setCustomBackground:background image:image];
           }
           return;
         }
@@ -1073,7 +1199,7 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
                                         length:image_data.length()];
           UIImage* image = [UIImage imageWithData:data];
           if (image) {
-            [strongSelf setCustomBackground:background image:image cache:YES];
+            [strongSelf setCustomBackground:background image:image];
           }
         } else {
           base::UmaHistogramSparse(
@@ -1103,6 +1229,12 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
 
 - (image_fetcher::ImageFetcherService*)imageFetcherService {
   return _imageFetcherService;
+}
+
+#pragma mark - SubscriptionEligibilityServiceObserving
+
+- (void)aiSubscriptionTierDidUpdate:(int32_t)newSubscriptionTier {
+  [self updateAccountImage];
 }
 
 @end

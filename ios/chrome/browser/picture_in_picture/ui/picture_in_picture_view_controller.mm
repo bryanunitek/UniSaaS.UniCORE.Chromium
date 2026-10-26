@@ -13,6 +13,7 @@
 #import "base/strings/strcat.h"
 #import "base/task/sequenced_task_runner.h"
 #import "base/time/time.h"
+#import "ios/chrome/browser/default_browser/model/features.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
 #import "ios/chrome/browser/picture_in_picture/public/picture_in_picture_configuration.h"
 #import "ios/chrome/browser/picture_in_picture/ui/picture_in_picture_mutator.h"
@@ -32,7 +33,7 @@ NSString* const kKeyPathTimeControlStatus = @"timeControlStatus";
 NSString* const kKeyPathVideoRect = @"videoRect";
 // Delay to wait before checking if the app was restored from picture in
 // picture or manually (App switcher, App icon...).
-constexpr base::TimeDelta kAppRestoreDelay = base::Milliseconds(50);
+constexpr base::TimeDelta kAppRestoreDelay = base::Milliseconds(100);
 // Delay to wait before auto-hiding controls.
 constexpr base::TimeDelta kControlsHideDelay = base::Seconds(3);
 // Duration for controls fade animation.
@@ -43,6 +44,10 @@ constexpr CGFloat kPlayPauseButtonPointSize = 25.0;
 NSString* accessibilityLabel(PictureInPictureFeature feature) {
   switch (feature) {
     case PictureInPictureFeature::kDefaultBrowser:
+      if (IsDefaultBrowserPipTextVideoEnabled()) {
+        return l10n_util::GetNSString(
+            IDS_IOS_DEFAULT_BROWSER_PIP_TEXT_VIDEO_ACCESSIBILITY_DESCRIPTION);
+      }
       return l10n_util::GetNSString(
           IDS_IOS_DEFAULT_BROWSER_PIP_ACCESSIBILITY_ANNOUNCEMENT);
   }
@@ -86,6 +91,8 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
   UIButton* _playPauseButton;
   // The closure to hide controls after a delay.
   base::CancelableOnceClosure _hideControlsClosure;
+  // The closure to handle manual app restore after a delay.
+  base::CancelableOnceClosure _appRestoreClosure;
 }
 
 - (instancetype)initWithTitle:(NSString*)title
@@ -126,17 +133,23 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
 #pragma mark - Public
 
 - (void)dismissIfNotPipRestore {
+  // If the view was already restored from the PiP fullscreen button, keep the
+  // UI alive and skip scheduling manual dismissal.
+  if (_restoredFromPictureInPicture) {
+    return;
+  }
   __weak __typeof(self) weakSelf = self;
   _appWasRestored = YES;
   // Delay execution by `kAppRestoreDelay` to allow
   // `restoreUserInterfaceForPictureInPictureStopWithCompletionHandler` to fire
   // first. This lets us distinguish a manual launch (which dismisses
-  // everything) from a PiP restore (which preserves the UI).
+  // everything) from a PiP restore (which cancels this closure and preserves
+  // the UI).
+  _appRestoreClosure.Reset(base::BindOnce(^{
+    [weakSelf handleAppRestore];
+  }));
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, base::BindOnce(^{
-        [weakSelf handleAppRestore];
-      }),
-      kAppRestoreDelay);
+      FROM_HERE, _appRestoreClosure.callback(), kAppRestoreDelay);
 }
 
 #pragma mark - Private
@@ -159,15 +172,7 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
   _playerView.accessibilityLabel = accessibilityLabel(_feature);
   _playerView.translatesAutoresizingMaskIntoConstraints = NO;
   [self.contentView addSubview:_playerView];
-  [NSLayoutConstraint activateConstraints:@[
-    [_playerView.leadingAnchor
-        constraintEqualToAnchor:self.contentView.leadingAnchor],
-    [_playerView.trailingAnchor
-        constraintEqualToAnchor:self.contentView.trailingAnchor],
-    [_playerView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
-    [_playerView.bottomAnchor
-        constraintEqualToAnchor:self.contentView.bottomAnchor],
-  ]];
+  AddSameConstraints(_playerView, self.contentView);
 
   AVPlayerItem* playerItem = [AVPlayerItem playerItemWithURL:_videoURL];
   _player = [AVQueuePlayer queuePlayerWithItems:@[ playerItem ]];
@@ -222,7 +227,7 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
   _playPauseButton.tintColor = [UIColor whiteColor];
 
   UIImage* pauseImage =
-      DefaultSymbolWithPointSize(kPauseFillSymbol, kPlayPauseButtonPointSize);
+      SymbolWithPointSize(SymbolPauseFill, kPlayPauseButtonPointSize);
   [_playPauseButton setImage:pauseImage forState:UIControlStateNormal];
   _playPauseButton.accessibilityLabel =
       l10n_util::GetNSString(IDS_IOS_PICTURE_IN_PICTURE_PAUSE);
@@ -313,14 +318,14 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
   if (_player.timeControlStatus == AVPlayerTimeControlStatusPlaying) {
     [_player pause];
     UIImage* playImage =
-        DefaultSymbolWithPointSize(kPlayFillSymbol, kPlayPauseButtonPointSize);
+        SymbolWithPointSize(SymbolPlayFill, kPlayPauseButtonPointSize);
     [_playPauseButton setImage:playImage forState:UIControlStateNormal];
     _playPauseButton.accessibilityLabel =
         l10n_util::GetNSString(IDS_IOS_PICTURE_IN_PICTURE_PLAY);
   } else {
     [_player play];
     UIImage* pauseImage =
-        DefaultSymbolWithPointSize(kPauseFillSymbol, kPlayPauseButtonPointSize);
+        SymbolWithPointSize(SymbolPauseFill, kPlayPauseButtonPointSize);
     [_playPauseButton setImage:pauseImage forState:UIControlStateNormal];
     _playPauseButton.accessibilityLabel =
         l10n_util::GetNSString(IDS_IOS_PICTURE_IN_PICTURE_PAUSE);
@@ -332,12 +337,17 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
 - (void)handleAppRestore {
   if (_restoredFromPictureInPicture) {
     [self showControls];
-    [self recordAppRestoration:PictureInPictureAppRestoration::
-                                   kPictureInPictureFullscreenButton];
     return;
   }
 
   if (_pipController.isPictureInPictureActive) {
+    // Record session duration before dismissing, as tearing down the view
+    // controller synchronously prevents AVKit's async didStop delegate
+    // callback from executing.
+    if (!_pipStartTime.is_null()) {
+      [self recordSessionDuration:base::TimeTicks::Now() - _pipStartTime];
+      _pipStartTime = base::TimeTicks();
+    }
     [self recordAppRestoration:PictureInPictureAppRestoration::kManual];
     _playerView.alpha = 0.0f;
     [_pipController stopPictureInPicture];
@@ -494,7 +504,12 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
 
 - (void)pictureInPictureControllerDidStopPictureInPicture:
     (AVPictureInPictureController*)pictureInPictureController {
-  [self recordSessionDuration:base::TimeTicks::Now() - _pipStartTime];
+  // Guard against recording multiple times if the session duration was already
+  // recorded during manual app restoration.
+  if (!_pipStartTime.is_null()) {
+    [self recordSessionDuration:base::TimeTicks::Now() - _pipStartTime];
+    _pipStartTime = base::TimeTicks();
+  }
   // If this method was called without an app restore, record a close
   // interaction.
   if (!_appWasRestored) {
@@ -509,6 +524,11 @@ NSString* accessibilityLabel(PictureInPictureFeature feature) {
     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:
         (void (^)(BOOL restored))completionHandler {
   _restoredFromPictureInPicture = YES;
+  // Cancel the pending manual restore closure to prevent tearing down the UI.
+  _appRestoreClosure.Cancel();
+  [self showControls];
+  [self recordAppRestoration:PictureInPictureAppRestoration::
+                                 kPictureInPictureFullscreenButton];
   completionHandler(YES);
 }
 

@@ -21,10 +21,10 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <ranges>
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "base/containers/span.h"
 
 #if defined(ANDROID)
@@ -481,6 +481,23 @@ BPF_TEST_C(SandboxBPF, SyntheticPolicy, SyntheticPolicy) {
     if (IsSyscallForTestHarness(syscall_number)) {
       continue;
     }
+#if defined(__NR_uretprobe)
+    if (syscall_number == __NR_uretprobe) {
+      // The kernel executes uretprobe(2) without consulting seccomp filters
+      // (it is a kernel implementation detail of x86-64 uprobes that default
+      // container policies were breaking), and it raises SIGILL when called
+      // from outside a real uprobe return trampoline, so it cannot be
+      // filtered or invoked here.
+      continue;
+    }
+#endif
+#if defined(__NR_uprobe)
+    if (syscall_number == __NR_uprobe) {
+      // uprobe(2) bypasses seccomp the same way and fails with its own errno
+      // rather than the filter's when called from outside a probe trampoline.
+      continue;
+    }
+#endif
     errno = 0;
     BPF_ASSERT(syscall(syscall_number) == -1);
     BPF_ASSERT(errno == SysnoToRandomErrno(syscall_number));
@@ -1038,7 +1055,7 @@ class EqualityStressTest {
     // Now, iterate over all the test cases that we want to compare against.
     // This builds a chain of SandboxBPF::Cond() tests
     // (aka "if ... elif ... elif ... elif ... fi")
-    for (auto& test : base::Reversed(arg_value->tests)) {
+    for (auto& test : std::views::reverse(arg_value->tests)) {
       // Again, we distinguish between leaf nodes and subtrees.
       ResultExpr matched =
           test.err ? Error(test.err) : ToErrorCode(test.arg_value.get());
@@ -1057,7 +1074,7 @@ class EqualityStressTest {
     // Iterate over all the k_values in arg_value.tests[] and verify that
     // we see the expected return values from system calls, when we pass
     // the k_value as a parameter in a system call.
-    for (auto& test : base::Reversed(arg_value.tests)) {
+    for (auto& test : std::views::reverse(arg_value.tests)) {
       mismatched += test.k_value;
       args[arg_value.argno] = test.k_value;
       if (test.err) {

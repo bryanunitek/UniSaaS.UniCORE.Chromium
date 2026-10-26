@@ -21,6 +21,7 @@
 #include "components/enterprise/common/proto/synced_from_google3/chrome_reporting_entity.pb.h"
 #include "components/enterprise/common/proto/upload_request_response.pb.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
+#include "components/enterprise/connectors/core/reporting_event_mappings.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
@@ -55,11 +56,14 @@ class MockCallbackObserver {
  public:
   MockCallbackObserver() = default;
 
-  MOCK_METHOD4(OnURLLoadComplete,
-               void(DeviceManagementService::Job* job,
-                    DeviceManagementStatus code,
-                    int response_code,
-                    std::optional<base::DictValue>));
+  MOCK_METHOD(
+      void,
+      OnURLLoadComplete,
+      (DeviceManagementService::Job * job,
+       DeviceManagementStatus code,
+       int response_code,
+       std::optional<base::DictValue> response,
+       const ::chrome::cros::reporting::proto::UploadEventsRequest& request));
 };
 
 class RealtimeReportingJobConfigurationTest : public testing::Test {
@@ -176,6 +180,8 @@ class RealtimeReportingJobConfigurationTest : public testing::Test {
       // constructed below.
       fake_statistics_provider->SetMachineStatistic(
           ash::system::kSerialNumberKey, "fake_serial_number");
+      fake_statistics_provider->SetLoadingState(
+          ash::system::StatisticsProvider::LoadingState::kFinished);
     }
   };
   ScopedFakeSerialNumber fake_serial_number_;
@@ -223,7 +229,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_Success) {
   EXPECT_CALL(callback_observer_,
               OnURLLoadComplete(&job_, DM_STATUS_SUCCESS,
                                 DeviceManagementService::kSuccess,
-                                testing::Eq(testing::ByRef(response))));
+                                testing::Eq(testing::ByRef(response)), _));
   configuration_->OnURLLoadComplete(&job_, net::OK,
                                     DeviceManagementService::kSuccess,
                                     CreateResponseString(response));
@@ -232,7 +238,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_Success) {
 TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_NetError) {
   EXPECT_CALL(callback_observer_,
               OnURLLoadComplete(&job_, DM_STATUS_REQUEST_FAILED, _,
-                                testing::Eq(std::nullopt)));
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(&job_, net::ERR_CONNECTION_RESET,
                                     0 /* ignored */, "");
 }
@@ -242,7 +248,7 @@ TEST_F(RealtimeReportingJobConfigurationTest,
   EXPECT_CALL(callback_observer_,
               OnURLLoadComplete(&job_, DM_STATUS_REQUEST_INVALID,
                                 DeviceManagementService::kInvalidArgument,
-                                testing::Eq(std::nullopt)));
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kInvalidArgument, "");
 }
@@ -253,7 +259,7 @@ TEST_F(RealtimeReportingJobConfigurationTest,
       callback_observer_,
       OnURLLoadComplete(&job_, DM_STATUS_SERVICE_MANAGEMENT_TOKEN_INVALID,
                         DeviceManagementService::kInvalidAuthCookieOrDMToken,
-                        testing::Eq(std::nullopt)));
+                        testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kInvalidAuthCookieOrDMToken, "");
 }
@@ -263,7 +269,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_NotSupported) {
       callback_observer_,
       OnURLLoadComplete(&job_, DM_STATUS_SERVICE_MANAGEMENT_NOT_SUPPORTED,
                         DeviceManagementService::kDeviceManagementNotAllowed,
-                        testing::Eq(std::nullopt)));
+                        testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kDeviceManagementNotAllowed, "");
 }
@@ -272,7 +278,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_TempError) {
   EXPECT_CALL(callback_observer_,
               OnURLLoadComplete(&job_, DM_STATUS_TEMPORARY_UNAVAILABLE,
                                 DeviceManagementService::kServiceUnavailable,
-                                testing::Eq(std::nullopt)));
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(
       &job_, net::OK, DeviceManagementService::kServiceUnavailable, "");
 }
@@ -281,7 +287,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, OnURLLoadComplete_UnknownError) {
   EXPECT_CALL(callback_observer_,
               OnURLLoadComplete(&job_, DM_STATUS_HTTP_STATUS_ERROR,
                                 DeviceManagementService::kInvalidURL,
-                                testing::Eq(std::nullopt)));
+                                testing::Eq(std::nullopt), _));
   configuration_->OnURLLoadComplete(&job_, net::OK,
                                     DeviceManagementService::kInvalidURL, "");
 }
@@ -334,7 +340,7 @@ TEST_F(RealtimeReportingJobConfigurationTest, GetPayloadRecordsUmaMetrics) {
 
   histogram_.ExpectUniqueSample(
       enterprise_connectors::GetPayloadSizeUmaMetricName(
-          enterprise_connectors::kExtensionInstallEvent),
+          enterprise_connectors::EventCase::kBrowserExtensionInstallEvent),
       payload.size(), 1);
 }
 

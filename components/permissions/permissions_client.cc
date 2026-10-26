@@ -11,6 +11,7 @@
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/web_contents.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -38,9 +39,18 @@ PermissionsClient* PermissionsClient::Get() {
 }
 
 // static
-bool PermissionsClient::AllowEmbeddedPermissionPromptForAllowlistedSurfaces() {
+bool PermissionsClient::AllowEmbeddedPermissionPromptForSurface(
+    content::WebContents* web_contents) {
+  if (web_contents && Get() && Get()->IsOmniboxEverywhere(web_contents)) {
+    return true;
+  }
   return base::FeatureList::IsEnabled(
       omnibox_feature_configs::kEmbeddedPermissionEnabled);
+}
+
+bool PermissionsClient::IsOmniboxEverywhere(
+    content::WebContents* web_contents) {
+  return false;
 }
 
 double PermissionsClient::GetSiteEngagementScore(
@@ -157,6 +167,14 @@ std::optional<GURL> PermissionsClient::GetEmbeddingOriginOverride(
   return std::nullopt;
 }
 
+std::optional<content::PermissionResult>
+PermissionsClient::GetPermissionResultOverride(
+    content::RenderFrameHost* render_frame_host,
+    const GURL& requesting_origin,
+    ContentSettingsType permission) {
+  return std::nullopt;
+}
+
 bool PermissionsClient::IsPrivilegedInternalWebUIForUIRouting(
     content::WebContents* web_contents) {
   return false;
@@ -223,6 +241,13 @@ std::unique_ptr<PermissionPrompt> PermissionsClient::CreatePrompt(
   return nullptr;
 }
 #endif
+
+std::unique_ptr<EmbeddedPermissionPromptFlowModel::PromptContentScrim>
+PermissionsClient::CreatePromptContentScrim(
+    content::WebContents* web_contents,
+    EmbeddedPermissionPromptFlowModel* flow_model) {
+  return nullptr;
+}
 
 bool PermissionsClient::HasDevicePermission(ContentSettingsType type) const {
   return true;

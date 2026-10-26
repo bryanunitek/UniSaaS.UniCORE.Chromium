@@ -184,14 +184,15 @@ void FakeDebugDaemonClient::GetLog(
 
 void FakeDebugDaemonClient::SetLog(std::string_view log_name,
                                    std::optional<std::string> log_data) {
-  if (auto it = logs_.find(log_name); it != logs_.end()) {
+  if (auto it = logs_.lower_bound(log_name);
+      it != logs_.end() && it->first == log_name) {
     if (log_data.has_value()) {
       it->second = std::move(*log_data);
     } else {
       logs_.erase(it);
     }
   } else if (log_data.has_value()) {
-    logs_.emplace(log_name, std::move(*log_data));
+    logs_.emplace_hint(it, log_name, std::move(*log_data));
   }
 }
 
@@ -271,20 +272,6 @@ void FakeDebugDaemonClient::SetServiceIsAvailable(bool is_available) {
   callbacks.swap(pending_wait_for_service_to_be_available_callbacks_);
   for (auto& callback : callbacks)
     std::move(callback).Run(true);
-}
-
-void FakeDebugDaemonClient::StartPluginVmDispatcher(
-    const std::string& /* owner_id */,
-    const std::string& /* lang */,
-    PluginVmDispatcherCallback callback) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
-}
-
-void FakeDebugDaemonClient::StopPluginVmDispatcher(
-    PluginVmDispatcherCallback callback) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
 void FakeDebugDaemonClient::SetRlzPingSent(SetRlzPingSentCallback callback) {

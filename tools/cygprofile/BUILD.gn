@@ -4,12 +4,13 @@
 
 import("//build/config/clang/clang.gni")
 import("//build/config/python.gni")
+import("//build/config/vpython.gni")
 import("//testing/test.gni")
 
 python_library("generate_orderfile_py") {
   testonly = true
   pydeps_file = "//tools/cygprofile/generate_orderfile.pydeps"
-  data = [ "//.vpython3" ]
+  data = vpython_spec_files
 }
 
 template("generate_orderfile_test") {
@@ -45,13 +46,16 @@ template("generate_orderfile_test") {
       "//testing:run_perf_test",
       "//third_party/dawn/src/tint/cmd/bench:bench_cmd",
     ]
+    if (defined(invoker.data_deps)) {
+      data_deps += invoker.data_deps
+    }
   }
 }
 
-generate_orderfile_test("generate_orderfile_android_trichrome_chrome_bundle") {
-  browser_name = "android-trichrome-chrome-bundle"
-  suffix = "_android_trichrome_chrome_bundle"
-  arch = "arm"
+generate_orderfile_test("generate_orderfile_android_chrome_bundle") {
+  browser_name = "android-chromium-bundle"
+  suffix = "_android_chrome_bundle"
+  arch = target_cpu
 }
 
 generate_orderfile_test("generate_orderfile_android_webview") {
@@ -59,20 +63,22 @@ generate_orderfile_test("generate_orderfile_android_webview") {
   suffix = "_android_webview"
   arch = "arm"
   profile_webview = true
+  if (enable_chrome_android_internal) {
+    data_deps =
+        [ "//chrome/test:telemetry_perf_tests_android_clank_webview_bundle" ]
+  }
 }
 
 if (defined(android_app_secondary_abi)) {
-  generate_orderfile_test(
-      "generate_orderfile_android_trichrome_chrome_64_32_bundle") {
-    browser_name = "android-trichrome-chrome-64-32-bundle"
-    suffix = "_android_trichrome_chrome_64_32_bundle"
-    arch = "arm64"
-  }
-
   generate_orderfile_test("generate_orderfile_android_webview_64") {
     browser_name = "android-webview-standalone"
     suffix = "_android_webview"
     arch = "arm64"
     profile_webview = true
+    if (enable_chrome_android_internal) {
+      data_deps = [
+        "//chrome/test:telemetry_perf_tests_android_clank_webview_64_32_bundle",
+      ]
+    }
   }
 }

@@ -30,6 +30,7 @@
 #include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/browser/gpu/compositor_util.h"
+#include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/renderer_host/browser_compositor_ios.h"
 #include "content/browser/renderer_host/dip_util.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
@@ -67,6 +68,7 @@
 #include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-shared.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/display_switches.h"
 #include "ui/gfx/geometry/size_conversions.h"
 
@@ -81,7 +83,9 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/renderer_host/compositor_impl_android.h"
+#include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "ui/android/delegated_frame_host_android.h"
 #endif
 
@@ -92,7 +96,7 @@
 #include "content/public/browser/context_factory.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_test_api.h"
 #include "ui/compositor/recyclable_compositor_mac.h"
 #endif
 
@@ -1054,6 +1058,25 @@ IN_PROC_BROWSER_TEST_F(NoCompositingRenderWidgetHostViewBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewBrowserTestBase,
+                       SharedWorkerContextProviderDurationRecorded) {
+  if (GpuDataManagerImpl::GetInstance()->IsGpuCompositingDisabled()) {
+    GTEST_SKIP() << "The shared raster worker context is only created when the "
+                    "renderer composites on the GPU.";
+  }
+  ASSERT_TRUE(embedded_test_server()->Start());
+  base::HistogramTester histogram_tester;
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("/page_with_animation.html")));
+  RenderFrameSubmissionObserver frame_observer(shell()->web_contents());
+  frame_observer.WaitForAnyFrameSubmission();
+  FetchHistogramsFromChildProcesses();
+  EXPECT_FALSE(histogram_tester
+                   .GetAllSamples(
+                       "GPU.CreateSharedWorkerContextProvider.Duration.Success")
+                   .empty());
+}
+
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewBrowserTestBase,
                        CompositorWorksWhenReusingRenderer) {
   ASSERT_TRUE(embedded_test_server()->Start());
   auto* web_contents = shell()->web_contents();
@@ -1625,7 +1648,7 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
     // On Mac, DelegatedFrameHost only behaves the same as on other platforms
     // when it has no parent UI layer.
     ASSERT_FALSE(
-        GetBrowserCompositor()->DelegatedFrameHostGetLayer()->parent());
+        GetBrowserCompositor()->GetDelegatedFrameHostLayer()->parent());
 #endif
   }
 
@@ -1693,7 +1716,8 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
         : browser_compositor_(browser_compositor) {
       recyclable_compositor_ = std::make_unique<ui::RecyclableCompositorMac>(
           content::GetContextFactory());
-      layer_.SetCompositorForTesting(recyclable_compositor_->compositor());
+      ui::LayerTestApi(&layer_).SetCompositor(
+          recyclable_compositor_->compositor());
     }
 
     ~ScopedParentLayer() {
@@ -1706,7 +1730,7 @@ class RenderWidgetHostViewPresentationFeedbackBrowserTest
 
    private:
     raw_ptr<BrowserCompositorMac> browser_compositor_;
-    ui::Layer layer_{ui::LAYER_SOLID_COLOR};
+    ui::LayerSolidColor layer_;
     std::unique_ptr<ui::RecyclableCompositorMac> recyclable_compositor_;
   };
 
@@ -1909,13 +1933,13 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewCopyFromSurfaceBrowserTest,
 
 namespace {
 
-void AssertSnapshotIsPureWhite(base::RepeatingClosure resume_test,
-                               const content::CopyFromSurfaceResult& result) {
-  const SkBitmap& snapshot = result.has_value() ? result->bitmap : SkBitmap();
-  for (int r = 0; r < snapshot.height(); ++r) {
-    for (int c = 0; c < snapshot.width(); ++c) {
-      ASSERT_EQ(snapshot.getColor(c, r), SK_ColorWHITE);
-    }
+void AssertCopySharedImageSucceeded(
+    base::RepeatingClosure resume_test,
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    viz::ReleaseCallback release_callback) {
+  EXPECT_TRUE(shared_image);
+  if (release_callback) {
+    std::move(release_callback).Run(gpu::SyncToken(), /*is_lost=*/false);
   }
   std::move(resume_test).Run();
 }
@@ -1944,10 +1968,11 @@ class ScopedSnapshotWaiter : public WebContentsObserver {
            base::RepeatingClosure resume) {
           ASSERT_TRUE(std::move(renderer_swapped).Run());
           ASSERT_TRUE(old_view);
-          static_cast<RenderWidgetHostViewBase*>(old_view)
-              ->CopyFromExactSurface(gfx::Rect(), gfx::Size(),
-                                     base::BindOnce(&AssertSnapshotIsPureWhite,
-                                                    std::move(resume)));
+          static_cast<RenderWidgetHostViewAndroid*>(old_view)
+              ->CopySharedImageFromExactSurface(
+                  gfx::Rect(), gfx::Size(),
+                  base::BindOnce(&AssertCopySharedImageSucceeded,
+                                 std::move(resume)));
         },
         request->frame_tree_node()->current_frame_host()->GetView(),
         // The request must outlive its own callback.

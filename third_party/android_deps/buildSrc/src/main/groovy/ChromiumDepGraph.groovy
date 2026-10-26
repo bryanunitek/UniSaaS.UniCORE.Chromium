@@ -23,6 +23,10 @@ import java.nio.file.Paths
  */
 class ChromiumDepGraph {
 
+    // Limit concurrent HTTP requests to avoid bursting hundreds of connections
+    // and exhausting the 512MB Gradle daemon heap.
+    static final int CONCURRENT_HTTP_TASKS = 32
+    static final int HTTP_TIMEOUT_MS = 15000
     private static final String DEFAULT_CIPD_SUFFIX = 'cr2'
 
     // Some libraries don't properly fill their POM with the appropriate licensing information. It is provided here from
@@ -124,10 +128,6 @@ class ChromiumDepGraph {
                     licenseUrl: 'https://raw.githubusercontent.com/mojohaus/animal-sniffer/master/animal-sniffer-annotations/pom.xml',
                     licensePath: 'licenses/Codehaus_License-2009.txt',
                     licenseName: 'MIT'),
-            com_google_protobuf_protobuf_lite: new PropertyOverride(
-                    exclude: true, // There is a phantom dep on this target, but this is deprecated and not used in chrome.
-                    licenseUrl: 'https://raw.githubusercontent.com/protocolbuffers/protobuf/master/LICENSE',
-                    licenseName: 'BSD'),
             com_google_truth_truth: new PropertyOverride(
                     licenseUrl: 'https://raw.githubusercontent.com/google/truth/master/LICENSE',
                     licenseName: 'Apache 2.0'),
@@ -160,9 +160,6 @@ class ChromiumDepGraph {
             io_perfmark_perfmark_api: new PropertyOverride(
                     licenseUrl: 'https://raw.githubusercontent.com/perfmark/perfmark/refs/heads/master/LICENSE',
                     licenseName: 'Apache 2.0'),
-            jakarta_inject_jakarta_inject_api: new PropertyOverride(
-                    // Help gradle resolve the same version that our 3pp script does.
-                    versionFilter: '\\d+\\.\\d+\\.\\d+$'),
             javax_annotation_javax_annotation_api: new PropertyOverride(
                     isShipped: false,  // Annotations are stripped by R8.
                     licenseName: 'CDDL-1.1, GPL-2.0-with-classpath-exception',
@@ -189,12 +186,20 @@ class ChromiumDepGraph {
             org_checkerframework_checker_util: new PropertyOverride(
                     licenseUrl: 'https://raw.githubusercontent.com/typetools/checker-framework/master/checker-util/LICENSE.txt',
                     licenseName: 'MIT'),
+            org_commonmark_commonmark: new PropertyOverride(
+                    licenseUrl: 'https://raw.githubusercontent.com/commonmark/commonmark-java/main/LICENSE.txt',
+                    licenseName: 'BSD-2-Clause'),
+            org_commonmark_commonmark_ext_gfm_tables: new PropertyOverride(
+                    licenseUrl: 'https://raw.githubusercontent.com/commonmark/commonmark-java/main/LICENSE.txt',
+                    licenseName: 'BSD-2-Clause'),
             org_conscrypt_conscrypt_openjdk_uber: new PropertyOverride(
                     licenseUrl: 'https://raw.githubusercontent.com/google/conscrypt/master/LICENSE',
                     licenseName: 'Apache 2.0'),
             org_hamcrest_hamcrest: new PropertyOverride(
                     licenseUrl: 'https://raw.githubusercontent.com/hamcrest/JavaHamcrest/master/LICENSE',
                     licenseName: 'BSD'),
+            org_jetbrains_kotlin_kotlin_stdlib: new PropertyOverride(
+                    cpePrefix: 'cpe:/a:jetbrains:kotlin'),
             org_jsoup_jsoup: new PropertyOverride(
                     cpePrefix: 'cpe:/a:jsoup:jsoup:1.14.3',
                     licenseUrl: 'https://raw.githubusercontent.com/jhy/jsoup/master/LICENSE',
@@ -235,9 +240,9 @@ class ChromiumDepGraph {
             org_robolectric_nativeruntime: new PropertyOverride(
                     licenseName: 'Apache-2.0, MIT',
                     licenseUrl: 'https://raw.githubusercontent.com/robolectric/robolectric/master/LICENSE'),
+            // Managed by //third_party/robolectric.
             org_robolectric_nativeruntime_dist_compat: new PropertyOverride(
-                    licenseName: 'Apache-2.0, MIT',
-                    licenseUrl: 'https://raw.githubusercontent.com/robolectric/robolectric/master/LICENSE'),
+                    exclude: true),
             org_robolectric_pluginapi: new PropertyOverride(
                     licenseName: 'Apache-2.0, MIT',
                     licenseUrl: 'https://raw.githubusercontent.com/robolectric/robolectric/master/LICENSE'),
@@ -265,19 +270,9 @@ class ChromiumDepGraph {
             org_robolectric_utils_reflector: new PropertyOverride(
                     licenseName: 'Apache-2.0, MIT',
                     licenseUrl: 'https://raw.githubusercontent.com/robolectric/robolectric/master/LICENSE'),
-            // Prevent version changing ~weekly. https://crbug.com/1257197
-            org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm: new PropertyOverride(
-                    resolveVersion: '1.8.1'),
-            org_jetbrains_kotlinx_kotlinx_coroutines_android: new PropertyOverride(
-                    resolveVersion: '1.8.1'),
-            org_jetbrains_kotlinx_kotlinx_coroutines_guava: new PropertyOverride(
-                    resolveVersion: '1.8.1'),
-            org_jetbrains_kotlinx_kotlinx_serialization_core_jvm: new PropertyOverride(
-                    resolveVersion: '1.7.2'),
-            org_jetbrains_kotlinx_kotlinx_serialization_json: new PropertyOverride(
-                    resolveVersion: '1.7.2', overrideLatest: true),
-            org_jetbrains_kotlinx_kotlinx_coroutines_test_jvm: new PropertyOverride(
-                    resolveVersion: '1.7.3'),
+            org_safere_safere: new PropertyOverride(
+                    licenseUrl: 'https://raw.githubusercontent.com/eaftan/safere/main/LICENSE',
+                    licenseName: 'BSD'),
             io_reactivex_rxjava3_rxjava: new PropertyOverride(
                     exclude: true),  // An unnecessary dep of androidx.xr.runtime.
             org_jetbrains_kotlinx_kotlinx_coroutines_reactive: new PropertyOverride(
@@ -307,9 +302,6 @@ class ChromiumDepGraph {
     Logger logger
     boolean skipLicenses
     boolean warnOnStaleDeps
-
-    // TODO: remove (set to true) when AUTOROLL_MIGRATION_IN_PROGRESS = false
-    boolean tagTargetsAsAutorolled
 
     private static String makeModuleIdInner(String group, String module, String version) {
         // Does not include version because by default the resolution strategy for gradle is to use the newest version
@@ -344,8 +336,6 @@ class ChromiumDepGraph {
     void collectDependencies() {
         Set<ResolvedDependency> deps = [] as Set
         Map<String, SortedSet<String>> resolvedDeps = [:]
-        ExecutorService downloadExecutor = Executors.newCachedThreadPool()
-        List<Future> futures = []
         String[] configNames = [
                 'compile',
                 'compileLatest',
@@ -357,7 +347,8 @@ class ChromiumDepGraph {
                 'testCompileLatest',
                 'androidTestCompile',
                 'androidTestCompileLatest',
-                'buildCompileNoDeps'
+                'buildCompileNoDeps',
+                'buildCompileNoDepsLatest'
         ]
         timeIt('** Resolving all deps') {
             for (Project project : projects) {
@@ -387,7 +378,7 @@ class ChromiumDepGraph {
             topLevelIds.add(makeModuleId(dependency.module))
             resolveVersionRecursive(dependency, resolvedVersions)
         }
-        ExecutorService taskExecutor = Executors.newCachedThreadPool()
+        ExecutorService taskExecutor = Executors.newFixedThreadPool(CONCURRENT_HTTP_TASKS)
         List<Future> taskList = []
         timeIt("** Parse all pom files") {
             buildDepDescriptionsAsync(resolvedVersions, taskExecutor, taskList)
@@ -416,7 +407,7 @@ class ChromiumDepGraph {
             } else {
                 assert false : 'Unknown config ' + key
             }
-            if (tagTargetsAsAutorolled && key.endsWith("Latest")) {
+            if (key.endsWith("Latest")) {
                 autorolledIds.addAll(values)
             }
         }
@@ -470,12 +461,6 @@ class ChromiumDepGraph {
                 if (overrides.supportsAndroid != null) {
                     dep.supportsAndroid = overrides.supportsAndroid
                 }
-                // If overrideLatest is true, set it recursively on the dep and all its children. This is convenient
-                // since you do not have to set it on a whole set of old deps.
-                if (overrides.overrideLatest) {
-                    recursivelyOverrideLatestVersion(dep)
-                }
-                dep.versionFilter = overrides.versionFilter
             } else {
                 if (warnOnStaleDeps) {
                     logger.warn('PROPERTY_OVERRIDES has stale dep: ' + id)
@@ -501,17 +486,6 @@ class ChromiumDepGraph {
 
     private static String sanitize(String input) {
         return input.replaceAll('[:.-]', '_')
-    }
-
-    private void recursivelyOverrideLatestVersion(DependencyDescription dep) {
-        dep.overrideLatest = true
-        dep.children.each { childID ->
-            PropertyOverride overrides = PROPERTY_OVERRIDES.get(childID)
-            if (!overrides?.resolveVersion) {
-                DependencyDescription child = dependencies.get(childID)
-                recursivelyOverrideLatestVersion(child)
-            }
-        }
     }
 
     private static boolean areAllModuleArtifactsSameFile(Set<ResolvedArtifact> artifacts) {
@@ -802,13 +776,30 @@ class ChromiumDepGraph {
             //
             // The file url will be: https://maven.google.com/android/arch/core/common/1.1.1/common-1.1.1.pom
             String fileUrl = String.format('%s/%s', repoUrl, componentPomSubPath)
-            try {
-                GPathResult content = new XmlSlurper(
-                        false /* validating */, false /* namespaceAware */).parse(fileUrl)
-                logger.debug("Succeeded in resolving url $fileUrl")
-                return [repoUrl, fileUrl, content]
-            } catch (ignored) {
-                logger.debug("Failed in resolving url $fileUrl")
+            int maxRetries = 3
+            int delayMs = 1000
+            for (int retry = 0; retry <= maxRetries; retry++) {
+                try {
+                    URLConnection connection = new URL(fileUrl).openConnection()
+                    connection.connectTimeout = HTTP_TIMEOUT_MS
+                    connection.readTimeout = HTTP_TIMEOUT_MS
+                    GPathResult content = connection.inputStream.withCloseable { stream ->
+                        new XmlSlurper(false /* validating */, false /* namespaceAware */).parse(stream)
+                    }
+                    logger.debug("Succeeded in resolving url $fileUrl")
+                    return [repoUrl, fileUrl, content]
+                } catch (java.io.FileNotFoundException fnfe) {
+                    logger.debug("FileNotFoundException for url $fileUrl: " + fnfe.getMessage())
+                    break
+                } catch (Throwable e) {
+                    if (retry == maxRetries) {
+                        logger.warn("Failed in resolving url $fileUrl after $maxRetries retries: " + e.getMessage(), e)
+                        e.printStackTrace()
+                    } else {
+                        logger.warn("Transient failure for url $fileUrl (retry ${retry + 1}/${maxRetries}): " + e.getMessage())
+                        Thread.sleep(delayMs * (retry + 1))
+                    }
+                }
             }
         }
         throw new RuntimeException("Could not find pom from artifact $componentPomSubPath in $repoUrls")
@@ -822,18 +813,39 @@ class ChromiumDepGraph {
             }
             return
         }
-        // Use a background thread to avoid slowing down main thread.
-        // Saves about 80 seconds currently.
-        new Thread().start(() -> {
-            HttpURLConnection http = new URL(url).openConnection()
-            http.requestMethod = 'HEAD'
-            if (http.responseCode != 200) {
-                new RuntimeException("Resolved POM but could not resolve $url").printStackTrace()
-                // Exception is logged and ignored if thrown, so explicitly exit.
-                System.exit(1)
+        int maxRetries = 3
+        int delayMs = 1000
+        for (int retry = 0; retry <= maxRetries; retry++) {
+            HttpURLConnection http = null
+            int code = -1
+            try {
+                http = (HttpURLConnection) new URL(url).openConnection()
+                http.requestMethod = 'HEAD'
+                http.connectTimeout = HTTP_TIMEOUT_MS
+                http.readTimeout = HTTP_TIMEOUT_MS
+                code = http.responseCode
+            } catch (Throwable t) {
+                if (retry == maxRetries) {
+                    throw new RuntimeException(
+                            "Resolved POM but failed to connect to $url: " + t.getMessage(), t)
+                }
+            } finally {
+                if (http != null) {
+                    http.disconnect()
+                }
             }
-            http.disconnect()
-        })
+            if (code == 200) {
+                return
+            }
+            if (code == 404) {
+                throw new RuntimeException("Resolved POM but got 404 for $url")
+            }
+            if (code != -1 && retry == maxRetries) {
+                throw new RuntimeException(
+                        "Resolved POM but got response code $code for $url after $maxRetries retries")
+            }
+            Thread.sleep(delayMs * (retry + 1))
+        }
     }
 
     // Checks if currentVersion is lower than versionInQuestion.
@@ -889,13 +901,6 @@ class ChromiumDepGraph {
         List<String> children
         String cipdSuffix
         String cpePrefix
-        // The fetch_all.py normally fetches the latest version instead of the declared version in build.gradle. When
-        // overrideLatest is set to true, the actual version resolved by gradle (based on what is declared in
-        // build.gradle as well as the version other dependencies need) will be used.
-        Boolean overrideLatest
-        // When set, //third_party/android_deps/fetch_common.py will only versions that contain this string to be valid.
-        // This variable is not used in groovy code.
-        String versionFilter
 
         String getDirectoryPath() {
             return BuildConfigGenerator.LIBS_DIRECTORY + '/' + directoryName
@@ -933,9 +938,8 @@ class ChromiumDepGraph {
             return Paths.get(basePath).relativize(Paths.get(this.projectPath)).toString()
         }
 
-        // When writing the BUILD.gn, the paths of autorolled deps is rebased
-        // with respect to the main project path since the autorolled BUILD.gn
-        // is imported to the main BUILD.gn
+        // Autorolled deps (including androidx) write paths relative to
+        // MAIN_PROJECT_PATH, e.g. "../androidx/cipd/..." in androidx's BUILD.gn.
         String getRebasedCommittedDirectoryPath(String currentProjectPath) {
             if (currentProjectPath == this.projectPath) {
                 return this.committedDirectoryPath
@@ -962,9 +966,6 @@ class ChromiumDepGraph {
             if (isAndroidx) {
                 return BuildConfigGenerator.ANDROIDX_PROJECT_PATH
             }
-            if (isAutorolled) {
-                return BuildConfigGenerator.AUTOROLLED_PROJECT_PATH
-            }
             return BuildConfigGenerator.MAIN_PROJECT_PATH
         }
 
@@ -973,9 +974,6 @@ class ChromiumDepGraph {
             if (isAndroidx) {
                 return BuildConfigGenerator.ANDROIDX_PROJECT_PATH
             }
-            // While autorolled targets are generated as part of
-            // AUTOROLLED_PROJECT_PATH's BUILD.gn, it is declared inside a gn
-            // template to be imported into the MAIN_PROJECT_PATH's BUILD.gn.
             return BuildConfigGenerator.MAIN_PROJECT_PATH
         }
     }
@@ -994,7 +992,5 @@ class ChromiumDepGraph {
         Boolean supportsAndroid
         // Set to true if this dependency is not needed.
         Boolean exclude
-        Boolean overrideLatest
-        String versionFilter
     }
 }

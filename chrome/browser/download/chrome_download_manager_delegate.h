@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -40,7 +41,7 @@
 #include "chrome/browser/download/android/download_message_bridge.h"  // nogncheck crbug.com/40147906
 #endif
 
-#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
 #include "base/types/expected.h"
 #endif
 
@@ -62,7 +63,7 @@ class CrxInstallError;
 }
 #endif
 
-#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
 namespace enterprise_obfuscation {
 enum class Error;
 }
@@ -100,7 +101,7 @@ class ChromeDownloadManagerDelegate
   void SetDownloadManager(content::DownloadManager* dm);
 
 #if BUILDFLAG(IS_ANDROID)
-  void ShowDownloadDialog(gfx::NativeWindow native_window,
+  void ShowDownloadDialog(content::WebContents* web_contents,
                           int64_t total_bytes,
                           DownloadLocationDialogType dialog_type,
                           const base::FilePath& suggested_path,
@@ -181,6 +182,7 @@ class ChromeDownloadManagerDelegate
 #else
   void AttachExtraInfo(download::DownloadItem* item) override;
 #endif  // BUILDFLAG(IS_ANDROID)
+  bool SupportsHistoryLoading() override;
 
   // Opens a download using the platform handler. DownloadItem::OpenDownload,
   // which ends up being handled by OpenDownload(), will open a download in the
@@ -267,6 +269,7 @@ class ChromeDownloadManagerDelegate
       ReservedPathCallback callback) override;
 #if BUILDFLAG(IS_ANDROID)
   void RequestIncognitoWarningConfirmation(
+      content::WebContents* web_contents,
       IncognitoWarningConfirmationCallback) override;
 #endif
   void RequestConfirmation(download::DownloadItem* download,
@@ -312,6 +315,13 @@ class ChromeDownloadManagerDelegate
       const base::FilePath& suggested_path,
       DownloadTargetDeterminerDelegate::ConfirmationCallback callback);
 
+  // Displays the file picker for `download`, queueing or deferring to user
+  // takeover if another picker or execution engine takeover is active.
+  void ShowFilePickerWithUserTakeover(
+      download::DownloadItem* download,
+      const base::FilePath& suggested_path,
+      DownloadTargetDeterminerDelegate::ConfirmationCallback callback);
+
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Called when CrxInstaller in running_crx_installs_ finishes installation.
   void OnInstallerDone(const base::UnguessableToken& token,
@@ -326,7 +336,7 @@ class ChromeDownloadManagerDelegate
   void ShouldCompleteDownloadInternal(uint32_t download_id,
                                       base::OnceClosure user_complete_callback);
 
-#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
   // Called when obfuscated download files are deobfuscated.
   void OnDeobfuscationComplete(
       uint32_t download_id,
@@ -395,10 +405,25 @@ class ChromeDownloadManagerDelegate
   // Called after user interacted on the incognito download confirmation message
   // before proceeding to save a package.
   void RequestIncognitoSavePackageConfirmationDone(
-      const GURL& url,
+      content::WebContents* web_contents,
       const base::FilePath& suggested_path,
       content::SavePackagePathPickedCallback callback,
       bool accept);
+
+  void OnDetermineSavePackagePathDone(
+      base::WeakPtr<content::WebContents> web_contents,
+      content::SavePackagePathPickedCallback callback,
+      const base::FilePath& file_path,
+      const base::FilePath& display_name);
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Called after attempting to obtain a temporary directory for deobfuscating
+  // virtual files.
+  void OnCreateDeobfuscationTempFile(uint32_t download_id,
+                                     const base::FilePath& virtual_path,
+                                     download::LocalPathCallback callback,
+                                     base::FilePath temp_file_path);
 #endif
 
   raw_ptr<Profile, DanglingUntriaged> profile_;

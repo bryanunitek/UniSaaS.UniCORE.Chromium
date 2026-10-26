@@ -16,7 +16,8 @@
 #include "components/private_ai/connection_factory_impl.h"
 #include "components/private_ai/features.h"
 #include "components/private_ai/phosphor/token_manager.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "net/base/url_util.h"
+#include "services/network/public/cpp/network_context_getter.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
@@ -28,17 +29,18 @@ std::unique_ptr<Client> Client::Create(
     const std::string& api_key,
     const std::string& proxy_url_string,
     bool use_token_attestation,
-    network::mojom::NetworkContext* network_context,
+    network::NetworkContextGetter network_context_getter,
     phosphor::TokenManager* token_manager,
     PrivateAiLogger* logger,
     PrivateAiOakSessionDriver* oak_session_driver,
-    PrivateAiNetworkDriver* network_driver) {
+    PrivateAiNetworkDriver* network_driver,
+    version_info::Channel channel) {
   CHECK(!api_key.empty());
   GURL formatted_url = Client::FormatUrl(url, api_key);
 
   auto connection_factory = std::make_unique<ConnectionFactoryImpl>(
-      formatted_url, network_context, logger, oak_session_driver,
-      network_driver);
+      formatted_url, std::move(network_context_getter), logger,
+      oak_session_driver, network_driver, channel);
 
   if (use_token_attestation) {
     connection_factory->EnableTokenAttestation(token_manager);
@@ -63,12 +65,21 @@ std::unique_ptr<Client> Client::Create(
 
 // static
 GURL Client::FormatUrl(const std::string& url) {
-  return GURL(base::StrCat({"wss://", url}));
+  GURL base_url(url);
+  if (base_url.is_valid()) {
+    GURL::Replacements replacements;
+    replacements.SetSchemeStr(url::kWssScheme);
+    base_url = base_url.ReplaceComponents(replacements);
+  } else {
+    base_url = GURL(base::StrCat({"wss://", url}));
+  }
+  return base_url;
 }
 
 // static
 GURL Client::FormatUrl(const std::string& url, const std::string& api_key) {
-  return GURL(base::StrCat({"wss://", url, "?key=", api_key}));
+  GURL formatted_url = FormatUrl(url);
+  return net::AppendOrReplaceQueryParameter(formatted_url, "key", api_key);
 }
 
 }  // namespace private_ai

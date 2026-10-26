@@ -78,7 +78,6 @@ bool SkiaOutputDeviceOffscreen::Reshape(const ReshapeParams& params) {
   }
   sk_color_type_ = params.image_info.colorType();
   sk_color_space_ = params.image_info.refColorSpace();
-  sample_count_ = params.sample_count;
   EnsureBackbuffer();
   return true;
 }
@@ -105,16 +104,6 @@ void SkiaOutputDeviceOffscreen::EnsureBackbuffer() {
   if (auto* gr_context = context_state_->gr_context()) {
     auto backend_format =
         gr_context->defaultBackendFormat(sk_color_type_, GrRenderable::kYes);
-#if BUILDFLAG(IS_MAC)
-    DCHECK_EQ(context_state_->gr_context_type(), gpu::GrContextType::kGL);
-    // Because SkiaOutputSurface may use IOSurface, we need to ensure that we
-    // are using the correct texture target for IOSurfaces (which depends on the
-    // GL implementation). Otherwise the validateSurface will fail because of
-    // the textureType mismatch.
-    backend_format = GrBackendFormats::MakeGL(
-        GrBackendFormats::AsGLFormatEnum(backend_format),
-        gpu::GetTextureTargetForIOSurfaces());
-#endif
     DCHECK(backend_format.isValid())
         << "GrBackendFormat is invalid for color_type: " << sk_color_type_;
 
@@ -157,12 +146,8 @@ void SkiaOutputDeviceOffscreen::EnsureBackbuffer() {
     skgpu::graphite::TextureInfo texture_info = gpu::GraphiteBackendTextureInfo(
         context_state_->gr_context_type(),
         SkColorTypeToSinglePlaneSharedImageFormat(sk_color_type_),
-        /*readonly=*/false,
-        /*plane_index=*/0,
-        /*is_yuv_plane=*/false, /*mipmapped=*/false,
-        /*scanout_dcomp_surface=*/false,
-        /*supports_multiplanar_rendering=*/false,
-        /*supports_multiplanar_copy=*/false);
+        /*plane_index=*/0, /*mipmapped=*/false,
+        /*scanout_dcomp_surface=*/false);
     graphite_texture_ =
         context_state_->gpu_main_graphite_recorder()->createBackendTexture(
             gfx::SizeToSkISize(size_), texture_info);
@@ -204,7 +189,7 @@ SkSurface* SkiaOutputDeviceOffscreen::BeginPaint(
           capabilities_.output_surface_origin == gfx::SurfaceOrigin::kTopLeft
               ? kTopLeft_GrSurfaceOrigin
               : kBottomLeft_GrSurfaceOrigin,
-          sample_count_, sk_color_type_, sk_color_space_, &surface_props);
+          /*sampleCnt=*/1, sk_color_type_, sk_color_space_, &surface_props);
     } else {
       CHECK(context_state_->graphite_shared_context());
       sk_surface_ = SkSurfaces::WrapBackendTexture(

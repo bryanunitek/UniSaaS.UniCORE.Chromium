@@ -19,6 +19,7 @@
 #include "base/trace_event/memory_pressure_level_proto.h"
 #include "base/trace_event/named_trigger.h"
 #include "base/trace_event/typed_macros.h"
+#include "build/build_config.h"
 #include "chrome/browser/performance_manager/mechanisms/page_loader.h"
 #include "chrome/browser/performance_manager/policies/background_tab_loading_policy_helpers.h"
 #include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
@@ -45,6 +46,21 @@ namespace policies {
 namespace {
 
 const char kDescriberName[] = "BackgroundTabLoadingPolicy";
+
+constexpr base::MemoryConsumerTraits kBackgroundTabLoadingPolicyTraits(
+    base::MemoryConsumerTraits::ConsumerType::kPassive,
+    // Prevents allocations in renderer processes (out-of-process).
+    base::MemoryConsumerTraits::InProcess::kNo);
+
+#if BUILDFLAG(IS_ANDROID)
+// On Android, BrowserMemoryCoordinator may be destroyed during test or process
+// teardown before the PerformanceManager graph is destroyed.
+constexpr auto kBackgroundTabLoadingPolicyCheckUnregister =
+    base::MemoryConsumerRegistration::CheckUnregister::kDisabled;
+#else
+constexpr auto kBackgroundTabLoadingPolicyCheckUnregister =
+    base::MemoryConsumerRegistration::CheckUnregister::kEnabled;
+#endif
 
 }  // namespace
 
@@ -159,8 +175,9 @@ BackgroundTabLoadingPolicy::BackgroundTabLoadingPolicy(
       page_loader_(std::make_unique<mechanism::PageLoader>()),
       memory_consumer_registration_(
           "BackgroundTabLoadingPolicy",
-          std::nullopt,  // TODO(crbug.com/489671163): Add traits.
-          this) {
+          kBackgroundTabLoadingPolicyTraits,
+          this,
+          kBackgroundTabLoadingPolicyCheckUnregister) {
   max_simultaneous_tab_loads_ = CalculateMaxSimultaneousTabLoads(
       kMinSimultaneousTabLoads, kMaxSimultaneousTabLoads,
       kCoresPerSimultaneousTabLoad, base::SysInfo::NumberOfProcessors());
@@ -456,14 +473,12 @@ void BackgroundTabLoadingPolicy::OnUpdateMemoryLimit() {
         auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
         auto* debug = event->add_debug_annotations();
         debug->set_name("memory_limit");
-        debug->set_int_value(memory_limit());
+        debug->set_int_value(memory_limit().percent());
       });
-  if (memory_limit() <= base::kModerateMemoryPressureThreshold) {
+  if (memory_limit() <= base::MemoryLimit::ModeratePressureThreshold()) {
     StopLoadingTabs();
   }
 }
-
-void BackgroundTabLoadingPolicy::OnReleaseMemory() {}
 
 SiteDataReader* BackgroundTabLoadingPolicy::GetSiteDataReader(
     const PageNode* page_node) const {

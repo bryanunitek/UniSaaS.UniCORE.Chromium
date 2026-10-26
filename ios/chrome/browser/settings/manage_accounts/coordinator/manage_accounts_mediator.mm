@@ -12,7 +12,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/settings/manage_accounts/public/manage_accounts_table_view_controller_constants.h"
-#import "ios/chrome/browser/settings/manage_accounts/ui/identity_view_item.h"
+#import "ios/chrome/browser/settings/manage_accounts/ui/identity_view_data.h"
 #import "ios/chrome/browser/settings/manage_accounts/ui/manage_accounts_consumer.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/settings_image_detail_text_item.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -38,7 +38,7 @@
 #import "ui/base/l10n/l10n_util_mac.h"
 
 @interface ManageAccountsMediator () <AuthenticationServiceObserving,
-                                      IdentityManagerObserverBridgeDelegate>
+                                      IdentityManagerObserving>
 @end
 
 @implementation ManageAccountsMediator {
@@ -88,7 +88,7 @@
   _authServiceObserverBridge.reset();
 }
 
-#pragma mark - AccountsModelIdentityDataSource
+#pragma mark - ManageAccountsModelIdentityDataSource
 
 - (id<SystemIdentity>)identityWithGaiaID:(const GaiaId&)gaiaID {
   return _accountManagerService->GetIdentityOnDeviceWithGaiaID(gaiaID);
@@ -101,14 +101,14 @@
       ->GetIdentityAvatar(identity, IdentityAvatarSize::TableViewIcon);
 }
 
-- (IdentityViewItem*)primaryIdentityViewItem {
+- (NSString*)primaryIdentityEmail {
   id<SystemIdentity> identity = _authService->GetPrimaryIdentity();
-  CHECK(identity, base::NotFatalUntil::M147);
-  return [self identityViewItemForIdentity:identity];
+  CHECK(identity);
+  return identity.userEmail;
 }
 
-- (std::vector<IdentityViewItem*>)identityViewItems {
-  std::vector<IdentityViewItem*> identityViewItemsForAccounts;
+- (std::vector<IdentityViewData*>)identityViewDataArray {
+  std::vector<IdentityViewData*> identityViewItemsForAccounts;
 
   NSArray<id<SystemIdentity>>* identitiesOnDevice =
       signin::GetIdentitiesOnDevice(_identityManager, _accountManagerService);
@@ -136,11 +136,11 @@
   [self.delegate signOutWithItemView:itemView];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
-      _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
+      _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.GetGaiaId());
   if (!identity) {
     DUMP_WILL_BE_NOTREACHED();
     // If the user is signed-out, the view will be dismissed by
@@ -150,7 +150,7 @@
   [self handleIdentityUpdated:identity];
 }
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   if (!_authService->HasPrimaryIdentity()) {
     // This accounts table view will be popped or dismissed when the user
     // is signed out. Avoid reloading it in that case as that would lead to an
@@ -164,7 +164,7 @@
   [self.consumer popView];
 }
 
-- (void)onEndBatchOfPrimaryAccountChanges {
+- (void)batchOfPrimaryAccountChangesDidEnd {
   if (!_authService->HasPrimaryIdentity()) {
     [self.delegate manageAccountsMediatorWantsToBeStopped:self];
   }
@@ -181,23 +181,23 @@
 #pragma mark - Private
 
 - (void)handleIdentityUpdated:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   [self.consumer
       updateIdentityViewItem:[self identityViewItemForIdentity:identity]];
 }
 
-- (IdentityViewItem*)identityViewItemForIdentity:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
-  IdentityViewItem* identityViewItem = [[IdentityViewItem alloc] init];
-  identityViewItem.userEmail = identity.userEmail;
-  identityViewItem.userFullName = identity.userFullName;
-  identityViewItem.gaiaID = identity.gaiaId;
-  identityViewItem.managed = [self isIdentityKnownToBeManaged:identity];
+- (IdentityViewData*)identityViewItemForIdentity:(id<SystemIdentity>)identity {
+  CHECK(identity);
+  IdentityViewData* identityViewData = [[IdentityViewData alloc] init];
+  identityViewData.userEmail = identity.userEmail;
+  identityViewData.userFullName = identity.userFullName;
+  identityViewData.gaiaID = identity.gaiaId;
+  identityViewData.managed = [self isIdentityKnownToBeManaged:identity];
   IdentityAvatarSize avatarSize = IdentityAvatarSize::Regular;
-  identityViewItem.avatar = [self identityAvatarWithSizeForIdentity:identity
+  identityViewData.avatar = [self identityAvatarWithSizeForIdentity:identity
                                                                size:avatarSize];
-  identityViewItem.accessibilityIdentifier = identity.userEmail;
-  return identityViewItem;
+  identityViewData.accessibilityIdentifier = identity.userEmail;
+  return identityViewData;
 }
 
 // Returns true if `identity` is known to be managed.
@@ -207,7 +207,7 @@
 // called asynchronously when the management status if retrieved and the
 // identity is managed.
 - (BOOL)isIdentityKnownToBeManaged:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   if (std::optional<BOOL> managed = IsIdentityManaged(identity);
       managed.has_value()) {
     return managed.value();
@@ -216,7 +216,7 @@
   __weak __typeof(self) weakSelf = self;
   FetchManagedStatusForIdentity(identity, base::BindOnce(^(bool managed) {
                                   if (managed) {
-                                    CHECK(identity, base::NotFatalUntil::M147);
+                                    CHECK(identity);
                                     [weakSelf handleIdentityUpdated:identity];
                                   }
                                 }));

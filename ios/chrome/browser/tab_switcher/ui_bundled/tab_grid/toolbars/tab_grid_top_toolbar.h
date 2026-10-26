@@ -11,6 +11,7 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_paging.h"
 
 @class LayoutGuideCenter;
+@class SceneLayoutState;
 @class TabGridPageControl;
 @protocol TabGridToolbarsGridDelegate;
 
@@ -44,6 +45,8 @@
 @property(nonatomic, assign) int selectedTabsCount;
 // Delegate to call when a button is tapped.
 @property(nonatomic, weak) id<TabGridToolbarsGridDelegate> buttonsDelegate;
+// The layout state.
+@property(nonatomic, weak) SceneLayoutState* layoutState;
 
 - (instancetype)initWithLayoutGuideCenter:(LayoutGuideCenter*)layoutGuideCenter
     NS_DESIGNATED_INITIALIZER;
@@ -64,8 +67,8 @@
 - (void)setSelectAllButtonEnabled:(BOOL)enabled;
 // Sets `enabled` on the close other tabs action.
 - (void)setCloseOtherTabsEnabled:(BOOL)enabled;
-// Sets `enabled` on the done button.
-- (void)setDoneButtonEnabled:(BOOL)enabled;
+// Sets `enabled` on the Exit Tab Grid button.
+- (void)setExitTabGridButtonEnabled:(BOOL)enabled;
 // Sets `enabled` on the page action menu entry point.
 - (void)setPageActionMenuButtonEnabled:(BOOL)enabled;
 // Sets `visible` on the page action menu entry point.
@@ -84,8 +87,6 @@
 // Updates the appearance of the this toolbar, based on whether the content
 // below it is `scrolledToEdge` or not.
 - (void)setScrollViewScrolledToEdge:(BOOL)scrolledToEdge;
-// Adds the receiver in the chain before the original next responder.
-- (void)respondBeforeResponder:(UIResponder*)nextResponder;
 // Relinquishs the searchBar status as first responder.
 - (void)unfocusSearchBar;
 // Sets the text of the UISearchBar.
@@ -95,6 +96,8 @@
                           animated:(BOOL)animated;
 // Sets whether the incognito toolbar background should be hidden.
 - (void)setIncognitoBackgroundHidden:(BOOL)hidden;
+// Sets whether the search button is hidden or not
+- (void)setSearchButtonHidden:(BOOL)hidden;
 
 @end
 

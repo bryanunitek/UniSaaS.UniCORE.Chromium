@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.display_cutout;
 
+import static androidx.core.view.WindowInsetsCompat.Type.ime;
 import static androidx.core.view.WindowInsetsCompat.Type.navigationBars;
 import static androidx.core.view.WindowInsetsCompat.Type.statusBars;
 
@@ -25,7 +26,6 @@ import android.view.WindowManager.LayoutParams;
 
 import androidx.core.graphics.Insets;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -37,16 +37,15 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.UserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.blink.mojom.ViewportFit;
-import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
-import org.chromium.chrome.browser.customtabs.BaseCustomTabActivity;
+import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
@@ -57,13 +56,23 @@ import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.browser.test.mock.MockWebContents;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.insets.InsetObserver;
+import org.chromium.ui.mojom.VirtualKeyboardMode;
 
 import java.lang.ref.WeakReference;
 
 /** Tests for {@link DisplayCutoutController} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DisplayCutoutControllerTest {
+    // getIntentDataProvider() is otherwise only populated during native initialization.
+    private static class TestCustomTabActivity extends CustomTabActivity {
+        private BrowserServicesIntentDataProvider mTestIntentDataProvider;
+
+        @Override
+        public BrowserServicesIntentDataProvider getIntentDataProvider() {
+            return mTestIntentDataProvider;
+        }
+    }
+
     private static final Insets INITIAL_STATUS_BAR_INSETS = Insets.of(0, 80, 0, 0);
     private static final Insets INITIAL_NAV_BAR_INSETS = Insets.of(0, 0, 0, 24);
     private static final Insets UPDATED_STATUS_BAR_INSETS = Insets.of(0, 64, 0, 0);
@@ -74,44 +83,29 @@ public class DisplayCutoutControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private Tab mTab;
-
     @Mock private MockWebContents mWebContents;
-
     @Mock private WindowAndroid mWindowAndroid;
-
-    @Mock private Window mWindow;
+    @Mock private InsetObserver mInsetObserver;
+    @Mock private BrowserServicesIntentDataProvider mIntentDataProvider;
+    @Mock private DisplayCutoutController.Delegate mDelegate;
 
     @Captor private ArgumentCaptor<TabObserver> mTabObserverCaptor;
     @Captor private ArgumentCaptor<WebContentsObserver> mWebContentObserverCaptor;
 
-    @Mock private ChromeActivity mChromeActivity;
-
-    @Mock private InsetObserver mInsetObserver;
-
-    @Mock private BaseCustomTabActivity mCustomTabActivity;
-
-    @Mock private BrowserServicesIntentDataProvider mIntentDataProvider;
-
-    @Mock private DisplayCutoutController.Delegate mDelegate;
-
+    private final UserDataHost mTabDataHost = new UserDataHost();
+    private Activity mActivity;
     private DisplayCutoutTabHelper mDisplayCutoutTabHelper;
     private DisplayCutoutController mController;
 
-    private WeakReference<Activity> mActivityRef;
-
-    private final UserDataHost mTabDataHost = new UserDataHost();
-
     @Before
     public void setUp() {
-        mActivityRef = new WeakReference<>(mChromeActivity);
+        mActivity = Robolectric.buildActivity(Activity.class).setup().get();
 
-        when(mChromeActivity.getWindow()).thenReturn(mWindow);
-        when(mWindow.getAttributes()).thenReturn(new LayoutParams());
         when(mTab.getWindowAndroid()).thenReturn(mWindowAndroid);
         when(mTab.getWebContents()).thenReturn(mWebContents);
         when(mTab.getUserDataHost()).thenReturn(mTabDataHost);
         when(mWebContents.isFullscreenForCurrentTab()).thenReturn(true);
-        when(mWindowAndroid.getActivity()).thenReturn(mActivityRef);
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(mActivity));
         when(mWindowAndroid.getInsetObserver()).thenReturn(mInsetObserver);
 
         // Common defaults for Delegate-based tests. Individual tests still set test-specific
@@ -128,7 +122,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testViewportFitUpdate() {
         verify(mController, never()).maybeUpdateLayout();
 
@@ -137,7 +130,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testViewportFitUpdateOnFullscreen() {
         // Re-adding observers; otherwise, the internal observers are bound to un-mocked
         // mController.
@@ -156,7 +148,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testViewportFitAutoUpdateNotChanged() {
         verify(mController, never()).maybeUpdateLayout();
 
@@ -165,7 +156,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testViewportFitCoverUpdateWhenValueNotChanged() {
         mDisplayCutoutTabHelper.setViewportFit(ViewportFit.COVER);
         mDisplayCutoutTabHelper.setViewportFit(ViewportFit.COVER);
@@ -174,7 +164,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenAutoAndInteractable() {
         when(mTab.isUserInteractable()).thenReturn(true);
 
@@ -185,7 +174,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenCoverAndInteractable() {
         when(mTab.isUserInteractable()).thenReturn(true);
 
@@ -196,7 +184,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenCoverForcedAndInteractable() {
         when(mTab.isUserInteractable()).thenReturn(true);
 
@@ -207,7 +194,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenContainAndInteractable() {
         when(mTab.isUserInteractable()).thenReturn(true);
 
@@ -218,7 +204,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenCoverInBrowserFullscreenAndNotWebFullscreen() {
         when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.FULLSCREEN);
         when(mWebContents.isFullscreenForCurrentTab()).thenReturn(false);
@@ -232,7 +217,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(ChromeFeatureList.WEB_APP_SHORT_EDGES_CUTOUT_MODE)
     public void testCutoutModeWhenCoverInStandaloneAndFeatureDisabled() {
         DisplayCutoutController controller = setUpFeatureDisabledWebApp(DisplayMode.STANDALONE);
@@ -244,7 +228,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures(ChromeFeatureList.WEB_APP_SHORT_EDGES_CUTOUT_MODE)
     public void testCutoutModeWhenCoverInFullscreenAndFeatureDisabled() {
         DisplayCutoutController controller = setUpFeatureDisabledWebApp(DisplayMode.FULLSCREEN);
@@ -256,7 +239,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testStandaloneForcedCoverRequestsEdgeToEdge() {
         when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.STANDALONE);
         when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
@@ -271,7 +253,27 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
+    public void testStandaloneCoverReleasesEdgeToEdgeWhileNotInteractable() {
+        when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.STANDALONE);
+        when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
+
+        DisplayCutoutController controller = new DisplayCutoutController(mDelegate);
+        controller.setViewportFit(ViewportFit.COVER);
+        verify(mDelegate).setEdgeToEdgeState(true);
+
+        // The tab is hidden, e.g. behind a child tab; the edge-to-edge claim is released.
+        when(mDelegate.isInteractable()).thenReturn(false);
+        controller.maybeUpdateLayout();
+        verify(mDelegate).setEdgeToEdgeState(false);
+
+        // The tab becomes interactable again; edge-to-edge is re-applied.
+        clearInvocations(mDelegate);
+        when(mDelegate.isInteractable()).thenReturn(true);
+        controller.maybeUpdateLayout();
+        verify(mDelegate).setEdgeToEdgeState(true);
+    }
+
+    @Test
     public void testBrowserFullscreenExplicitCoverRequestsEdgeToEdge() {
         when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.FULLSCREEN);
         when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
@@ -287,7 +289,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testStandaloneCoverMergesSafeAreaWithSystemBars() {
         WindowInsetsCompat initialInsets = mock(WindowInsetsCompat.class);
         WindowInsetsCompat updatedInsets = mock(WindowInsetsCompat.class);
@@ -306,7 +307,10 @@ public class DisplayCutoutControllerTest {
         when(zeroInsets.getInsetsIgnoringVisibility(statusBars())).thenReturn(Insets.NONE);
         when(zeroInsets.getInsetsIgnoringVisibility(navigationBars())).thenReturn(Insets.NONE);
 
-        when(mDelegate.getAttachedActivity()).thenReturn(mChromeActivity);
+        // A real soft keyboard is far taller than the navigation bar.
+        when(updatedInsets.getInsets(ime())).thenReturn(Insets.of(0, 0, 0, 392));
+
+        when(mDelegate.getAttachedActivity()).thenReturn(mActivity);
         when(mDelegate.getInsetObserver()).thenReturn(mInsetObserver);
         when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.STANDALONE);
         when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
@@ -344,6 +348,33 @@ public class DisplayCutoutControllerTest {
         Assert.assertEquals(UPDATED_EXPECTED_SAFE_AREA, safeAreaCaptor.getValue());
 
         clearInvocations(mWebContents);
+        when(updatedInsets.isVisible(ime())).thenReturn(true);
+        when(mWebContents.getVirtualKeyboardMode()).thenReturn(VirtualKeyboardMode.RESIZES_VISUAL);
+        controller.onInsetChanged();
+
+        // A resizes-visual keyboard occludes the navigation bar just like a resizes-content one;
+        // fixed bottom UI following the visual viewport must not keep an extra bar-height gap.
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 0), safeAreaCaptor.getValue());
+
+        clearInvocations(mWebContents);
+        when(mWebContents.getVirtualKeyboardMode()).thenReturn(VirtualKeyboardMode.RESIZES_CONTENT);
+        controller.onInsetChanged();
+
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 0), safeAreaCaptor.getValue());
+
+        clearInvocations(mWebContents);
+        when(mWebContents.getVirtualKeyboardMode())
+                .thenReturn(VirtualKeyboardMode.OVERLAYS_CONTENT);
+        controller.onInsetChanged();
+
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(UPDATED_EXPECTED_SAFE_AREA, safeAreaCaptor.getValue());
+
+        clearInvocations(mWebContents);
         when(mInsetObserver.getLastRawWindowInsets()).thenReturn(zeroInsets);
         controller.setViewportFit(ViewportFit.COVER);
 
@@ -351,8 +382,157 @@ public class DisplayCutoutControllerTest {
         Assert.assertEquals(UPDATED_EXPECTED_SAFE_AREA, safeAreaCaptor.getValue());
     }
 
+    /**
+     * Builds a controller whose window insets report the given navigation bar and IME bottoms with
+     * a visible keyboard in the given {@link VirtualKeyboardMode}.
+     */
+    private DisplayCutoutController createControllerForImeTest(
+            int navBarBottom, int imeBottom, @VirtualKeyboardMode.EnumType int keyboardMode) {
+        WindowInsetsCompat insets = mock(WindowInsetsCompat.class);
+        when(insets.getInsetsIgnoringVisibility(statusBars()))
+                .thenReturn(UPDATED_STATUS_BAR_INSETS);
+        when(insets.getInsetsIgnoringVisibility(navigationBars()))
+                .thenReturn(Insets.of(0, 0, 0, navBarBottom));
+        when(insets.getInsets(ime())).thenReturn(Insets.of(0, 0, 0, imeBottom));
+        when(insets.isVisible(ime())).thenReturn(true);
+
+        when(mDelegate.getAttachedActivity()).thenReturn(mActivity);
+        when(mDelegate.getInsetObserver()).thenReturn(mInsetObserver);
+        when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.STANDALONE);
+        when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
+        when(mWebContents.isFullscreenForCurrentTab()).thenReturn(false);
+        when(mWebContents.getTopLevelNativeWindow()).thenReturn(mWindowAndroid);
+        when(mWebContents.getVirtualKeyboardMode()).thenReturn(keyboardMode);
+        when(mInsetObserver.getCurrentSafeArea()).thenReturn(new Rect());
+        when(mInsetObserver.getLastRawWindowInsets()).thenReturn(insets);
+
+        DisplayCutoutController controller =
+                new DisplayCutoutController(mDelegate) {
+                    @Override
+                    protected float getDipScale() {
+                        return 1f;
+                    }
+                };
+        // Browser edge-to-edge, and therefore the browser safe area merge, only applies to a
+        // page that asked for viewport-fit=cover.
+        controller.setViewportFit(ViewportFit.COVER);
+        return controller;
+    }
+
     @Test
-    @SmallTest
+    public void testResizesContentImeTallerThanNavBarClearsBottom() {
+        // The common case: the keyboard fully covers the navigation bar, so the resized content
+        // no longer has anything obstructing its bottom edge.
+        DisplayCutoutController controller =
+                createControllerForImeTest(
+                        /* navBarBottom= */ 16,
+                        /* imeBottom= */ 392,
+                        VirtualKeyboardMode.RESIZES_CONTENT);
+
+        clearInvocations(mWebContents);
+        controller.onInsetChanged();
+
+        ArgumentCaptor<Rect> safeAreaCaptor = ArgumentCaptor.forClass(Rect.class);
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 0), safeAreaCaptor.getValue());
+    }
+
+    @Test
+    public void testResizesContentShortImeKeepsUncoveredNavigationBar() {
+        // Defensive case, e.g. a floating or split keyboard, or a hardware keyboard showing only
+        // a suggestion strip: the IME is shorter than the navigation bar, so the part of the bar
+        // it does not cover must stay in the safe area.
+        DisplayCutoutController controller =
+                createControllerForImeTest(
+                        /* navBarBottom= */ 16,
+                        /* imeBottom= */ 4,
+                        VirtualKeyboardMode.RESIZES_CONTENT);
+
+        clearInvocations(mWebContents);
+        controller.onInsetChanged();
+
+        ArgumentCaptor<Rect> safeAreaCaptor = ArgumentCaptor.forClass(Rect.class);
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 12), safeAreaCaptor.getValue());
+    }
+
+    @Test
+    public void testResizesVisualImeTallerThanNavBarClearsBottom() {
+        // The default keyboard mode since M108: the visual viewport shrinks above the keyboard
+        // while the layout viewport keeps its size. The keyboard still occludes the navigation
+        // bar, so env(safe-area-inset-bottom) must not keep the bar inset. crbug.com/407420295.
+        DisplayCutoutController controller =
+                createControllerForImeTest(
+                        /* navBarBottom= */ 16,
+                        /* imeBottom= */ 392,
+                        VirtualKeyboardMode.RESIZES_VISUAL);
+
+        clearInvocations(mWebContents);
+        controller.onInsetChanged();
+
+        ArgumentCaptor<Rect> safeAreaCaptor = ArgumentCaptor.forClass(Rect.class);
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 0), safeAreaCaptor.getValue());
+    }
+
+    @Test
+    public void testResizesVisualShortImeKeepsUncoveredNavigationBar() {
+        DisplayCutoutController controller =
+                createControllerForImeTest(
+                        /* navBarBottom= */ 16,
+                        /* imeBottom= */ 4,
+                        VirtualKeyboardMode.RESIZES_VISUAL);
+
+        clearInvocations(mWebContents);
+        controller.onInsetChanged();
+
+        ArgumentCaptor<Rect> safeAreaCaptor = ArgumentCaptor.forClass(Rect.class);
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 12), safeAreaCaptor.getValue());
+    }
+
+    @Test
+    public void testUnsetKeyboardModeImeClearsBottom() {
+        // Pages that never declare interactive-widget report UNSET, and the Android platform
+        // default for UNSET is resizes-visual, so the keyboard still occludes the bottom edge.
+        // This is the configuration real pages hit. crbug.com/407420295.
+        DisplayCutoutController controller =
+                createControllerForImeTest(
+                        /* navBarBottom= */ 48, /* imeBottom= */ 392, VirtualKeyboardMode.UNSET);
+
+        clearInvocations(mWebContents);
+        controller.onInsetChanged();
+
+        ArgumentCaptor<Rect> safeAreaCaptor = ArgumentCaptor.forClass(Rect.class);
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 0), safeAreaCaptor.getValue());
+    }
+
+    @Test
+    public void testOverlaysContentImeKeepsNavigationBarInset() {
+        // With the VirtualKeyboard API the author manages keyboard geometry explicitly via
+        // env(keyboard-inset-*); the bar inset must stay stable under the keyboard.
+        DisplayCutoutController controller =
+                createControllerForImeTest(
+                        /* navBarBottom= */ 16,
+                        /* imeBottom= */ 392,
+                        VirtualKeyboardMode.OVERLAYS_CONTENT);
+
+        clearInvocations(mWebContents);
+        controller.onInsetChanged();
+
+        ArgumentCaptor<Rect> safeAreaCaptor = ArgumentCaptor.forClass(Rect.class);
+        verify(mWebContents).setDisplayCutoutSafeArea(safeAreaCaptor.capture());
+        Assert.assertEquals(
+                new Rect(0, UPDATED_STATUS_BAR_INSETS.top, 0, 16), safeAreaCaptor.getValue());
+    }
+
+    @Test
     public void testBrowserFullscreenCoverAcquiresAndReleasesEdgeToEdge() {
         when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.FULLSCREEN);
         when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
@@ -368,7 +548,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenAutoAndNotInteractable() {
         mDisplayCutoutTabHelper.setViewportFit(ViewportFit.AUTO);
         Assert.assertEquals(
@@ -377,7 +556,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenCoverAndNotInteractable() {
         mDisplayCutoutTabHelper.setViewportFit(ViewportFit.COVER);
         Assert.assertEquals(
@@ -386,7 +564,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenCoverForcedAndNotInteractable() {
         mDisplayCutoutTabHelper.setViewportFit(ViewportFit.COVER_FORCED_BY_USER_AGENT);
         Assert.assertEquals(
@@ -395,7 +572,6 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
     public void testCutoutModeWhenContainAndNotInteractable() {
         mDisplayCutoutTabHelper.setViewportFit(ViewportFit.CONTAIN);
         Assert.assertEquals(
@@ -404,7 +580,57 @@ public class DisplayCutoutControllerTest {
     }
 
     @Test
-    @SmallTest
+    public void testCutoutModeChangeRedispatchesInsets() {
+        // The cutout mode feeds WindowInsetsUtils#shouldPadDisplayCutout, which decides whether the
+        // edge-to-edge layout pads content away from the cutout. Changing the mode has to re-run
+        // the inset pass, otherwise the layout keeps the decision made under the previous mode and
+        // a page that switched from viewport-fit=cover to a fitted value keeps rendering
+        // underneath the cutout.
+        when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.STANDALONE);
+        when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
+        when(mDelegate.getInsetObserver()).thenReturn(mInsetObserver);
+        when(mDelegate.getAttachedActivity()).thenReturn(mActivity);
+
+        DisplayCutoutController controller = new DisplayCutoutController(mDelegate);
+        controller.onActivityAttachmentChanged(mWindowAndroid);
+        LayoutParams attributes = mActivity.getWindow().getAttributes();
+
+        // A cover page draws under the cutout via short edges mode.
+        controller.setViewportFit(ViewportFit.COVER);
+        Assert.assertEquals(
+                LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES,
+                attributes.layoutInDisplayCutoutMode);
+        clearInvocations(mInsetObserver);
+
+        // Switching to a fitted value demotes the window out of short edges mode.
+        controller.setViewportFit(ViewportFit.AUTO);
+
+        Assert.assertEquals(
+                "Fitted page should leave short edges mode.",
+                LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT,
+                attributes.layoutInDisplayCutoutMode);
+        verify(mInsetObserver).retriggerOnApplyWindowInsets();
+    }
+
+    @Test
+    public void testCutoutModeUnchangedDoesNotRedispatchInsets() {
+        when(mDelegate.getDisplayMode()).thenReturn(DisplayMode.STANDALONE);
+        when(mDelegate.isShortEdgesCutoutModeEnabled()).thenReturn(true);
+        when(mDelegate.getInsetObserver()).thenReturn(mInsetObserver);
+        when(mDelegate.getAttachedActivity()).thenReturn(mActivity);
+
+        DisplayCutoutController controller = new DisplayCutoutController(mDelegate);
+        controller.onActivityAttachmentChanged(mWindowAndroid);
+        controller.setViewportFit(ViewportFit.COVER);
+        clearInvocations(mInsetObserver);
+
+        // Already in short edges mode for cover, so nothing changes and no work is needed.
+        controller.maybeUpdateLayout();
+
+        verify(mInsetObserver, never()).retriggerOnApplyWindowInsets();
+    }
+
+    @Test
     public void testLayoutOnInteractability_True() {
         // In this test we are checking for a side effect of maybeUpdateLayout.
         // This is because the tab observer holds a reference to the original
@@ -412,12 +638,12 @@ public class DisplayCutoutControllerTest {
         verify(mTab).addObserver(mTabObserverCaptor.capture());
         reset(mTab);
 
+        setWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
         mTabObserverCaptor.getValue().onInteractabilityChanged(mTab, true);
-        verify(mWindow).getAttributes();
+        assertWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
     @Test
-    @SmallTest
     public void testLayoutOnInteractability_False() {
         // In this test we are checking for a side effect of maybeUpdateLayout.
         // This is because the tab observer holds a reference to the original
@@ -425,24 +651,24 @@ public class DisplayCutoutControllerTest {
         verify(mTab).addObserver(mTabObserverCaptor.capture());
         reset(mTab);
 
+        setWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
         mTabObserverCaptor.getValue().onInteractabilityChanged(mTab, false);
-        verify(mWindow).getAttributes();
+        assertWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
     @Test
-    @SmallTest
     public void testLayout_NoWindow() {
         // Verify there's no crash when the tab's interactability changes after activity detachment.
         verify(mTab).addObserver(mTabObserverCaptor.capture());
         reset(mTab);
 
         mTabObserverCaptor.getValue().onActivityAttachmentChanged(mTab, null);
+        setWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
         mTabObserverCaptor.getValue().onInteractabilityChanged(mTab, false);
-        verify(mWindow, never()).getAttributes();
+        assertWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
     }
 
     @Test
-    @SmallTest
     public void testLayoutOnShown() {
         // In this test we are checking for a side effect of maybeUpdateLayout.
         // This is because the tab observer holds a reference to the original
@@ -450,12 +676,12 @@ public class DisplayCutoutControllerTest {
         verify(mTab).addObserver(mTabObserverCaptor.capture());
         reset(mTab);
 
+        setWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER);
         mTabObserverCaptor.getValue().onShown(mTab, TabSelectionType.FROM_NEW);
-        verify(mWindow).getAttributes();
+        assertWindowCutoutMode(LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
     }
 
     @Test
-    @SmallTest
     @SuppressWarnings("DirectInvocationOnMock")
     public void testGetIsViewportFitCover() {
         // Go through the live creation of DisplayCutoutTabHelper.from(Tab) with our mock Tab.
@@ -542,6 +768,18 @@ public class DisplayCutoutControllerTest {
                 mDisplayCutoutTabHelper.mCutoutController.getWebContentObserverForTesting());
     }
 
+    private void setWindowCutoutMode(int mode) {
+        Window window = mActivity.getWindow();
+        LayoutParams attributes = window.getAttributes();
+        attributes.layoutInDisplayCutoutMode = mode;
+        window.setAttributes(attributes);
+    }
+
+    private void assertWindowCutoutMode(int expectedMode) {
+        Assert.assertEquals(
+                expectedMode, mActivity.getWindow().getAttributes().layoutInDisplayCutoutMode);
+    }
+
     /**
      * Wires up the mTab path through a webapp BaseCustomTabActivity with the given resolved display
      * mode, with the short-edges feature disabled, and returns a fresh controller built via the
@@ -549,8 +787,10 @@ public class DisplayCutoutControllerTest {
      */
     private DisplayCutoutController setUpFeatureDisabledWebApp(@DisplayMode.EnumType int mode) {
         when(mTab.isUserInteractable()).thenReturn(true);
-        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(mCustomTabActivity));
-        when(mCustomTabActivity.getIntentDataProvider()).thenReturn(mIntentDataProvider);
+        TestCustomTabActivity customTabActivity =
+                Robolectric.buildActivity(TestCustomTabActivity.class).get();
+        customTabActivity.mTestIntentDataProvider = mIntentDataProvider;
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(customTabActivity));
         when(mIntentDataProvider.getActivityType()).thenReturn(ActivityType.WEBAPP);
         when(mIntentDataProvider.getResolvedDisplayMode()).thenReturn(mode);
         when(mWebContents.isFullscreenForCurrentTab()).thenReturn(false);

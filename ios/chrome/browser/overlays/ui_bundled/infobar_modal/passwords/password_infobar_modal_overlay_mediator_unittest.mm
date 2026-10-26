@@ -10,6 +10,8 @@
 #import "components/metrics/profile_metrics_service.h"
 #import "components/password_manager/core/browser/mock_password_form_manager_for_ui.h"
 #import "components/password_manager/core/browser/password_form_metrics_recorder.h"
+#import "components/password_manager/core/browser/password_string.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/test/fake_infobar_password_modal_consumer.h"
 #import "ios/chrome/browser/overlays/model/public/default/default_infobar_overlay_request_config.h"
@@ -54,6 +56,14 @@ class PasswordInfobarModalOverlayMediatorTest : public PlatformTest {
 
   void InitInfobar(
       std::optional<std::string> account_to_store_password = std::nullopt) {
+    if (account_to_store_password.has_value()) {
+      CoreAccountInfo account_info;
+      account_info.email = *account_to_store_password;
+      sync_service_.SetSignedIn(signin::ConsentLevel::kSignin, account_info);
+    } else {
+      sync_service_.SetSignedOut();
+    }
+
     metrics_recorder_ =
         base::MakeRefCounted<password_manager::PasswordFormMetricsRecorder>(
             /*is_main_frame_secure=*/true, ukm::kInvalidSourceId,
@@ -62,7 +72,7 @@ class PasswordInfobarModalOverlayMediatorTest : public PlatformTest {
         InfobarType::kInfobarTypePasswordSave,
         MockIOSChromeSavePasswordInfoBarDelegate::Create(
             kUsername, kPassword, GURL(std::string("http://") + kUrlHost),
-            account_to_store_password, metrics_recorder_.get()));
+            &sync_service_, metrics_recorder_.get()));
     request_ =
         OverlayRequest::CreateWithConfig<DefaultInfobarOverlayRequestConfig>(
             infobar_.get(), InfobarOverlayType::kModal);
@@ -76,6 +86,7 @@ class PasswordInfobarModalOverlayMediatorTest : public PlatformTest {
 
  protected:
   metrics::ProfileMetricsService profile_metrics_service_;
+  syncer::TestSyncService sync_service_;
   scoped_refptr<password_manager::PasswordFormMetricsRecorder>
       metrics_recorder_;
   std::unique_ptr<InfoBarIOS> infobar_;
@@ -140,9 +151,9 @@ TEST_F(PasswordInfobarModalOverlayMediatorTest, UpdateCredentials) {
   EXPECT_CALL(
       *mock_delegate().mock_form_manager(),
       OnUpdateUsernameFromPrompt(base::SysNSStringToUTF16(kUpdatedUsername)));
-  EXPECT_CALL(
-      *mock_delegate().mock_form_manager(),
-      OnUpdatePasswordFromPrompt(base::SysNSStringToUTF16(kUpdatedPassword)));
+  EXPECT_CALL(*mock_delegate().mock_form_manager(),
+              OnUpdatePasswordFromPrompt(password_manager::PasswordString(
+                  base::SysNSStringToUTF16(kUpdatedPassword))));
   OCMExpect([delegate_ stopOverlayForMediator:mediator_]);
   [mediator_ updateCredentialsWithUsername:kUpdatedUsername
                                   password:kUpdatedPassword];

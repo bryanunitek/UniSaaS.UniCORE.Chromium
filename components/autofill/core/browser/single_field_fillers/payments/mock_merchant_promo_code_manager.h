@@ -10,9 +10,11 @@
 
 namespace autofill {
 
+class AutofillClient;
+
 class MockMerchantPromoCodeManager : public MerchantPromoCodeManager {
  public:
-  MockMerchantPromoCodeManager();
+  explicit MockMerchantPromoCodeManager(AutofillClient* autofill_client);
   ~MockMerchantPromoCodeManager() override;
 
   MOCK_METHOD(bool,
@@ -27,6 +29,8 @@ class MockMerchantPromoCodeManager : public MerchantPromoCodeManager {
               OnSingleFieldSuggestionSelected,
               (const Suggestion& suggestion),
               (override));
+  MOCK_METHOD(void, DidShowSuggestions, (), (override));
+  MOCK_METHOD(void, Reset, (), (override));
 };
 
 }  // namespace autofill

@@ -42,7 +42,8 @@ class UserSecuritySignalsService : public SecuritySignalsService,
 
   UserSecuritySignalsService(PrefService* profile_prefs,
                              Delegate* delegate,
-                             policy::PolicyService* policy_service);
+                             policy::PolicyService* policy_service,
+                             bool is_isolated_profile = false);
   ~UserSecuritySignalsService() override;
 
   UserSecuritySignalsService(const UserSecuritySignalsService&) = delete;
@@ -79,7 +80,7 @@ class UserSecuritySignalsService : public SecuritySignalsService,
 
   // Called when the state value of the policy changes. This will affect whether
   // the timed reporting loop is running or not.
-  void OnStatePolicyValueChanged();
+  void OnStatePolicyValueChanged(bool is_initialization);
 
   // Called when the authentication policy value changes.
   void OnCookiePolicyValueChanged();
@@ -101,6 +102,7 @@ class UserSecuritySignalsService : public SecuritySignalsService,
   base::WallClockTimer timer_;
   bool initialized_{false};
   bool is_observing_policy_service_{false};
+  bool can_upload_signals_{true};
 
   // Connection to the CookieManager that signals when the GAIA cookies change.
   mojo::Receiver<network::mojom::CookieChangeListener>

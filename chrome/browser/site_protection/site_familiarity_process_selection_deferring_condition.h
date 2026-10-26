@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_SITE_PROTECTION_SITE_FAMILIARITY_PROCESS_SELECTION_DEFERRING_CONDITION_H_
 #define CHROME_BROWSER_SITE_PROTECTION_SITE_FAMILIARITY_PROCESS_SELECTION_DEFERRING_CONDITION_H_
 
+#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -15,14 +16,11 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "content/public/browser/process_selection_deferring_condition.h"
-#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace site_protection {
 
-inline constexpr char
-    kSiteFamiliarityDeferNavigationForDefaultSearchEngineHistogram[] =
-        "SafeBrowsing.SiteFamiliarity.DeferNavigation.DefaultSearchEngine";
+BASE_DECLARE_FEATURE(kSkipSiteFamiliarityDeferralForSameSite);
 
 inline constexpr char kSiteFamiliarityDeferNavigationDurationHistogram[] =
     "SafeBrowsing.SiteFamiliarity.DeferNavigationToComputeSiteFamiliarity."

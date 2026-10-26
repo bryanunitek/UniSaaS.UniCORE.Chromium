@@ -21,7 +21,7 @@
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/autofill_field.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_qualifiers.h"
 #include "components/autofill/core/browser/form_structure.h"
@@ -30,7 +30,7 @@
 #include "components/autofill/core/browser/foundations/autofill_driver.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics_util.h"
 #include "components/autofill/core/browser/metrics/form_events/form_events.h"
 #include "components/autofill/core/browser/metrics/form_interactions_ukm_logger.h"
 #include "components/autofill/core/browser/studies/autofill_ablation_study.h"
@@ -67,8 +67,10 @@ bool DetermineHeuristicOnlyEmailFormStatus(const FormStructure& form,
   // applicable  must not run heuristics normally (i.e., their field count is
   // below `kMinRequiredFieldsForHeuristics`), but must be eligible for single
   // field form heuristics.
-  if (ShouldRunHeuristics(form, ignore_small_forms) ||
-      !ShouldRunHeuristicsForSingleFields(form)) {
+  const DenseSet<FormParsingPermission> permissions =
+      GetFormParsingPermissions(form, ignore_small_forms);
+  if (permissions.contains(FormParsingPermission::kHeuristics) ||
+      !permissions.contains(FormParsingPermission::kSingleFieldHeuristics)) {
     return false;
   }
   // Having met the prerequisites, now determine if there's a field whose

@@ -8,7 +8,7 @@
 #include <windows.h>
 
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include <utility>
@@ -18,6 +18,7 @@
 #include "gpu/command_buffer/service/shared_image/d3d_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
+#include "gpu/config/gpu_preferences.h"
 #include "third_party/skia/include/core/SkAlphaType.h"
 #include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 #include "ui/gfx/color_space.h"
@@ -39,7 +40,8 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
       Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
       const Mailbox& mailbox,
       const SharedImageInfo& si_info,
-      DXGI_FORMAT internal_format);
+      DXGI_FORMAT internal_format,
+      GrContextType gr_context_type);
 
   DXGISwapChainImageBacking(const DXGISwapChainImageBacking&) = delete;
   DXGISwapChainImageBacking& operator=(const DXGISwapChainImageBacking&) =
@@ -49,7 +51,7 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
 
   // SharedImageBacking implementation.
   SharedImageBackingType GetType() const override;
-  void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
+  void Update(gfx::GpuFenceHandle in_fence) override;
 
  protected:
   std::unique_ptr<OverlayImageRepresentation> ProduceOverlay(
@@ -71,7 +73,7 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
       const Mailbox& mailbox,
       const SharedImageInfo& si_info,
       Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device,
-      Microsoft::WRL::ComPtr<IDXGISwapChain1> dxgi_swap_chain,
+      Microsoft::WRL::ComPtr<IDXGISwapChain3> dxgi_swap_chain,
       int buffers_need_alpha_initialization_count);
 
   friend class DXGISwapChainOverlayImageRepresentation;
@@ -95,7 +97,7 @@ class GPU_GLES2_EXPORT DXGISwapChainImageBacking
   std::optional<gfx::Rect> pending_swap_rect_;
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device_;
-  Microsoft::WRL::ComPtr<IDXGISwapChain1> dxgi_swap_chain_;
+  Microsoft::WRL::ComPtr<IDXGISwapChain3> dxgi_swap_chain_;
 
   // Holds a gles2::TexturePassthrough and corresponding egl image.
   scoped_refptr<D3DImageBacking::GLTextureHolder> gl_texture_holder_;

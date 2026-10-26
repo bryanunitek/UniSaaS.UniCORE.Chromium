@@ -10,6 +10,9 @@ import android.content.Intent;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Utility class for interacting with the Chrome Item Picker. */
 @NullMarked
 public final class ChromeItemPickerUtils {
@@ -31,5 +34,54 @@ public final class ChromeItemPickerUtils {
         } catch (ClassNotFoundException e) {
             return null;
         }
+    }
+
+    /**
+     * Creates an Intent to launch the Chrome Item Picker with preselected tab IDs.
+     *
+     * @param context The context used to start the intent.
+     * @param preselectedTabIds The list of tab IDs that should be preselected on startup.
+     * @return An intent to launch the Chrome Item Picker or null if it cannot be found.
+     */
+    public static @Nullable Intent createChromeItemPickerIntent(
+            Context context, @Nullable List<Integer> preselectedTabIds) {
+        return createChromeItemPickerIntent(
+                context, preselectedTabIds, /* includePdfTabs= */ false);
+    }
+
+    /**
+     * Creates an Intent to launch the Chrome Item Picker with preselected tab IDs.
+     *
+     * @param context The context used to start the intent.
+     * @param preselectedTabIds The list of tab IDs that should be preselected on startup.
+     * @param includePdfTabs Whether tabs displaying a native PDF page should be selectable.
+     * @return An intent to launch the Chrome Item Picker or null if it cannot be found.
+     */
+    public static @Nullable Intent createChromeItemPickerIntent(
+            Context context, @Nullable List<Integer> preselectedTabIds, boolean includePdfTabs) {
+        Intent intent = createChromeItemPickerIntent(context);
+        if (intent == null) return null;
+        if (includePdfTabs) {
+            intent.putExtra(ChromeItemPickerExtras.EXTRA_INCLUDE_PDF_TABS, true);
+        }
+        if (preselectedTabIds != null && !preselectedTabIds.isEmpty()) {
+            intent.putIntegerArrayListExtra(
+                    ChromeItemPickerExtras.EXTRA_PRESELECTED_TAB_IDS,
+                    new ArrayList<>(preselectedTabIds));
+        }
+        return intent;
+    }
+
+    /**
+     * Extracts the list of selected tab IDs from the result Intent returned by the item picker.
+     *
+     * @param resultIntent The result Intent returned by the picker activity.
+     * @return A list of selected tab IDs, or null if missing.
+     */
+    public static @Nullable List<Integer> getSelectedTabIdsFromIntent(
+            @Nullable Intent resultIntent) {
+        if (resultIntent == null) return null;
+        return resultIntent.getIntegerArrayListExtra(
+                ChromeItemPickerExtras.EXTRA_ATTACHMENT_TAB_IDS);
     }
 }

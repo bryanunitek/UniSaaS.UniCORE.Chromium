@@ -12,15 +12,19 @@
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/timer/elapsed_timer.h"
+#include "build/build_config.h"
 #include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/ukm/test_ukm_recorder.h"
@@ -65,9 +69,13 @@ class AnchorElementPreloaderBrowserTest
              GetNavigationPredictorFieldTrialParams()}};
   }
 
+  virtual std::vector<base::test::FeatureRef> GetDisabledFeatures() {
+    return {};
+  }
+
   void SetUp() override {
     feature_list_.InitWithFeaturesAndParameters(GetEnabledFeatures(),
-                                                /*disabled_features=*/{});
+                                                GetDisabledFeatures());
     https_server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::TYPE_HTTPS);
     https_server_->ServeFilesFromSourceDirectory("chrome/test/data/preload");
@@ -87,7 +95,7 @@ class AnchorElementPreloaderBrowserTest
     host_resolver()->AddRule("*", "127.0.0.1");
     auto* loading_predictor =
         predictors::LoadingPredictorFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     histogram_tester_ = std::make_unique<base::HistogramTester>();
     test_ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
     ukm_entry_builder_ =
@@ -99,7 +107,7 @@ class AnchorElementPreloaderBrowserTest
 
   void SimulateMouseDownElementWithId(const std::string& id) {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     gfx::Point point = gfx::ToFlooredPoint(
         GetCenterCoordinatesOfElementWithId(web_contents, id));
 
@@ -120,17 +128,26 @@ class AnchorElementPreloaderBrowserTest
     }
   }
 
-  void GiveItSomeTime(const base::TimeDelta& t) {
-    base::RunLoop run_loop;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(), t);
-    run_loop.Run();
+  // content::PreconnectManager::Observer
+  void OnPreconnectUrl(
+      const GURL& url,
+      int num_sockets,
+      bool allow_credentials,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
+      mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>&
+          observer) override {
+    last_network_anonymization_key_ = network_anonymization_key;
+    if (url != GURL(kOrigin1) && url != GURL(kOrigin2)) {
+      return;
+    }
+
+    last_preresolve_success_ = true;
+    ++preresolve_count_;
+    if (run_loop_) {
+      run_loop_->Quit();
+    }
   }
 
-  // content::PreconnectManager::Observer
-  // We observe DNS preresolution instead of preconnect, because test
-  // servers all resolve to localhost and Chrome won't preconnect
-  // given it already has a warm connection.
   void OnPreresolveFinished(
       const GURL& url,
       const net::NetworkAnonymizationKey& network_anonymization_key,
@@ -138,14 +155,17 @@ class AnchorElementPreloaderBrowserTest
           observer,
       bool success) override {
     last_network_anonymization_key_ = network_anonymization_key;
-    last_preresolve_success_ = success;
     if (url != GURL(kOrigin1) && url != GURL(kOrigin2)) {
       return;
     }
 
-    ++preresolve_count_;
-    if (run_loop_)
-      run_loop_->Quit();
+    if (!success) {
+      last_preresolve_success_ = false;
+      ++preresolve_count_;
+      if (run_loop_) {
+        run_loop_->Quit();
+      }
+    }
   }
 
   ukm::TestAutoSetUkmRecorder* test_ukm_recorder() {
@@ -154,7 +174,7 @@ class AnchorElementPreloaderBrowserTest
 
   content::RenderFrameHost* GetPrimaryMainFrame() {
     return browser()
-        ->tab_strip_model()
+        ->GetTabStripModel()
         ->GetActiveWebContents()
         ->GetPrimaryMainFrame();
   }
@@ -326,7 +346,7 @@ IN_PROC_BROWSER_TEST_F(AnchorElementPreloaderBrowserTest, DISABLED_IframeTest) {
   const GURL& url = GetTestURL("/iframe_anchor.html");
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::SimulateMouseEvent(
-      browser()->tab_strip_model()->GetActiveWebContents(),
+      browser()->GetTabStripModel()->GetActiveWebContents(),
       blink::WebMouseEvent::Type::kMouseDown,
       blink::WebMouseEvent::Button::kLeft, gfx::Point(200, 200));
   WaitForPreresolveCountForURL(1);
@@ -335,15 +355,16 @@ IN_PROC_BROWSER_TEST_F(AnchorElementPreloaderBrowserTest, DISABLED_IframeTest) {
 
 IN_PROC_BROWSER_TEST_F(AnchorElementPreloaderBrowserTest,
                        UserSettingDisabledTest) {
-  prefetch::SetPreloadPagesState(browser()->profile()->GetPrefs(),
+  prefetch::SetPreloadPagesState(browser()->GetProfile()->GetPrefs(),
                                  prefetch::PreloadPagesState::kNoPreloading);
   const GURL& url = GetTestURL("/one_anchor.html");
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   SimulateMouseDownElementWithId("anchor1");
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return content::test::GetPreloadingAttemptsCount(
+               browser()->GetTabStripModel()->GetActiveWebContents()) > 0;
+  }));
   EXPECT_EQ(0, preresolve_count_);
-
-  // Give some time for Preloading APIs creation.
-  GiveItSomeTime(base::Milliseconds(100));
 
   // Navigate away to the same origin that was preconnected. This should flush
   // the Preloading UKM logs.
@@ -382,10 +403,11 @@ IN_PROC_BROWSER_TEST_F(AnchorElementPreloaderHoldbackBrowserTest,
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   SimulateMouseDownElementWithId("anchor1");
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return content::test::GetPreloadingAttemptsCount(
+               browser()->GetTabStripModel()->GetActiveWebContents()) > 0;
+  }));
   EXPECT_EQ(0, preresolve_count_);
-
-  // Give some time for Preloading APIs creation.
-  GiveItSomeTime(base::Milliseconds(100));
 
   // Navigate away to the same origin that was preconnected. This should flush
   // the Preloading UKM logs.
@@ -412,7 +434,7 @@ class AnchorElementSetIsNavigationInDomainBrowserTest
     : public AnchorElementPreloaderBrowserTest {
  public:
   base::FieldTrialParams GetNavigationPredictorFieldTrialParams() override {
-    return {{"random_anchor_sampling_period", "1"}};
+    return {{"RandomAnchorSamplingPeriod", "1"}};
   }
 };
 
@@ -485,7 +507,7 @@ IN_PROC_BROWSER_TEST_F(AnchorElementPreloaderBrowserTest,
   ASSERT_TRUE(iframe);
 
   EXPECT_TRUE(content::NavigateIframeToURL(
-      browser()->tab_strip_model()->GetActiveWebContents(), "iframe1",
+      browser()->GetTabStripModel()->GetActiveWebContents(), "iframe1",
       cross_origin_url));
   // Re-get the iframe RFH after navigation.
   iframe = content::ChildFrameAt(main_frame, 0);
@@ -494,7 +516,7 @@ IN_PROC_BROWSER_TEST_F(AnchorElementPreloaderBrowserTest,
 
   // Trigger mousedown in the iframe.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   gfx::Point point =
       gfx::ToFlooredPoint(iframe->GetView()->TransformPointToRootCoordSpaceF(
           content::GetCenterCoordinatesOfElementWithId(iframe,
@@ -530,9 +552,14 @@ class AnchorElementPreloaderConnectionAllowlistBrowserTest
     std::vector<base::test::FeatureRefAndParams> enabled =
         AnchorElementPreloaderBrowserTest::GetEnabledFeatures();
     enabled.push_back({network::features::kConnectionAllowlists, {}});
-    enabled.push_back(
-        {blink::features::kOverrideConnectionAllowlistOriginTrial, {}});
     return enabled;
+  }
+
+  // The connection allowlist tests verify the legacy UI-thread host preresolve
+  // allowlist check and observe OnPreresolveFinished, so disable the direct
+  // fast-path.
+  std::vector<base::test::FeatureRef> GetDisabledFeatures() override {
+    return {features::kPreconnectManagerDirectFastPath};
   }
 };
 

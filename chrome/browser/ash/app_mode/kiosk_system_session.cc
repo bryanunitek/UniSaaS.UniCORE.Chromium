@@ -20,12 +20,11 @@
 #include "chrome/browser/ash/app_mode/kiosk_app_types.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_update_service.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_update_service_factory.h"
+#include "chrome/browser/ash/app_mode/kiosk_browser_window_handler.h"
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
 #include "chrome/browser/ash/app_mode/kiosk_mode_idle_app_name_notification.h"
 #include "chrome/browser/ash/app_mode/metrics/network_connectivity_metrics_service.h"
 #include "chrome/browser/ash/app_mode/metrics/periodic_metrics_service.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/app_mode/kiosk_browser_window_handler.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -51,10 +50,10 @@ KioskSystemSession::KioskSystemSession(
     PrefService& local_state,
     Profile* profile,
     const KioskAppId& kiosk_app_id,
-    const std::optional<std::string>& app_name)
+    const std::optional<webapps::AppId>& app_id)
     : local_state_(local_state),
       profile_(profile),
-      browser_session_(profile),
+      browser_session_(&local_state, profile),
       kiosk_app_id_(kiosk_app_id),
       network_metrics_service_(
           std::make_unique<NetworkConnectivityMetricsService>(local_state)),
@@ -66,10 +65,12 @@ KioskSystemSession::KioskSystemSession(
       InitForChromeAppKiosk();
       break;
     case KioskAppType::kWebApp:
-      InitForWebKiosk(app_name);
+      CHECK(app_id.has_value());
+      InitForWebKiosk(*app_id);
       break;
     case KioskAppType::kIsolatedWebApp:
-      InitForIwaKiosk(app_name);
+      CHECK(app_id.has_value());
+      InitForIwaKiosk(*app_id);
       break;
     case KioskAppType::kArcvmApp:
       // TODO(crbug.com/418950414): Implement kiosk system session for ARCVM
@@ -88,15 +89,13 @@ void KioskSystemSession::InitForChromeAppKiosk() {
   InitCommon();
 }
 
-void KioskSystemSession::InitForWebKiosk(
-    const std::optional<std::string>& app_name) {
-  browser_session_.InitForWebKiosk(app_name);
+void KioskSystemSession::InitForWebKiosk(const webapps::AppId& app_id) {
+  browser_session_.InitForWebKiosk(app_id);
   InitCommon();
 }
 
-void KioskSystemSession::InitForIwaKiosk(
-    const std::optional<std::string>& app_name) {
-  browser_session_.InitForIwaKiosk(app_name);
+void KioskSystemSession::InitForIwaKiosk(const webapps::AppId& app_id) {
+  browser_session_.InitForIwaKiosk(app_id);
   InitCommon();
 }
 
@@ -112,7 +111,7 @@ void KioskSystemSession::ShuttingDown() {
 void KioskSystemSession::InitKioskAppUpdateService(const std::string& app_id) {
   // Set the app_id for the current instance of KioskAppUpdateService.
   auto* update_service = KioskAppUpdateServiceFactory::GetForProfile(profile());
-  DCHECK(update_service);
+  CHECK(update_service, base::NotFatalUntil::M160);
   if (update_service) {
     update_service->Init(app_id);
   }
@@ -148,7 +147,7 @@ bool KioskSystemSession::is_shutting_down() const {
   return browser_session_.is_shutting_down();
 }
 
-Browser* KioskSystemSession::GetSettingsBrowserForTesting() {
+BrowserDelegate* KioskSystemSession::GetSettingsBrowserForTesting() {
   return browser_session_.GetSettingsBrowserForTesting();  // IN-TEST
 }
 

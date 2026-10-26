@@ -2,24 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/autofill/autofill_context_menu_manager.h"
+
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/media/webrtc/desktop_capture_access_handler.h"
+#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
-#include "chrome/browser/ui/autofill/autofill_context_menu_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/feedback/feedback_dialog.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/core/browser/autofill_feedback_data.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/feature_engagement/public/feature_constants.h"
@@ -74,11 +80,17 @@ class AutofillContextMenuManagerFeedbackUIBrowserTest
         std::make_unique<AutofillContextMenuManager>(
             render_view_context_menu_.get(), nullptr);
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                    true);
+    MediaCaptureDevicesDispatcher::GetInstance()
+        ->desktop_capture_access_handler_for_test()
+        ->SetRequestApprovedForTest(true);
   }
 
   void TearDownOnMainThread() override {
+    MediaCaptureDevicesDispatcher::GetInstance()
+        ->desktop_capture_access_handler_for_test()
+        ->SetRequestApprovedForTest(false);
     autofill_context_menu_manager_.reset();
     render_view_context_menu_.reset();
 
@@ -86,7 +98,7 @@ class AutofillContextMenuManagerFeedbackUIBrowserTest
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   TestAutofillManager* GetAutofillManager() {
@@ -134,7 +146,7 @@ IN_PROC_BROWSER_TEST_F(AutofillContextMenuManagerFeedbackUIBrowserTest,
       IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK);
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   tab->Close();
 }
 
@@ -168,13 +180,14 @@ IN_PROC_BROWSER_TEST_F(AutofillContextMenuManagerFeedbackUIBrowserTest,
 IN_PROC_BROWSER_TEST_F(AutofillContextMenuManagerFeedbackUIBrowserTest,
                        TabMoveToOtherBrowserDoesNotCrash) {
   // Create another browser.
-  Browser* other_browser = CreateBrowser(browser()->GetProfile());
+  BrowserWindowInterface* other_browser =
+      CreateBrowser(browser()->GetProfile());
 
   // Move the tab to the other browser.
-  other_browser->tab_strip_model()->InsertDetachedTabAt(
-      0, browser()->tab_strip_model()->DetachTabAtForInsertion(0),
+  other_browser->GetTabStripModel()->InsertDetachedTabAt(
+      0, browser()->GetTabStripModel()->DetachTabAtForInsertion(0),
       AddTabTypes::ADD_ACTIVE);
-  ASSERT_EQ(other_browser->tab_strip_model()->count(), 2);
+  ASSERT_EQ(other_browser->GetTabStripModel()->count(), 2);
 
   // Close the first browser.
   CloseBrowserSynchronously(browser());
@@ -217,7 +230,7 @@ IN_PROC_BROWSER_TEST_F(AutofillContextMenuManagerFeedbackUIBrowserTest,
       test::CreateTestAddressFormData(), frame_token);
   GetAutofillManager()->OnFormsSeen(
       /*updated_forms=*/{form},
-      /*removed_forms=*/{});
+      /*removed_forms=*/{}, autofill::AutofillManagerTestApi::pass_key());
   ASSERT_TRUE(GetAutofillManager()->WaitForFormsSeen(1));
   ASSERT_TRUE(GetAutofillManager()->FindCachedFormById(form.global_id()));
 

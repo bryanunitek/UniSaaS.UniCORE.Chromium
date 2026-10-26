@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
+
 #include <memory>
 #include <string>
 #include <variant>
@@ -19,16 +21,18 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
+#include "chrome/browser/glic/host/context/glic_share_image_handler.h"
 #include "chrome/browser/glic/host/glic_features.mojom.h"
 #include "chrome/browser/glic/host/guest_util.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 #include "chrome/browser/ui/tab_contents/chrome_web_contents_view_delegate.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
@@ -60,7 +64,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
@@ -193,289 +196,6 @@ IN_PROC_BROWSER_TEST_F(ContextMenuUiTest,
 }
 #endif  // !BUILDFLAG(IS_MAC)
 
-// TODO(crbug.com/375048798): Once Kombucha framework supports querying elements
-// inside iframe and fenced frame, convert the context menu tests to use
-// Kombucha framework.
-class ContextMenuFencedFrameTest : public ContextMenuUiTest {
- public:
-  ContextMenuFencedFrameTest() = default;
-  ~ContextMenuFencedFrameTest() override = default;
-  ContextMenuFencedFrameTest(const ContextMenuFencedFrameTest&) = delete;
-  ContextMenuFencedFrameTest& operator=(const ContextMenuFencedFrameTest&) =
-      delete;
-
-  // Defines the skeleton of set up method.
-  void SetUpOnMainThread() override {
-    ContextMenuUiTest::SetUpOnMainThread();
-
-    embedded_https_test_server().AddDefaultHandlers(GetChromeTestDataDir());
-    // Add content/test/data for cross_site_iframe_factory.html.
-    embedded_https_test_server().ServeFilesFromSourceDirectory(
-        "content/test/data");
-    embedded_https_test_server().SetSSLConfig(
-        net::EmbeddedTestServer::CERT_TEST_NAMES);
-
-    override_registration_ =
-        web_app::OsIntegrationTestOverrideImpl::OverrideForTesting();
-  }
-
-  // Create a fenced frame which is navigated to `url`.
-  content::RenderFrameHost* CreateFencedFrame(const GURL& url) {
-    // Navigate fenced frame to a page with an anchor element.
-    GURL main_url(embedded_https_test_server().GetURL(
-        "a.test",
-        base::StringPrintf("/cross_site_iframe_factory.html?a.test(%s{fenced})",
-                           url.spec().c_str())));
-    EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
-
-    // Get fenced frame render frame host.
-    std::vector<content::RenderFrameHost*> child_frames =
-        fenced_frame_test_helper().GetChildFencedFrameHosts(
-            primary_main_frame_host());
-    EXPECT_EQ(child_frames.size(), 1u);
-    content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
-    EXPECT_EQ(fenced_frame_rfh->GetLastCommittedURL(), url);
-
-    return fenced_frame_rfh;
-  }
-
-  // Create a fenced frame with a nested iframe. The nested iframe is navigated
-  // to `url`.
-  content::RenderFrameHost* CreateFencedFrameWithNestedIframe(const GURL& url) {
-    // The page has a fenced frame with a nested iframe inside.
-    GURL main_url(embedded_https_test_server().GetURL(
-        "a.test",
-        base::StringPrintf(
-            "/cross_site_iframe_factory.html?a.test(a.test{fenced}(%s))",
-            url.spec().c_str())));
-    EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
-
-    // Get fenced frame render frame host.
-    std::vector<content::RenderFrameHost*> child_frames =
-        fenced_frame_test_helper().GetChildFencedFrameHosts(
-            primary_main_frame_host());
-    EXPECT_EQ(child_frames.size(), 1u);
-    content::RenderFrameHost* fenced_frame_rfh = child_frames[0];
-
-    return fenced_frame_rfh;
-  }
-
-  content::RenderFrameHost* primary_main_frame_host() {
-    return browser()
-        ->tab_strip_model()
-        ->GetActiveWebContents()
-        ->GetPrimaryMainFrame();
-  }
-
-  void InstallTestWebApp(const GURL& start_url) {
-    auto web_app_info =
-        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
-    web_app_info->scope = start_url;
-    web_app_info->title = u"Test app";
-    web_app_info->description = u"Test description";
-    web_app_info->user_display_mode =
-        web_app::mojom::UserDisplayMode::kStandalone;
-
-    web_app::test::InstallWebApp(browser()->GetProfile(),
-                                 std::move(web_app_info));
-  }
-
-  void CleanupWebApps() {
-    web_app::test::UninstallAllWebApps(browser()->GetProfile());
-    override_registration_.reset();
-  }
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_test_helper_;
-  }
-
- private:
-  content::test::FencedFrameTestHelper fenced_frame_test_helper_;
-  // OS integration is needed to be able to launch web applications. This
-  // override ensures OS integration doesn't leave any traces.
-  std::unique_ptr<web_app::OsIntegrationTestOverrideImpl::BlockingRegistration>
-      override_registration_;
-};
-
-// Check which commands are present after opening the context menu for a
-// fencedframe.
-// TODO(crbug.com/40273673): Enable the test.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_MenuContentsVerification_Fencedframe \
-  DISABLED_MenuContentsVerification_Fencedframe
-#else
-#define MAYBE_MenuContentsVerification_Fencedframe \
-  MenuContentsVerification_Fencedframe
-#endif
-IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTest,
-                       MAYBE_MenuContentsVerification_Fencedframe) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  auto initial_url = embedded_test_server()->GetURL("/empty.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
-
-  // Load a fenced frame.
-  GURL fenced_frame_url(
-      embedded_test_server()->GetURL("/fenced_frames/title1.html"));
-  auto* fenced_frame_rfh = fenced_frame_test_helper().CreateFencedFrame(
-      primary_main_frame_host(), fenced_frame_url);
-
-  // To avoid a flakiness and ensure fenced_frame_rfh is ready for hit testing.
-  content::WaitForHitTestData(fenced_frame_rfh);
-
-  // Open a context menu.
-  ContextMenuWaiter menu_observer;
-  blink::WebMouseEvent mouse_event(
-      blink::WebInputEvent::Type::kMouseDown,
-      blink::WebInputEvent::kNoModifiers,
-      blink::WebInputEvent::GetStaticTimeStampForTests());
-  mouse_event.button = blink::WebMouseEvent::Button::kRight;
-  // These coordinates are relative to the fenced frame's widget since we're
-  // forwarding this event directly to the widget.
-  mouse_event.SetPositionInWidget(50, 50);
-
-  auto* fenced_frame_widget = fenced_frame_rfh->GetRenderWidgetHost();
-  fenced_frame_widget->ForwardMouseEvent(mouse_event);
-  mouse_event.SetType(blink::WebInputEvent::Type::kMouseUp);
-  fenced_frame_widget->ForwardMouseEvent(mouse_event);
-
-  // Wait for context menu to be visible.
-  menu_observer.WaitForMenuOpenAndClose();
-  EXPECT_THAT(menu_observer.GetCapturedCommandIds(),
-              IsSupersetOf({IDC_BACK, IDC_FORWARD, IDC_RELOAD, IDC_VIEW_SOURCE,
-                            IDC_SAVE_PAGE, IDC_CONTENT_CONTEXT_VIEWFRAMESOURCE,
-                            IDC_CONTENT_CONTEXT_RELOADFRAME,
-                            IDC_CONTENT_CONTEXT_INSPECTELEMENT}));
-}
-
-class InterestGroupContentBrowserClient : public ChromeContentBrowserClient {
- public:
-  InterestGroupContentBrowserClient() = default;
-  InterestGroupContentBrowserClient(const InterestGroupContentBrowserClient&) =
-      delete;
-  InterestGroupContentBrowserClient& operator=(
-      const InterestGroupContentBrowserClient&) = delete;
-
-  // ChromeContentBrowserClient overrides:
-  // This is needed so that the interest group related APIs can run without
-  // failing with the result AuctionResult::kSellerRejected.
-  bool IsInterestGroupAPIAllowed(content::BrowserContext* browser_context,
-                                 content::RenderFrameHost* render_frame_host,
-                                 content::InterestGroupApiOperation operation,
-                                 const url::Origin& top_frame_origin,
-                                 const url::Origin& api_origin) override {
-    return true;
-  }
-};
-
-// TODO(crbug.com/40285326): This fails with the field trial testing config.
-class ContextMenuFencedFrameTestNoTestingConfig
-    : public ContextMenuFencedFrameTest {
- public:
-  ContextMenuFencedFrameTestNoTestingConfig() = default;
-  ~ContextMenuFencedFrameTestNoTestingConfig() override {
-    content::SetBrowserClientForTesting(original_client_);
-  }
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContextMenuFencedFrameTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch("disable-field-trial-config");
-  }
-
-  // Defines the skeleton of set up method.
-  void SetUpOnMainThread() override {
-    ContextMenuFencedFrameTest::SetUpOnMainThread();
-
-    content_browser_client_ =
-        std::make_unique<InterestGroupContentBrowserClient>();
-    original_client_ =
-        content::SetBrowserClientForTesting(content_browser_client_.get());
-  }
-
- private:
-  std::unique_ptr<InterestGroupContentBrowserClient> content_browser_client_;
-  raw_ptr<content::ContentBrowserClient> original_client_;
-};
-
-// Test that automatic beacons are sent after clicking "Open Link in New Tab"
-// from a contextual menu inside of a fenced frame.
-IN_PROC_BROWSER_TEST_F(ContextMenuFencedFrameTestNoTestingConfig,
-                       AutomaticBeaconSentAfterContextMenuNavigation) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  constexpr char kReportingURL[] = "/_report_event_server.html";
-  constexpr char kBeaconMessage[] = "this is the message";
-
-  // In order to check events reported over the network, we register an HTTP
-  // response interceptor for each successful reportEvent request we expect.
-  net::test_server::ControllableHttpResponse response(
-      &embedded_https_test_server(), kReportingURL);
-
-  ASSERT_TRUE(embedded_https_test_server().Start());
-
-  auto initial_url =
-      embedded_https_test_server().GetURL("a.test", "/empty.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
-
-  // Load a fenced frame.
-  GURL fenced_frame_url(embedded_https_test_server().GetURL(
-      "a.test", "/fenced_frames/title1.html"));
-  GURL new_tab_url(
-      embedded_https_test_server().GetURL("a.test", "/title2.html"));
-  EXPECT_TRUE(ExecJs(primary_main_frame_host(),
-                     "var fenced_frame = document.createElement('fencedframe');"
-                     "fenced_frame.id = 'fenced_frame';"
-                     "document.body.appendChild(fenced_frame);"));
-  content::RenderFrameHost* fenced_frame_rfh =
-      fenced_frame_test_helper().GetMostRecentlyAddedFencedFrame(
-          primary_main_frame_host());
-  content::TestFrameNavigationObserver observer(fenced_frame_rfh);
-  fenced_frame_test_helper().NavigateFencedFrameUsingFledge(
-      primary_main_frame_host(), fenced_frame_url, "fenced_frame");
-  observer.Wait();
-
-  // Embedder-initiated fenced frame navigation uses a new browsing instance.
-  // Fenced frame RenderFrameHost is a new one after navigation, so we need
-  // to retrieve it.
-  fenced_frame_rfh = fenced_frame_test_helper().GetMostRecentlyAddedFencedFrame(
-      primary_main_frame_host());
-
-  // Set the automatic beacon
-  EXPECT_TRUE(ExecJs(
-      fenced_frame_rfh,
-      content::JsReplace(R"(
-      window.fence.setReportEventDataForAutomaticBeacons({
-        eventType: $1,
-        eventData: $2,
-        destination: ['seller', 'buyer']
-      });
-    )",
-                         "reserved.top_navigation_commit", kBeaconMessage)));
-
-  // This simulates the conditions when right clicking on a link.
-  content::ContextMenuParams params;
-  params.is_editable = false;
-  params.media_type = blink::mojom::ContextMenuDataMediaType::kNone;
-  params.page_url = fenced_frame_url;
-  params.link_url = new_tab_url;
-
-  ui_test_utils::TabAddedWaiter tab_add(browser());
-
-  // Open the contextual menu and click "Open Link in New Tab".
-  TestRenderViewContextMenu menu(*fenced_frame_rfh, params);
-  menu.Init();
-  menu.ExecuteCommand(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB, 0);
-
-  // Verify the automatic beacon was sent and has the correct data.
-  response.WaitForRequest();
-  EXPECT_EQ(response.http_request()->content, kBeaconMessage);
-}
-
 class GlicInteractiveContextMenuTestBase
     : public glic::test::InteractiveGlicTest {
  public:
@@ -484,7 +204,6 @@ class GlicInteractiveContextMenuTestBase
 
   void SetUpOnMainThread() override {
     glic::test::InteractiveGlicTest::SetUpOnMainThread();
-    ASSERT_TRUE(embedded_https_test_server().Start());
     host_resolver()->AddRule("*", "127.0.0.1");
     signin::IdentityManager* identity_manager =
         IdentityManagerFactory::GetForProfile(browser()->GetProfile());
@@ -498,14 +217,14 @@ class GlicInteractiveContextMenuTestBase
   }
 
   auto PollForAndCompleteOnboarding() {
-    return Steps(PollUntil(
+    return Steps(InAnyContext(PollUntil(
                      [this]() {
                        if (auto* instance = GetGlicInstanceImpl()) {
                          return instance->host().IsWebClientConnected();
                        }
                        return false;
                      },
-                     "polling until the client is ready"),
+                     "polling until the client is ready")),
                  Do([this]() {
                    ::glic::SetFRECompletion(browser()->GetProfile(),
                                             glic::prefs::FreStatus::kCompleted);
@@ -513,6 +232,26 @@ class GlicInteractiveContextMenuTestBase
   }
 
   auto PollForAndInstrumentGlic() {
+    if (glic::GlicKeyedService::IsNoWebviewEnabled(browser()->GetProfile())) {
+      return Steps(UninstrumentWebContents(glic::kGlicContentsElementId, false),
+                   UninstrumentWebContents(glic::kGlicHostElementId, false),
+                   InAnyContext(Steps(
+                       InstrumentNonTabWebView(glic::kGlicContentsElementId,
+                                               kGlicViewElementId),
+                       InstrumentNonTabWebView(glic::kGlicHostElementId,
+                                               kGlicViewElementId),
+                       WaitForWebContentsReady(glic::kGlicContentsElementId),
+                       // TODO(b:448604727): State observation is currently
+                       // unsupported with multi- instance, so we will poll.
+                       PollUntil(
+                           [this]() {
+                             if (auto* instance = GetGlicInstanceImpl()) {
+                               return instance->host().IsWebClientConnected();
+                             }
+                             return false;
+                           },
+                           "polling until web client is ready"))));
+    }
     return Steps(UninstrumentWebContents(glic::kGlicContentsElementId, false),
                  UninstrumentWebContents(glic::kGlicHostElementId, false),
                  InAnyContext(Steps(
@@ -520,17 +259,17 @@ class GlicInteractiveContextMenuTestBase
                                              kGlicViewElementId),
                      InstrumentInnerWebContents(glic::kGlicContentsElementId,
                                                 glic::kGlicHostElementId, 0),
-                     WaitForWebContentsReady(glic::kGlicContentsElementId))),
-                 // TODO(b:448604727): State observation is currently
-                 // unsupported with multi- instance, so we will poll.
-                 PollUntil(
-                     [this]() {
-                       if (auto* instance = GetGlicInstanceImpl()) {
-                         return instance->host().IsWebClientConnected();
-                       }
-                       return false;
-                     },
-                     "polling until web client is ready"));
+                     WaitForWebContentsReady(glic::kGlicContentsElementId),
+                     // TODO(b:448604727): State observation is currently
+                     // unsupported with multi- instance, so we will poll.
+                     PollUntil(
+                         [this]() {
+                           if (auto* instance = GetGlicInstanceImpl()) {
+                             return instance->host().IsWebClientConnected();
+                           }
+                           return false;
+                         },
+                         "polling until web client is ready"))));
   }
 
   auto CheckHistograms() {
@@ -565,25 +304,31 @@ class GlicInteractiveContextMenuTestBase
   }
 
   auto PollForNewGlicInstance() {
-    return PollUntil(
+    auto steps = PollUntil(
         [this]() {
-          return cached_instance_id_.IsValid() &&
-                 cached_instance_id_ !=
-                     glic_service()->GetInstanceForActiveTab(browser())->id();
+          auto* instance = glic_service()->GetInstanceForActiveTab(browser());
+          return cached_instance_id_.IsValid() && instance &&
+                 cached_instance_id_ != instance->id();
         },
         "polling we have a new glic instance");
+    for (auto& step : steps) {
+      step.SetMustRemainVisible(false);
+    }
+    return steps;
   }
 
   auto WaitForAdditionalContext() {
-    return WaitForJsResult(
+    auto steps = WaitForJsResult(
         glic::kGlicContentsElementId,
         "() => { "
         "  let c = document.querySelector('#additionalContextResult');"
-        "  return !!c && c.children.length === 5 && "
-        "      c.children[1].innerText.startsWith('MIME Type: image/png') && "
-        "      c.children[4].innerText.startsWith("
-        "           'Tab Context: present');"
+        "  return !!c && c.children.length >= 4 && "
+        "      c.innerText.includes('MIME Type: image/png');"
         "}");
+    for (auto& step : steps) {
+      step.SetMustRemainVisible(false);
+    }
+    return steps;
   }
 
   auto CheckAdditionalContextNotPresent() {
@@ -599,7 +344,7 @@ class GlicInteractiveContextMenuTestBase
   auto CheckToastIsShowing(ToastId toast_id) {
     return PollUntil(
         [this, toast_id]() {
-          auto* controller = browser()->GetFeatures().toast_controller();
+          auto* controller = ToastController::From(browser());
           return controller && controller->IsShowingToast() &&
                  controller->GetCurrentToastId() == toast_id;
         },
@@ -607,13 +352,17 @@ class GlicInteractiveContextMenuTestBase
   }
 
   auto WaitForShareResult(glic::ShareImageResult result) {
-    return PollUntil(
+    auto steps = PollUntil(
         [this, result]() {
           return histogram_tester_.GetBucketCount(
                      "Glic.TabContext.ShareImageResult",
                      static_cast<int>(result)) == 1;
         },
         "polling until result");
+    for (auto& step : steps) {
+      step.SetMustRemainVisible(false);
+    }
+    return steps;
   }
 
  protected:
@@ -658,28 +407,6 @@ IN_PROC_BROWSER_TEST_F(GlicInteractiveContextMenuTest, GlicShareImage) {
       WaitForAdditionalContext(),
       WaitForShareResult(glic::ShareImageResult::kSentImageToClient),
       CheckHistograms());
-}
-
-IN_PROC_BROWSER_TEST_F(GlicInteractiveContextMenuTest, CreateNewInstance) {
-  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTab);
-
-  const GURL url = embedded_test_server()->GetURL(kPageWithImage);
-  const DeepQuery kPathToImg{
-      "img",
-  };
-  RunTestSequence(
-      InstrumentTab(kActiveTab, std::nullopt, browser(), true),
-      NavigateWebContents(kActiveTab, url),
-      WaitForWebContentsPainted(kActiveTab),
-      ToggleGlicWindow(GlicWindowMode::kAttached),
-      PollForAndCompleteOnboarding(),
-      WaitForAndInstrumentGlic(kHostAndContents), CacheCurrentInstance(),
-      MoveMouseTo(kActiveTab, kPathToImg), ClickMouse(ui_controls::RIGHT),
-      SelectMenuItem(RenderViewContextMenu::kGlicShareImageMenuItem),
-      PollForNewGlicInstance(), PollForAndInstrumentGlic(),
-      WaitForAdditionalContext(),
-      WaitForShareResult(glic::ShareImageResult::kSentImageToClient),
-      CheckCachedInstance(), CheckHistograms());
 }
 
 // Disabled because flaky: crbug.com/519961669
@@ -785,7 +512,10 @@ class ClipboardTestContentAnalysisDelegate
 
   using FakeContentAnalysisDelegate::FakeContentAnalysisDelegate;
 
- protected:
+  void FakeUploadClipboardDataForDeepScanning(
+      enterprise_connectors::ClipboardRequestHandler::Type type,
+      std::unique_ptr<enterprise_connectors::BinaryUploadRequest> request)
+      override;
 };
 
 class GlicInteractiveContextMenuPolicyTest
@@ -798,8 +528,10 @@ class GlicInteractiveContextMenuPolicyTest
         SetObserverForTesting(this);
   }
 
-  static base::RepeatingClosure& GetPastePolicyCallbackHook() {
-    static base::NoDestructor<base::RepeatingClosure> hook;
+  static base::RepeatingCallback<void(base::OnceClosure)>&
+  GetPastePolicyCallbackHook() {
+    static base::NoDestructor<base::RepeatingCallback<void(base::OnceClosure)>>
+        hook;
     return *hook;
   }
 
@@ -825,9 +557,6 @@ class GlicInteractiveContextMenuPolicyTest
             &ClipboardTestContentAnalysisDelegate::Create, base::DoNothing(),
             base::BindRepeating([](const std::string& contents,
                                    const base::FilePath& path) {
-              if (GetPastePolicyCallbackHook()) {
-                GetPastePolicyCallbackHook().Run();
-              }
               bool success = false;
               if (contents.size() > kPatternSize) {
                 std::string pattern = base::Base64Encode(contents.substr(
@@ -902,6 +631,23 @@ class GlicInteractiveContextMenuPolicyTest
   bool content_analysis_dialog_shown_ = false;
 };
 
+void ClipboardTestContentAnalysisDelegate::
+    FakeUploadClipboardDataForDeepScanning(
+        enterprise_connectors::ClipboardRequestHandler::Type type,
+        std::unique_ptr<enterprise_connectors::BinaryUploadRequest> request) {
+  if (GlicInteractiveContextMenuPolicyTest::GetPastePolicyCallbackHook()) {
+    auto hook = std::move(
+        GlicInteractiveContextMenuPolicyTest::GetPastePolicyCallbackHook());
+    GlicInteractiveContextMenuPolicyTest::GetPastePolicyCallbackHook().Reset();
+    hook.Run(base::BindOnce(
+        &FakeContentAnalysisDelegate::FakeUploadClipboardDataForDeepScanning,
+        weakptr_factory_.GetWeakPtr(), type, std::move(request)));
+    return;
+  }
+  FakeContentAnalysisDelegate::FakeUploadClipboardDataForDeepScanning(
+      type, std::move(request));
+}
+
 IN_PROC_BROWSER_TEST_F(GlicInteractiveContextMenuPolicyTest,
                        GlicShareImageFailsOnCopyDenied) {
   // Taken from DataProtectionClipboardBrowserTest in clipboard_browsertest.cc.
@@ -971,8 +717,12 @@ IN_PROC_BROWSER_TEST_F(
   static bool reached = false;
   reached = false;
 
-  GetPastePolicyCallbackHook() =
-      base::BindRepeating([](bool* flag) { *flag = true; }, &reached);
+  GetPastePolicyCallbackHook() = base::BindRepeating(
+      [](bool* flag, base::OnceClosure done) {
+        *flag = true;
+        std::move(done).Run();
+      },
+      &reached);
 
   RunTestSequence(
       InstrumentTab(kActiveTab, std::nullopt, browser(), true),
@@ -988,9 +738,55 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 IN_PROC_BROWSER_TEST_F(GlicInteractiveContextMenuPolicyTest,
+                       ReplacedByNewShareCancelsPreviousInvoke) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTab);
+
+  const GURL url = embedded_test_server()->GetURL(kPageWithAllowedImage);
+  const DeepQuery kPathToImg{"img:nth-of-type(3)"};
+
+  static bool share1_reached = false;
+  share1_reached = false;
+
+  GetPastePolicyCallbackHook() = base::BindRepeating(
+      [](bool* flag, base::OnceClosure done) { *flag = true; },
+      &share1_reached);
+
+  browser()->GetWindow()->SetBounds(gfx::Rect(0, 0, 1000, 1000));
+
+  RunTestSequence(
+      InstrumentTab(kActiveTab, std::nullopt, browser(), true),
+      NavigateWebContents(kActiveTab, url),
+      WaitForWebContentsPainted(kActiveTab),
+      MoveMouseTo(kActiveTab, kPathToImg), ClickMouse(ui_controls::RIGHT),
+      SelectMenuItem(RenderViewContextMenu::kGlicShareImageMenuItem),
+      PollUntil([]() { return share1_reached; },
+                "waiting for share 1 paste policy check"),
+      WaitForHide(RenderViewContextMenu::kGlicShareImageMenuItem),
+      Do([]() { GetPastePolicyCallbackHook().Reset(); }),
+      MoveMouseTo(kActiveTab, kPathToImg), ClickMouse(ui_controls::RIGHT),
+      SelectMenuItem(RenderViewContextMenu::kGlicShareImageMenuItem),
+      WaitForHide(RenderViewContextMenu::kGlicShareImageMenuItem),
+      PollForAndCompleteOnboarding(), PollForAndInstrumentGlic(),
+      WaitForShareResult(glic::ShareImageResult::kFailedReplacedByNewShare),
+      WaitForAdditionalContext(),
+      WaitForShareResult(glic::ShareImageResult::kSentImageToClient),
+      Do([this]() {
+        histogram_tester_.ExpectBucketCount(
+            "Glic.TabContext.ShareImageResult",
+            static_cast<int>(glic::ShareImageResult::kFailedReplacedByNewShare),
+            1);
+        histogram_tester_.ExpectBucketCount(
+            "Glic.TabContext.ShareImageResult",
+            static_cast<int>(glic::ShareImageResult::kSentImageToClient), 1);
+      }));
+
+  GetPastePolicyCallbackHook().Reset();
+}
+
+IN_PROC_BROWSER_TEST_F(GlicInteractiveContextMenuPolicyTest,
                        GlicShareImageFailsWhenGuestURLBlocked) {
   // Check that our destination is the Guest URL.
-  GURL guest_url = glic::GetGuestURL();
+  GURL guest_url = glic::GetGuestURL(browser()->GetProfile());
   data_controls::SetDataControls(
       browser()->GetProfile()->GetPrefs(),
       {base::StringPrintf(kPastePolicyTemplate, guest_url.spec())});

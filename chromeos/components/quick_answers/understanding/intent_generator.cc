@@ -8,6 +8,7 @@
 
 #include "base/i18n/break_iterator.h"
 #include "base/i18n/case_conversion.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
@@ -17,7 +18,6 @@
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
 #include "chromeos/components/quick_answers/utils/spell_checker.h"
 #include "chromeos/components/quick_answers/utils/translation_v2_utils.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
 #include "chromeos/services/machine_learning/public/mojom/machine_learning_service.mojom.h"
 #include "components/translate/core/browser/translate_download_manager.h"
@@ -35,8 +35,7 @@ using ::chromeos::machine_learning::mojom::TextClassifier;
 
 // TODO(llin): Finalize on the threshold based on user feedback.
 constexpr int kUnitConversionIntentAndSelectionLengthDiffThreshold = 5;
-constexpr int kTranslationTextLengthThreshold = 100;
-constexpr int kRichAnswersTranslationTextLengthThreshold = 250;
+constexpr size_t kTranslationTextLengthThreshold = 100;
 constexpr int kDefinitionIntentAndSelectionLengthDiffThreshold = 2;
 
 // TODO(b/169370175): Remove the temporary invalid set after we ramp up to v2
@@ -104,8 +103,10 @@ bool IsPreferredLanguage(std::string_view detected_language) {
                         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
   for (const std::string& locale : preferred_languages_list) {
-    if (l10n_util::GetLanguage(locale) == detected_language)
+    if (base::i18n::GetLanguageSubtagUsingLanguageTag(locale) ==
+        detected_language) {
       return true;
+    }
   }
   return false;
 }
@@ -117,8 +118,8 @@ bool ShouldSkipDefinition(const std::string& text) {
   // Skip definition annotations if English is not device language or user
   // preferred language (Currently the text classifier only works with English
   // words).
-  auto device_language =
-      l10n_util::GetLanguage(QuickAnswersState::Get()->application_locale());
+  auto device_language = base::i18n::GetLanguageSubtagUsingLanguageTag(
+      QuickAnswersState::Get()->application_locale());
   if (device_language != kEnglishLanguage &&
       !IsPreferredLanguage(kEnglishLanguage))
     return true;
@@ -328,15 +329,11 @@ void IntentGenerator::MaybeGenerateTranslationIntent(
     return;
   }
 
-  size_t translation_text_length_threshold =
-      chromeos::features::IsQuickAnswersRichCardEnabled()
-          ? kRichAnswersTranslationTextLengthThreshold
-          : kTranslationTextLengthThreshold;
   // Don't generate translation intent if no device language is provided or the
   // length of selected text is above the threshold. Returns unknown intent
   // type.
   if (QuickAnswersState::Get()->application_locale().empty() ||
-      request.selected_text.length() > translation_text_length_threshold) {
+      request.selected_text.length() > kTranslationTextLengthThreshold) {
     std::move(complete_callback_)
         .Run(IntentInfo(request.selected_text, IntentType::kUnknown));
     return;
@@ -355,11 +352,12 @@ void IntentGenerator::LanguageDetectorCallback(
     std::optional<std::string> detected_locale) {
   language_detector_.reset();
 
-  auto device_language =
-      l10n_util::GetLanguage(QuickAnswersState::Get()->application_locale());
+  auto device_language = base::i18n::GetLanguageSubtagUsingLanguageTag(
+      QuickAnswersState::Get()->application_locale());
   auto detected_language = detected_locale.has_value()
-                               ? l10n_util::GetLanguage(detected_locale.value())
-                               : std::string_view();
+                               ? base::i18n::GetLanguageSubtagUsingLanguageTag(
+                                     detected_locale.value())
+                               : std::string();
 
   // Generate translation intent if the detected language is different to the
   // system language and is not one of the preferred languages.

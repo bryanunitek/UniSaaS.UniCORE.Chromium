@@ -8,6 +8,8 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -95,7 +97,9 @@ Layer::LayerTreeInputs::~LayerTreeInputs() = default;
 
 int Layer::GetNextLayerId() {
   // Layer IDs start from 1.
-  return g_next_layer_id.GetNext() + 1;
+  int prev = g_next_layer_id.GetNext();
+  CHECK_LT(prev, std::numeric_limits<int>::max());
+  return prev + 1;
 }
 
 scoped_refptr<Layer> Layer::Create() {
@@ -623,7 +627,7 @@ void Layer::SetClipRect(const gfx::Rect& clip_rect) {
           property_trees->effect_tree_mutable().MutableNode(effect_id);
       node.mask_filter_info = gfx::MaskFilterInfo(
           effective_clip_rect, corner_radii(), gradient_mask());
-      node.effect_changed = true;
+      node.SetEffectChanged(DamageReason::kUntracked);
       property_trees->effect_tree_mutable().set_needs_update(true);
     }
   } else {
@@ -736,7 +740,7 @@ void Layer::UpdateMaskFilterInfo(const gfx::RoundedCornersF* corner_radii,
     effective_clip_rect += offset_to_transform_parent();
     node.mask_filter_info = gfx::MaskFilterInfo(
         effective_clip_rect, inputs.corner_radii, inputs.gradient_mask);
-    node.effect_changed = true;
+    node.SetEffectChanged(DamageReason::kUntracked);
     property_trees->effect_tree_mutable().set_needs_update(true);
   } else {
     SetPropertyTreesNeedRebuild();
@@ -796,7 +800,7 @@ void Layer::SetOpacity(float opacity) {
         EffectNode& node =
             property_trees->effect_tree_mutable().MutableNode(effect_id);
         node.opacity = opacity;
-        node.effect_changed = true;
+        node.SetEffectChanged(DamageReason::kUntracked);
         property_trees->effect_tree_mutable().set_needs_update(true);
       }
     } else {
@@ -1039,6 +1043,9 @@ void Layer::SetTransformOrigin(const gfx::Point3F& transform_origin) {
 }
 
 void Layer::SetScrollOffset(const gfx::PointF& scroll_offset) {
+  if (!std::isfinite(scroll_offset.x()) || !std::isfinite(scroll_offset.y())) {
+    return;
+  }
   DCHECK(IsPropertyChangeAllowed());
 
   auto& inputs = EnsureLayerTreeInputs();
@@ -1055,6 +1062,9 @@ void Layer::SetScrollOffset(const gfx::PointF& scroll_offset) {
 }
 
 void Layer::SetScrollOffsetFromImplSide(const gfx::PointF& scroll_offset) {
+  if (!std::isfinite(scroll_offset.x()) || !std::isfinite(scroll_offset.y())) {
+    return;
+  }
   DCHECK(IsPropertyChangeAllowed());
   // This function only gets called during a BeginMainFrame, so there
   // is no need to call SetNeedsUpdate here.
@@ -1242,16 +1252,16 @@ void Layer::SetXrHitTestOrder(std::vector<ElementId> xr_hit_test_order) {
 }
 #endif
 
-void Layer::SetCanvasChildId(ElementId id) {
+void Layer::SetCanvasDrawableId(ElementId id) {
   DCHECK(IsPropertyChangeAllowed());
   const auto& rare_inputs = inputs_.Read(*this).rare_inputs;
   if (!rare_inputs && !id) {
     return;
   }
-  if (rare_inputs && rare_inputs->canvas_child_id == id) {
+  if (rare_inputs && rare_inputs->canvas_drawable_id == id) {
     return;
   }
-  EnsureRareInputs().canvas_child_id = id;
+  EnsureRareInputs().canvas_drawable_id = id;
   SetNeedsPushProperties();
 }
 
@@ -1525,9 +1535,9 @@ void Layer::PushDirtyPropertiesTo(LayerImpl* layer,
     layer->SetBounds(inputs.bounds);
 
     layer->SetOffsetToTransformParent(offset_to_transform_parent_.Read(*this));
-    bool has_canvas_child_id =
-        inputs.rare_inputs && inputs.rare_inputs->canvas_child_id;
-    layer->SetDrawsContent(draws_content() && !has_canvas_child_id);
+    bool has_canvas_drawable_id =
+        inputs.rare_inputs && inputs.rare_inputs->canvas_drawable_id;
+    layer->SetDrawsContent(draws_content() && !has_canvas_drawable_id);
     layer->SetHitTestOpaqueness(inputs.hit_test_opaqueness);
     // subtree_property_changed_ is propagated to all descendants while building
     // property trees. So, it is enough to check it only for the current layer.
@@ -1561,7 +1571,7 @@ void Layer::PushDirtyPropertiesTo(LayerImpl* layer,
       layer->SetCaptureBounds(inputs.rare_inputs->capture_bounds);
       layer->SetTrackedElementRects(inputs.rare_inputs->tracked_element_rects);
       layer->SetWheelEventHandlerRegion(inputs.rare_inputs->wheel_event_region);
-      layer->SetCanvasChildId(inputs.rare_inputs->canvas_child_id);
+      layer->SetCanvasDrawableId(inputs.rare_inputs->canvas_drawable_id);
     } else {
       layer->ResetRareProperties();
     }

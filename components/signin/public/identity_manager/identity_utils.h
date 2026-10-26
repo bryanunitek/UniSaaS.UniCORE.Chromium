@@ -6,8 +6,11 @@
 #define COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_IDENTITY_UTILS_H_
 
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/containers/flat_set.h"
+#include "components/signin/public/identity_manager/account_info.h"
 
 class GaiaId;
 class PrefService;
@@ -27,19 +30,37 @@ bool IsUsernameAllowedByPattern(std::string_view username,
 // |prefs::kGoogleServicesUsernamePattern| with the preferences service
 // referenced by |prefs|.
 bool IsUsernameAllowedByPatternFromPrefs(const PrefService* prefs,
-                                         const std::string& username);
+                                         std::string_view username);
 
 // Returns all accounts for which Chrome should keep account-keyed preferences.
-// These are the accounts in the cookie (signed in or signed out) plus the
-// primary account.
+// These are the accounts in the cookie (signed in or signed out), the primary
+// account and the accounts with refresh tokens.
 // In particular, when the cookies are cleared while signed in, they may be
 // rebuilt immediately, and in that case it is very important to not clear the
 // preferences.
+// Accounts with refresh tokens are kept even if they are not in the cookie nor
+// the primary account (e.g. on Android, the accounts on the device after
+// sign-out). Callers should make sure that refresh tokens are loaded
+// (`IdentityManager::AreRefreshTokensLoaded()`) before relying on the result
+// to remove preferences.
 // `identity_manager` may be nullptr.
 // `accounts_in_cookie_jar_info.AreAccountsFresh()` must be true.
 base::flat_set<GaiaId> GetAllGaiaIdsForKeyedPreferences(
     const IdentityManager* identity_manager,
     const AccountsInCookieJarInfo& accounts_in_cookie_jar_info);
+
+// Returns the candidate accounts in priority order for display in sign-in
+// promos or UI.
+// - If signed in to Chrome, the primary account is always returned first.
+// - On iOS: device accounts in system keychain order.
+// - On Android: accounts with refresh tokens in device order.
+// - On Desktop: accounts with refresh tokens in Gaia cookie jar order.
+//
+// If `local_state` is provided, accounts disallowed by enterprise pattern
+// policies (`prefs::kGoogleServicesUsernamePattern`) are filtered out.
+std::vector<AccountInfo> GetOrderedAccountsForDisplay(
+    const IdentityManager* identity_manager,
+    const PrefService* local_state = nullptr);
 
 }  // namespace signin
 

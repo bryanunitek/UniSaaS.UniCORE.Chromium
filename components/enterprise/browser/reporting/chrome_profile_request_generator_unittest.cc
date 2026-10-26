@@ -11,6 +11,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "components/certificate_matching/certificate_principal_pattern.h"
 #include "components/device_signals/core/browser/mock_signals_aggregator.h"
 #include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/browser/reporting/fake_browser_report_generator_delegate.h"
@@ -19,6 +20,7 @@
 #include "components/enterprise/browser/reporting/reporting_delegate_factory.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/enterprise/device_attestation/scoped_device_attestation_service_factory.h"
+#include "components/enterprise/isolated_mode/isolated_mode_features.h"
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/version_info/channel.h"
@@ -56,36 +58,23 @@ const bool kFakeVerifiedAppsEnabled = true;
 const int64_t kFakeSecurityPatchLevel = 1735689600000;
 #endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(IS_IOS)
+constexpr char kFakeVendorId[] = "fake-vendor-id";
+#endif  // BUILDFLAG(IS_IOS)
+
+constexpr char kFakeCertData[] = "fake_cert_data";
+constexpr char kFakeSignature[] = "fake_signature";
+
 namespace {
 
 const base::FilePath::CharType kProfilePath[] =
     FILE_PATH_LITERAL("profile-path");
 constexpr char kBrowserExePath[] = "browser-path";
 
-device_signals::SignalsAggregationRequest CreateExpectedRequest(
-    bool agent_collection_enabled) {
-  device_signals::SignalsAggregationRequest request;
-  request.signal_names.emplace(device_signals::SignalName::kOsSignals);
-  request.signal_names.emplace(
-      device_signals::SignalName::kBrowserContextSignals);
-
-  if (agent_collection_enabled) {
-    request.signal_names.emplace(device_signals::SignalName::kAgent);
-    request.agent_signal_parameters.emplace(
-        device_signals::AgentSignalCollectionType::kDetectedAgents);
-  }
-
-#if BUILDFLAG(IS_WIN)
-  request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
-  request.signal_names.emplace(device_signals::SignalName::kHotfixes);
-#endif  // BUILDFLAG(IS_WIN)
-  request.trigger = device_signals::Trigger::kSignalsReport;
-
-  return request;
-}
-
 device_signals::SignalsAggregationResponse CreateFilledResponse(
-    bool nullify_profile_id = false) {
+    bool nullify_profile_id = false,
+    bool include_cert_signals = false,
+    bool is_isolated_mode = false) {
   device_signals::SignalsAggregationResponse response;
 
   device_signals::OsSignalsResponse os_signals;
@@ -100,10 +89,12 @@ device_signals::SignalsAggregationResponse CreateFilledResponse(
                               kFakeSignalMacAddr3};
 
 #if BUILDFLAG(IS_ANDROID)
-  os_signals.has_potentially_harmful_apps = kFakeHasHarmfulApps;
-  os_signals.verified_apps_enabled = kFakeVerifiedAppsEnabled;
   os_signals.security_patch_ms = kFakeSecurityPatchLevel;
 #endif
+
+#if BUILDFLAG(IS_IOS)
+  os_signals.vendor_id = kFakeVendorId;
+#endif  // BUILDFLAG(IS_IOS)
 
   response.os_signals_response = os_signals;
 
@@ -125,6 +116,17 @@ device_signals::SignalsAggregationResponse CreateFilledResponse(
   response.hotfix_signal_response = hotfix_response;
 #endif  // BUILDFLAG(IS_WIN)
 
+  if (include_cert_signals) {
+    device_signals::CertificateSignalsResponse cert_response;
+    em::SignedCertificateDetails fake_cert;
+    fake_cert.set_data(kFakeCertData);
+    fake_cert.set_signature(kFakeSignature);
+    cert_response.serialized_caa_responses.push_back(
+        fake_cert.SerializeAsString());
+    cert_response.truncated_certificates = false;
+    response.certificate_signals_response = cert_response;
+  }
+
   device_signals::ProfileSignalsResponse profile_signals;
   profile_signals.built_in_dns_client_enabled = true;
   profile_signals.chrome_remote_desktop_app_blocked = false;
@@ -143,8 +145,16 @@ device_signals::SignalsAggregationResponse CreateFilledResponse(
 
   profile_signals.realtime_url_check_mode = enterprise_connectors::
       EnterpriseRealTimeUrlCheckMode::REAL_TIME_CHECK_FOR_MAINFRAME_ENABLED;
+  profile_signals.is_isolated_mode = is_isolated_mode;
 
   response.profile_signals_response = profile_signals;
+
+#if BUILDFLAG(IS_ANDROID)
+  device_signals::VerifyAppsSignalsResponse verify_apps_signals;
+  verify_apps_signals.has_potentially_harmful_apps = kFakeHasHarmfulApps;
+  verify_apps_signals.verified_apps_enabled = kFakeVerifiedAppsEnabled;
+  response.verify_apps_signals_response = verify_apps_signals;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   return response;
 }
@@ -176,11 +186,68 @@ class ChromeProfileRequestGeneratorTest
 
   bool is_agent_collection_enabled() const { return GetParam(); }
 
+  device_signals::SignalsAggregationRequest CreateExpectedRequest(
+      const std::optional<std::string>& challenge = std::nullopt,
+      const base::ListValue& cert_selectors = {}) const {
+    device_signals::SignalsAggregationRequest request;
+    request.signal_names.emplace(device_signals::SignalName::kOsSignals);
+#if BUILDFLAG(IS_ANDROID)
+    request.signal_names.emplace(device_signals::SignalName::kVerifyApps);
+#endif  // BUILDFLAG(IS_ANDROID)
+    request.signal_names.emplace(
+        device_signals::SignalName::kBrowserContextSignals);
+
+    if (is_agent_collection_enabled()) {
+      request.signal_names.emplace(device_signals::SignalName::kAgent);
+      request.agent_signal_parameters.emplace(
+          device_signals::AgentSignalCollectionType::kDetectedAgents);
+    }
+
+#if BUILDFLAG(IS_WIN)
+    request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
+    request.signal_names.emplace(device_signals::SignalName::kHotfixes);
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+    if (enterprise_signals::features::IsCertificateCollectionEnabled() &&
+        challenge.has_value() && !challenge.value().empty()) {
+      request.signal_names.emplace(device_signals::SignalName::kCertificates);
+      if (cert_selectors.empty()) {
+        device_signals::GetCertificateOptions cert_option;
+        cert_option.challenge = challenge.value();
+        request.certificate_signal_parameters.push_back(std::move(cert_option));
+      } else {
+        for (const auto& entry : cert_selectors) {
+          const base::DictValue* selector_dict = entry.GetIfDict();
+          if (!selector_dict) {
+            continue;
+          }
+          device_signals::GetCertificateOptions cert_option;
+          cert_option.challenge = challenge.value();
+          cert_option.issuer_pattern = certificate_matching::
+              CertificatePrincipalPattern::ParseFromOptionalDict(
+                  selector_dict->FindDict("ISSUER"), "CN", "L", "O", "OU");
+          cert_option.subject_pattern = certificate_matching::
+              CertificatePrincipalPattern::ParseFromOptionalDict(
+                  selector_dict->FindDict("SUBJECT"), "CN", "L", "O", "OU");
+          request.certificate_signal_parameters.push_back(
+              std::move(cert_option));
+        }
+      }
+    }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
+    request.trigger = device_signals::Trigger::kSignalsReport;
+    return request;
+  }
+
   void VerifyReportContent(
       const ReportRequestQueue& requests,
       em::ChromeProfileReportRequest::ReportType expected_report_type,
       bool is_profile_id_null = false,
-      bool agent_collection_enabled = false) {
+      bool agent_collection_enabled = false,
+      bool expect_cert_signals = false,
+      bool expect_isolated_mode = false) {
     // True if a status report-exclusive field is expected to be filled
     // correctly, status reports with signals also count.
     bool expect_status_report_only_value =
@@ -226,10 +293,22 @@ class ChromeProfileRequestGeneratorTest
       EXPECT_EQ(os_report.mac_addresses(2), kFakeSignalMacAddr3);
 
 #if BUILDFLAG(IS_ANDROID)
+      EXPECT_TRUE(os_report.has_has_potentially_harmful_apps());
+      EXPECT_TRUE(os_report.has_verified_apps_enabled());
+
       EXPECT_EQ(os_report.has_potentially_harmful_apps(), kFakeHasHarmfulApps);
       EXPECT_EQ(os_report.verified_apps_enabled(), kFakeVerifiedAppsEnabled);
       EXPECT_EQ(os_report.security_patch_ms(), kFakeSecurityPatchLevel);
-#endif
+#else
+      EXPECT_FALSE(os_report.has_has_potentially_harmful_apps());
+      EXPECT_FALSE(os_report.has_verified_apps_enabled());
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS)
+      ASSERT_TRUE(os_report.has_ios_specific_attributes());
+      EXPECT_EQ(os_report.ios_specific_attributes().vendor_id(),
+                kFakeVendorId);
+#endif  // BUILDFLAG(IS_IOS)
 
       if (agent_collection_enabled) {
         EXPECT_EQ(os_report.detected_agents(0), em::Agent::CROWDSTRIKE_FALCON);
@@ -259,6 +338,13 @@ class ChromeProfileRequestGeneratorTest
       EXPECT_EQ(0, os_report.antivirus_info_size());
       EXPECT_EQ(0, os_report.hotfixes_size());
 #endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_ANDROID)
+      EXPECT_FALSE(os_report.has_has_potentially_harmful_apps());
+      EXPECT_FALSE(os_report.has_verified_apps_enabled());
+#endif  // BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_IOS)
+      EXPECT_FALSE(os_report.has_ios_specific_attributes());
+#endif  // BUILDFLAG(IS_IOS)
     }
 
     EXPECT_EQ(
@@ -298,7 +384,11 @@ class ChromeProfileRequestGeneratorTest
 
     // Affiliation info is now always included.
     EXPECT_TRUE(chrome_user_profile_info.has_affiliation());
-
+    if (enterprise_isolated_mode::IsCaaEnabledInIsolatedMode()) {
+      EXPECT_EQ(chrome_user_profile_info.profile_type(),
+                expect_isolated_mode ? em::ChromeUserProfileInfo::ISOLATED
+                                     : em::ChromeUserProfileInfo::REGULAR);
+    }
     // `profile_signals_report` is a signals report only sub-proto.
     EXPECT_EQ(chrome_user_profile_info.has_profile_signals_report(),
               expect_signals_override_value);
@@ -322,6 +412,21 @@ class ChromeProfileRequestGeneratorTest
                 is_profile_id_null ? std::string() : kFakeProfileId);
       EXPECT_EQ(profile_signals_report.realtime_url_check_mode(),
                 em::ProfileSignalsReport::ENABLED_MAIN_FRAME);
+      if (enterprise_isolated_mode::IsCaaEnabledInIsolatedMode()) {
+        EXPECT_EQ(profile_signals_report.is_isolated_mode(),
+                  expect_isolated_mode);
+      }
+
+      if (expect_cert_signals) {
+        EXPECT_EQ(1, chrome_user_profile_info.certificates_size());
+        EXPECT_FALSE(chrome_user_profile_info.certificates_were_truncated());
+        const auto& cert = chrome_user_profile_info.certificates(0);
+        EXPECT_EQ(cert.data(), kFakeCertData);
+        EXPECT_EQ(cert.signature(), kFakeSignature);
+      } else {
+        EXPECT_EQ(0, chrome_user_profile_info.certificates_size());
+        EXPECT_FALSE(chrome_user_profile_info.certificates_were_truncated());
+      }
     }
   }
 
@@ -346,7 +451,6 @@ TEST_P(ChromeProfileRequestGeneratorTest, GenerateFullReportNoSecuritySignals) {
                       test_future.GetCallback());
 
   const auto& requests = test_future.Get();
-  base::RunLoop().RunUntilIdle();
   VerifyReportContent(
       requests.value(), em::ChromeProfileReportRequest::PROFILE_REPORT,
       /*is_profile_id_null=*/false, is_agent_collection_enabled());
@@ -355,8 +459,7 @@ TEST_P(ChromeProfileRequestGeneratorTest, GenerateFullReportNoSecuritySignals) {
 TEST_P(ChromeProfileRequestGeneratorTest,
        GenerateFullReportWithSecuritySignals) {
   bool agent_collection_enabled = is_agent_collection_enabled();
-  EXPECT_CALL(mock_aggregator_,
-              GetSignals(CreateExpectedRequest(agent_collection_enabled), _))
+  EXPECT_CALL(mock_aggregator_, GetSignals(CreateExpectedRequest(), _))
       .WillOnce([](const device_signals::SignalsAggregationRequest& request,
                    base::OnceCallback<void(
                        device_signals::SignalsAggregationResponse)> callback) {
@@ -374,17 +477,91 @@ TEST_P(ChromeProfileRequestGeneratorTest,
       test_future.GetCallback());
 
   const auto& requests = test_future.Get();
-  base::RunLoop().RunUntilIdle();
   VerifyReportContent(
       requests.value(),
       em::ChromeProfileReportRequest::PROFILE_REPORT_WITH_SECURITY_SIGNALS,
       /*is_profile_id_null=*/false, agent_collection_enabled);
 }
 
-TEST_P(ChromeProfileRequestGeneratorTest, GenerateSecuritySignalsOnlyReport) {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+TEST_P(ChromeProfileRequestGeneratorTest,
+       GenerateFullReportWithCertificateSignals) {
+  constexpr char kFakeChallenge[] = "fake_challenge";
   bool agent_collection_enabled = is_agent_collection_enabled();
   EXPECT_CALL(mock_aggregator_,
-              GetSignals(CreateExpectedRequest(agent_collection_enabled), _))
+              GetSignals(CreateExpectedRequest(kFakeChallenge), _))
+      .WillOnce([](const device_signals::SignalsAggregationRequest& request,
+                   base::OnceCallback<void(
+                       device_signals::SignalsAggregationResponse)> callback) {
+        std::move(callback).Run(
+            CreateFilledResponse(/*nullify_profile_id=*/false,
+                                 /*include_cert_signals=*/true));
+      });
+
+  base::test::TestFuture<
+      base::expected<ReportRequestQueue, ReportGenerationError>>
+      test_future;
+  ReportGenerationConfig config(ReportTrigger::kTriggerTimer,
+                                ReportType::kProfileReport,
+                                SecuritySignalsMode::kSignalsAttached,
+                                /*use_cookies=*/false);
+  config.challenge = kFakeChallenge;
+  generator_.Generate(config, test_future.GetCallback());
+
+  const auto& requests = test_future.Get();
+  VerifyReportContent(
+      requests.value(),
+      em::ChromeProfileReportRequest::PROFILE_REPORT_WITH_SECURITY_SIGNALS,
+      /*is_profile_id_null=*/false, agent_collection_enabled,
+      /*expect_cert_signals=*/true);
+}
+
+TEST_P(ChromeProfileRequestGeneratorTest,
+       GenerateFullReportWithCertificateSelectors) {
+  constexpr char kFakeChallenge[] = "fake_challenge";
+  bool agent_collection_enabled = is_agent_collection_enabled();
+
+  base::ListValue selectors;
+  base::DictValue selector;
+  base::DictValue issuer;
+  issuer.Set("CN", "TestIssuerCN");
+  selector.Set("ISSUER", std::move(issuer));
+  base::DictValue subject;
+  subject.Set("CN", "TestSubjectCN");
+  selector.Set("SUBJECT", std::move(subject));
+  selectors.Append(std::move(selector));
+
+  EXPECT_CALL(mock_aggregator_,
+              GetSignals(CreateExpectedRequest(kFakeChallenge, selectors), _))
+      .WillOnce([](const device_signals::SignalsAggregationRequest& request,
+                   base::OnceCallback<void(
+                       device_signals::SignalsAggregationResponse)> callback) {
+        std::move(callback).Run(
+            CreateFilledResponse(/*nullify_profile_id=*/false,
+                                 /*include_cert_signals=*/true));
+      });
+
+  base::test::TestFuture<
+      base::expected<ReportRequestQueue, ReportGenerationError>>
+      test_future;
+  ReportGenerationConfig config(
+      ReportTrigger::kTriggerTimer, ReportType::kProfileReport,
+      SecuritySignalsMode::kSignalsAttached,
+      /*use_cookies=*/false, kFakeChallenge, selectors.Clone());
+  generator_.Generate(config, test_future.GetCallback());
+
+  const auto& requests = test_future.Get();
+  VerifyReportContent(
+      requests.value(),
+      em::ChromeProfileReportRequest::PROFILE_REPORT_WITH_SECURITY_SIGNALS,
+      /*is_profile_id_null=*/false, agent_collection_enabled,
+      /*expect_cert_signals=*/true);
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
+TEST_P(ChromeProfileRequestGeneratorTest, GenerateSecuritySignalsOnlyReport) {
+  bool agent_collection_enabled = is_agent_collection_enabled();
+  EXPECT_CALL(mock_aggregator_, GetSignals(CreateExpectedRequest(), _))
       .WillOnce([](const device_signals::SignalsAggregationRequest& request,
                    base::OnceCallback<void(
                        device_signals::SignalsAggregationResponse)> callback) {
@@ -401,18 +578,48 @@ TEST_P(ChromeProfileRequestGeneratorTest, GenerateSecuritySignalsOnlyReport) {
                       test_future.GetCallback());
 
   const auto& requests = test_future.Get();
-  base::RunLoop().RunUntilIdle();
   VerifyReportContent(requests.value(),
                       em::ChromeProfileReportRequest::PROFILE_SECURITY_SIGNALS,
                       /*is_profile_id_null=*/false, agent_collection_enabled);
+}
+
+TEST_P(ChromeProfileRequestGeneratorTest,
+       GenerateSecuritySignalsOnlyReportIsolatedMode) {
+  base::test::ScopedFeatureList feature_list{
+      enterprise_isolated_mode::kEnterpriseIsolatedModeMilestone2};
+  bool agent_collection_enabled = is_agent_collection_enabled();
+  EXPECT_CALL(mock_aggregator_, GetSignals(CreateExpectedRequest(), _))
+      .WillOnce([](const device_signals::SignalsAggregationRequest& request,
+                   base::OnceCallback<void(
+                       device_signals::SignalsAggregationResponse)> callback) {
+        std::move(callback).Run(
+            CreateFilledResponse(/*nullify_profile_id=*/false,
+                                 /*include_cert_signals=*/false,
+                                 /*is_isolated_mode=*/true));
+      });
+  base::test::TestFuture<
+      base::expected<ReportRequestQueue, ReportGenerationError>>
+      test_future;
+
+  generator_.Generate(ReportGenerationConfig(ReportTrigger::kTriggerSecurity,
+                                             ReportType::kProfileReport,
+                                             SecuritySignalsMode::kSignalsOnly,
+                                             /*use_cookies=*/true),
+                      test_future.GetCallback());
+
+  const auto& requests = test_future.Get();
+  VerifyReportContent(requests.value(),
+                      em::ChromeProfileReportRequest::PROFILE_SECURITY_SIGNALS,
+                      /*is_profile_id_null=*/false, agent_collection_enabled,
+                      /*expect_cert_signals=*/false,
+                      /*expect_isolated_mode=*/true);
 }
 
 // Test that no issue is encountered when a nullopt value is collected, on an
 // optional field
 TEST_P(ChromeProfileRequestGeneratorTest, NoProfileId) {
   bool agent_collection_enabled = is_agent_collection_enabled();
-  EXPECT_CALL(mock_aggregator_,
-              GetSignals(CreateExpectedRequest(agent_collection_enabled), _))
+  EXPECT_CALL(mock_aggregator_, GetSignals(CreateExpectedRequest(), _))
       .WillOnce([](const device_signals::SignalsAggregationRequest& request,
                    base::OnceCallback<void(
                        device_signals::SignalsAggregationResponse)> callback) {
@@ -430,7 +637,6 @@ TEST_P(ChromeProfileRequestGeneratorTest, NoProfileId) {
                       test_future.GetCallback());
 
   const auto& requests = test_future.Get();
-  base::RunLoop().RunUntilIdle();
   VerifyReportContent(requests.value(),
                       em::ChromeProfileReportRequest::PROFILE_SECURITY_SIGNALS,
                       /*is_profile_id_null=*/true, agent_collection_enabled);
@@ -444,7 +650,6 @@ TEST_P(ChromeProfileRequestGeneratorTest, IncorrectReportType) {
   generator_.Generate(ReportGenerationConfig(), test_future.GetCallback());
 
   const auto& requests = test_future.Get();
-  base::RunLoop().RunUntilIdle();
   // When the wrong report type is provided, generator should still return the
   // correct request, but with empty content.
   ASSERT_EQ(1u, requests->size());
@@ -474,7 +679,6 @@ TEST_P(ChromeProfileRequestGeneratorTest, AbortsWhenProfileReportIsEmpty) {
       test_future.GetCallback());
 
   const auto& result = test_future.Get();
-  base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error(), ReportGenerationError::kProfileEmptyReport);
 }

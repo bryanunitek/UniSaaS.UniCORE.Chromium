@@ -25,10 +25,6 @@
   return NO;
 }
 
-- (BOOL)hasAnswer {
-  return NO;
-}
-
 - (BOOL)isURL {
   return NO;
 }
@@ -38,10 +34,6 @@
 }
 
 - (BOOL)isTabMatch {
-  return NO;
-}
-
-- (BOOL)isShareable {
   return NO;
 }
 
@@ -63,6 +55,14 @@
 
 - (NSInteger)numberOfLines {
   return 1;
+}
+
+- (BOOL)wrapPrimaryText {
+  return NO;
+}
+
+- (BOOL)wrapSecondaryText {
+  return NO;
 }
 
 - (NSAttributedString*)text {

@@ -131,8 +131,8 @@ class DeveloperPrivateAPIFunction : public ExtensionFunction {
   const Extension* GetEnabledExtensionById(const ExtensionId& id);
 
   // Called when there is no extension that exists for a specified ID in a
-  // function. Logs the function name and returns an error.
-  ResponseValue LogNoSuchExtensionFoundAndReturn();
+  // function. Returns an error specifying the function name.
+  ResponseValue NoSuchExtensionError();
 };
 
 class DeveloperPrivateAutoUpdateFunction : public DeveloperPrivateAPIFunction {
@@ -244,6 +244,17 @@ class DeveloperPrivateUpdateExtensionConfigurationFunction
 
  protected:
   ~DeveloperPrivateUpdateExtensionConfigurationFunction() override;
+  ResponseAction Run() override;
+};
+
+class DeveloperPrivateOpenReviewPageFunction
+    : public DeveloperPrivateAPIFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("developerPrivate.openReviewPage",
+                             DEVELOPERPRIVATE_OPENREVIEWPAGE)
+
+ protected:
+  ~DeveloperPrivateOpenReviewPageFunction() override;
   ResponseAction Run() override;
 };
 

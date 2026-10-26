@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
@@ -83,7 +84,7 @@ namespace sql {
 // When enabled, don't commit or rollback transactions if they have already been
 // rolled back by a statement error (e.g. SQLITE_FULL).
 BASE_FEATURE(kCheckAutoCommitInCommitAndRollback,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 namespace {
 
@@ -221,7 +222,7 @@ enum class OpenDatabaseFailedReason {
   kMaxValue = kPragmaJournalFailed
 };
 
-// LINT.ThenChange(//tools/metrics/histograms/metadata/sql/enums.xml)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/sql/enums.xml:OpenDatabaseFailedReason)
 // Reports the reason for a failure in Database::Open(...).
 void RecordOpenDatabaseFailureReason(const std::string& histogram_tag,
                                      OpenDatabaseFailedReason reason) {
@@ -248,7 +249,7 @@ enum class RazeDatabaseFailedReason {
   kMaxValue = kCheckpointFailed
 };
 
-// LINT.ThenChange(//tools/metrics/histograms/metadata/sql/enums.xml)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/sql/enums.xml:RazeDatabaseFailedReason)
 // Reports the reason for a failure in Database::Raze(...).
 void RecordRazeDatabaseFailureReason(const std::string& histogram_tag,
                                      RazeDatabaseFailedReason reason) {
@@ -550,6 +551,10 @@ Database::Database(DatabaseOptions options, Database::Tag tag)
 }
 
 Database::~Database() {
+  // The error callback is not allowed to destroy `this`, or else, using the
+  // `Database` after any `Statement` execution would risk a use-after-free.
+  CHECK(!executing_error_callback_);
+
   Close();
 }
 
@@ -666,8 +671,7 @@ void Database::CloseInternal(bool forced) {
     db_ = nullptr;
     auto sqlite_result_code = ToSqliteResultCode(sqlite3_close(raw_db));
 
-    CHECK_NE(sqlite_result_code, SqliteResultCode::kBusy,
-             base::NotFatalUntil::M141)
+    CHECK_NE(sqlite_result_code, SqliteResultCode::kBusy)
         << "sqlite3_close() called while resources (statements, blobs, etc) "
            "are still alive";
     DCHECK_EQ(sqlite_result_code, SqliteResultCode::kOk)
@@ -1210,7 +1214,7 @@ bool Database::RazeInternal() {
       return false;
     }
     // Page size isn't changed until the database is vacuumed.
-    std::ignore = Execute("VACUUM");
+    std::ignore = Vacuum();
     // Re-enter WAL mode.
     if (UseWALMode()) {
       std::ignore = Execute("PRAGMA journal_mode=WAL;");
@@ -1261,6 +1265,17 @@ bool Database::Raze() {
   RecordTimingHistogram("Sql.Database.RazeTime.", raze_timer.Elapsed());
 
   return result;
+}
+
+bool Database::Vacuum() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  TRACE_EVENT0("sql", "Database::Vacuum");
+
+  if (!is_open() || transaction_nesting_ != 0) {
+    return false;
+  }
+  Statement statement(GetCachedStatement(StatementID(SQL_FROM_HERE), "VACUUM"));
+  return statement.Run();
 }
 
 bool Database::RazeAndPoison() {
@@ -2575,23 +2590,13 @@ void Database::OnSqliteError(SqliteErrorCode sqlite_error_code,
   std::ignore = IsExpectedSqliteError(static_cast<int>(sqlite_error_code));
 
   if (!executing_error_callback_ && !error_callback_.is_null()) {
-    executing_error_callback_ = true;
-
-    base::WeakPtr<Database> weak_this =
-        weak_factory_lifetime_tracker_.GetWeakPtr();
-
     // Create an additional reference to the state in `error_callback_`, so the
     // state doesn't go away if the callback changes `error_callback_` by
     // calling set_error_callback() or reset_error_callback(). This avoids a
     // subtle source of use-after-frees. See https://crbug.com/254584.
     ErrorCallback error_callback_copy = error_callback_;
+    base::AutoReset auto_reset(&executing_error_callback_, true);
     error_callback_copy.Run(static_cast<int>(sqlite_error_code), statement);
-
-    // Abort if `error_callback_` deleted this `Database` object.
-    if (!weak_this) {
-      return;
-    }
-    executing_error_callback_ = false;
   }
 }
 

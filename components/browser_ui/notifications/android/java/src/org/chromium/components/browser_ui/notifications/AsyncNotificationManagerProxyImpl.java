@@ -12,8 +12,11 @@ import androidx.core.app.NotificationManagerCompat;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.task.AsyncTask;
+import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.NullUnmarked;
 import org.chromium.build.annotations.Nullable;
@@ -32,27 +35,20 @@ import java.util.function.Function;
 /* package */ class AsyncNotificationManagerProxyImpl implements BaseNotificationManagerProxy {
     private static final String TAG = "AsyncNotifManager";
 
-    // This object is initialized and used on a background thread, and it should always be non
-    // null when used.
-    @SuppressWarnings("NullAway.Init")
-    private NotificationManagerCompat mNotificationManager;
+    private final NotificationManagerCompat mNotificationManager;
 
     private static @Nullable AsyncNotificationManagerProxyImpl sInstance;
 
     public static AsyncNotificationManagerProxyImpl getInstance() {
         if (sInstance == null) {
             sInstance = new AsyncNotificationManagerProxyImpl();
+            ResettersForTesting.register(() -> sInstance = null);
         }
         return sInstance;
     }
 
     private AsyncNotificationManagerProxyImpl() {
-        runAsync(
-                "AsyncNotificationManagerProxyImpl()",
-                () -> {
-                    mNotificationManager =
-                            NotificationManagerCompat.from(ContextUtils.getApplicationContext());
-                });
+        mNotificationManager = NotificationManagerCompat.from(ContextUtils.getApplicationContext());
     }
 
     @Override
@@ -78,16 +74,23 @@ import java.util.function.Function;
 
     @Override
     public void createNotificationChannel(NotificationChannel channel) {
-        runAsync(
-                "AsyncNotificationManagerProxyImpl.createNotificationChannel",
-                () -> mNotificationManager.createNotificationChannel(channel));
+        try (TraceEvent te =
+                TraceEvent.scoped("AsyncNotificationManagerProxyImpl.createNotificationChannel")) {
+            mNotificationManager.createNotificationChannel(channel);
+        } catch (Exception e) {
+            Log.e(TAG, "Unable to create notification channel.", e);
+        }
     }
 
     @Override
     public void createNotificationChannelGroup(NotificationChannelGroup channelGroup) {
-        runAsync(
-                "AsyncNotificationManagerProxyImpl.createNotificationChannelGroup",
-                () -> mNotificationManager.createNotificationChannelGroup(channelGroup));
+        try (TraceEvent te =
+                TraceEvent.scoped(
+                        "AsyncNotificationManagerProxyImpl.createNotificationChannelGroup")) {
+            mNotificationManager.createNotificationChannelGroup(channelGroup);
+        } catch (Exception e) {
+            Log.e(TAG, "Unable to create notification channel group.", e);
+        }
     }
 
     @Override
@@ -131,10 +134,26 @@ import java.util.function.Function;
 
     @Override
     public void notify(NotificationWrapper notification) {
+        notify(notification, null);
+    }
+
+    /**
+     * Post an Android notification to the notification bar and run {@code callback} on completion.
+     *
+     * @param notification A NotificationWrapper object containing all the information about the
+     *     notification.
+     * @param callback Optional runnable invoked on the UI thread once the notification call
+     *     finishes.
+     */
+    @Override
+    public void notify(NotificationWrapper notification, @Nullable Runnable callback) {
         if (notification == null
                 || notification.getNotification() == null
                 || notification.getMetadata() == null) {
             Log.e(TAG, "Failed to create notification.");
+            if (callback != null) {
+                PostTask.postTask(TaskTraits.UI_DEFAULT, callback);
+            }
             return;
         }
 
@@ -144,7 +163,8 @@ import java.util.function.Function;
                         mNotificationManager.notify(
                                 notification.getMetadata().tag,
                                 notification.getMetadata().id,
-                                notification.getNotification()));
+                                notification.getNotification()),
+                callback);
     }
 
     @Override
@@ -180,14 +200,23 @@ import java.util.function.Function;
     }
 
     /** Helper method to run an runnable inside a scoped event in background. */
-    @SuppressWarnings("NoDynamicStringsInTraceEventCheck")
     private void runAsync(String eventName, Runnable runnable) {
+        runAsync(eventName, runnable, null);
+    }
+
+    /** Helper method to run an runnable inside a scoped event in background. */
+    @SuppressWarnings("NoDynamicStringsInTraceEventCheck")
+    private void runAsync(String eventName, Runnable runnable, @Nullable Runnable callback) {
         AsyncTask.SERIAL_EXECUTOR.execute(
                 () -> {
                     try (TraceEvent te = TraceEvent.scoped(eventName)) {
                         runnable.run();
                     } catch (Exception e) {
                         Log.e(TAG, "unable to run a runnable.", e);
+                    } finally {
+                        if (callback != null) {
+                            PostTask.postTask(TaskTraits.UI_DEFAULT, callback);
+                        }
                     }
                 });
     }

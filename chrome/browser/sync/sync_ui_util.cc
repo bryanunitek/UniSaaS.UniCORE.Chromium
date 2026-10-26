@@ -13,6 +13,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/sync/sync_passphrase_dialog.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -27,6 +28,8 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
@@ -35,7 +38,6 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/singleton_tabs.h"
@@ -333,7 +335,7 @@ bool ShouldShowSyncPassphraseError(const syncer::SyncService* service) {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-void ShowSyncPassphraseDialogAndDecryptData(Browser& browser) {
+void ShowSyncPassphraseDialogAndDecryptData(BrowserWindowInterface& browser) {
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(browser.GetProfile());
   if (!sync_service) {
@@ -406,7 +408,7 @@ void ShowBookmarksLimitExceededHelp(
   sync_service->AcknowledgeBookmarksLimitExceededError(source);
   NavigateParams params(browser, GURL(kBookmarksLimitExceededHelpCenter),
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)

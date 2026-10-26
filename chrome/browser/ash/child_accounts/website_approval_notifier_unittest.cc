@@ -7,15 +7,26 @@
 #include <memory>
 #include <string>
 
+#include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/test/test_new_window_delegate.h"
+#include "base/check_deref.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/strcat.h"
 #include "base/test/metrics/user_action_tester.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/test/base/testing_profile.h"
+#include "chrome/browser/ash/login/test/chrome_user_session_test_environment_delegate.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "components/session_manager/test/user_session_test_environment.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/message_center/message_center.h"
+#include "ui/message_center/public/cpp/notification.h"
 
 namespace ash {
 
@@ -40,26 +51,60 @@ class WebsiteApprovalNotifierTest : public testing::Test {
 
   ~WebsiteApprovalNotifierTest() override = default;
 
+  void SetUp() override {
+    message_center::MessageCenter::Initialize();
+
+    user_session_test_environment_ =
+        std::make_unique<test::UserSessionTestEnvironment>(
+            TestingBrowserProcess::GetGlobal()->local_state(),
+            std::make_unique<test::ChromeUserSessionTestEnvironmentDelegate>(
+                TestingBrowserProcess::GetGlobal()));
+
+    // WebsiteApprovalNotifier is a Family Link feature for child accounts.
+    const user_manager::User* user =
+        user_session_test_environment_->AddChildUser(
+            user_manager::StubAccountId());
+    user_session_test_environment_->LogIn(user->GetAccountId());
+    user_hash_ = user->username_hash();
+
+    Profile* const profile = Profile::FromBrowserContext(
+        BrowserContextHelper::Get()->GetBrowserContextByUser(user));
+    notifier_ = std::make_unique<WebsiteApprovalNotifier>(
+        profile,
+        CHECK_DEREF(
+            supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
+                profile->GetProfileKey())));
+  }
+
+  void TearDown() override {
+    notifier_.reset();
+    user_session_test_environment_.reset();
+    message_center::MessageCenter::Shutdown();
+  }
+
   MockNewWindowDelegate& new_window_delegate() { return new_window_delegate_; }
 
  protected:
   void OnNewWebsiteApproval(const std::string& hostname) {
-    notifier_.MaybeShowApprovalNotification(hostname);
+    notifier_->MaybeShowApprovalNotification(hostname);
   }
 
   std::string GetNotificationId(const std::string& hostname) const {
     return base::StrCat({"website-approval-", hostname});
   }
 
-  bool HasApprovalNotification(const std::string& hostname) const {
-    return notification_tester_.GetNotification(GetNotificationId(hostname))
-        .has_value();
+  const message_center::Notification* GetApprovalNotification(
+      const std::string& hostname) {
+    return message_center::MessageCenter::Get()->FindNotificationById(
+        CreateUserScopedNotificationId(GetNotificationId(hostname),
+                                       user_hash_));
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  TestingProfile profile_;
-  NotificationDisplayServiceTester notification_tester_{&profile_};
-  WebsiteApprovalNotifier notifier_{&profile_};
+  std::unique_ptr<test::UserSessionTestEnvironment>
+      user_session_test_environment_;
+  std::string user_hash_;
+  std::unique_ptr<WebsiteApprovalNotifier> notifier_;
 
  private:
   MockNewWindowDelegate new_window_delegate_;
@@ -71,33 +116,33 @@ TEST_F(WebsiteApprovalNotifierTest, ShowNotificationsForValidHosts) {
   OnNewWebsiteApproval(host1);
   OnNewWebsiteApproval(host2);
   // Expect both notifications to be shown (no overriding).
-  EXPECT_TRUE(HasApprovalNotification(host1));
-  EXPECT_TRUE(HasApprovalNotification(host2));
+  EXPECT_TRUE(GetApprovalNotification(host1));
+  EXPECT_TRUE(GetApprovalNotification(host2));
 }
 
 TEST_F(WebsiteApprovalNotifierTest, NoNotificationForDomainPattern) {
   std::string host = "*.google.*";
   OnNewWebsiteApproval(host);
-  EXPECT_FALSE(HasApprovalNotification(host));
+  EXPECT_FALSE(GetApprovalNotification(host));
 }
 
 TEST_F(WebsiteApprovalNotifierTest, NoNotificationForInvalidHost) {
   std::string host = "google.com:12three";
   OnNewWebsiteApproval(host);
-  EXPECT_FALSE(HasApprovalNotification(host));
+  EXPECT_FALSE(GetApprovalNotification(host));
 }
 
 TEST_F(WebsiteApprovalNotifierTest, MetricRecording) {
   base::UserActionTester user_action_tester;
   std::string host = "www.google.com";
   OnNewWebsiteApproval(host);
-  EXPECT_TRUE(HasApprovalNotification(host));
+  const message_center::Notification* notification =
+      GetApprovalNotification(host);
+  ASSERT_TRUE(notification);
   EXPECT_EQ(1, user_action_tester.GetActionCount(
                    "SupervisedUsers_RemoteWebApproval_NotificationShown"));
-  notification_tester_.SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                     GetNotificationId(host),
-                                     /*action_index=*/std::nullopt,
-                                     /*reply=*/std::nullopt);
+  notification->delegate()->Click(/*button_index=*/std::nullopt,
+                                  /*reply=*/std::nullopt);
   EXPECT_EQ(1, user_action_tester.GetActionCount(
                    "SupervisedUsers_RemoteWebApproval_NotificationClicked"));
 }
@@ -107,15 +152,15 @@ TEST_F(WebsiteApprovalNotifierTest, UrlOpensInPrimaryBrowser) {
   std::string host = "www.google.com";
   std::string expected_url = std::string("https://") + host + "/";
   OnNewWebsiteApproval(host);
-  EXPECT_TRUE(HasApprovalNotification(host));
+  const message_center::Notification* notification =
+      GetApprovalNotification(host);
+  ASSERT_TRUE(notification);
   EXPECT_CALL(new_window_delegate(),
               OpenUrl(GURL(expected_url),
                       NewWindowDelegate::OpenUrlFrom::kUserInteraction,
                       NewWindowDelegate::Disposition::kNewForegroundTab));
-  notification_tester_.SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                     GetNotificationId(host),
-                                     /*action_index=*/std::nullopt,
-                                     /*reply=*/std::nullopt);
+  notification->delegate()->Click(/*button_index=*/std::nullopt,
+                                  /*reply=*/std::nullopt);
 }
 
 }  // namespace ash

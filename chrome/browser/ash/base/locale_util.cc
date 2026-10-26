@@ -61,7 +61,8 @@ struct SwitchLanguageData {
 // Runs on ThreadPool thread under PostTaskAndReply().
 std::unique_ptr<SwitchLanguageData> SwitchLanguageDoReloadLocale(
     std::unique_ptr<SwitchLanguageData> data) {
-  DCHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M160);
 
   data->result.loaded_locale =
       ui::ResourceBundle::GetSharedInstance().ReloadLocaleResources(
@@ -75,7 +76,7 @@ std::unique_ptr<SwitchLanguageData> SwitchLanguageDoReloadLocale(
 // Callback after SwitchLanguageDoReloadLocale() back in UI thread.
 void FinishSwitchLanguage(ApplicationLocaleStorage* application_locale_storage,
                           std::unique_ptr<SwitchLanguageData> data) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (data->result.success) {
     CHECK_DEREF(application_locale_storage).Set(data->result.loaded_locale);
 
@@ -94,7 +95,7 @@ void FinishSwitchLanguage(ApplicationLocaleStorage* application_locale_storage,
         // first hardware keyboard layout since the input method currently in
         // use may not be supported by the new locale.
         ime_state->EnableLoginLayouts(
-            data->result.loaded_locale,
+            application_locale_storage->GetTag(),
             manager->GetInputMethodUtil()->GetHardwareLoginInputMethodIds());
       } else {
         // Enable all hardware keyboard layouts. This will also switch to the
@@ -155,7 +156,7 @@ void SwitchLanguage(ApplicationLocaleStorage* application_locale_storage,
                     const bool login_layouts_only,
                     SwitchLanguageCallback callback,
                     Profile* profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   auto data = std::make_unique<SwitchLanguageData>(
       locale, enable_locale_keyboard_layouts, login_layouts_only,
       std::move(callback), profile);

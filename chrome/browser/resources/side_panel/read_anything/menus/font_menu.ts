@@ -3,20 +3,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 import './simple_action_menu.js';
-import '//resources/cr_elements/md_select.css.js';
 
 import {I18nMixinLit} from '//resources/cr_elements/i18n_mixin_lit.js';
 import {WebUiListenerMixinLit} from '//resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
-import type {SettingsPrefs, ShowAtConfigPrefs} from '../content/read_anything_types.js';
-import {DEFAULT_SETTINGS, ToolbarEvent} from '../content/read_anything_types.js';
-import {ReadAnythingSettingsChange} from '../shared/metrics_browser_proxy.js';
-import {ReadAnythingLogger} from '../shared/read_anything_logger.js';
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
+import type {ShowAtConfigPrefs} from '../content/read_anything_types.js';
+import {ToolbarEvent} from '../content/read_anything_types.js';
 
 import {getHtml} from './font_menu.html.js';
-import {getIndexOrDefault} from './menu_util.js';
 import type {MenuStateItem, ToolbarMenu} from './menu_util.js';
 import type {SimpleActionMenuElement} from './simple_action_menu.js';
 
@@ -42,7 +40,7 @@ export class FontMenuElement extends FontMenuElementBase implements
 
   static override get properties() {
     return {
-      settingsPrefs: {type: Object},
+      font: {type: String},
       pageLanguage: {type: String},
       areFontsLoaded: {type: Boolean},
       options_: {type: Array},
@@ -54,17 +52,17 @@ export class FontMenuElement extends FontMenuElementBase implements
 
   accessor areFontsLoaded: boolean = false;
   accessor pageLanguage: string = '';
-  accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
+  accessor font: string = '';
   accessor nonModal: boolean = false;
 
-  private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (changedProperties.has('pageLanguage') ||
-        changedProperties.has('areFontsLoaded') ||
-        changedProperties.has('settingsPrefs')) {
-      this.setFontOptions_(chrome.readingMode.supportedFonts);
+        changedProperties.has('areFontsLoaded')) {
+      this.setFontOptions_(this.visualBrowserProxy_.getSupportedFonts());
     }
   }
 
@@ -76,13 +74,14 @@ export class FontMenuElement extends FontMenuElementBase implements
     this.$.menu.close();
   }
 
-  protected currentFontIndex_(): number {
-    return getIndexOrDefault(this.options_, chrome.readingMode.fontName);
+  // An unsupported font renders as the first supported one, matching
+  // getValidatedFontName().
+  protected selectedFont_(): string|undefined {
+    const fonts = this.options_.map(option => option.data);
+    return fonts.includes(this.font) ? this.font : fonts[0];
   }
 
-  protected onFontChange_(event: CustomEvent<{data: string}>) {
-    chrome.readingMode.onFontChange(event.detail.data);
-    this.logger_.logTextSettingsChange(ReadAnythingSettingsChange.FONT_CHANGE);
+  protected onFontChange_() {
     this.fire(ToolbarEvent.CLOSE_ALL_MENUS);
   }
 

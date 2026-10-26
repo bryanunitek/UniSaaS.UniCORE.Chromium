@@ -10,6 +10,7 @@
 #include "base/containers/span.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "crypto/crypto_buildflags.h"
 #include "net/base/net_export.h"
 #include "net/cert/internal/platform_trust_store.h"
 #include "net/net_buildflags.h"
@@ -24,6 +25,7 @@
 namespace net {
 
 struct ChromeRootCertConstraints;
+class NetLogWithSource;
 
 // The SystemTrustStore interface is used to encapsulate a bssl::TrustStore for
 // the current platform, with some extra bells and whistles. Implementations
@@ -68,6 +70,10 @@ class SystemTrustStore {
   // Chrome Root Store is not in use, returns 0.
   virtual int64_t chrome_root_store_version() const = 0;
 
+  // Returns the timestamp of the current SignerSet being used. If Chrome Root
+  // Store or MTCs are not enabled, returns nullopt.
+  virtual std::optional<base::Time> signer_set_timestamp() const = 0;
+
   // Returns the update timestamp for the Chrome Root Store MTC Metadata
   // component, or nullopt if MTC Metadata is not available.
   virtual std::optional<base::Time> mtc_metadata_update_time() const = 0;
@@ -81,7 +87,17 @@ class SystemTrustStore {
       const bssl::CertPathBuilderResultPath* path) const = 0;
 
   virtual const TrustStoreChrome::MtcAnchorExtraData* GetMTCAnchorData(
-      base::span<const uint8_t> log_id) const = 0;
+      base::span<const uint8_t> ca_id) const = 0;
+
+  virtual std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
+  GetMtcMirrorKey(base::span<const uint8_t> cosigner_id) const = 0;
+
+  virtual bool IsMtcCosignerPolicySatisfied(
+      const bssl::ParsedCertificate& target_cert,
+      base::Time current_time,
+      const bssl::MTCAnchor* mtc_anchor,
+      base::span<const std::vector<uint8_t>> valid_additional_cosigners,
+      const NetLogWithSource& net_log) const = 0;
 
   // Returns the crs_root_id for `path`, or nullopt if unknown.
   virtual std::optional<int32_t> GetCrsRootIdForCert(
@@ -98,12 +114,15 @@ NET_EXPORT std::unique_ptr<SystemTrustStore> CreateSslSystemTrustStore();
 #endif
 
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+#if BUILDFLAG(USE_NSS_SERVER_CERTS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 // Creates an instance of SystemTrustStore that wraps the current platform's SSL
 // trust store for user added roots, but uses the Chrome Root Store trust
 // anchors. This cannot return nullptr.
 NET_EXPORT std::unique_ptr<SystemTrustStore>
 CreateSslSystemTrustStoreChromeRoot(
     std::unique_ptr<TrustStoreChrome> chrome_root);
+#endif
 
 // Creates an instance of SystemTrustStore that only uses the Chrome Root Store
 // trust anchors.

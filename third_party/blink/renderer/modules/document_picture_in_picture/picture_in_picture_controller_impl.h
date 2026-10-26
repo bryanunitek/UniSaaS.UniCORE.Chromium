@@ -5,8 +5,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_DOCUMENT_PICTURE_IN_PICTURE_PICTURE_IN_PICTURE_CONTROLLER_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_DOCUMENT_PICTURE_IN_PICTURE_PICTURE_IN_PICTURE_CONTROLLER_IMPL_H_
 
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "third_party/blink/public/common/frame/user_activation_state.h"
 #include "third_party/blink/public/mojom/picture_in_picture/picture_in_picture.mojom-blink.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -15,6 +17,7 @@
 #include "third_party/blink/renderer/modules/picture_in_picture/picture_in_picture_window.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -37,6 +40,33 @@ class MODULES_EXPORT PictureInPictureControllerImpl
       public ExecutionContextClient,
       public blink::mojom::blink::PictureInPictureSessionObserver {
  public:
+  // Manages a transient request token that authorizes entering
+  // Picture-in-Picture without universal user activation.
+  class MODULES_EXPORT RequestToken {
+    DISALLOW_NEW();
+
+   public:
+    RequestToken();
+
+    static constexpr base::TimeDelta kActivationLifespan =
+        blink::kActivationLifespan;
+
+    // Activate the transient token for the duration of `kActivationLifespan`.
+    void Activate();
+
+    // Deactivate the transient token.
+    void Deactivate();
+
+    // Returns true if recently activated and not yet expired.
+    bool IsActive() const;
+
+    // If active, deactivates and returns true, otherwise returns false.
+    bool ConsumeIfActive();
+
+   private:
+    base::TimeTicks transient_state_expiry_time_;
+  };
+
   explicit PictureInPictureControllerImpl(Document&);
 
   PictureInPictureControllerImpl(const PictureInPictureControllerImpl&) =
@@ -86,6 +116,9 @@ class MODULES_EXPORT PictureInPictureControllerImpl
                           bool report_failure) const override;
   LocalDOMWindow* GetDocumentPictureInPictureWindow() const override;
   LocalDOMWindow* GetDocumentPictureInPictureOwner() const override;
+  bool IsPictureInPictureRequestTokenActive() const override;
+  void ActivatePictureInPictureRequestToken() override;
+  bool ConsumePictureInPictureRequestToken() override;
 
   void SetDocumentPictureInPictureOwner(LocalDOMWindow* owner);
 
@@ -142,8 +175,7 @@ class MODULES_EXPORT PictureInPictureControllerImpl
   // initialized successfully.
   bool EnsureService();
 
-  // Resolves a call to |CreateDocumentPictureInPictureWindow()|.
-  void ResolveOpenDocumentPictureInPicture();
+  void DispatchEnterEvent(LocalDOMWindow* document_picture_in_picture_window);
 
   // Observer to watch a Document Picture in Picture window, so that the opener
   // can find out when it is being destroyed.
@@ -187,13 +219,6 @@ class MODULES_EXPORT PictureInPictureControllerImpl
   // attached to a document picture-in-picture window).
   Member<DocumentPictureInPictureObserver> document_pip_context_observer_;
 
-  // Used to force |CreateDocumentPictureInPictureWindow()| to be asynchronous.
-  TaskHandle open_document_pip_task_;
-
-  // The |ScriptPromiseResolverBase| associated with the most recent call to
-  // |CreateDocumentPictureInPictureWindow()| if it has not yet been resolved.
-  Member<ScriptPromiseResolver<DOMWindow>> open_document_pip_resolver_;
-
   // The Picture-in-Picture element for the associated document.
   Member<HTMLVideoElement> picture_in_picture_element_;
 
@@ -214,6 +239,8 @@ class MODULES_EXPORT PictureInPictureControllerImpl
   // is for video-only PiP.
   HeapMojoRemote<mojom::blink::PictureInPictureSession>
       picture_in_picture_session_;
+
+  RequestToken picture_in_picture_request_token_;
 };
 
 }  // namespace blink

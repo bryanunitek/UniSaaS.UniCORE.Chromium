@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/webrtc/rtc.h"
 
 #include "base/notreached.h"
+#include "base/uuid.h"
 #include "third_party/blink/public/common/webrtc/rtc_logging_utils.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -75,15 +76,23 @@ RTC* RTC::rtc(Navigator& navigator) {
 
 RTC::RTC(Navigator& navigator)
     : Supplement<Navigator>(navigator),
-      diagnostic_logging_dispatcher_(
-          navigator.DomWindow()->GetExecutionContext()) {}
+      diagnostic_logging_dispatcher_(navigator.GetExecutionContext()) {}
 
 ScriptPromise<IDLString> RTC::startDiagnosticLogging(
     ScriptState* script_state,
     RTCStartDiagnosticLoggingOptions* options) {
+  if (!script_state || !script_state->ContextIsValid()) {
+    return ScriptPromise<IDLString>();
+  }
   auto* resolver =
       MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(script_state);
   auto promise = resolver->Promise();
+  if (!GetSupplementable()->DomWindow()) {
+    resolver->RejectWithDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "No local DOM window; is this a detached window?");
+    return promise;
+  }
   if (!ValidateMetadata(options, resolver)) {
     return promise;
   }
@@ -93,9 +102,12 @@ ScriptPromise<IDLString> RTC::startDiagnosticLogging(
     metadata.Set(pair.first, pair.second);
   }
 
+  base::Uuid session_id = base::Uuid::GenerateRandomV4();
+  String session_id_str(session_id.AsLowercaseString());
   GetDiagnosticLoggingDispatcher().StartDiagnosticLogging(
-      options->allowUpload(), std::move(metadata),
-      BindOnce(&OnDiagnosticLoggingResult, WrapPersistent(resolver)));
+      session_id, options->allowUpload(), std::move(metadata),
+      BindOnce(&OnDiagnosticLoggingResult, WrapPersistent(resolver),
+               session_id_str));
 
   return promise;
 }
@@ -103,9 +115,18 @@ ScriptPromise<IDLString> RTC::startDiagnosticLogging(
 ScriptPromise<IDLUndefined> RTC::finishDiagnosticLogging(
     ScriptState* script_state,
     RTCFinishDiagnosticLoggingOptions* options) {
+  if (!script_state || !script_state->ContextIsValid()) {
+    return ScriptPromise<IDLUndefined>();
+  }
   auto* resolver =
       MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
   auto promise = resolver->Promise();
+  if (!GetSupplementable()->DomWindow()) {
+    resolver->RejectWithDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "No local DOM window; is this a detached window?");
+    return promise;
+  }
   if (!ValidateMetadata(options, resolver)) {
     return promise;
   }
@@ -124,9 +145,18 @@ ScriptPromise<IDLUndefined> RTC::finishDiagnosticLogging(
 
 ScriptPromise<IDLUndefined> RTC::cancelDiagnosticLogging(
     ScriptState* script_state) {
+  if (!script_state || !script_state->ContextIsValid()) {
+    return ScriptPromise<IDLUndefined>();
+  }
   auto* resolver =
       MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
   auto promise = resolver->Promise();
+  if (!GetSupplementable()->DomWindow()) {
+    resolver->RejectWithDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "No local DOM window; is this a detached window?");
+    return promise;
+  }
 
   GetDiagnosticLoggingDispatcher().CancelDiagnosticLogging(
       BindOnce(&OnDiagnosticLoggingVoidResult, WrapPersistent(resolver)));
@@ -144,6 +174,7 @@ mojom::blink::RTCLoggingDispatcher& RTC::GetDiagnosticLoggingDispatcher() {
   if (!diagnostic_logging_dispatcher_.is_bound()) {
     // TODO(guidou): Add disconnect handler.
     auto* window = GetSupplementable()->DomWindow();
+    CHECK(window);
     window->GetBrowserInterfaceBroker().GetInterface(
         diagnostic_logging_dispatcher_.BindNewPipeAndPassReceiver(
             window->GetTaskRunner(TaskType::kMiscPlatformAPI)));

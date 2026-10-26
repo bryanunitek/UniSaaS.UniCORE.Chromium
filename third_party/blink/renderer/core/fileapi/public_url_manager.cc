@@ -26,36 +26,33 @@
 
 #include "third_party/blink/renderer/core/fileapi/public_url_manager.h"
 
-#include "base/feature_list.h"
+#include "base/check.h"
 #include "base/notreached.h"
-#include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "net/base/features.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/blink/public/common/blob/blob_utils.h"
-#include "third_party/blink/public/mojom/blob/blob_registry.mojom-blink.h"
-#include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink.h"
-#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/blob/blob.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/fileapi/url_registry.h"
+#include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/local_frame_client.h"
+#include "third_party/blink/renderer/core/html/media/media_source_attachment.h"
+#include "third_party/blink/renderer/core/html/media/media_source_registry.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
-#include "third_party/blink/renderer/platform/blob/blob_data.h"
 #include "third_party/blink/renderer/platform/blob/blob_url.h"
 #include "third_party/blink/renderer/platform/blob/blob_url_null_origin_map.h"
-#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/task_type_names.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
-#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
 namespace {
 
-static void RemoveFromNullOriginMapIfNecessary(const KURL& blob_url) {
+void RemoveFromNullOriginMapIfNecessary(const KURL& blob_url) {
   DCHECK(blob_url.ProtocolIs("blob"));
   if (BlobURL::GetOrigin(blob_url) == "null")
     BlobURLNullOriginMap::GetInstance()->Remove(blob_url);
@@ -69,7 +66,21 @@ PublicURLManager::PublicURLManager(ExecutionContext* execution_context)
       worker_url_store_(execution_context) {
   if (auto* window = DynamicTo<LocalDOMWindow>(execution_context)) {
     LocalFrame* frame = window->GetFrame();
-    if (!frame) {
+    // In PDF processes, DOM storage and Blob URLs are disabled to avoid
+    // accessing or registering data for the origin that served the PDF (see
+    // ChildProcessSecurityPolicyImpl::IsAccessAllowedForPdfProcess).
+    // Marking PublicURLManager as stopped ensures we do not bind
+    // frame_url_store_ (which would trigger a bad message renderer kill in the
+    // browser process) and causes URL.createObjectURL to return an empty
+    // string. An empty string was chosen rather than throwing a SecurityError
+    // to match the W3C File API specification when a blob URL cannot be
+    // generated, as well as the behavior of DOM storage in PDF processes (where
+    // localStorage returns null instead of throwing) and to avoid breaking
+    // extensions or scripts that do not expect createObjectURL to throw an
+    // exception.
+    if (!frame ||
+        (base::FeatureList::IsEnabled(features::kEnforcePdfBlobRestrictions) &&
+         frame->Client()->IsDomStorageDisabled())) {
       is_stopped_ = true;
       return;
     }
@@ -98,7 +109,9 @@ PublicURLManager::PublicURLManager(ExecutionContext* execution_context)
 
     if (worklet_global_scope->IsMainThreadWorkletGlobalScope()) {
       LocalFrame* frame = worklet_global_scope->GetFrame();
-      if (!frame) {
+      if (!frame || (base::FeatureList::IsEnabled(
+                         features::kEnforcePdfBlobRestrictions) &&
+                     frame->Client()->IsDomStorageDisabled())) {
         is_stopped_ = true;
         return;
       }
@@ -112,7 +125,12 @@ PublicURLManager::PublicURLManager(ExecutionContext* execution_context)
       // this worklet.
       mojo::PendingRemote<mojom::blink::BlobURLStore> pending_remote =
           worklet_global_scope->TakeBlobUrlStorePendingRemote();
-      DCHECK(pending_remote.is_valid());
+      // The BlobURLStore remote may be invalid if blobs are not allowed in
+      // this process (e.g., in PDF processes where DOM storage is disabled).
+      if (!pending_remote.is_valid()) {
+        is_stopped_ = true;
+        return;
+      }
       worker_url_store_.Bind(
           std::move(pending_remote),
           execution_context->GetTaskRunner(TaskType::kFileReading));
@@ -144,37 +162,52 @@ mojom::blink::BlobURLStore& PublicURLManager::GetBlobURLStore() {
   }
 }
 
-String PublicURLManager::RegisterURL(URLRegistrable* registrable) {
-  if (is_stopped_)
+String PublicURLManager::RegisterUrl(
+    scoped_refptr<MediaSourceAttachment> attachment) {
+  if (is_stopped_) {
     return String();
+  }
+  CHECK(attachment);
 
-  const KURL& url =
-      BlobURL::CreatePublicURL(GetExecutionContext()->GetSecurityOrigin());
-  DCHECK(!url.IsEmpty());
-  const String& url_string = url.GetString();
+  MediaSourceRegistry* registry = &attachment->Registry();
+  const KURL url = registry->RegisterUrl(
+      GetExecutionContext()->GetSecurityOrigin(), std::move(attachment));
+  url_to_registry_.insert(url.GetString(), registry);
 
-  if (registrable->IsMojoBlob()) {
-    mojo::PendingRemote<mojom::blink::Blob> blob_remote;
-    mojo::PendingReceiver<mojom::blink::Blob> blob_receiver =
-        blob_remote.InitWithNewPipeAndPassReceiver();
+  return CompleteRegistration(url);
+}
 
-    GetBlobURLStore().Register(std::move(blob_remote), url);
+String PublicURLManager::RegisterUrl(Blob* blob) {
+  if (is_stopped_) {
+    return String();
+  }
+  CHECK(blob);
 
-    mojo_urls_.insert(url_string);
-    registrable->CloneMojoBlob(std::move(blob_receiver));
-  } else {
-    URLRegistry* registry = &registrable->Registry();
-    registry->RegisterURL(url, registrable);
-    url_to_registry_.insert(url_string, registry);
+  mojo::PendingRemote<mojom::blink::Blob> blob_remote;
+  mojo::PendingReceiver<mojom::blink::Blob> blob_receiver =
+      blob_remote.InitWithNewPipeAndPassReceiver();
+
+  KURL url;
+  if (!GetBlobURLStore().Register(
+          std::move(blob_remote),
+          GetExecutionContext()->GetSecurityOrigin()->SerializesAsNull(),
+          &url)) {
+    return String();
   }
 
+  mojo_urls_.insert(url.GetString());
+  blob->CloneMojoBlob(std::move(blob_receiver));
+
+  return CompleteRegistration(url);
+}
+
+String PublicURLManager::CompleteRegistration(const KURL& url) {
   SecurityOrigin* mutable_origin =
       GetExecutionContext()->GetMutableSecurityOrigin();
   if (mutable_origin->SerializesAsNull()) {
     BlobURLNullOriginMap::GetInstance()->Add(url, mutable_origin);
   }
-
-  return url_string;
+  return url.GetString();
 }
 
 void PublicURLManager::Revoke(const KURL& url) {
@@ -195,7 +228,7 @@ void PublicURLManager::Revoke(const KURL& url) {
   auto it = url_to_registry_.find(url.GetString());
   if (it == url_to_registry_.end())
     return;
-  it->value->UnregisterURL(url);
+  it->value->UnregisterUrl(url);
   url_to_registry_.erase(it);
 }
 
@@ -229,9 +262,9 @@ void PublicURLManager::ContextDestroyed() {
     return;
 
   is_stopped_ = true;
-  for (auto& url_registry : url_to_registry_) {
-    url_registry.value->UnregisterURL(KURL(url_registry.key));
-    RemoveFromNullOriginMapIfNecessary(KURL(url_registry.key));
+  for (auto& entry : url_to_registry_) {
+    entry.value->UnregisterUrl(KURL(entry.key));
+    RemoveFromNullOriginMapIfNecessary(KURL(entry.key));
   }
   for (const auto& url : mojo_urls_)
     RemoveFromNullOriginMapIfNecessary(KURL(url));

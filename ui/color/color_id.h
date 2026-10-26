@@ -153,6 +153,12 @@
   E_CPONLY(kColorSysSurface4) \
   E_CPONLY(kColorSysSurface5) \
   E_CPONLY(kColorSysSurfaceNumberedForeground) \
+  /* Material 3 surface container roles, ordered Lowest to Highest. */ \
+  E_CPONLY(kColorSysSurfaceContainerLowest) \
+  E_CPONLY(kColorSysSurfaceContainerLow) \
+  E_CPONLY(kColorSysSurfaceContainer) \
+  E_CPONLY(kColorSysSurfaceContainerHigh) \
+  E_CPONLY(kColorSysSurfaceContainerHighest) \
   /* General. */ \
   E_CPONLY(kColorSysOnSurfaceSecondary) \
   E_CPONLY(kColorSysOnSurfaceSubtle) \
@@ -653,14 +659,6 @@
   E_CPONLY(kColorAshSystemUIMenuIcon) \
   E_CPONLY(kColorAshSystemUIMenuItemBackgroundSelected) \
   E_CPONLY(kColorAshSystemUIMenuSeparator) \
-  \
-  /* TODO(b/291622042): Delete these colors when Jelly is launched */ \
-  E_CPONLY(kColorHighlightBorderBorder1) \
-  E_CPONLY(kColorHighlightBorderBorder2) \
-  E_CPONLY(kColorHighlightBorderBorder3) \
-  E_CPONLY(kColorHighlightBorderHighlight1) \
-  E_CPONLY(kColorHighlightBorderHighlight2) \
-  E_CPONLY(kColorHighlightBorderHighlight3) \
   \
   E_CPONLY(kColorCrosSystemHighlight) \
   E_CPONLY(kColorCrosSystemHighlightBorder) \

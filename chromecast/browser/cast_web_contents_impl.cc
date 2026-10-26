@@ -236,6 +236,12 @@ void CastWebContentsImpl::AddRendererFeatures(base::DictValue features) {
   renderer_features_ = std::move(features);
 }
 
+bool CastWebContentsImpl::HasRendererFeature(
+    std::string_view feature_name) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return renderer_features_.contains(feature_name);
+}
+
 void CastWebContentsImpl::SetInterfacesForRenderer(
     mojo::PendingRemote<mojom::RemoteInterfaces> remote_interfaces) {
   remote_interfaces_.SetProvider(std::move(remote_interfaces));
@@ -472,10 +478,6 @@ bool CastWebContentsImpl::TryBindReceiver(
 
 InterfaceBundle* CastWebContentsImpl::local_interfaces() {
   return &local_interfaces_;
-}
-
-bool CastWebContentsImpl::is_websql_enabled() {
-  return params_->enable_websql;
 }
 
 bool CastWebContentsImpl::is_mixer_audio_enabled() {

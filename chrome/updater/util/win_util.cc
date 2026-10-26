@@ -12,14 +12,15 @@
 #include <regstr.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <sysinfoapi.h>
 #include <winhttp.h>
 #include <wrl/client.h>
 #include <wtsapi32.h>
 
 #include <algorithm>
-#include <cstdint>
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -106,6 +107,23 @@ ICallingProcessInfo : public IUnknown {
                                                  HANDLE * handle) = 0;
 };
 
+// Filters the `explorer.exe` processes. This filter is used with
+// `base::ProcessIterator` instead of using `base::NamedProcessIterator`
+// because the latter compares executable names with
+// `base::FilePath::CompareEqualIgnoreCase`, which calls `::CharUpperW` in
+// user32 and `CHECK`s that win32k system calls are not disabled for the
+// process. Some environments which virtualize win32k, such as GraphOn
+// GO-Global, report the win32k lockdown mitigation as enabled for updater
+// processes launched from a hosted application, which makes the `CHECK` fail
+// (see crbug.com/574549798). The process name is pure ASCII, so an ASCII
+// case-insensitive comparison is sufficient and has no user32 dependency.
+class ExplorerProcessFilter : public base::ProcessFilter {
+ public:
+  bool Includes(const base::ProcessEntry& entry) const override {
+    return base::EqualsCaseInsensitiveASCII(entry.exe_file(), L"explorer.exe");
+  }
+};
+
 // Returns `true` if the current process token is a split UAC token.
 bool IsUserRunningSplitToken() {
   std::optional<base::win::AccessToken> token =
@@ -162,7 +180,7 @@ HRESULT GetProcessIntegrityLevel(DWORD process_id, MANDATORY_LEVEL* level) {
     return E_FAIL;
   }
   std::unique_ptr<TOKEN_MANDATORY_LABEL, base::FreeDeleter> label(
-      static_cast<TOKEN_MANDATORY_LABEL*>(std::malloc(label_size)));
+      static_cast<TOKEN_MANDATORY_LABEL*>(malloc(label_size)));
   if (!::GetTokenInformation(token_holder.get(), TokenIntegrityLevel,
                              label.get(), label_size, &label_size)) {
     return HRESULTFromLastError();
@@ -171,7 +189,8 @@ HRESULT GetProcessIntegrityLevel(DWORD process_id, MANDATORY_LEVEL* level) {
 }
 
 bool IsExplorerRunningAtMediumOrLower() {
-  base::NamedProcessIterator iter(L"EXPLORER.EXE", nullptr);
+  const ExplorerProcessFilter filter;
+  base::ProcessIterator iter(&filter);
   while (const base::ProcessEntry* process_entry = iter.NextProcessEntry()) {
     MANDATORY_LEVEL level = MandatoryLevelUntrusted;
     if (SUCCEEDED(GetProcessIntegrityLevel(process_entry->pid(), &level)) &&
@@ -252,20 +271,6 @@ std::optional<int> DaynumFromDWORD(DWORD value) {
              : std::nullopt;
 }
 
-std::optional<std::vector<std::wstring>> CommandLineToArgv(
-    const std::wstring& command_line) {
-  int num_args = 0;
-  base::win::ScopedLocalAllocTyped<wchar_t*> argv(
-      ::CommandLineToArgvW(&command_line[0], &num_args));
-  if (!argv || num_args < 1) {
-    LOG(ERROR) << __func__ << "!argv || num_args < 1: " << num_args;
-    return std::nullopt;
-  }
-  // SAFETY: `num_args` describes the valid portion of `argv`.
-  return UNSAFE_BUFFERS(
-      std::vector<std::wstring>(argv.get(), argv.get() + num_args));
-}
-
 [[nodiscard]] bool IsServicePresentNonAdmin(const std::wstring& service_name) {
   ScopedScHandle scm(
       ::OpenSCManager(nullptr, nullptr, SC_MANAGER_CONNECT | GENERIC_READ));
@@ -313,6 +318,20 @@ std::wstring SanitizeAppId(const std::wstring& app_id) {
 }
 
 }  // namespace
+
+std::optional<std::vector<std::wstring>> CommandLineToArgv(
+    const std::wstring& command_line) {
+  int num_args = 0;
+  base::win::ScopedLocalAllocTyped<wchar_t*> argv(
+      ::CommandLineToArgvW(command_line.c_str(), &num_args));
+  if (!argv || num_args < 1) {
+    LOG(ERROR) << __func__ << ": !argv || num_args < 1: " << num_args;
+    return std::nullopt;
+  }
+  // SAFETY: `num_args` describes the valid portion of `argv`.
+  return UNSAFE_BUFFERS(
+      std::vector<std::wstring>(argv.get(), argv.get() + num_args));
+}
 
 NamedObjectAttributes::NamedObjectAttributes(const std::wstring& name,
                                              const std::wstring& sddl)
@@ -391,8 +410,7 @@ std::optional<std::wstring> AddCurrentUserAllowedAce(
     UINT8 required_ace_flags) {
   auto token = base::win::AccessToken::FromEffective();
   if (!token) {
-    VLOG(2) << "Failed to get effective token: " << std::hex
-            << HRESULTFromLastError();
+    VPLOG(2) << "Failed to get effective token";
     return {};
   }
 
@@ -409,7 +427,7 @@ std::optional<std::wstring> AddCurrentUserAllowedAce(
   // ACE ordering.
   if (!sd->SetDaclEntry(*token, base::win::SecurityAccessMode::kGrant,
                         required_permissions, required_ace_flags)) {
-    VLOG(2) << "Failed to add ACE: " << std::hex << HRESULTFromLastError();
+    VPLOG(2) << "Failed to add ACE";
     return {};
   }
 
@@ -529,12 +547,48 @@ HResultOr<bool> IsCOMCallerAdmin() {
           /*open_as_self=*/true, TOKEN_QUERY);
   if (!token) {
     HRESULT hr = HRESULTFromLastError();
-    LOG(ERROR) << "AccessToken::FromCurrentThread failed: " << std::hex << hr;
+    PLOG(ERROR) << "AccessToken::FromCurrentThread failed";
     return base::unexpected(hr);
   }
 
   return base::ok(
       token->IsMember(base::win::WellKnownSid::kBuiltinAdministrators));
+}
+
+std::wstring GetCOMCallerSid() {
+  ScopedClientImpersonation impersonate_client;
+  std::optional<base::win::AccessToken> token;
+  if (!impersonate_client.is_valid()) {
+    // RPC_E_CALL_COMPLETE indicates that the caller is in-proc.
+    if (impersonate_client.result() != RPC_E_CALL_COMPLETE) {
+      LOG(ERROR) << "Failed to impersonate caller: "
+                 << logging::SystemErrorCodeToString(
+                        impersonate_client.result());
+      return {};
+    }
+    token = base::win::AccessToken::FromCurrentProcess(/*impersonation=*/false,
+                                                       TOKEN_QUERY);
+    if (token && token->User() ==
+                     base::win::Sid(base::win::WellKnownSid::kLocalSystem)) {
+      LOG(ERROR) << "Cannot use LocalSystem process token for in-proc caller";
+      return {};
+    }
+  } else {
+    token = base::win::AccessToken::FromCurrentThread(
+        /*open_as_self=*/true, TOKEN_QUERY);
+  }
+
+  if (!token) {
+    PLOG(ERROR) << "Failed to get access token";
+    return {};
+  }
+
+  std::optional<std::wstring> sddl = token->User().ToSddlString();
+  if (!sddl) {
+    LOG(ERROR) << "Failed to convert user SID to SDDL";
+    return {};
+  }
+  return *std::move(sddl);
 }
 
 bool IsUACOn() {
@@ -585,7 +639,7 @@ void EnsureEnoughMemory() {
   MEMORYSTATUSEX memory_status = {};
   memory_status.dwLength = sizeof(memory_status);
   if (!::GlobalMemoryStatusEx(&memory_status)) {
-    VLOG(1) << "Can't memory stat: " << std::hex << ::GetLastError();
+    VPLOG(1) << "Can't memory stat";
     return;
   }
   constexpr SIZE_T kMinMemoryNeeded = 10'000'000;  // 10MB.
@@ -618,8 +672,7 @@ void EnsureEnoughMemory() {
       alloc) {
     ::VirtualFree(alloc, 0, MEM_RELEASE);
   } else {
-    VLOG(1) << "Allocation failed: " << kMinMemoryNeeded / 1024 << "K, "
-            << std::hex << ::GetLastError();
+    VPLOG(1) << "Allocation failed: " << kMinMemoryNeeded / 1024 << "K";
   }
 
   VLOG(1) << MemoryStatus();
@@ -682,7 +735,7 @@ HResultOr<DWORD> ShellExecuteAndWait(const base::FilePath& file_path,
 
   if (!::ShellExecuteEx(&shell_execute_info)) {
     const HRESULT hr = HRESULTFromLastError();
-    VLOG(1) << __func__ << ": ::ShellExecuteEx failed: " << std::hex << hr;
+    VPLOG(1) << __func__ << ": ::ShellExecuteEx failed";
     return base::unexpected(hr);
   }
 
@@ -697,8 +750,7 @@ HResultOr<DWORD> ShellExecuteAndWait(const base::FilePath& file_path,
 
   // Allow the spawned process to show windows in the foreground.
   if (!::AllowSetForegroundWindow(pid)) {
-    VLOG(1) << __func__
-            << ": ::AllowSetForegroundWindow failed: " << ::GetLastError();
+    VPLOG(1) << __func__ << ": ::AllowSetForegroundWindow failed";
   }
 
   int ret_val = 0;
@@ -817,23 +869,21 @@ std::wstring BuildExeCommandLine(
 bool IsServiceRunning(const std::wstring& service_name) {
   ScopedScHandle scm(::OpenSCManager(nullptr, nullptr, SC_MANAGER_CONNECT));
   if (!scm.is_valid()) {
-    LOG(ERROR) << "::OpenSCManager failed. service_name: " << service_name
-               << ", error: " << std::hex << HRESULTFromLastError();
+    PLOG(ERROR) << "::OpenSCManager failed. service_name: " << service_name;
     return false;
   }
 
   ScopedScHandle service(
       ::OpenService(scm.get(), service_name.c_str(), SERVICE_QUERY_STATUS));
   if (!service.is_valid()) {
-    LOG(ERROR) << "::OpenService failed. service_name: " << service_name
-               << ", error: " << std::hex << HRESULTFromLastError();
+    PLOG(ERROR) << "::OpenService failed. service_name: " << service_name;
     return false;
   }
 
   SERVICE_STATUS status = {0};
   if (!::QueryServiceStatus(service.get(), &status)) {
-    LOG(ERROR) << "::QueryServiceStatus failed. service_name: " << service_name
-               << ", error: " << std::hex << HRESULTFromLastError();
+    PLOG(ERROR) << "::QueryServiceStatus failed. service_name: "
+                << service_name;
     return false;
   }
 
@@ -877,20 +927,18 @@ bool CompareOSVersions(const OSVERSIONINFOEX& os_version, BYTE oper) {
 
 bool EnableSecureDllLoading() {
 #if defined(COMPONENT_BUILD)
-  const DWORD directory_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+  constexpr DWORD kDirectoryFlags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
 #else
-  const DWORD directory_flags = LOAD_LIBRARY_SEARCH_SYSTEM32;
+  constexpr DWORD kDirectoryFlags = LOAD_LIBRARY_SEARCH_SYSTEM32;
 #endif
 
-  return ::SetDefaultDllDirectories(directory_flags);
+  return ::SetDefaultDllDirectories(kDirectoryFlags);
 }
 
 bool EnableProcessHeapMetadataProtection() {
   if (!::HeapSetInformation(NULL, HeapEnableTerminationOnCorruption, nullptr,
                             0)) {
-    LOG(ERROR) << __func__
-               << ": Failed to enable heap metadata protection: " << std::hex
-               << HRESULTFromLastError();
+    PLOG(ERROR) << __func__ << ": Failed to enable heap metadata protection";
     return false;
   }
 
@@ -903,20 +951,15 @@ std::optional<base::ScopedTempDir> CreateSecureTempDir() {
   // instead of just `base::ScopedTempDir::CreateUniqueTempDir`, because the
   // former allows setting a more recognizable prefix of
   // `COMPANY_SHORTNAME_STRING` on the temp directory.
-  base::FilePath parent_dir;
-  if (::IsUserAnAdmin()) {
-    if (!base::PathService::Get(base::DIR_SYSTEM_TEMP, &parent_dir)) {
-      return std::nullopt;
-    }
-  } else {
-    if (!base::GetTempDir(&parent_dir)) {
-      return std::nullopt;
-    }
+  std::optional<base::FilePath> parent_dir = GetUpdaterTempDir();
+  if (!parent_dir) {
+    return std::nullopt;
   }
 
   base::FilePath temp_dir;
   if (!base::CreateTemporaryDirInDir(
-          parent_dir, FILE_PATH_LITERAL(COMPANY_SHORTNAME_STRING), &temp_dir)) {
+          *parent_dir, FILE_PATH_LITERAL(COMPANY_SHORTNAME_STRING),
+          &temp_dir)) {
     return std::nullopt;
   }
 
@@ -933,8 +976,7 @@ base::ScopedClosureRunner SignalShutdownEvent(UpdaterScope scope) {
   base::win::ScopedHandle shutdown_event_handle(
       ::CreateEvent(&attr.sa, true, false, attr.name.c_str()));
   if (!shutdown_event_handle.is_valid()) {
-    VLOG(1) << __func__ << "Could not create the shutdown event: " << std::hex
-            << HRESULTFromLastError();
+    VPLOG(1) << __func__ << "Could not create the shutdown event";
     return {};
   }
 
@@ -1067,7 +1109,7 @@ bool IsGuid(const std::wstring& s) {
   CHECK(!s.empty());
 
   GUID guid = {0};
-  return SUCCEEDED(::IIDFromString(&s[0], &guid));
+  return SUCCEEDED(::IIDFromString(s.c_str(), &guid));
 }
 
 void ForEachRegistryRunValueWithPrefix(
@@ -1077,7 +1119,7 @@ void ForEachRegistryRunValueWithPrefix(
                                            KEY_WOW64_32KEY);
        it.Valid(); ++it) {
     const std::wstring run_name = it.Name();
-    if (base::StartsWith(run_name, prefix)) {
+    if (run_name.starts_with(prefix)) {
       callback(run_name);
     }
   }
@@ -1105,7 +1147,7 @@ void ForEachServiceWithPrefix(
                                          KEY_WOW64_32KEY);
        it.Valid(); ++it) {
     const std::wstring service_name = it.Name();
-    if (base::StartsWith(service_name, service_name_prefix)) {
+    if (service_name.starts_with(service_name_prefix)) {
       if (display_name_prefix.empty()) {
         callback(service_name);
         continue;
@@ -1126,7 +1168,7 @@ void ForEachServiceWithPrefix(
       }
 
       const bool display_name_starts_with_prefix =
-          base::StartsWith(display_name, display_name_prefix);
+          display_name.starts_with(display_name_prefix);
       VLOG(1) << __func__ << ": " << service_name
               << " matches: " << service_name_prefix << ": " << display_name
               << ": " << display_name_starts_with_prefix << ": "
@@ -1429,7 +1471,8 @@ std::optional<base::ProcessId> GetExplorerPidInActiveSession() {
     return {};
   }
 
-  base::NamedProcessIterator iter(L"EXPLORER.EXE", nullptr);
+  const ExplorerProcessFilter filter;
+  base::ProcessIterator iter(&filter);
   while (const base::ProcessEntry* process_entry = iter.NextProcessEntry()) {
     DWORD process_session = 0;
     if (::ProcessIdToSessionId(process_entry->pid(), &process_session) &&
@@ -1581,19 +1624,20 @@ HResultOr<std::wstring> GetCommandLineForPid(DWORD process_id) {
                                               sizeof(info), nullptr))) {
     return base::unexpected(E_FAIL);
   }
-  BYTE* peb = reinterpret_cast<BYTE*>(info.PebBaseAddress);
+  const uintptr_t peb = reinterpret_cast<uintptr_t>(info.PebBaseAddress);
   if (!peb) {
     return base::unexpected(E_FAIL);
   }
   SIZE_T bytes_read = 0;
   DWORD_PTR dw = 0;
 
-  // Get the address of the process parameters.
-  // SAFETY: the `ProcessParameters` offset into the PEB is always valid.
+  // Get the address of the process parameters. `peb` is an address in the
+  // remote process, so it is never dereferenced locally; it is only passed to
+  // `::ReadProcessMemory`.
   if (!::ReadProcessMemory(
           process_handle.get(),
-          UNSAFE_BUFFERS(peb + offsetof(PEB, ProcessParameters)), &dw,
-          sizeof(dw), &bytes_read)) {
+          reinterpret_cast<LPCVOID>(peb + offsetof(PEB, ProcessParameters)),
+          &dw, sizeof(dw), &bytes_read)) {
     return base::unexpected(HRESULTFromLastError());
   }
 
@@ -1613,7 +1657,7 @@ HResultOr<std::wstring> GetCommandLineForPid(DWORD process_id) {
     return base::unexpected(HRESULTFromLastError());
   }
   cmd_line.resize(bytes_read / sizeof(wchar_t));
-  if (cmd_line.back() == L'\0') {
+  if (!cmd_line.empty() && cmd_line.back() == L'\0') {
     cmd_line.pop_back();
   }
   return cmd_line;
@@ -1669,6 +1713,21 @@ std::optional<base::win::AccessToken> GetLoggedOnUserToken() {
   return base::win::AccessToken::FromProcess(
       process.Handle(), /*impersonation=*/false,
       TOKEN_IMPERSONATE | TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE);
+}
+
+void DismissAppStartingCursor() {
+  if (base::win::IsUser32AndGdi32Available()) {
+    // Informs Windows that the process has completed startup. Calling
+    // `PeekMessage` on the primary thread clears the OS-level startup feedback
+    // (`IDC_APPSTARTING`) without modifying or removing any messages from the
+    // queue.
+    // NOTE: PeekMessage will synchronously dispatch sent messages from other
+    // threads. This is safe during early startup since no windows or other
+    // threads are running, but call locations should remain at the entry
+    // points of the process.
+    MSG msg = {};
+    ::PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE);
+  }
 }
 
 }  // namespace updater

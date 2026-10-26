@@ -98,8 +98,9 @@ GlicUserStatusFetcher::GlicUserStatusFetcher(Profile* profile,
       base::BindRepeating(&GlicUserStatusFetcher::OnGeminiSettingsChanged,
                           base::Unretained(this)));
   cached_gemini_settings_value_ =
-      glic::prefs::SettingsPolicyState{profile_->GetPrefs()->GetInteger(
-          optimization_guide::prefs::kGeminiSettings)};
+      optimization_guide::prefs::GeminiSettingsPolicyState{
+          profile_->GetPrefs()->GetInteger(
+              optimization_guide::prefs::kGeminiSettings)};
 
   // if it has passed default delay after last update time,
   // run immediately. Otherwise, wait until the default delay.
@@ -184,7 +185,8 @@ void GlicUserStatusFetcher::UpdateUserStatus() {
   // If the admin has disabled Gemini, we don't need to send the request.
   if (profile_->GetPrefs()->GetInteger(
           optimization_guide::prefs::kGeminiSettings) ==
-      std::to_underlying(glic::prefs::SettingsPolicyState::kDisabled)) {
+      std::to_underlying(
+          optimization_guide::prefs::GeminiSettingsPolicyState::kDisabled)) {
     return;
   }
 
@@ -246,10 +248,8 @@ void GlicUserStatusFetcher::UpdateUserStatus() {
           // token (both are checked above).
           // kTimeout can only occur if a finite timeout is used, which is not
           // the case.
-          NOTREACHED(base::NotFatalUntil::M141)
-              << "Unexpected account managed status: "
-              << static_cast<int>(account_managed_status_);
-          return;
+          NOTREACHED() << "Unexpected account managed status: "
+                       << static_cast<int>(account_managed_status_);
       }
       break;
     case features::GlicEnterpriseCheckStrategy::kPolicy: {
@@ -452,13 +452,13 @@ void GlicUserStatusFetcher::OnIdentityManagerShutdown(
 void GlicUserStatusFetcher::OnGeminiSettingsChanged() {
   // If the policy changed from either not set or Disabled to Enabled, trigger a
   // rpc fetch to update the possible user status change sooner.
-  glic::prefs::SettingsPolicyState updated_gemini_settings_value{
-      profile_->GetPrefs()->GetInteger(
+  optimization_guide::prefs::GeminiSettingsPolicyState
+      updated_gemini_settings_value{profile_->GetPrefs()->GetInteger(
           optimization_guide::prefs::kGeminiSettings)};
   if (cached_gemini_settings_value_ !=
-          glic::prefs::SettingsPolicyState::kEnabled &&
+          optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled &&
       updated_gemini_settings_value ==
-          glic::prefs::SettingsPolicyState::kEnabled) {
+          optimization_guide::prefs::GeminiSettingsPolicyState::kEnabled) {
     UpdateUserStatus();
   }
   cached_gemini_settings_value_ = updated_gemini_settings_value;

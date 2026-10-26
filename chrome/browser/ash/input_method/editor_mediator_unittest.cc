@@ -7,7 +7,10 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/input_method/editor_geolocation_mock_provider.h"
 #include "chrome/browser/ash/input_method/editor_geolocation_provider.h"
+#include "chrome/browser/global_features.h"
+#include "chrome/browser/manta/manta_service_factory.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -32,7 +35,12 @@ TEST_F(EditorMediatorTest,
        SurroundingTextChangedDoesNotChangeSelectedTextLength) {
   std::unique_ptr<EditorGeolocationProvider> geolocation_provider =
       std::make_unique<EditorGeolocationMockProvider>("us");
-  EditorMediator mediator(&profile(), std::move(geolocation_provider));
+  EditorMediator mediator(TestingBrowserProcess::GetGlobal()
+                              ->GetFeatures()
+                              ->application_locale_storage(),
+                          &profile(),
+                          manta::MantaServiceFactory::GetForProfile(&profile()),
+                          std::move(geolocation_provider));
 
   IMEBridge::Get()->SetCurrentInputContext(
       TextInputMethod::InputContext(ui::TEXT_INPUT_TYPE_TEXT));
@@ -46,7 +54,12 @@ TEST_F(EditorMediatorTest,
 TEST_F(EditorMediatorTest, CacheContextChangesSelectedTextLength) {
   std::unique_ptr<EditorGeolocationProvider> geolocation_provider =
       std::make_unique<EditorGeolocationMockProvider>("us");
-  EditorMediator mediator(&profile(), std::move(geolocation_provider));
+  EditorMediator mediator(TestingBrowserProcess::GetGlobal()
+                              ->GetFeatures()
+                              ->application_locale_storage(),
+                          &profile(),
+                          manta::MantaServiceFactory::GetForProfile(&profile()),
+                          std::move(geolocation_provider));
 
   IMEBridge::Get()->SetCurrentInputContext(
       TextInputMethod::InputContext(ui::TEXT_INPUT_TYPE_TEXT));

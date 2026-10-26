@@ -38,12 +38,14 @@ BtmState BtmStorage::Read(const GURL& url) {
 
 BtmState BtmStorage::ReadSite(std::string site) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   std::optional<StateValue> state = db_->Read(site);
 
   if (state.has_value()) {
     // We should not have entries in the DB without any timestamps.
+    // TODO(crbug.com/567725132): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK(state->user_activation_times.has_value() ||
            state->bounce_times.has_value() ||
            state->web_authn_assertion_times.has_value());
@@ -55,7 +57,7 @@ BtmState BtmStorage::ReadSite(std::string site) {
 
 void BtmStorage::Write(const BtmState& state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   db_->Write(state.site(), state.user_activation_times(), state.bounce_times(),
              state.web_authn_assertion_times());
@@ -65,7 +67,7 @@ std::optional<PopupsStateValue> BtmStorage::ReadPopup(
     const std::string& first_party_site,
     const std::string& tracking_site) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   return db_->ReadPopup(first_party_site, tracking_site);
 }
@@ -77,7 +79,7 @@ bool BtmStorage::WritePopup(const std::string& first_party_site,
                             bool is_current_interaction,
                             bool is_authentication_interaction) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   return db_->WritePopup(first_party_site, tracking_site, access_id, popup_time,
                          is_current_interaction, is_authentication_interaction);
@@ -88,8 +90,9 @@ void BtmStorage::RemoveEvents(base::Time delete_begin,
                               network::mojom::ClearDataFilterPtr filter,
                               const BtmEventRemovalType type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
-  DCHECK(delete_end.is_null() || delete_begin <= delete_end);
+  CHECK(db_, base::NotFatalUntil::M158);
+  CHECK(delete_end.is_null() || delete_begin <= delete_end,
+        base::NotFatalUntil::M158);
 
   if (delete_end.is_null()) {
     delete_end = base::Time::Max();
@@ -102,13 +105,13 @@ void BtmStorage::RemoveEvents(base::Time delete_begin,
     db_->RemoveEventsByTime(delete_begin, delete_end, type);
   } else if (type == BtmEventRemovalType::kStorage && filter->origins.empty()) {
     // Site-filtered deletion is only supported for cookie-related
-    // DIPS events, since only cookie deletion allows domains but not hosts.
+    // BTM events, since only cookie deletion allows domains but not hosts.
     //
     // TODO(jdh): Assess the use of cookie deletions with both a time range and
     // a list of domains to determine whether supporting time ranges here is
     // necessary.
     // Time ranges aren't currently supported for site-filtered
-    // deletion of DIPS Events.
+    // deletion of BTM Events.
     if (delete_begin != base::Time::Min() || delete_end != base::Time::Max()) {
       // TODO (kaklilu@): Add a UMA metric to record if this happens.
       return;
@@ -124,7 +127,7 @@ void BtmStorage::RemoveEvents(base::Time delete_begin,
 
 void BtmStorage::RemoveRows(const std::vector<std::string>& sites) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   db_->RemoveRows(BtmDatabaseTable::kBounces, sites);
 }
@@ -132,7 +135,7 @@ void BtmStorage::RemoveRows(const std::vector<std::string>& sites) {
 void BtmStorage::RemoveRowsWithoutProtectiveEvent(
     const std::set<std::string>& sites) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   std::set<std::string> filtered_sites =
       FilterSitesWithoutProtectiveEvent(sites);
@@ -145,7 +148,7 @@ void BtmStorage::RemoveRowsWithoutProtectiveEvent(
 
 void BtmStorage::RecordUserActivation(const GURL& url, base::Time time) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   BtmState state = Read(url);
   state.update_user_activation_time(time);
@@ -153,7 +156,7 @@ void BtmStorage::RecordUserActivation(const GURL& url, base::Time time) {
 
 void BtmStorage::RecordWebAuthnAssertion(const GURL& url, base::Time time) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   BtmState state = Read(url);
   state.update_web_authn_assertion_time(time);
@@ -161,7 +164,7 @@ void BtmStorage::RecordWebAuthnAssertion(const GURL& url, base::Time time) {
 
 void BtmStorage::RecordBounce(const GURL& url, base::Time time) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
   BtmState state = Read(url);
   state.update_bounce_time(time);
 }
@@ -170,7 +173,7 @@ std::pair<std::set<std::string>, std::set<std::string>>
 BtmStorage::FilterSitesWithProtectiveEvent(
     const std::set<std::string>& sites) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   return {
       db_->FilterSites(sites, BtmDatabase::BounceFilterType::kUserActivation),
@@ -181,7 +184,7 @@ BtmStorage::FilterSitesWithProtectiveEvent(
 std::set<std::string> BtmStorage::FilterSitesWithoutProtectiveEvent(
     std::set<std::string> sites) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
 
   std::set<std::string> interacted_sites =
       db_->FilterSites(sites, BtmDatabase::BounceFilterType::kProtectiveEvent);
@@ -196,7 +199,7 @@ std::set<std::string> BtmStorage::FilterSitesWithoutProtectiveEvent(
 std::vector<std::string> BtmStorage::GetSitesThatBounced(
     base::TimeDelta grace_period) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(db_);
+  CHECK(db_, base::NotFatalUntil::M158);
   return db_->GetSitesThatBounced(grace_period);
 }
 

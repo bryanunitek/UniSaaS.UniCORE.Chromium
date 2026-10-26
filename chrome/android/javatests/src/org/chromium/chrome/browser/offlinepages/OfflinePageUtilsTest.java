@@ -39,15 +39,17 @@ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.Snackbar
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.offlinepages.SavePageResult;
+import org.chromium.content_public.browser.test.util.JavaScriptUtils;
 import org.chromium.net.ConnectionType;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.net.test.EmbeddedTestServer;
 
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Instrumentation tests for {@link OfflinePageUtils}. */
@@ -60,10 +62,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class OfflinePageUtilsTest {
     @Rule
     public AutoResetCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.autoResetCtaActivityRule();
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private static final String TEST_PAGE = "/chrome/test/data/android/about.html";
     private static final int TIMEOUT_MS = 5000;
+    private static final AtomicInteger sTitleCounter = new AtomicInteger();
     private static final ClientId BOOKMARK_ID =
             new ClientId(OfflinePageBridge.BOOKMARK_NAMESPACE, "1234");
     private static final ClientId ASYNC_ID =
@@ -92,7 +95,6 @@ public class OfflinePageUtilsTest {
     private EmbeddedTestServer mTestServer;
     private String mTestPage;
     private boolean mServerTurnedOn;
-    private WebPageStation mStartingPage;
 
     @Before
     public void setUp() throws Exception {
@@ -126,7 +128,7 @@ public class OfflinePageUtilsTest {
                 EmbeddedTestServer.createAndStartServer(
                         ApplicationProvider.getApplicationContext());
         mServerTurnedOn = true;
-        mStartingPage = mActivityTestRule.startOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
     }
 
     @After
@@ -525,9 +527,28 @@ public class OfflinePageUtilsTest {
         mActivityTestRule.loadUrl(mTestPage);
     }
 
+    /**
+     * Gives the current page a unique title. Saved pages are published to the Downloads
+     * collection under their title, so a fixed title collides with leftovers from earlier runs
+     * on reused devices and the save fails with FILE_MOVE_FAILED (b/575823388).
+     */
+    private void makeTitleUnique() {
+        final String title = "About-" + System.nanoTime() + "-" + sTitleCounter.incrementAndGet();
+        try {
+            JavaScriptUtils.executeJavaScriptAndWaitForResult(
+                    mActivityTestRule.getWebContents(), "document.title = '" + title + "';");
+        } catch (TimeoutException e) {
+            throw new AssertionError("Timed out setting the page title.", e);
+        }
+        CriteriaHelper.pollUiThread(
+                () -> title.equals(mActivityTestRule.getWebContents().getTitle()),
+                "Page title was not updated.");
+    }
+
     // Save an offline copy of the current page in the tab.
     private void savePage(final int expectedResult, final String expectedUrl, ClientId clientId)
             throws InterruptedException {
+        makeTitleUnique();
         final Semaphore semaphore = new Semaphore(0);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {

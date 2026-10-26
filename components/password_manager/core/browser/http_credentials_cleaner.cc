@@ -43,12 +43,13 @@ void HttpCredentialCleaner::StartCleaning(Observer* observer) {
 
 void HttpCredentialCleaner::OnGetPasswordStoreResultsOrErrorFrom(
     PasswordStoreInterface* store,
-    LoginsResultOrError results_or_error) {
-  if (std::holds_alternative<PasswordStoreBackendError>(results_or_error)) {
+    base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+        results_or_error) {
+  if (!results_or_error) {
     observer_->CleaningCompleted();
     return;
   }
-  auto results = std::get<LoginsResult>(std::move(results_or_error));
+  std::vector<StoredCredential> results = std::move(*results_or_error);
 
   // Non HTTP or HTTPS credentials are ignored, in particular Android or
   // federated credentials.
@@ -67,7 +68,7 @@ void HttpCredentialCleaner::OnGetPasswordStoreResultsOrErrorFrom(
                          form_key));
       ++total_http_credentials_;
     } else {  // HTTPS
-      https_credentials_map_[form_key].insert(form.password_value);
+      https_credentials_map_[form_key].insert(form.password_value.value());
     }
   }
 
@@ -103,7 +104,7 @@ void HttpCredentialCleaner::OnHSTSQueryResult(PasswordForm form,
     return;
   }
 
-  if (user_it->second.contains(form.password_value)) {
+  if (user_it->second.contains(form.password_value.value())) {
     // The password store contains the same credentials (signon_realm, scheme,
     // username and password) on HTTPS version of the form.
     base::UmaHistogramEnumeration(

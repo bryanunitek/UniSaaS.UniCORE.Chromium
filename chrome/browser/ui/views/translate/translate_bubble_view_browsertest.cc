@@ -11,13 +11,16 @@
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
+#include "pdf/buildflags.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/translate/translate_test_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/translate/translate_bubble_model.h"
@@ -26,6 +29,7 @@
 #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
 #include "chrome/browser/ui/views/translate/translate_language_search_view.h"
 #include "chrome/common/chrome_switches.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/translate/core/browser/translate_manager.h"
@@ -102,11 +106,11 @@ class TranslateBubbleViewBrowserTest : public InProcessBrowserTest {
 
     while (expected_lang !=
            ChromeTranslateClient::FromWebContents(
-               browser()->tab_strip_model()->GetActiveWebContents())
+               browser()->GetTabStripModel()->GetActiveWebContents())
                ->GetLanguageState()
                .source_language()) {
       CreateTranslateWaiter(
-          browser()->tab_strip_model()->GetActiveWebContents(),
+          browser()->GetTabStripModel()->GetActiveWebContents(),
           TranslateWaiter::WaitEvent::kLanguageDetermined)
           ->Wait();
     }
@@ -186,9 +190,9 @@ IN_PROC_BROWSER_TEST_F(TranslateBubbleViewBrowserTest,
 
   // Close the tab without translating. Spin the runloop to allow asynchronous
   // window closure to happen.
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   chrome::CloseWebContents(
-      browser(), browser()->tab_strip_model()->GetActiveWebContents(), false);
+      browser(), browser()->GetTabStripModel()->GetActiveWebContents(), false);
   base::RunLoop().RunUntilIdle();
 
   // Closing the last tab should close the bubble.
@@ -200,17 +204,17 @@ IN_PROC_BROWSER_TEST_F(TranslateBubbleViewBrowserTest,
   EXPECT_FALSE(
       TranslateBubbleController::From(browser())->GetTranslateBubble());
 
-  int active_index = browser()->tab_strip_model()->active_index();
+  int active_index = browser()->GetTabStripModel()->active_index();
 
   // Open another tab to load a French page on background.
   int french_index = active_index + 1;
   GURL french_url = GURL(embedded_test_server()->GetURL("/french_page.html"));
   chrome::AddTabAt(browser(), french_url, french_index, false);
-  EXPECT_EQ(active_index, browser()->tab_strip_model()->active_index());
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_EQ(active_index, browser()->GetTabStripModel()->active_index());
+  EXPECT_EQ(2, browser()->GetTabStripModel()->count());
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(french_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(french_index);
 
   // The bubble is not shown because the tab is not activated.
   EXPECT_FALSE(
@@ -218,14 +222,14 @@ IN_PROC_BROWSER_TEST_F(TranslateBubbleViewBrowserTest,
 
   // Close the French page tab immediately.
   chrome::CloseWebContents(browser(), web_contents, false);
-  EXPECT_EQ(active_index, browser()->tab_strip_model()->active_index());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(active_index, browser()->GetTabStripModel()->active_index());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   EXPECT_FALSE(
       TranslateBubbleController::From(browser())->GetTranslateBubble());
 
   // Close the last tab.
   chrome::CloseWebContents(
-      browser(), browser()->tab_strip_model()->GetActiveWebContents(), false);
+      browser(), browser()->GetTabStripModel()->GetActiveWebContents(), false);
 }
 
 IN_PROC_BROWSER_TEST_F(TranslateBubbleViewBrowserTest, AlertAccessibleEvent) {
@@ -238,6 +242,42 @@ IN_PROC_BROWSER_TEST_F(TranslateBubbleViewBrowserTest, AlertAccessibleEvent) {
   // TODO(crbug.com/40691800): This should produce one event instead of two.
   EXPECT_LT(0, counter.GetCount(ax::mojom::Event::kAlert));
 }
+
+#if BUILDFLAG(ENABLE_PDF)
+class TranslateBubbleViewPdfBrowserTest : public TranslateBubbleViewBrowserTest {
+ public:
+  TranslateBubbleViewPdfBrowserTest() {
+    feature_list_.InitWithFeatures(
+        {translate::kEnableTranslatePdf,
+         features::kReadAnythingTranslateEntryPoint},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Test that TriggerPdfTranslation displays the Reading Mode side panel for PDF pages.
+IN_PROC_BROWSER_TEST_F(TranslateBubbleViewPdfBrowserTest,
+                       PdfTranslateBubbleDisplay) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/pdf/test.pdf")));
+
+  ChromeTranslateClient* client =
+      ChromeTranslateClient::FromWebContents(
+          browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_TRUE(client);
+
+  client->TriggerPdfTranslation();
+
+  SidePanelUI* side_panel_ui = SidePanelUI::From(browser());
+  ASSERT_TRUE(side_panel_ui);
+  EXPECT_TRUE(base::test::RunUntil([&]() -> bool {
+    return side_panel_ui->IsSidePanelShowing() &&
+           side_panel_ui->GetCurrentEntryId() == SidePanelEntryId::kReadAnything;
+  }));
+}
+#endif
 
 class TranslateBubbleVisualTest
     : public SupportsTestDialog<

@@ -30,7 +30,6 @@
 #include <limits>
 
 #include "base/bits.h"
-#include "base/feature_list.h"
 #include "base/memory/platform_shared_memory_region.h"
 #include "base/system/sys_info.h"
 #include "gin/array_buffer.h"
@@ -42,24 +41,12 @@
 
 namespace blink {
 
-namespace {
-
-// On ArrayBufferContents allocation failure, this feature enables simulating V8
-// memory pressure to trigger garbage collection and retrying the allocation up
-// to two times. This is expected to reduce OOM crashes. The feature exists to
-// allow quantifying the impact on OOM crashes, CPU usage and user engagement.
-//
-// TODO(crbug.com/371904440): Clean up the feature after running the experiment,
-// no later than in M136.
-BASE_FEATURE(kGCOnArrayBufferAllocationFailure,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-}  // namespace
 
 ArrayBufferContents::ArrayBufferContents(
     const base::subtle::PlatformSharedMemoryRegion& region,
     uint64_t offset,
-    size_t length) {
+    size_t length,
+    SharingType is_shared) {
   DCHECK(region.IsValid());
 
   // The offset must be a multiples of |SysInfo::VMAllocationGranularity()|.
@@ -85,8 +72,13 @@ ArrayBufferContents::ArrayBufferContents(
     base::subtle::PlatformSharedMemoryRegion::Unmap(mapping, mapper);
   };
   uint8_t* base = &result.value()[offset_rounding];
-  backing_store_ =
-      v8::ArrayBuffer::NewBackingStore(base, length, deleter, nullptr);
+  if (is_shared == kShared) {
+    backing_store_ =
+        v8::SharedArrayBuffer::NewBackingStore(base, length, deleter, nullptr);
+  } else {
+    backing_store_ =
+        v8::ArrayBuffer::NewBackingStore(base, length, deleter, nullptr);
+  }
 }
 
 ArrayBufferContents::ArrayBufferContents(
@@ -109,25 +101,18 @@ ArrayBufferContents::ArrayBufferContents(
 
   if (!max_num_elements) {
     // Create a fixed-length ArrayBuffer.
-    void* data = nullptr;
-
-    if (base::FeatureList::IsEnabled(kGCOnArrayBufferAllocationFailure)) {
-      data = AllocateMemoryOrNull(length, policy);
-      if (!data && v8::Isolate::TryGetCurrent() != nullptr) {
-        v8::Isolate::GetCurrent()->RetryCustomAllocate([&]() {
-          return (data = AllocateMemoryOrNull(length, policy)) != nullptr;
-        });
-      }
-      if (!data &&
-          allocation_failure_behavior == AllocationFailureBehavior::kCrash) {
-        data =
-            AllocateMemory<partition_alloc::AllocFlags::kNone>(length, policy);
-      }
-    } else {
-      data = (allocation_failure_behavior == AllocationFailureBehavior::kCrash)
-                 ? AllocateMemory<partition_alloc::AllocFlags::kNone>(length,
-                                                                      policy)
-                 : AllocateMemoryOrNull(length, policy);
+    void* data =
+        AllocateMemoryOrNull(length, policy, MaxAllocationSizePolicy::kNormal);
+    if (!data && v8::Isolate::TryGetCurrent() != nullptr) {
+      v8::Isolate::GetCurrent()->RetryCustomAllocate([&]() {
+        return (data = AllocateMemoryOrNull(
+                    length, policy, MaxAllocationSizePolicy::kNormal)) !=
+               nullptr;
+      });
+    }
+    if (!data &&
+        allocation_failure_behavior == AllocationFailureBehavior::kCrash) {
+      data = AllocateMemory<partition_alloc::AllocFlags::kNone>(length, policy);
     }
 
     if (!data) {
@@ -177,31 +162,47 @@ void ArrayBufferContents::Reset() {
   backing_store_.reset();
 }
 
-void ArrayBufferContents::Transfer(ArrayBufferContents& other) {
+void ArrayBufferContents::TransferOrCopy(ArrayBufferContents& other) {
   DCHECK(!IsShared());
-  DCHECK(!other.Data());
-  other.backing_store_ = std::move(backing_store_);
+  DCHECK(!other.IsValid());
+  // Transfer may be done with the intent of sending the bytes to a different
+  // thread, so play it safe by reverting to copying contents if the use
+  // count indicates we're not the only user.
+  if (backing_store_.use_count() != 1) {
+    CopyTo(other);
+    backing_store_.reset();
+  } else {
+    other.backing_store_ = std::move(backing_store_);
+  }
 }
 
 void ArrayBufferContents::ShareWith(ArrayBufferContents& other) {
   DCHECK(IsShared());
-  DCHECK(!other.Data());
+  DCHECK(!other.IsValid());
   other.backing_store_ = backing_store_;
 }
 
 void ArrayBufferContents::ShareNonSharedForInternalUse(
     ArrayBufferContents& other) {
   DCHECK(!IsShared());
-  DCHECK(!other.Data());
-  DCHECK(Data());
+  DCHECK(!other.IsValid());
+  DCHECK(IsValid());
   other.backing_store_ = backing_store_;
 }
 
 void ArrayBufferContents::CopyTo(ArrayBufferContents& other) {
-  other = ArrayBufferContents(
-      DataLength(), 1, IsShared() ? kShared : kNotShared, kDontInitialize);
-  if (!IsValid() || !other.IsValid())
+  if (!IsValid()) {
+    other = ArrayBufferContents();
     return;
+  }
+  const std::optional<size_t> max_num_elements =
+      backing_store_->IsResizableByUserJavaScript()
+          ? std::make_optional(backing_store_->MaxByteLength())
+          : std::nullopt;
+  other = ArrayBufferContents(
+      DataLength(), max_num_elements, 1, IsShared() ? kShared : kNotShared,
+      kDontInitialize, ArrayBufferContents::AllocationFailureBehavior::kCrash);
+  CHECK(other.IsValid());
   other.ByteSpan().copy_from(ByteSpan());
 }
 
@@ -260,8 +261,16 @@ void* ArrayBufferContents::AllocateMemory(size_t size,
   return data;
 }
 
-void* ArrayBufferContents::AllocateMemoryOrNull(size_t size,
-                                                InitializationPolicy policy) {
+void* ArrayBufferContents::AllocateMemoryOrNull(
+    size_t size,
+    InitializationPolicy policy,
+    MaxAllocationSizePolicy max_allocation_size_policy) {
+  if (max_allocation_size_policy ==
+      MaxAllocationSizePolicy::kAllowGigaAllocations) {
+    return AllocateMemory<partition_alloc::AllocFlags::kReturnNull |
+                          partition_alloc::AllocFlags::kAllowGigaAllocations>(
+        size, policy);
+  }
   return AllocateMemory<partition_alloc::AllocFlags::kReturnNull>(size, policy);
 }
 

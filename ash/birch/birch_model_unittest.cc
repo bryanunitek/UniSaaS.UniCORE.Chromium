@@ -5,6 +5,7 @@
 #include "ash/birch/birch_model.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 
 #include "ash/birch/birch_coral_provider.h"
@@ -24,15 +25,18 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/coral/coral_controller.h"
 #include "ash/wm/coral/coral_test_util.h"
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/unguessable_token.h"
 #include "chromeos/ash/components/geolocation/system_location_provider.h"
+#include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -150,6 +154,11 @@ class BirchModelTest : public AshTestBase {
 
   void SetUp() override {
     AshTestBase::SetUp();
+    // Make Coral's GenAI age check resolve to available so birch data fetches
+    // do not crash on the missing provider.
+    coral_gen_ai_availability_ = std::make_unique<ScopedCoralGenAIAvailability>(
+        AccountId::FromUserEmailGaiaId("coral-test@gmail.com",
+                                       GaiaId("coral-test-gaia-id")));
     // Inject no-op, stub weather provider to prevent real implementation from
     // returning empty weather info.
     stub_birch_client_.InstallStubWeatherDataProvider();
@@ -168,29 +177,27 @@ class BirchModelTest : public AshTestBase {
 
   void TearDown() override {
     Shell::Get()->birch_model()->SetClientAndInit(nullptr);
+    // Do not reset `coral_gen_ai_availability_` here: it installs the
+    // UserManager that AshTestHelper's SessionManager observes, and that
+    // SessionManager is destroyed by AshTestBase::TearDown(), so the helper
+    // must outlive it. It tears down with the fixture instead.
     AshTestBase::TearDown();
   }
 
   // Disables all data type prefs except the given exceptions.
-  void DisableAllDataTypePrefsExcept(std::vector<const char*> exceptions) {
+  void DisableAllDataTypePrefsExcept(
+      base::span<const base::cstring_view> exceptions) {
     PrefService* pref_service =
         Shell::Get()->session_controller()->GetPrimaryUserPrefService();
     ASSERT_TRUE(pref_service);
-    const char* kDataPrefs[] = {
+    constexpr base::cstring_view kDataPrefs[] = {
         prefs::kBirchUseCalendar,     prefs::kBirchUseFileSuggest,
         prefs::kBirchUseChromeTabs,   prefs::kBirchUseLostMedia,
         prefs::kBirchUseReleaseNotes, prefs::kBirchUseWeather,
         prefs::kBirchUseCoral,
     };
-    for (const char* pref : kDataPrefs) {
-      bool enable = false;
-      for (const char* exception : exceptions) {
-        /*strcmp returns 0 when inputs are the same*/
-        if (0 == UNSAFE_TODO(strcmp(pref, exception))) {
-          enable = true;
-        }
-      }
-      pref_service->SetBoolean(pref, enable);
+    for (base::cstring_view pref : kDataPrefs) {
+      pref_service->SetBoolean(pref, std::ranges::contains(exceptions, pref));
     }
   }
 
@@ -198,6 +205,7 @@ class BirchModelTest : public AshTestBase {
   base::test::ScopedFeatureList feature_list_;
   StubBirchClient stub_birch_client_;
   base::SimpleTestClock test_clock_;
+  std::unique_ptr<ScopedCoralGenAIAvailability> coral_gen_ai_availability_;
 };
 
 // Test that requesting data and adding all fresh items to the model will run
@@ -277,7 +285,7 @@ TEST_F(BirchModelTest, DataFetchForNonPrimaryUserClearsModel) {
   TestModelConsumer consumer;
 
   // Sign in to a secondary user.
-  SimulateUserLogin({"user2@test.com"});
+  SimulateUserLogin(AccountId::FromUserEmail("user2@test.com"));
   ASSERT_FALSE(Shell::Get()->session_controller()->IsUserPrimary());
 
   // Add an item to the model.
@@ -314,7 +322,7 @@ TEST_F(BirchModelTest, DisablingAllPrefsCausesNoFetch) {
   ASSERT_TRUE(model->IsDataFresh());
 
   // Disable all the prefs.
-  DisableAllDataTypePrefsExcept(std::vector<const char*>());
+  DisableAllDataTypePrefsExcept({});
 
   // Install a stub weather provider.
   auto* weather_provider = stub_birch_client_.InstallStubWeatherDataProvider();
@@ -350,7 +358,7 @@ TEST_F(BirchModelTest, EnablingOnePrefsCausesFetch) {
 
   // Disable all the prefs except calendar.
   DisableAllDataTypePrefsExcept(
-      std::vector<const char*>{prefs::kBirchUseCalendar});
+      std::to_array<base::cstring_view>({prefs::kBirchUseCalendar}));
 
   // Install a stub weather provider.
   auto* weather_provider = stub_birch_client_.InstallStubWeatherDataProvider();
@@ -415,7 +423,7 @@ TEST_F(BirchModelTest, DisablingPrefsClearsModel) {
   ASSERT_TRUE(model->IsDataFresh());
 
   // Disable all the prefs for data providers.
-  DisableAllDataTypePrefsExcept(std::vector<const char*>());
+  DisableAllDataTypePrefsExcept({});
 
   // The model is now empty.
   EXPECT_TRUE(model->GetAllItems().empty());
@@ -436,7 +444,7 @@ TEST_F(BirchModelTest, GetAllItemsDoesNotReturnItemsWithDisabledPrefs) {
   BirchModel* model = Shell::Get()->birch_model();
 
   // Disable all the prefs for data providers.
-  DisableAllDataTypePrefsExcept(std::vector<const char*>());
+  DisableAllDataTypePrefsExcept({});
 
   // Populate the model with every data type.
   model->SetCalendarItems(MakeCalendarItemList(/*event_count=*/1));
@@ -478,7 +486,7 @@ TEST_F(BirchModelTest, DisablingPrefsMarksDataFresh) {
   ASSERT_FALSE(model->IsDataFresh());
 
   // Disable all the prefs for data providers.
-  DisableAllDataTypePrefsExcept(std::vector<const char*>());
+  DisableAllDataTypePrefsExcept({});
 
   // The data is reported as fresh.
   EXPECT_TRUE(model->IsDataFresh());
@@ -549,7 +557,7 @@ TEST_F(BirchModelTest, EnablePrefsDuringFetchCausesDataFetchRequest) {
   // Disable all the prefs except weather, so that a data fetch request creates
   // a pending request.
   DisableAllDataTypePrefsExcept(
-      std::vector<const char*>({prefs::kBirchUseWeather}));
+      std::to_array<base::cstring_view>({prefs::kBirchUseWeather}));
 
   // Request a fetch, creating a pending fetch request.
   model->RequestBirchDataFetch(/*is_post_login=*/false, base::DoNothing());
@@ -566,7 +574,7 @@ TEST_F(BirchModelTest, EnablePrefsDuringFetchCausesDataFetchRequest) {
 
   // Enable prefs and then expect that data fetch requests are called for each
   // enabled data type.
-  DisableAllDataTypePrefsExcept(std::vector<const char*>(
+  DisableAllDataTypePrefsExcept(std::to_array<base::cstring_view>(
       {prefs::kBirchUseCalendar, prefs::kBirchUseFileSuggest,
        prefs::kBirchUseChromeTabs, prefs::kBirchUseLostMedia,
        prefs::kBirchUseReleaseNotes}));
@@ -1151,7 +1159,7 @@ TEST_F(BirchModelTest, ModelClearedOnMultiProfileUserSwitch) {
   ASSERT_TRUE(model->IsDataFresh());
 
   // Sign in to a secondary user.
-  SimulateUserLogin({"user2@test.com"});
+  SimulateUserLogin(AccountId::FromUserEmail("user2@test.com"));
   ASSERT_FALSE(Shell::Get()->session_controller()->IsUserPrimary());
 
   // The model is empty.

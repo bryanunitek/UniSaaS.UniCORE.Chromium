@@ -13,9 +13,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/lookalikes/lookalike_test_helper.h"
 #include "chrome/browser/lookalikes/safety_tip_web_contents_observer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
@@ -26,7 +26,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_mock_cert_verifier.h"
-#include "content/public/test/fenced_frame_test_util.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_utils.h"
 #include "net/dns/mock_host_resolver.h"
@@ -120,7 +119,7 @@ class SecurityStatePageLoadMetricsBrowserTest : public InProcessBrowserTest {
   }
 
   void CloseAllTabs() {
-    TabStripModel* tab_strip_model = browser()->tab_strip_model();
+    TabStripModel* tab_strip_model = browser()->GetTabStripModel();
     content::WebContentsDestroyedWatcher destroyed_watcher(
         tab_strip_model->GetActiveWebContents());
     tab_strip_model->CloseAllTabs();
@@ -228,8 +227,8 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest, ReloadPage) {
   GURL url = https_test_server()->GetURL("/simple.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
   EXPECT_TRUE(content::WaitForLoadStop(contents));
 
   histogram_tester()->ExpectTotalCount(
@@ -279,7 +278,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
 
     chrome::AddTabAt(browser(), GURL(), -1, true);
     content::WebContents* contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
 
     SafetyTipWebContentsObserver* safety_tip_observer =
         SafetyTipWebContentsObserver::FromWebContents(contents);
@@ -294,10 +293,10 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
     run_loop.Run();
 
     // The UKM isn't recorded until the page is destroyed.
-    int previous_tab_count = browser()->tab_strip_model()->count();
-    browser()->tab_strip_model()->CloseWebContentsAt(1,
-                                                     TabCloseTypes::CLOSE_NONE);
-    ASSERT_EQ(previous_tab_count - 1, browser()->tab_strip_model()->count());
+    int previous_tab_count = browser()->GetTabStripModel()->count();
+    browser()->GetTabStripModel()->CloseWebContentsAt(
+        1, TabCloseTypes::CLOSE_NONE);
+    ASSERT_EQ(previous_tab_count - 1, browser()->GetTabStripModel()->count());
 
     histogram_tester.ExpectTotalCount(
         kSiteEngagementHistogramPrefix + (test_case.expect_safety_tip
@@ -336,7 +335,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
     base::HistogramTester histogram_tester;
 
     content::WebContents* contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     SafetyTipWebContentsObserver* safety_tip_observer =
         SafetyTipWebContentsObserver::FromWebContents(contents);
     ASSERT_TRUE(safety_tip_observer);
@@ -349,7 +348,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_case.url));
     run_loop.Run();
 
-    chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+    chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
     EXPECT_TRUE(content::WaitForLoadStop(contents));
 
     histogram_tester.ExpectUniqueSample(
@@ -404,10 +403,10 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::WebContents* tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   SecurityStyleTestObserver observer(tab);
   ASSERT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                       "var img = document.createElement('img'); "
                       "img.src = 'http://example.com/image.png'; "
                       "document.body.appendChild(img);"));
@@ -481,7 +480,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
   GURL url("http://nonexistent-google.com/page.html");
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   SafetyTipWebContentsObserver* safety_tip_observer =
       SafetyTipWebContentsObserver::FromWebContents(contents);
   ASSERT_TRUE(safety_tip_observer);
@@ -568,7 +567,7 @@ class SecurityStatePageLoadMetricsMPArchBrowserTest
   ~SecurityStatePageLoadMetricsMPArchBrowserTest() override = default;
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 };
 
@@ -620,38 +619,4 @@ IN_PROC_BROWSER_TEST_F(
 
   // Prerendering records it on DidActivatePrerenderedPage.
   histogram_tester()->ExpectTotalCount("Security.SecurityLevel.OnCommit", 2);
-}
-
-class SecurityStatePageLoadMetricsFencedFrameBrowserTest
-    : public SecurityStatePageLoadMetricsMPArchBrowserTest {
- public:
-  SecurityStatePageLoadMetricsFencedFrameBrowserTest() = default;
-  ~SecurityStatePageLoadMetricsFencedFrameBrowserTest() override = default;
-
-  content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
-    return fenced_frame_helper_;
-  }
-
- private:
-  content::test::FencedFrameTestHelper fenced_frame_helper_;
-};
-
-IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsFencedFrameBrowserTest,
-                       DoNotRecordOnCommitSecurityLevelHistogram) {
-  StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
-
-  GURL https_url = https_test_server()->GetURL("/title1.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), https_url));
-
-  histogram_tester()->ExpectTotalCount("Security.SecurityLevel.OnCommit", 1);
-
-  // Create a fenced frame.
-  GURL fenced_frame_url(
-      https_test_server()->GetURL("/fenced_frames/title1.html"));
-  content::RenderFrameHost* fenced_frame_host =
-      fenced_frame_test_helper().CreateFencedFrame(
-          GetWebContents()->GetPrimaryMainFrame(), fenced_frame_url);
-  ASSERT_TRUE(fenced_frame_host);
-
-  histogram_tester()->ExpectTotalCount("Security.SecurityLevel.OnCommit", 1);
 }

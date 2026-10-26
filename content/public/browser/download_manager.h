@@ -112,11 +112,13 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data,
   // Remove downloads whose URLs match the |url_filter| and are within
   // the given time constraints - after remove_begin (inclusive) and before
   // remove_end (exclusive). You may pass in null Time values to do an unbounded
-  // delete in either direction.
-  virtual int RemoveDownloadsByURLAndTime(
+  // delete in either direction. |callback| is run on the UI thread when
+  // complete.
+  virtual void RemoveDownloadsByURLAndTime(
       const base::RepeatingCallback<bool(const GURL&)>& url_filter,
       base::Time remove_begin,
-      base::Time remove_end) = 0;
+      base::Time remove_end,
+      base::OnceClosure callback) = 0;
 
   using SimpleDownloadManager::DownloadUrl;
   // For downloads of blob URLs, the caller can pass a URLLoaderFactory to
@@ -162,8 +164,8 @@ class CONTENT_EXPORT DownloadManager : public base::SupportsUserData::Data,
       bool opened,
       base::Time last_access_time,
       bool transient,
-      const std::vector<download::DownloadItem::ReceivedSlice>&
-          received_slices) = 0;
+      const std::vector<download::DownloadItem::ReceivedSlice>& received_slices,
+      const base::FilePath& display_name) = 0;
 
   // Enum to describe which dependency was initialized in PostInitialization.
   enum DownloadInitializationDependency {

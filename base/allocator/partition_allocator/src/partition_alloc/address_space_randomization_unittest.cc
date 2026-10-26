@@ -92,7 +92,7 @@ TEST(PartitionAllocAddressSpaceRandomizationTest, Range) {
   }
 }
 
-TEST(PartitionAllocAddressSpaceRandomizationTest, Predictable) {
+TEST(PartitionAllocAddressSpaceRandomizationTest, ForkedPredictablility) {
   uintptr_t mask = GetMask();
   if (!mask) {
     return;
@@ -111,6 +111,34 @@ TEST(PartitionAllocAddressSpaceRandomizationTest, Predictable) {
   for (size_t i = 0; i < kSamples; ++i) {
     EXPECT_EQ(GetRandomPageBase(), sequence[i]);
   }
+}
+
+TEST(PartitionAllocAddressSpaceRandomizationTest, Reinitialize) {
+  uintptr_t mask = GetMask();
+  if (!mask) {
+    return;
+  }
+
+  const uint64_t kInitialSeed = 0xfeed5eedULL;
+  SetMmapSeedForTesting(kInitialSeed);
+
+  std::vector<uintptr_t> sequence;
+  for (size_t i = 0; i < kSamples; ++i) {
+    sequence.push_back(GetRandomPageBase());
+  }
+
+  // Put the generator back into the same state and then reinitialize it from
+  // the OS. The resulting sequence must diverge from the known-seed sequence.
+  SetMmapSeedForTesting(kInitialSeed);
+  internal::ReinitializeRandomGenerator();
+
+  bool diverged = false;
+  for (size_t i = 0; i < kSamples; ++i) {
+    if (GetRandomPageBase() != sequence[i]) {
+      diverged = true;
+    }
+  }
+  EXPECT_TRUE(diverged);
 }
 
 // This randomness test is adapted from V8's PRNG tests.
@@ -158,7 +186,7 @@ void RandomBitCorrelation(int random_bit) {
 
       // Enter the new random value into the history.
       for (int i = ago; i >= 0; i--) {
-        PA_UNSAFE_TODO(history[i]) = GetRandomBits();
+        history[i] = GetRandomBits();
       }
 
       // Find out how many of the bits are the same as the prediction bit.
@@ -166,13 +194,13 @@ void RandomBitCorrelation(int random_bit) {
       for (int i = 0; i < kRepeats; i++) {
         uintptr_t random = GetRandomBits();
         for (int j = ago - 1; j >= 0; j--) {
-          PA_UNSAFE_TODO(history[j + 1]) = PA_UNSAFE_TODO(history[j]);
+          history[j + 1] = history[j];
         }
         history[0] = random;
 
         int predicted;
         if (predictor_bit >= 0) {
-          predicted = (PA_UNSAFE_TODO(history[ago]) >> predictor_bit) & 1;
+          predicted = (history[ago] >> predictor_bit) & 1;
         } else {
           predicted = predictor_bit == -2 ? 0 : 1;
         }

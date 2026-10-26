@@ -5,21 +5,14 @@
 #ifndef CHROME_BROWSER_PERMISSIONS_SYSTEM_SYSTEM_MEDIA_CAPTURE_PERMISSIONS_MAC_H_
 #define CHROME_BROWSER_PERMISSIONS_SYSTEM_SYSTEM_MEDIA_CAPTURE_PERMISSIONS_MAC_H_
 
+#include <optional>
+
 #include "base/functional/callback_forward.h"
+#include "chrome/browser/permissions/system/system_permission_common.h"
 
 namespace system_permission_settings {
 
 class MediaAuthorizationWrapper;
-
-// System permission state. These are also used in stats - do not remove or
-// re-arrange the values.
-enum class SystemPermission {
-  kNotDetermined = 0,
-  kRestricted = 1,
-  kDenied = 2,
-  kAllowed = 3,
-  kMaxValue = kAllowed
-};
 
 // Returns the system permission to capture audio or video.
 SystemPermission CheckSystemAudioCapturePermission();
@@ -43,7 +36,9 @@ void SetMediaAuthorizationWrapperForTesting(MediaAuthorizationWrapper* wrapper);
 
 // Sets the value of `g_is_screen_capture_allowed_for_testing`, for test
 // purposes only. When set `IsScreenCaptureAllowed` will return this value.
-void SetIsScreenCaptureAllowedForTesting(bool is_screen_capture_allowed);
+// Pass `std::nullopt` to clear the override and restore the real OS check.
+void SetIsScreenCaptureAllowedForTesting(
+    std::optional<bool> is_screen_capture_allowed);
 
 }  // namespace system_permission_settings
 

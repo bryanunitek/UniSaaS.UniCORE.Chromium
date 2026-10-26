@@ -4,9 +4,10 @@
 
 package org.chromium.chrome.browser.logo;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
@@ -18,8 +19,9 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 import android.view.ContextThemeWrapper;
-import android.view.ViewGroup;
+import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewStub;
+import android.widget.FrameLayout;
 
 import androidx.annotation.ColorInt;
 import androidx.test.core.app.ApplicationProvider;
@@ -36,12 +38,14 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.logo.LogoBridge.Logo;
 import org.chromium.chrome.browser.logo.LogoUtils.DoodleSize;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.ntp_customization.policy.NtpCustomizationPolicyManager;
@@ -49,21 +53,17 @@ import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThem
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorUtils;
 import org.chromium.chrome.browser.ntp_customization.theme.upload_image.BackgroundImageInfo;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
 import org.chromium.content_public.browser.LoadUrlParams;
 
 import java.util.function.Supplier;
 
 /** Unit tests for the {@link LogoCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class LogoCoordinatorUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private LogoContainerView mLogoContainerView;
-    @Mock private LegacyLogoView mLegacyLogoView;
-    @Mock private ViewGroup mParentView;
     @Mock private Callback<LoadUrlParams> mLogoClickedCallback;
     @Mock private Callback<Logo> mOnLogoAvailableCallback;
     @Mock private LogoCoordinator.VisibilityObserver mVisibilityObserver;
@@ -77,6 +77,7 @@ public class LogoCoordinatorUnitTest {
 
     private Context mContext;
     private LogoCoordinator mLogoCoordinator;
+    private LogoContainerView mLogoContainerView;
 
     @Before
     public void setUp() {
@@ -85,11 +86,7 @@ public class LogoCoordinatorUnitTest {
                         ApplicationProvider.getApplicationContext(),
                         R.style.Theme_BrowserUI_DayNight);
         NtpCustomizationConfigManager.setInstanceForTesting(mNtpCustomizationConfigManager);
-        when(mParentView.findViewById(R.id.logo_container_view)).thenReturn(mLogoContainerView);
-        when(mParentView.findViewById(R.id.search_provider_logo)).thenReturn(mLegacyLogoView);
         when(mIsInMultiWindowModeSupplier.get()).thenReturn(false);
-        ViewStub mockStub = mock(ViewStub.class);
-        when(mParentView.findViewById(R.id.logo_view_stub)).thenReturn(mockStub);
     }
 
     @Test
@@ -186,7 +183,7 @@ public class LogoCoordinatorUnitTest {
                 NtpThemeColorUtils.createNtpThemeColorInfo(mContext, colorInfoId);
         NtpBackgroundDataColor dataColor =
                 new NtpBackgroundDataColor(
-                        NtpBackgroundDataBase.PlatformType.ANDROID_LOCAL,
+                        PlatformType.ANDROID,
                         /* isChromeColorDailyRefreshEnabled= */ false,
                         colorInfo);
         @ColorInt
@@ -226,7 +223,7 @@ public class LogoCoordinatorUnitTest {
         colorInfo = NtpThemeColorUtils.createNtpThemeColorInfo(mContext, colorInfoId);
         dataColor =
                 new NtpBackgroundDataColor(
-                        NtpBackgroundDataBase.PlatformType.ANDROID_LOCAL,
+                        PlatformType.ANDROID,
                         /* isChromeColorDailyRefreshEnabled= */ false,
                         colorInfo);
         backgroundColor =
@@ -294,7 +291,7 @@ public class LogoCoordinatorUnitTest {
     @Test
     public void testUpdateDoodleOnTablet_setDoodleSize() {
         mLogoCoordinator = createLogoCoordinator();
-        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+        assertEquals(DoodleSize.REGULAR, mLogoContainerView.getDoodleSizeForTesting());
 
         // Tablet transitions to multi-window mode.
         verifyDoodleSize(
@@ -324,48 +321,88 @@ public class LogoCoordinatorUnitTest {
     @Test
     public void testUpdateDoodleOnTablet_setLayoutParams() {
         mLogoCoordinator = createLogoCoordinator();
-        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+        assertEquals(DoodleSize.REGULAR, mLogoContainerView.getDoodleSizeForTesting());
+
+        // Preset sentinel values so that the update below is observable.
+        LogoView logoView = mLogoContainerView.findViewById(R.id.search_provider_logo);
+        logoView.setLogoHeight(1);
+        logoView.setLogoTopMargin(1);
 
         // Tablet transitions to multi-window mode.
-        clearInvocations(mLogoContainerView);
         when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
         mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ true);
-        verify(mLogoContainerView).setLogoHeight(anyInt());
-        verify(mLogoContainerView).setLogoTopMargin(anyInt());
+        int[] expectedParams =
+                LogoUtils.getLogoViewLayoutParams(
+                        mContext.getResources(),
+                        /* isLogoDoodle= */ true,
+                        DoodleSize.TABLET_SPLIT_SCREEN);
+        MarginLayoutParams layoutParams = (MarginLayoutParams) logoView.getLayoutParams();
+        assertEquals(expectedParams[0], layoutParams.height);
+        assertEquals(expectedParams[1], layoutParams.topMargin);
     }
 
     @Test
     public void testUpdateDoodleOnTablet_sameMode() {
         mLogoCoordinator = createLogoCoordinator();
-        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+        assertEquals(DoodleSize.REGULAR, mLogoContainerView.getDoodleSizeForTesting());
 
-        // Tablet mode doesn't change.
-        clearInvocations(mLogoContainerView);
+        // Tablet mode doesn't change. Preset a different value on the view directly to verify that
+        // the doodle size on the view is left untouched.
+        mLogoContainerView.setDoodleSize(DoodleSize.TABLET_SPLIT_SCREEN);
         mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
-        verify(mLogoContainerView, never()).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
+        assertEquals(DoodleSize.TABLET_SPLIT_SCREEN, mLogoContainerView.getDoodleSizeForTesting());
 
         // Tablet transitions to multi-window mode.
-        clearInvocations(mLogoContainerView);
+        mLogoContainerView.setDoodleSize(DoodleSize.REGULAR);
         when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
         mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
-        verify(mLogoContainerView).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
+        assertEquals(DoodleSize.TABLET_SPLIT_SCREEN, mLogoContainerView.getDoodleSizeForTesting());
 
         // Tablet mode doesn't change.
-        clearInvocations(mLogoContainerView);
+        mLogoContainerView.setDoodleSize(DoodleSize.REGULAR);
         mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
-        verify(mLogoContainerView, never()).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
+        assertEquals(DoodleSize.REGULAR, mLogoContainerView.getDoodleSizeForTesting());
     }
 
+    @Test
+    public void testConstructor_auroraPaddingStyleMediumOrLarge_onPhones() {
+        verifyLogoTopPadding(PaddingStyle.MEDIUM, /* expectPaddingSet= */ true);
+        verifyLogoTopPadding(PaddingStyle.LARGE, /* expectPaddingSet= */ true);
+    }
+
+    @Test
+    public void testConstructor_auroraPaddingStyleSmallOrDefault_onPhones() {
+        verifyLogoTopPadding(PaddingStyle.SMALL, /* expectPaddingSet= */ false);
+        verifyLogoTopPadding(PaddingStyle.DEFAULT, /* expectPaddingSet= */ false);
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    public void testConstructor_auroraPaddingStyleMediumOrLarge_onTablets() {
+        verifyLogoTopPadding(PaddingStyle.MEDIUM, /* expectPaddingSet= */ false);
+        verifyLogoTopPadding(PaddingStyle.LARGE, /* expectPaddingSet= */ false);
+    }
+
+    /**
+     * Creates a new {@link LogoCoordinator} with a fresh parent view containing the logo ViewStub,
+     * and stores the inflated {@link LogoContainerView} in {@link #mLogoContainerView}.
+     */
     private LogoCoordinator createLogoCoordinator() {
+        FrameLayout parentView = new FrameLayout(mContext);
+        ViewStub stub = new ViewStub(mContext, R.layout.logo_view_layout);
+        stub.setId(R.id.logo_view_stub);
+        parentView.addView(stub);
+
         LogoCoordinator coordinator =
                 new LogoCoordinator(
                         mContext,
                         mLogoClickedCallback,
-                        mParentView,
+                        parentView,
                         mOnLogoAvailableCallback,
                         mVisibilityObserver,
                         mIsInMultiWindowModeSupplier);
         coordinator.setMediatorForTesting(mLogoMediator);
+        mLogoContainerView = parentView.findViewById(R.id.logo_container_view);
         return coordinator;
     }
 
@@ -373,89 +410,21 @@ public class LogoCoordinatorUnitTest {
             boolean isInMultiWindowMode,
             boolean showingNonStandardGoogleLogo,
             int expectedDoodleSize) {
-        clearInvocations(mLogoContainerView);
         when(mIsInMultiWindowModeSupplier.get()).thenReturn(isInMultiWindowMode);
         mLogoCoordinator.updateDoodleOnTablet(showingNonStandardGoogleLogo);
 
-        verify(mLogoContainerView).setDoodleSize(expectedDoodleSize);
+        assertEquals(expectedDoodleSize, mLogoContainerView.getDoodleSizeForTesting());
     }
 
-    private void verifyDoodleSize_logoViewRefactorFlagDisabled(
-            boolean isInMultiWindowMode,
-            boolean showingNonStandardGoogleLogo,
-            int expectedDoodleSize) {
-        clearInvocations(mLegacyLogoView);
-        when(mIsInMultiWindowModeSupplier.get()).thenReturn(isInMultiWindowMode);
-        mLogoCoordinator.updateDoodleOnTablet(showingNonStandardGoogleLogo);
+    private void verifyLogoTopPadding(@PaddingStyle int paddingStyle, boolean expectPaddingSet) {
+        FeatureOverrides.overrideParam(ChromeFeatureList.NTP_AURORA, "padding_style", paddingStyle);
 
-        verify(mLegacyLogoView).setDoodleSize(expectedDoodleSize);
-    }
+        createLogoCoordinator();
 
-    @Test
-    @DisableFeatures({ChromeFeatureList.LOGO_VIEW_REFACTOR})
-    public void testUpdateDoodleOnTablet_setDoodleSize_logoViewRefactorFlagDisabled() {
-        mLogoCoordinator = createLogoCoordinator();
-        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
-
-        // Tablet transitions to multi-window mode.
-        verifyDoodleSize_logoViewRefactorFlagDisabled(
-                /* isInMultiWindowMode= */ true,
-                /* showingNonStandardGoogleLogo= */ false,
-                DoodleSize.TABLET_SPLIT_SCREEN);
-
-        // Tablet transitions back to regular mode.
-        verifyDoodleSize_logoViewRefactorFlagDisabled(
-                /* isInMultiWindowMode= */ false,
-                /* showingNonStandardGoogleLogo= */ false,
-                DoodleSize.REGULAR);
-
-        // Tablet transitions to multi-window mode.
-        verifyDoodleSize_logoViewRefactorFlagDisabled(
-                /* isInMultiWindowMode= */ true,
-                /* showingNonStandardGoogleLogo= */ true,
-                DoodleSize.TABLET_SPLIT_SCREEN);
-
-        // Tablet transitions back to regular mode.
-        verifyDoodleSize_logoViewRefactorFlagDisabled(
-                /* isInMultiWindowMode= */ false,
-                /* showingNonStandardGoogleLogo= */ true,
-                DoodleSize.REGULAR);
-    }
-
-    @Test
-    @DisableFeatures({ChromeFeatureList.LOGO_VIEW_REFACTOR})
-    public void testUpdateDoodleOnTablet_setLayoutParams_logoViewRefactorFlagDisabled() {
-        mLogoCoordinator = createLogoCoordinator();
-        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
-
-        // Tablet transitions to multi-window mode.
-        clearInvocations(mLegacyLogoView);
-        when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
-        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ true);
-        verify(mLegacyLogoView).setLogoHeight(anyInt());
-        verify(mLegacyLogoView).setLogoTopMargin(anyInt());
-    }
-
-    @Test
-    @DisableFeatures({ChromeFeatureList.LOGO_VIEW_REFACTOR})
-    public void testUpdateDoodleOnTablet_sameMode_logoViewRefactorFlagDisabled() {
-        mLogoCoordinator = createLogoCoordinator();
-        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
-
-        // Tablet mode doesn't change.
-        clearInvocations(mLegacyLogoView);
-        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
-        verify(mLegacyLogoView, never()).setDoodleSize(LogoUtils.DoodleSize.REGULAR);
-
-        // Tablet transitions to multi-window mode.
-        clearInvocations(mLegacyLogoView);
-        when(mIsInMultiWindowModeSupplier.get()).thenReturn(true);
-        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
-        verify(mLegacyLogoView).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
-
-        // Tablet mode doesn't change.
-        clearInvocations(mLegacyLogoView);
-        mLogoCoordinator.updateDoodleOnTablet(/* showingNonStandardGoogleLogo= */ false);
-        verify(mLegacyLogoView, never()).setDoodleSize(LogoUtils.DoodleSize.TABLET_SPLIT_SCREEN);
+        LogoView logoView = mLogoContainerView.findViewById(R.id.search_provider_logo);
+        int defaultPaddingTop =
+                mContext.getResources().getDimensionPixelSize(R.dimen.ntp_logo_padding_top);
+        assertNotEquals(0, defaultPaddingTop);
+        assertEquals(expectPaddingSet ? 0 : defaultPaddingTop, logoView.getPaddingTop());
     }
 }

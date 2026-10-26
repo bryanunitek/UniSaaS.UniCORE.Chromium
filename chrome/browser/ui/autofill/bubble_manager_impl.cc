@@ -27,30 +27,37 @@ constexpr base::TimeDelta kPendingRequestTimeout = base::Seconds(3600);
 int GetPriorityForBubbleType(BubbleType type) {
   switch (type) {
     case BubbleType::kOmniboxAutofill:
-      return 12;
+      return 14;
     case BubbleType::kFilledCardInformation:
-      return 11;
+      return 13;
     case BubbleType::kPassword:
-      return 10;
+      return 12;
     case BubbleType::kSaveUpdateAutofillAi:
-      return 9;
+      return 11;
     case BubbleType::kSaveUpdateCard:
-      return 8;
+      return 10;
     case BubbleType::kVirtualCardEnrollConfirmation:
-      return 7;
+      return 9;
     case BubbleType::kSaveIban:
-      return 6;
+      return 8;
     case BubbleType::kMandatoryReauth:
-      return 5;
+      return 7;
     case BubbleType::kSaveUpdateAddress:
-      return 4;
+      return 6;
     case BubbleType::kOfferNotification:
-      return 3;
+      return 5;
     case BubbleType::kPaymentsChurnedUsers:
-      return 2;
+      return 4;
+    // Proactive Gmail OTP opt-in has lower priority than post-submission save
+    // flows (save-password, save-card, save-address) and sits alongside other
+    // feature opt-in consent prompts.
+    case BubbleType::kGmailOtpOptIn:
+      return 3;
     case BubbleType::kWalletablePassConsent:
-      return 1;
+      return 2;
     case BubbleType::kWalletablePassSave:
+      return 1;
+    case BubbleType::kWalletReminderNotice:
       return 0;
   }
   NOTREACHED();
@@ -72,8 +79,10 @@ bool ShouldAlwaysPreemptSameType(BubbleType bubble_type) {
     case BubbleType::kMandatoryReauth:
     case BubbleType::kSaveUpdateAddress:
     case BubbleType::kOfferNotification:
+    case BubbleType::kGmailOtpOptIn:
     case BubbleType::kWalletablePassConsent:
     case BubbleType::kWalletablePassSave:
+    case BubbleType::kWalletReminderNotice:
       return false;
   }
   NOTREACHED();
@@ -108,6 +117,10 @@ std::string_view BubbleTypeToMetricSuffix(BubbleType bubble_type) {
       return "WalletablePassConsent";
     case BubbleType::kWalletablePassSave:
       return "WalletablePassSave";
+    case BubbleType::kWalletReminderNotice:
+      return "WalletReminderNotice";
+    case BubbleType::kGmailOtpOptIn:
+      return "GmailOtpOptIn";
   }
   NOTREACHED();
 }
@@ -264,15 +277,10 @@ void BubbleManagerImpl::AddToPendingQueue(
     const bool bubble_has_timed_out =
         (now - it->time_added) > kPendingRequestTimeout;
     if (ShouldAlwaysPreemptSameType(new_bubble_type) || bubble_has_timed_out) {
-      if (bubble_has_timed_out) {
-        if (it->controller) {
-          it->controller->OnBubbleDiscarded();
-          base::UmaHistogramEnumeration("Autofill.Bubble.Queue.TimedOut",
-                                        it->controller->GetBubbleType());
-        }
-      } else {
-        base::UmaHistogramEnumeration("Autofill.Bubble.Queue.Replaced",
-                                      new_bubble_type);
+      if (bubble_has_timed_out && it->controller) {
+        it->controller->OnBubbleDiscarded();
+        base::UmaHistogramEnumeration("Autofill.Bubble.Queue.TimedOut",
+                                      it->controller->GetBubbleType());
       }
       pending_bubbles_queue_.erase(it);
       pending_bubbles_queue_.insert(PendingRequest(controller, now, priority));

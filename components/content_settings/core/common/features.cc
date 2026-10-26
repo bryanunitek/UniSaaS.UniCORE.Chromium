@@ -27,7 +27,9 @@ BASE_FEATURE(kSafetyCheckUnusedSitePermissions,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
-BASE_FEATURE(kActiveContentSettingExpiry, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kActiveContentSettingExpiry, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kEagerStorageAccessPermissionCheck,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 const base::FeatureParam<bool> kSafetyCheckUnusedSitePermissionsNoDelay{
     &kSafetyCheckUnusedSitePermissions,
@@ -44,8 +46,6 @@ BASE_FEATURE(kApproximateGeolocationPermission,
              base::FEATURE_DISABLED_BY_DEFAULT
 #endif
 );
-
-BASE_FEATURE(kLeftHandSideActivityIndicators, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kLeftHandSideSensorActivityIndicators,
              base::FEATURE_DISABLED_BY_DEFAULT);

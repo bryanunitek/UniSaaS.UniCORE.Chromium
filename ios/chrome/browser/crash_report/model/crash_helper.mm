@@ -12,6 +12,7 @@
 
 #import <atomic>
 
+#import "base/apple/backup_util.h"
 #import "base/auto_reset.h"
 #import "base/debug/crash_logging.h"
 #import "base/feature_list.h"
@@ -34,7 +35,6 @@
 #import "components/crash/core/common/reporter_running_ios.h"
 #import "components/gwp_asan/crash_handler/crash_handler.h"
 #import "components/previous_session_info/previous_session_info.h"
-#import "ios/chrome/browser/crash_report/model/crash_report_user_application_state.h"
 #import "ios/chrome/browser/crash_report/model/crash_upload_list.h"
 #import "ios/chrome/browser/crash_report/model/features.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -112,6 +112,9 @@ void ProcessIntermediateDumps() {
 
   // Remove this after a few milestones.
   ClearMainThreadFreezeDetectorCache();
+
+  // Exclude the crash database from iCloud / local device backups.
+  base::apple::SetBackupExclusion(common::CrashpadDumpLocation());
 
   // Wait until after processing intermediate dumps to record last shutdown
   // type.

@@ -21,6 +21,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
@@ -64,7 +65,6 @@
 using blink::mojom::MediaDeviceType;
 using testing::_;
 using testing::SaveArg;
-using testing::InvokeWithoutArgs;
 
 namespace content {
 
@@ -159,16 +159,16 @@ class FakeContentBrowserClient : public ContentBrowserClient {
 class MockAudioOutputAuthorizationHandler
     : public AudioOutputAuthorizationHandler {
  public:
-  explicit MockAudioOutputAuthorizationHandler(
-      MediaStreamManager* media_stream_manager)
+  MockAudioOutputAuthorizationHandler(
+      MediaStreamManager* media_stream_manager,
+      GlobalRenderFrameHostId render_frame_host_id)
       : AudioOutputAuthorizationHandler(/*media::AudioSystem*=*/nullptr,
                                         media_stream_manager,
-                                        /*render_process_id=*/0) {}
+                                        render_frame_host_id) {}
   ~MockAudioOutputAuthorizationHandler() override = default;
   MOCK_METHOD(void,
               RequestDeviceAuthorization,
-              (int,
-               const base::UnguessableToken&,
+              (const base::UnguessableToken&,
                const std::string&,
                AudioOutputAuthorizationHandler::AuthorizationCompletedCallback),
               (const, override));
@@ -778,7 +778,7 @@ TEST_P(MediaDevicesDispatcherHostTest, SubscribeDeviceChangeNoAccess) {
 TEST_P(MediaDevicesDispatcherHostTest, GetVideoInputCapabilities) {
   base::RunLoop run_loop;
   EXPECT_CALL(*this, MockVideoInputCapabilitiesCallback())
-      .WillOnce(InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   host_->GetVideoInputCapabilities(base::BindOnce(
       &MediaDevicesDispatcherHostTest::VideoInputCapabilitiesCallback,
       base::Unretained(this)));
@@ -788,7 +788,7 @@ TEST_P(MediaDevicesDispatcherHostTest, GetVideoInputCapabilities) {
 TEST_P(MediaDevicesDispatcherHostTest, GetAudioInputCapabilities) {
   base::RunLoop run_loop;
   EXPECT_CALL(*this, MockAudioInputCapabilitiesCallback())
-      .WillOnce(InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   host_->GetAudioInputCapabilities(base::BindOnce(
       &MediaDevicesDispatcherHostTest::AudioInputCapabilitiesCallback,
       base::Unretained(this)));
@@ -798,7 +798,7 @@ TEST_P(MediaDevicesDispatcherHostTest, GetAudioInputCapabilities) {
 TEST_P(MediaDevicesDispatcherHostTest, GetAllVideoInputDeviceFormats) {
   base::RunLoop run_loop;
   EXPECT_CALL(*this, MockAllVideoInputDeviceFormatsCallback())
-      .WillOnce(InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   base::test::TestFuture<const MediaDeviceSaltAndOrigin&> future;
   GetMediaDeviceSaltAndOrigin(GlobalRenderFrameHostId(-1, -1),
                               future.GetCallback());
@@ -814,7 +814,7 @@ TEST_P(MediaDevicesDispatcherHostTest, GetAllVideoInputDeviceFormats) {
 TEST_P(MediaDevicesDispatcherHostTest, GetAvailableVideoInputDeviceFormats) {
   base::RunLoop run_loop;
   EXPECT_CALL(*this, MockAvailableVideoInputDeviceFormatsCallback())
-      .WillOnce(InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   base::test::TestFuture<const MediaDeviceSaltAndOrigin&> future;
   GetMediaDeviceSaltAndOrigin(GlobalRenderFrameHostId(-1, -1),
                               future.GetCallback());
@@ -915,7 +915,7 @@ TEST_P(MediaDevicesDispatcherHostTest,
   // Expect an empty list of supported formats for an unfound device.
   ExpectVideoCaptureFormats({});
   EXPECT_CALL(*this, MockAvailableVideoInputDeviceFormatsCallback())
-      .WillOnce(InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   host_->GetAvailableVideoInputDeviceFormats(
       "UnknownHashedDeviceId",
       base::BindOnce(&MediaDevicesDispatcherHostTest::
@@ -930,7 +930,7 @@ TEST_P(MediaDevicesDispatcherHostTest,
   // Expect an empty list of supported formats for an unfound device.
   ExpectVideoCaptureFormats({});
   EXPECT_CALL(*this, MockAvailableVideoInputDeviceFormatsCallback())
-      .WillOnce(InvokeWithoutArgs([&run_loop]() { run_loop.Quit(); }));
+      .WillOnce([&run_loop]() { run_loop.Quit(); });
   host_->GetAllVideoInputDeviceFormats(
       "UnknownHashedDeviceId",
       base::BindOnce(&MediaDevicesDispatcherHostTest::
@@ -1075,6 +1075,65 @@ TEST_P(SelectAudioOutputTest, SelectAudioOutputSuccess) {
   EXPECT_EQ(result->device_info.device_id, last_audio_output_device_id);
 }
 
+TEST_P(SelectAudioOutputTest, SelectAudioOutputForwardsRequestToUIProxy) {
+  // When no authorized device ID is provided, MediaDevicesDispatcherHost
+  // delegates the selection request to MediaStreamUIProxy on the UI thread.
+  //
+  // To avoid cross-thread Use-After-Free races where the host is destroyed on
+  // the IO thread while the UI thread executes the callback, the reply must be
+  // posted back to the IO task runner via BindPostTaskToCurrentDefault rather
+  // than executed synchronously within the UI proxy's call stack.
+  //
+  // In this single-threaded test harness, we verify this asynchronous contract:
+  // We post a probe task to the task runner during the salt/origin lookup. At
+  // that moment, the SelectAudioOutput result must NOT be ready yet (it should
+  // only arrive after subsequent posted tasks run).
+  render_frame_host_->SimulateUserActivation();
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      switches::kUseFakeUIForMediaStream);
+
+  MediaDevicesManager* const devices_manager =
+      media_stream_manager_->media_devices_manager();
+  devices_manager->SetPermissionChecker(
+      std::make_unique<MediaDevicesPermissionChecker>(true));
+
+  base::test::TestFuture<blink::mojom::SelectAudioOutputResultPtr> future;
+  std::optional<bool> result_ready_before_reply;
+
+  // Intercept the salt/origin lookup—the earliest asynchronous checkpoint in
+  // device selection—to schedule a probe task into the sequence queue ahead
+  // of any posted reply from the UI proxy.
+  devices_manager->set_get_salt_and_origin_cb_for_testing(
+      base::BindLambdaForTesting(
+          [&](GlobalRenderFrameHostId, MediaDeviceSaltAndOriginCallback cb) {
+            // 1. Complete the expected salt and origin lookup.
+            GetMediaDeviceSaltAndOrigin(GlobalRenderFrameHostId(-1, -1),
+                                        std::move(cb));
+
+            // 2. Post a probe task to check if the SelectAudioOutput result was
+            //    delivered synchronously.
+            auto check_readiness = base::BindLambdaForTesting([&]() {
+              result_ready_before_reply = future.IsReady();
+            });
+
+            base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE, std::move(check_readiness));
+          }));
+
+  // Trigger the audio output selection request.
+  host_->SelectAudioOutput(std::string(), future.GetCallback());
+
+  // Wait for the result and verify the async contract and outcome.
+  blink::mojom::SelectAudioOutputResultPtr result = future.Take();
+  EXPECT_EQ(result->status, blink::mojom::AudioOutputStatus::kNoPermission);
+  EXPECT_TRUE(result->device_info.device_id.empty());
+
+  // Confirm that the result was delivered via posted task (not synchronously).
+  ASSERT_TRUE(result_ready_before_reply.has_value());
+  EXPECT_FALSE(*result_ready_before_reply);
+}
+
 INSTANTIATE_TEST_SUITE_P(All,
                          SelectAudioOutputTest,
                          testing::Values(std::string(), "https://test.com"));
@@ -1105,14 +1164,14 @@ TEST_P(SetPreferredSinkIdTest, DispatchPreferredAudioOutputDeviceManager) {
 
   auto authorization_handler =
       std::make_unique<MockAudioOutputAuthorizationHandler>(
-          media_stream_manager_.get());
+          media_stream_manager_.get(), render_frame_host_->GetGlobalId());
   MockAudioOutputAuthorizationHandler* mock_authorization_handler =
       authorization_handler.get();
   SetAuthorizationHandler(std::move(authorization_handler));
 
   EXPECT_CALL(*mock_authorization_handler,
-              RequestDeviceAuthorization(_, _, kHashedDeviceId, _))
-      .WillOnce(base::test::RunOnceCallback<3>(
+              RequestDeviceAuthorization(_, kHashedDeviceId, _))
+      .WillOnce(base::test::RunOnceCallback<2>(
           media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_OK,
           media::AudioParameters(), kRawDeviceId, ""));
 
@@ -1132,14 +1191,14 @@ TEST_P(SetPreferredSinkIdTest,
 
   auto authorization_handler =
       std::make_unique<MockAudioOutputAuthorizationHandler>(
-          media_stream_manager_.get());
+          media_stream_manager_.get(), render_frame_host_->GetGlobalId());
   MockAudioOutputAuthorizationHandler* mock_authorization_handler =
       authorization_handler.get();
   SetAuthorizationHandler(std::move(authorization_handler));
 
   EXPECT_CALL(*mock_authorization_handler,
-              RequestDeviceAuthorization(_, _, kHashedDeviceId, _))
-      .WillOnce(base::test::RunOnceCallback<3>(
+              RequestDeviceAuthorization(_, kHashedDeviceId, _))
+      .WillOnce(base::test::RunOnceCallback<2>(
           media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_NOT_AUTHORIZED,
           media::AudioParameters(), kRawDeviceId, ""));
 

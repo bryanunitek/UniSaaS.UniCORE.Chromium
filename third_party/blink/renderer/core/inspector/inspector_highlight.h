@@ -147,12 +147,22 @@ struct CORE_EXPORT InspectorIsolationModeHighlightConfig {
   int highlight_index = 0;
 };
 
-struct CORE_EXPORT InspectorGreenDevFloatyAnchorConfig {
-  USING_FAST_MALLOC(InspectorGreenDevFloatyAnchorConfig);
+struct CORE_EXPORT InspectorImcbHighlightConfig {
+  USING_FAST_MALLOC(InspectorImcbHighlightConfig);
 
  public:
-  InspectorGreenDevFloatyAnchorConfig() = default;
-  int node_id = 0;
+  InspectorImcbHighlightConfig() = default;
+
+  std::optional<LineStyle> imcb_border;
+  Color imcb_background_color;
+  Color insets_background_color;
+  Color insets_hatch_color;
+
+  std::optional<LineStyle> anchor_border;
+  Color anchor_background_color;
+  bool show_position_area_grid = false;
+  std::optional<LineStyle> position_area_grid_line_color;
+  Color position_area_active_region_color;
 };
 
 struct CORE_EXPORT InspectorHighlightConfig {
@@ -187,6 +197,7 @@ struct CORE_EXPORT InspectorHighlightConfig {
   std::unique_ptr<InspectorFlexItemHighlightConfig> flex_item_highlight_config;
   std::unique_ptr<InspectorContainerQueryContainerHighlightConfig>
       container_query_container_highlight_config;
+  std::unique_ptr<InspectorImcbHighlightConfig> imcb_highlight_config;
 };
 
 struct InspectorHighlightContrastInfo {
@@ -285,6 +296,7 @@ class CORE_EXPORT InspectorHighlight : public InspectorHighlightBase {
   std::unique_ptr<protocol::ListValue> flex_container_info_;
   std::unique_ptr<protocol::ListValue> flex_item_info_;
   std::unique_ptr<protocol::ListValue> container_query_container_info_;
+  std::unique_ptr<protocol::ListValue> imcb_info_;
   bool show_rulers_;
   bool show_extension_lines_;
   bool show_accessibility_info_;
@@ -310,12 +322,6 @@ std::unique_ptr<protocol::DictionaryValue> InspectorIsolatedElementHighlight(
     const InspectorIsolationModeHighlightConfig& config);
 
 std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
-InspectorGreenDevFloatyAnchorHighlight(
-    Node* node,
-    const InspectorGreenDevFloatyAnchorConfig& config,
-    float scale);
-
-std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
 InspectorGridHighlight(Node*, const InspectorGridHighlightConfig& config);
 
 std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
@@ -332,6 +338,11 @@ std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
 BuildIsolatedElementInfo(Element& element,
                          const InspectorIsolationModeHighlightConfig& config,
                          float scale);
+
+std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
+BuildImcbInfo(Element* element,
+              const InspectorImcbHighlightConfig& imcb_config,
+              float scale);
 
 void CORE_EXPORT
 AppendStyleInfo(Element* element,

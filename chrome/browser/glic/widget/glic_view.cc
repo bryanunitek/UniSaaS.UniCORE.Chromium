@@ -7,9 +7,11 @@
 #include "base/command_line.h"
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/file_select_helper.h"
+#include "chrome/browser/glic/host/guest_util.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/widget/web_contents_delegate_util.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -29,6 +31,7 @@
 #include "ui/color/color_variant.h"
 #include "ui/events/event_observer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/draggable_region.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/background.h"
 #include "ui/views/event_monitor.h"
@@ -49,14 +52,17 @@ GlicView::GlicView(Profile* profile,
   SetSize(initial_size);
   // As there is no WebContents yet, this will apply the default background.
   UpdateBackgroundColor();
+  SetAcceleratorHandling(views::WebContentsAcceleratorHandling::kEnabled);
 }
 
-GlicView::~GlicView() = default;
+GlicView::~GlicView() {
+  SetWebContentsDelegate(web_contents(), /*delegate=*/nullptr,
+                         /*expected_delegate=*/this);
+}
 
 bool GlicView::HandleKeyboardEvent(content::WebContents* source,
                                    const input::NativeWebKeyboardEvent& event) {
-  return GetWidget() && unhandled_keyboard_event_handler_.HandleKeyboardEvent(
-                            event, GetWidget()->GetFocusManager());
+  return WebView::HandleKeyboardEvent(source, event);
 }
 
 void GlicView::RequestMediaAccessPermission(
@@ -65,6 +71,14 @@ void GlicView::RequestMediaAccessPermission(
     content::MediaResponseCallback callback) {
   MediaCaptureDevicesDispatcher::GetInstance()->ProcessMediaAccessRequest(
       web_contents, request, std::move(callback), nullptr);
+}
+
+bool GlicView::CheckMediaAccessPermission(
+    content::RenderFrameHost* render_frame_host,
+    const url::Origin& security_origin,
+    blink::mojom::MediaStreamType type) {
+  return MediaCaptureDevicesDispatcher::GetInstance()
+      ->CheckMediaAccessPermission(render_frame_host, security_origin, type);
 }
 
 void GlicView::RunFileChooser(
@@ -81,31 +95,73 @@ bool GlicView::CanDragEnter(content::WebContents* source,
   if (!base::FeatureList::IsEnabled(features::kGlicDragAndDropFileUpload)) {
     return false;
   }
-  // Check for local files or URLs.
+  // Check for local files or in-memory web image/file contents.
+  // TODO(crbug.com/567183211): Temporarily reject non-file web drags (such as
+  // text and links) until extended drag-and-drop payload types are supported.
   bool has_files = !data.filenames.empty() || !data.file_system_files.empty();
-  bool has_url = !data.url_infos.empty();
+  bool has_file_contents = !data.file_contents.empty();
 
-  return has_files || (has_url && base::FeatureList::IsEnabled(
-                                      features::kGlicWebDragAndDropFileUpload));
+  return has_files ||
+         (has_file_contents && base::FeatureList::IsEnabled(
+                                   features::kGlicWebDragAndDropFileUpload));
 }
 
-void GlicView::SetWebContents(content::WebContents* web_contents) {
-  views::WebView::SetWebContents(web_contents);
-  if (web_contents) {
-    web_contents->SetDelegate(this);
+void GlicView::ContentsZoomChange(bool zoom_in) {
+  if (zoom_changed_callback_) {
+    zoom_changed_callback_.Run(zoom_in);
   }
+}
+
+void GlicView::SetWebContents(content::WebContents* new_web_contents) {
+  // Clear the delegate on the old WebContents if this view is currently the
+  // delegate. Passing `/*expected_delegate=*/this` avoids clearing the delegate
+  // if another view has already taken over (e.g. during transitions between
+  // panel and floaty).
+  SetWebContentsDelegate(web_contents(), /*delegate=*/nullptr,
+                         /*expected_delegate=*/this);
+  views::WebView::SetWebContents(new_web_contents);
+  // Attach this view as the delegate for the new WebContents.
+  SetWebContentsDelegate(new_web_contents, /*delegate=*/this);
+
+  UpdateWebContentsSize();
+}
+
+void GlicView::RenderFrameCreated(content::RenderFrameHost* render_frame_host) {
+  views::WebView::RenderFrameCreated(render_frame_host);
+  if (web_contents() &&
+      render_frame_host == web_contents()->GetPrimaryMainFrame()) {
+    UpdateWebContentsSize();
+  }
+}
+
+void GlicView::RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                                      content::RenderFrameHost* new_host) {
+  views::WebView::RenderFrameHostChanged(old_host, new_host);
+  if (web_contents() && new_host == web_contents()->GetPrimaryMainFrame()) {
+    UpdateWebContentsSize();
+  }
+}
+
+void GlicView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  views::WebView::OnBoundsChanged(previous_bounds);
+  UpdateWebContentsSize();
+}
+
+void GlicView::UpdateWebContentsSize() {
+  const gfx::Size contents_size = GetContentsBounds().size();
+  if (!web_contents() || contents_size.IsEmpty()) {
+    return;
+  }
+  if (auto* rwhv = web_contents()->GetRenderWidgetHostView()) {
+    rwhv->SetSize(contents_size);
+  }
+  InvalidateLayout();
 }
 
 void GlicView::DraggableRegionsChanged(
     const std::vector<blink::mojom::DraggableRegionPtr>& regions,
     content::WebContents* contents) {
-  SkRegion sk_region;
-  for (const auto& region : regions) {
-    sk_region.op(
-        SkIRect::MakeLTRB(region->bounds.x(), region->bounds.y(),
-                          region->bounds.right(), region->bounds.bottom()),
-        region->draggable ? SkRegion::kUnion_Op : SkRegion::kDifference_Op);
-  }
+  SkRegion sk_region = gfx::DraggableRegionsToSkRegion(regions);
 
   // `GlicView::DraggableRegionsChanged()` is called when draggable regions for
   // either the main-webcontents or guest-webcontents are changed.
@@ -113,6 +169,15 @@ void GlicView::DraggableRegionsChanged(
   // glic web app,
   const bool is_webview_contents = web_contents() != contents;
   SetDraggableRegion(sk_region, /*for_webview=*/is_webview_contents);
+}
+
+bool GlicView::HandleWindowCreation(
+    content::RenderFrameHost* opener,
+    const GURL& target_url,
+    WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& features) {
+  return MaybeHandleGlicWindowCreation(opener, target_url, disposition,
+                                       features);
 }
 
 bool GlicView::IsPointWithinDraggableRegion(const gfx::Point& point) {

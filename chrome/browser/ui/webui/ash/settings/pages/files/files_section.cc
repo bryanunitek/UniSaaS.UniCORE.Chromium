@@ -18,7 +18,6 @@
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_handler.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_shares_localized_strings_provider.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/user_manager/user.h"
@@ -247,13 +246,7 @@ void FilesSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       {"alwaysMoveToOneDrivePreferenceLabel",
        IDS_SETTINGS_ALWAYS_MOVE_OFFICE_TO_ONEDRIVE_PREFERENCE_LABEL},
       {"smbSharesTitleDescription",
-       IDS_OS_SETTINGS_DOWNLOADS_SMB_SHARES_DESCRIPTION},
-      {"googleDriveFileSyncSectionTitle",
-       IDS_SETTINGS_GOOGLE_DRIVE_FILE_SYNC_SECTION_TITLE},
-      {"googleDriveMirrorSyncLabel",
-       IDS_SETTINGS_GOOGLE_DRIVE_MIRROR_SYNC_TOGGLE_LABEL},
-      {"googleDriveMirrorSyncDescription",
-       IDS_SETTINGS_GOOGLE_DRIVE_MIRROR_SYNC_TOGGLE_DESCRIPTION}};
+       IDS_OS_SETTINGS_DOWNLOADS_SMB_SHARES_DESCRIPTION}};
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
   smb_dialog::AddLocalizedStrings(html_source);
@@ -300,11 +293,8 @@ void FilesSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
 
   html_source->AddBoolean(
       "enableSkyVault",
-      base::FeatureList::IsEnabled(::features::kSkyVault) &&
+      base::FeatureList::IsEnabled(::ash::features::kSkyVault) &&
           base::FeatureList::IsEnabled(ash::features::kSkyVaultV2));
-
-  html_source->AddBoolean("enableDriveFsMirrorSync",
-                          drive::util::IsDriveFsMirrorSyncAvailable(profile()));
 }
 
 void FilesSection::AddHandlers(content::WebUI* web_ui) {

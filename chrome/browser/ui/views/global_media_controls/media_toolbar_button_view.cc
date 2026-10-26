@@ -7,19 +7,20 @@
 #include "base/observer_list.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_service.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_service_factory.h"
 #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
 #include "chrome/browser/ui/global_media_controls/media_toolbar_button_observer.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_dialog_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_contextual_menu.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/live_caption/caption_util.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
+#include "content/public/browser/navigation_controller.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
@@ -37,7 +38,7 @@ MediaToolbarButtonView::MediaToolbarButtonView(
                     /** trigger_menu_on_long_press */ false),
       browser_(browser_view->browser()),
       service_(MediaNotificationServiceFactory::GetForProfile(
-          browser_view->browser()->profile())),
+          browser_view->browser()->GetProfile())),
       context_menu_(std::move(context_menu)) {
   button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnPress);
@@ -95,15 +96,6 @@ void MediaToolbarButtonView::Hide() {
 void MediaToolbarButtonView::Enable() {
   SetEnabled(true);
 
-  // Have to check for browser window because this can be called during setup,
-  // before there is a valid widget to anchor anything to. Previously any
-  // attempt to display an IPH at this point would have simply failed, so this
-  // is not a behavioral change (see crbug.com/40212637).
-  if (captions::IsLiveCaptionFeatureSupported()) {
-    BrowserUserEducationInterface::From(browser_)->MaybeShowFeaturePromo(
-        feature_engagement::kIPHLiveCaptionFeature);
-  }
-
   observers_.Notify(&MediaToolbarButtonObserver::OnMediaButtonEnabled);
 }
 
@@ -133,7 +125,8 @@ void MediaToolbarButtonView::ButtonPressed() {
   if (MediaDialogView::IsShowing()) {
     MediaDialogView::HideDialog();
   } else {
-    MediaDialogView::ShowDialogFromToolbar(this, service_, browser_->profile());
+    MediaDialogView::ShowDialogFromToolbar(GetBubbleAnchor(), service_,
+                                           browser_->GetProfile());
     ClosePromoBubble(/*engaged=*/true);
     observers_.Notify(&MediaToolbarButtonObserver::OnMediaDialogOpened);
   }
@@ -144,18 +137,21 @@ void MediaToolbarButtonView::ClosePromoBubble(bool engaged) {
           BrowserUserEducationInterface::From(browser_)) {
     if (engaged) {
       user_education->NotifyFeaturePromoFeatureUsed(
-          feature_engagement::kIPHLiveCaptionFeature,
-          FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
-      user_education->NotifyFeaturePromoFeatureUsed(
           feature_engagement::kIPHGMCCastStartStopFeature,
           FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
     } else {
       user_education->AbortFeaturePromo(
-          feature_engagement::kIPHLiveCaptionFeature);
-      user_education->AbortFeaturePromo(
           feature_engagement::kIPHGMCCastStartStopFeature);
     }
   }
+}
+
+views::BubbleAnchor MediaToolbarButtonView::GetBubbleAnchor() {
+  return views::BubbleAnchor(this);
+}
+
+MediaToolbarButtonController* MediaToolbarButtonView::GetController() {
+  return controller_.get();
 }
 
 BEGIN_METADATA(MediaToolbarButtonView)

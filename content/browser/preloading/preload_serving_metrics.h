@@ -53,12 +53,15 @@ struct CONTENT_EXPORT PrefetchContainerMetrics final {
 
   // Timing information for metrics
   //
-  // Constraint: That earlier one is null implies that later one is null.
+  // Constraint: That earlier one is null implies that later one is null,
+  // except for `time_domain_lookup_started`, which can be null if DNS
+  // resolution was not performed (e.g. socket reuse or HTTP cache hit).
   // E.g. `time_prefetch_start` is null implies
   // `time_header_determined_successfully` is null.
   std::optional<base::TimeTicks> time_added_to_prefetch_service;
   std::optional<base::TimeTicks> time_initial_eligibility_got;
   std::optional<base::TimeTicks> time_prefetch_started;
+  std::optional<base::TimeTicks> time_first_url_request_started;
   std::optional<base::TimeTicks> time_url_request_started;
   std::optional<base::TimeTicks> time_domain_lookup_started;
   std::optional<base::TimeTicks> time_header_determined_successfully;
@@ -221,10 +224,13 @@ struct CONTENT_EXPORT PreloadServingMetrics final {
   // Returns nullptr if there is no `PrefetchMatchMetrics`.
   const PrefetchMatchMetrics* GetMeaningfulPrefetchMatchMetrics() const;
 
+  // Returns the instant load technology used for the navigation.
+  UsedInstantLoad GetUsedInstantLoad(
+      bool nav_used_bfcache,
+      bool is_served_by_legacy_search_prefetch) const;
+
   void RecordMetricsForNonPrerenderNavigationCommitted() const;
   void RecordMetricsForPrerenderInitialNavigationFailed() const;
-  void RecordFirstContentfulPaint(
-      base::TimeDelta corrected_first_contentful_paint) const;
 
   // Added per prefetch matching.
   std::vector<std::unique_ptr<PrefetchMatchMetrics>>
@@ -254,8 +260,9 @@ class CONTENT_EXPORT PreloadServingMetricsCapsuleImpl final
       NavigationHandle& navigation_handle);
 
   void RecordMetricsForNonPrerenderNavigationCommitted() const override;
-  void RecordFirstContentfulPaint(
-      base::TimeDelta corrected_first_contentful_paint) const override;
+  UsedInstantLoad GetUsedInstantLoad(
+      bool nav_used_bfcache,
+      bool is_served_by_legacy_search_prefetch) const override;
 
  private:
   explicit PreloadServingMetricsCapsuleImpl(

@@ -15,12 +15,10 @@
 #include "base/timer/timer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
-#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/sessions/core/session_id.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/service_worker_context_observer.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "url/gurl.h"
 
@@ -139,9 +137,13 @@ struct NavigationEventList {
       const content::GlobalRenderFrameHostId& outermost_main_frame_id,
       size_t start_index);
 
-  // Finds the the navigation event in the |pending_navigation_events_| map that
+  // Finds the navigation event in the |pending_navigation_events_| map that
   // has the same destination URL as the |target_url|. If there are multiple
-  // matches, returns the one with the latest updated time.
+  // matches, returns the one with the latest updated time. If the matched
+  // pending navigation event has an empty |source_url| and
+  // |source_main_frame_url| (e.g. the initial navigation in a newly opened
+  // tab), looks up and returns the preceding retargeting NavigationEvent from
+  // |navigation_events_| with updated destination and initiation attributes.
   NavigationEvent* FindPendingNavigationEvent(const GURL& target_url);
 
   // Finds the index of the most recent retargeting NavigationEvent index in the

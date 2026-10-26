@@ -16,6 +16,8 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/language_tag_value_converters.h"
 #include "base/json/values_util.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -33,6 +35,9 @@
 #include "components/prefs/pref_registry.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include <jni.h>
+
+#include "base/android/jni_android.h"
 #include "components/prefs/android/pref_service_android.h"
 #endif
 
@@ -153,6 +158,12 @@ base::FilePath PrefService::GetFilePath(std::string_view path) const {
   return *result;
 }
 
+base::i18n::LanguageTag PrefService::GetLanguageTag(
+    std::string_view path) const {
+  return base::i18n::ValueToLanguageTag(GetValue(path))
+      .value_or(base::i18n::GetKnownLanguageTag("und"));
+}
+
 bool PrefService::HasPrefPath(std::string_view path) const {
   const Preference* pref = FindPreference(path);
   return pref && !pref->IsDefaultValue();
@@ -208,7 +219,7 @@ const PrefService::Preference* PrefService::FindPreference(
   if (it != prefs_map_.end())
     return it->second.get();
   const base::Value* default_value = nullptr;
-  if (!pref_registry_->defaults()->GetValue(path, &default_value)) {
+  if (!pref_registry_->default_store()->GetValue(path, &default_value)) {
     return nullptr;
   }
   it = prefs_map_
@@ -309,7 +320,7 @@ const base::Value* PrefService::GetDefaultPrefValue(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Lookup the preference in the default store.
   const base::Value* value = nullptr;
-  bool has_value = pref_registry_->defaults()->GetValue(path, &value);
+  bool has_value = pref_registry_->default_store()->GetValue(path, &value);
   DCHECK(has_value) << "Default value missing for pref: " << path;
   return value;
 }
@@ -399,10 +410,15 @@ void PrefService::SetFilePath(std::string_view path,
   SetUserPrefValue(path, base::FilePathToValue(value));
 }
 
+void PrefService::SetLanguageTag(std::string_view path,
+                                 const base::i18n::LanguageTag& value) {
+  SetUserPrefValue(path, base::i18n::LanguageTagToValue(value));
+}
+
 void PrefService::SetInt64(std::string_view path, int64_t value) {
   CHECK_EQ(pref_registry_->GetRegisteredPrefType(path).value_or(
                PrefRegistry::RegisteredPrefType::kInt64),
-           PrefRegistry::RegisteredPrefType::kInt64, base::NotFatalUntil::M143)
+           PrefRegistry::RegisteredPrefType::kInt64)
       << path;
   SetUserPrefValue(path, base::Int64ToValue(value));
 }
@@ -410,7 +426,7 @@ void PrefService::SetInt64(std::string_view path, int64_t value) {
 int64_t PrefService::GetInt64(std::string_view path) const {
   CHECK_EQ(pref_registry_->GetRegisteredPrefType(path).value_or(
                PrefRegistry::RegisteredPrefType::kInt64),
-           PrefRegistry::RegisteredPrefType::kInt64, base::NotFatalUntil::M143)
+           PrefRegistry::RegisteredPrefType::kInt64)
       << path;
   const base::Value& value = GetValue(path);
   std::optional<int64_t> integer = base::ValueToInt64(value);
@@ -435,7 +451,7 @@ uint64_t PrefService::GetUint64(std::string_view path) const {
 void PrefService::SetTime(std::string_view path, base::Time value) {
   CHECK_EQ(pref_registry_->GetRegisteredPrefType(path).value_or(
                PrefRegistry::RegisteredPrefType::kTime),
-           PrefRegistry::RegisteredPrefType::kTime, base::NotFatalUntil::M143)
+           PrefRegistry::RegisteredPrefType::kTime)
       << path;
   SetUserPrefValue(path, base::TimeToValue(value));
 }
@@ -443,7 +459,7 @@ void PrefService::SetTime(std::string_view path, base::Time value) {
 base::Time PrefService::GetTime(std::string_view path) const {
   CHECK_EQ(pref_registry_->GetRegisteredPrefType(path).value_or(
                PrefRegistry::RegisteredPrefType::kTime),
-           PrefRegistry::RegisteredPrefType::kTime, base::NotFatalUntil::M143)
+           PrefRegistry::RegisteredPrefType::kTime)
       << path;
   const base::Value& value = GetValue(path);
   std::optional<base::Time> time = base::ValueToTime(value);
@@ -486,7 +502,7 @@ base::Value* PrefService::GetMutableUserPref(std::string_view path,
 
   // If no user preference of the correct type exists, clone default value.
   const base::Value* default_value = nullptr;
-  pref_registry_->defaults()->GetValue(path, &default_value);
+  pref_registry_->default_store()->GetValue(path, &default_value);
   DCHECK_EQ(default_value->type(), type);
   user_pref_store_->SetValueSilently(path, default_value->Clone(),
                                      GetWriteFlags(pref));
@@ -543,9 +559,20 @@ void PrefService::SetUserPrefValue(std::string_view path,
 
   const Preference* pref = FindPreference(path);
   if (!pref) {
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/535326218): Throw Java exception so that we get a Java
+    // stack trace of the caller of the unregistered preference.
+    JNIEnv* env = base::android::AttachCurrentThread();
+    jclass clazz = env->FindClass("java/lang/RuntimeException");
+    std::string msg =
+        "Trying to write an unregistered pref: " + std::string(path);
+    env->ThrowNew(clazz, msg.c_str());
+    return;
+#else
     DUMP_WILL_BE_NOTREACHED()
         << "Trying to write an unregistered pref: " << path;
     return;
+#endif
   }
   if (pref->GetType() != new_value.type()) {
     NOTREACHED() << "Trying to set pref " << path << " of type "
@@ -579,7 +606,14 @@ PrefService::Preference::Preference(const PrefService* service,
       pref_service_(CHECK_DEREF(service)) {}
 
 const base::Value* PrefService::Preference::GetValue() const {
-  return pref_service_->GetPreferenceValue(name_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(pref_service_->sequence_checker_);
+
+  const base::Value* found_value = nullptr;
+  CHECK(pref_value_store()->GetValue(name_, type_, &found_value))
+      << "Must register pref before getting its value: " << name_;
+  CHECK(found_value);
+  CHECK_EQ(found_value->type(), type_);
+  return found_value;
 }
 
 const base::Value* PrefService::Preference::GetRecommendedValue() const {
@@ -641,22 +675,26 @@ const base::Value* PrefService::GetPreferenceValue(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const base::Value* default_value = nullptr;
-  CHECK(pref_registry_->defaults()->GetValue(path, &default_value))
+  CHECK(pref_registry_->default_store()->GetValue(path, &default_value))
       << "Trying to access an unregistered pref: " << path;
   CHECK(default_value);
   const base::Value::Type default_type = default_value->type();
 
   const base::Value* found_value = nullptr;
-  // GetValue shouldn't fail because every registered preference has at least a
-  // default value.
-  CHECK(pref_value_store_->GetValue(path, default_type, &found_value));
-  CHECK(found_value);
-  // The type is expected to match here thanks to a verification in
-  // PrefValueStore::GetValueFromStoreWithType which discards polluted values
-  // (and we should at least get a matching type from the default store if no
-  // other store has a valid value+type).
-  CHECK_EQ(found_value->type(), default_type);
-  return found_value;
+  if (pref_value_store_->GetValueFromNonDefaultStores(path, default_type,
+                                                      &found_value)) {
+    CHECK(found_value);
+    // The type is expected to match here thanks to a verification in
+    // PrefValueStore::GetValueFromStoreWithType which discards polluted values.
+    CHECK_EQ(found_value->type(), default_type);
+    return found_value;
+  }
+
+  // If no non-default store overrides `path`, return `default_value` directly
+  // (already retrieved above from `pref_registry_->defaults()`, which is
+  // `pref_value_store_`'s DEFAULT_STORE) instead of looking up `path` in
+  // DefaultPrefStore a second time.
+  return default_value;
 }
 
 // static

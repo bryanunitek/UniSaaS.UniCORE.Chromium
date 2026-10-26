@@ -52,8 +52,6 @@ bool ShouldRecordOpUMA(CacheStorageSchedulerOp op_type) {
 
 std::string_view OpToName(CacheStorageSchedulerOp op_type) {
   switch (op_type) {
-    case CacheStorageSchedulerOp::kClose:
-      RETURN_LITERAL_STRING_PIECE("Close");
     case CacheStorageSchedulerOp::kDelete:
       RETURN_LITERAL_STRING_PIECE("Delete");
     case CacheStorageSchedulerOp::kGetAllMatched:
@@ -74,8 +72,6 @@ std::string_view OpToName(CacheStorageSchedulerOp op_type) {
       RETURN_LITERAL_STRING_PIECE("Put");
     case CacheStorageSchedulerOp::kSize:
       RETURN_LITERAL_STRING_PIECE("Size");
-    case CacheStorageSchedulerOp::kSizeThenClose:
-      RETURN_LITERAL_STRING_PIECE("SizeThenClose");
     case CacheStorageSchedulerOp::kTest:
       NOTREACHED();
     case CacheStorageSchedulerOp::kWriteIndex:
@@ -97,7 +93,8 @@ void RecordCacheStorageSchedulerUMA(CacheStorageSchedulerUMA uma_type,
                                     CacheStorageSchedulerClient client_type,
                                     CacheStorageSchedulerOp op_type,
                                     int value) {
-  DCHECK(uma_type == CacheStorageSchedulerUMA::kQueueLength);
+  CHECK(uma_type == CacheStorageSchedulerUMA::kQueueLength,
+        base::NotFatalUntil::M158);
   std::string histogram_name = GetClientHistogramName(uma_type, client_type);
   base::UmaHistogramCounts10000(histogram_name, value);
   if (!ShouldRecordOpUMA(op_type))
@@ -110,8 +107,9 @@ void RecordCacheStorageSchedulerUMA(CacheStorageSchedulerUMA uma_type,
                                     CacheStorageSchedulerClient client_type,
                                     CacheStorageSchedulerOp op_type,
                                     base::TimeDelta value) {
-  DCHECK(uma_type == CacheStorageSchedulerUMA::kOperationDuration ||
-         uma_type == CacheStorageSchedulerUMA::kQueueDuration);
+  CHECK(uma_type == CacheStorageSchedulerUMA::kOperationDuration ||
+            uma_type == CacheStorageSchedulerUMA::kQueueDuration,
+        base::NotFatalUntil::M158);
   std::string histogram_name = GetClientHistogramName(uma_type, client_type);
   base::UmaHistogramLongTimes(histogram_name, value);
   if (!ShouldRecordOpUMA(op_type))

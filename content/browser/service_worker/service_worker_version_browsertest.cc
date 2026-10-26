@@ -25,6 +25,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -40,6 +41,7 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/storage_partition.h"
@@ -56,6 +58,7 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
+#include "storage/browser/blob/blob_side_data_access_type.h"
 #include "storage/browser/test/blob_test_utils.h"
 #include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
@@ -98,6 +101,7 @@ struct FetchResult {
   blink::ServiceWorkerStatusCode status;
   ServiceWorkerFetchDispatcher::FetchEventResult result;
   blink::mojom::FetchAPIResponsePtr response;
+  blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors;
 };
 
 void RunWithDelay(base::OnceClosure closure, base::TimeDelta delay) {
@@ -405,15 +409,17 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
   void FetchOnRegisteredWorker(
       const std::string& path,
       ServiceWorkerFetchDispatcher::FetchEventResult* result,
-      blink::mojom::FetchAPIResponsePtr* response) {
-    FetchOnRegisteredWorker(path, "", result, response);
+      blink::mojom::FetchAPIResponsePtr* response,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr* errors = nullptr) {
+    FetchOnRegisteredWorker(path, "", result, response, errors);
   }
 
   void FetchOnRegisteredWorker(
       const std::string& path,
       const std::string& range_header,
       ServiceWorkerFetchDispatcher::FetchEventResult* result,
-      blink::mojom::FetchAPIResponsePtr* response) {
+      blink::mojom::FetchAPIResponsePtr* response,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr* errors = nullptr) {
     bool prepare_result = false;
     FetchResult fetch_result;
     fetch_result.status = blink::ServiceWorkerStatusCode::kErrorFailed;
@@ -424,6 +430,9 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
     ASSERT_TRUE(prepare_result);
     *result = fetch_result.result;
     *response = std::move(fetch_result.response);
+    if (errors) {
+      *errors = std::move(fetch_result.errors);
+    }
     ASSERT_EQ(blink::ServiceWorkerStatusCode::kOk, fetch_result.status);
   }
 
@@ -692,6 +701,7 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
       blink::mojom::FetchAPIResponsePtr actual_response,
       blink::mojom::ServiceWorkerStreamHandlePtr /* stream */,
       blink::mojom::ServiceWorkerFetchEventTimingPtr /* timing */,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr actual_errors,
       scoped_refptr<ServiceWorkerVersion> worker) {
     ASSERT_TRUE(BrowserThread::CurrentlyOn(BrowserThread::UI));
     ASSERT_TRUE(fetch_dispatcher_);
@@ -699,6 +709,7 @@ class ServiceWorkerVersionBrowserTest : public ContentBrowserTest {
     out_result->status = actual_status;
     out_result->result = actual_result;
     out_result->response = std::move(actual_response);
+    out_result->errors = std::move(actual_errors);
     if (quit)
       std::move(quit).Run();
   }
@@ -1285,7 +1296,9 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   ConsoleListener console_listener;
   version_->embedded_worker()->AddObserver(&console_listener);
 
-  FetchOnRegisteredWorker("/service_worker/empty.html", &result, &response);
+  blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors;
+  FetchOnRegisteredWorker("/service_worker/empty.html", &result, &response,
+                          &errors);
   const std::u16string expected1 =
       u"resulted in a network error response: the promise was rejected.";
   const std::u16string expected2 =
@@ -1299,8 +1312,31 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   ASSERT_EQ(ServiceWorkerFetchDispatcher::FetchEventResult::kGotResponse,
             result);
   EXPECT_EQ(0, response->status_code);
+  EXPECT_TRUE(!errors || (!errors->race_fetch_error_code.has_value() &&
+                          !errors->regular_fetch_error_code.has_value()));
 
   EXPECT_FALSE(response->blob);
+}
+
+IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
+                       FetchEvent_respondWithFetchError) {
+  StartServerAndNavigateToSetup();
+  ServiceWorkerFetchDispatcher::FetchEventResult result;
+  blink::mojom::FetchAPIResponsePtr response;
+  ASSERT_EQ(Install("/service_worker/fetch_event_respond_with_fetch.js"),
+            blink::ServiceWorkerStatusCode::kOk);
+  EXPECT_EQ(Activate(), blink::ServiceWorkerStatusCode::kOk);
+
+  blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors;
+  FetchOnRegisteredWorker("/close-socket", &result, &response, &errors);
+
+  ASSERT_EQ(ServiceWorkerFetchDispatcher::FetchEventResult::kGotResponse,
+            result);
+  EXPECT_EQ(0, response->status_code);
+  ASSERT_TRUE(errors);
+  EXPECT_FALSE(errors->race_fetch_error_code.has_value());
+  ASSERT_TRUE(errors->regular_fetch_error_code.has_value());
+  EXPECT_NE(0, *errors->regular_fetch_error_code);
 }
 
 // Tests that the browser cache is bypassed on update checks after 24 hours
@@ -1335,6 +1371,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   observer->Init();
   public_context()->RegisterServiceWorker(
       embedded_test_server()->GetURL(kWorkerUrl), key, options,
+      GlobalRenderFrameHostId(),
       base::BindOnce(&ExpectRegisterResultAndRun,
                      blink::ServiceWorkerStatusCode::kOk, base::DoNothing()));
   observer->Wait();
@@ -1408,6 +1445,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerVersionBrowserTest,
   observer->Init();
   public_context()->RegisterServiceWorker(
       embedded_test_server()->GetURL(kWorkerUrl), key, options,
+      GlobalRenderFrameHostId(),
       base::BindOnce(&ExpectRegisterResultAndRun,
                      blink::ServiceWorkerStatusCode::kOk, base::DoNothing()));
   observer->Wait();
@@ -1656,8 +1694,12 @@ class CacheStorageEagerReadingTest : public ServiceWorkerVersionBrowserTest {
 
     // Since this js response was stored in the install event it should have
     // code cache stored in the blob side data.
+    base::HistogramTester histogram_tester;
     EXPECT_GT(BlobSideDataLength(blob.get()),
               static_cast<size_t>(kV8CacheTimeStampDataSize));
+    histogram_tester.ExpectUniqueSample(
+        "Storage.Blob.SideDataAccessType",
+        storage::BlobSideDataAccessType::kCacheStorageSideDataRead, 1);
   }
 
   void ExpectEagerlyReadCacheResponse(

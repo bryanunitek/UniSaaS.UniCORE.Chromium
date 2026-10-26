@@ -56,7 +56,7 @@
       {
         "args": [
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-          "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.android_browsertests.filter",
+          "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.android_browsertests.filter;../../testing/buildbot/filters/android.phone.android_browsertests.filter",
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
@@ -163,6 +163,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
@@ -208,6 +209,7 @@
       },
       {
         "args": [
+          "-v",
           "-v",
           "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb"
         ],
@@ -508,6 +510,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_29_google_apis_x86",
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -904,6 +907,7 @@
           "--gs-results-bucket=chromium-result-details",
           "--recover-devices"
         ],
+        "ci_only": true,
         "description": "Run with android_29_google_apis_x86",
         "isolate_profile_data": true,
         "merge": {
@@ -921,7 +925,8 @@
         "precommit_args": [
           "--gerrit-issue=${patch_issue}",
           "--gerrit-patchset=${patch_set}",
-          "--buildbucket-id=${buildbucket_build_id}"
+          "--buildbucket-id=${buildbucket_build_id}",
+          "--bypass-skia-gold-functionality"
         ],
         "resultdb": {
           "enable": true,
@@ -963,6 +968,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_29_google_apis_x86",
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1068,6 +1074,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_29_google_apis_x86",
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1119,6 +1126,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_29_google_apis_x86",
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [
@@ -1171,6 +1179,7 @@
           "--recover-devices"
         ],
         "description": "Run with android_29_google_apis_x86",
+        "enable_rts_filtering": true,
         "isolate_profile_data": true,
         "merge": {
           "args": [

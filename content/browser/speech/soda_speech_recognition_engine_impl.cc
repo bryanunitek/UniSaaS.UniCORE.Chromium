@@ -164,6 +164,13 @@ void SodaSpeechRecognitionEngineImpl::OnSpeechRecognitionRecognitionEvent(
   media::mojom::WebSpeechRecognitionResultPtr& result = results.back();
   result->is_provisional = !recognition_result.is_final;
 
+  if (recognition_result.timing_information.has_value()) {
+    result->audio_start_time =
+        recognition_result.timing_information->audio_start_time;
+    result->audio_end_time =
+        recognition_result.timing_information->audio_end_time;
+  }
+
   media::mojom::SpeechRecognitionHypothesisPtr hypothesis =
       media::mojom::SpeechRecognitionHypothesis::New();
   // TODO(crbug.com/40286514): Hardcode now.
@@ -223,7 +230,7 @@ void SodaSpeechRecognitionEngineImpl::OnRecognizerDisconnected() {
 
 void SodaSpeechRecognitionEngineImpl::SendAudioToSpeechRecognitionService(
     media::mojom::AudioDataS16Ptr audio_data) {
-  DCHECK(audio_data);
+  CHECK(audio_data, base::NotFatalUntil::M159);
   if (speech_recognition_recognizer_.is_bound()) {
     speech_recognition_recognizer_->SendAudioToSpeechRecognitionService(
         std::move(audio_data), std::nullopt);

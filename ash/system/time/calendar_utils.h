@@ -101,8 +101,6 @@ constexpr int kUpNextBetweenChildSpacing = 8;
 // between the bottom and top of the 'nub'.
 constexpr int kUpNextOverlapInPx = 12;
 
-// Returns true if the Multi-Calendar Support feature is enabled.
-bool IsMultiCalendarEnabled();
 
 // Checks if the `selected_date` is local time today.
 bool IsToday(const base::Time selected_date);
@@ -156,10 +154,6 @@ ASH_EXPORT std::u16string GetTwentyFourHourClockTime(const base::Time date);
 // (e.g. Greenwich Mean Time)
 ASH_EXPORT std::u16string GetTimeZone(const base::Time date);
 
-// Gets the index of this day in the week, starts from 1. This number is
-// different for different languages.
-ASH_EXPORT std::u16string GetDayOfWeek(const base::Time date);
-
 // Gets the `date`'s year.
 // (e.g. 2022)
 ASH_EXPORT std::u16string GetYear(const base::Time date);
@@ -209,10 +203,6 @@ ASH_EXPORT base::Time GetMaxTime(const base::Time d1, const base::Time d2);
 // Gets date with lesser value between `d1` and `d2`.
 ASH_EXPORT base::Time GetMinTime(const base::Time d1, const base::Time d2);
 
-// Colors.
-SkColor GetPrimaryTextColor();
-SkColor GetSecondaryTextColor();
-SkColor GetDisabledTextColor();
 
 // Get the first day of the month that includes |date|.
 ASH_EXPORT base::Time GetFirstDayOfMonth(const base::Time& date);

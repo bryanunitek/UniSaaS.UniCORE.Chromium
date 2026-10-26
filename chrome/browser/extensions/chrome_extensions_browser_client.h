@@ -20,6 +20,7 @@
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/kiosk/kiosk_delegate.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/event_args.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -125,6 +126,7 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   bool CanExtensionCrossIncognito(
       const Extension* extension,
       content::BrowserContext* context) const override;
+  BrowserContextLifetimeTracker* GetBrowserContextLifetimeTracker() override;
   base::FilePath GetBundleResourcePath(
       const network::ResourceRequest& request,
       const base::FilePath& extension_resources_path,
@@ -135,7 +137,8 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       const base::FilePath& resource_relative_path,
       int resource_id,
       scoped_refptr<net::HttpResponseHeaders> headers,
-      mojo::PendingRemote<network::mojom::URLLoaderClient> client) override;
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      content::BrowserContext* browser_context) override;
   bool AllowCrossRendererResourceLoad(
       const network::ResourceRequest& request,
       network::mojom::RequestDestination destination,
@@ -175,7 +178,7 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   void BroadcastEventToRenderers(
       events::HistogramValue histogram_value,
       const std::string& event_name,
-      base::ListValue args,
+      scoped_refptr<const EventArgs> args,
       bool dispatch_to_off_the_record_profiles) override;
   ExtensionCache* GetExtensionCache() override;
   bool IsBackgroundUpdateAllowed() override;
@@ -214,6 +217,7 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   bool ShouldSchemeBypassNavigationChecks(
       const std::string& scheme) const override;
   bool IsDefaultSearchEngineRedirect(content::BrowserContext* context,
+                                     const ExtensionId& extension_id,
                                      const GURL& request_url,
                                      const GURL& redirect_url) const override;
   base::FilePath GetSaveFilePath(content::BrowserContext* context) override;
@@ -289,7 +293,7 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   void CheckManagementPolicy(content::BrowserContext* context) override;
   scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager>
   GetSafeBrowsingDatabaseManager() const override;
-  std::optional<safe_browsing::V4ProtocolConfig> GetV4ProtocolConfig()
+  std::optional<safe_browsing::SBProtocolConfig> GetSBProtocolConfig()
       const override;
   void OnActiveTabPermissionGranted(
       const Extension* extension,
@@ -334,6 +338,16 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   std::unique_ptr<ExtensionInstallPromptClient> CreateInstallPrompt(
       content::WebContents* web_contents,
       std::unique_ptr<InstallPromptData> prompt) override;
+  std::unique_ptr<ExtensionInstallPromptClient>
+  CreateInstallPromptForNativeWindow(
+      gfx::NativeWindow native_window,
+      content::BrowserContext& browser_context,
+      std::unique_ptr<InstallPromptData> prompt) override;
+  gfx::NativeWindow GetNativeWindowForFunction(
+      ExtensionFunction& function) override;
+  bool IsLazyKeyedServiceInstantiationEnabled() const override;
+  bool IsLazySocketAndUsbKeyedServiceInstantiationEnabled() const override;
+  bool IsLazyChromeOSResourceKeyedServiceInstantiationEnabled() const override;
 
   void SetAPIClientForTest(std::unique_ptr<ExtensionsAPIClient> client);
 

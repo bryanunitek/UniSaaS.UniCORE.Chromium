@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 
+#import <utility>
+
 #import "base/apple/foundation_util.h"
 #import "base/feature_list.h"
 #import "base/notreached.h"
@@ -25,6 +27,7 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_history_sync/signin_and_history_sync_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_in_progress.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_screen_provider.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/metrics/model/activity_reporter.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/animated_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
@@ -57,11 +60,10 @@ using signin_metrics::PromoAction;
     _activityReporter =
         [[ActivityReporter alloc] initWithDomain:ActivityReportDomainSignin];
     CHECK(browser);
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     auto* authService =
         AuthenticationServiceFactory::GetForProfile(self.profile);
-    CHECK(authService->SigninEnabled(), base::NotFatalUntil::M146);
+    CHECK(authService->SigninEnabled());
     _contextStyle = contextStyle;
     _accessPoint = accessPoint;
     _creationTimeTicks = base::TimeTicks::Now();
@@ -74,7 +76,6 @@ using signin_metrics::PromoAction;
 + (void)registerProfilePrefs:(user_prefs::PrefRegistrySyncable*)registry {
   // ConsistencyPromoSigninCoordinator.
   registry->RegisterIntegerPref(prefs::kSigninWebSignDismissalCount, 0);
-  registry->RegisterDictionaryPref(prefs::kSigninHasAcceptedManagementDialog);
 }
 
 + (SigninCoordinator*)signinCoordinatorWithCommand:(ShowSigninCommand*)command
@@ -83,7 +84,7 @@ using signin_metrics::PromoAction;
                                     (UIViewController*)baseViewController {
   AuthenticationService* authenticationService =
       AuthenticationServiceFactory::GetForProfile(browser->GetProfile());
-  CHECK(authenticationService->SigninEnabled(), base::NotFatalUntil::M146);
+  CHECK(authenticationService->SigninEnabled());
   SigninCoordinator* signinCoordinator;
   switch (command.operation) {
     case AuthenticationOperation::kResignin: {
@@ -235,8 +236,8 @@ using signin_metrics::PromoAction;
                            continuationProvider:
                                (const ChangeProfileContinuationProvider&)
                                    continuationProvider {
-  CHECK(viewController, base::NotFatalUntil::M140);
-  CHECK(browser, base::NotFatalUntil::M140);
+  CHECK(viewController);
+  CHECK(browser);
   CHECK(continuationProvider);
   return [[AddAccountSigninCoordinator alloc]
       initWithBaseViewController:viewController
@@ -263,8 +264,8 @@ using signin_metrics::PromoAction;
                                          (const ChangeProfileContinuationProvider&)
                                              continuationProvider {
   CHECK(continuationProvider);
-  CHECK(viewController, base::NotFatalUntil::M140);
-  CHECK(browser, base::NotFatalUntil::M140);
+  CHECK(viewController);
+  CHECK(browser);
   return [[AddAccountSigninCoordinator alloc]
       initWithBaseViewController:viewController
                          browser:browser
@@ -290,8 +291,8 @@ using signin_metrics::PromoAction;
                                         (const ChangeProfileContinuationProvider&)
                                             continuationProvider {
   CHECK(continuationProvider);
-  CHECK(viewController, base::NotFatalUntil::M140);
-  CHECK(browser, base::NotFatalUntil::M140);
+  CHECK(viewController);
+  CHECK(browser);
   return [[AddAccountSigninCoordinator alloc]
       initWithBaseViewController:viewController
                          browser:browser
@@ -403,7 +404,7 @@ using signin_metrics::PromoAction;
 - (void)start {
   // `signinCompletion` needs to be set by the owner to know when the sign-in
   // is finished.
-  CHECK(self.signinCompletion, base::NotFatalUntil::M151);
+  CHECK(self.signinCompletion);
   [_activityReporter reportActive];
 }
 
@@ -417,25 +418,27 @@ using signin_metrics::PromoAction;
 
 #pragma mark - Protected
 
-- (void)runCompletionWithSigninResult:(SigninCoordinatorResult)signinResult
-                   completionIdentity:(id<SystemIdentity>)completionIdentity {
-  // `identity` is set, if and only if the sign-in is successful.
-  CHECK(((signinResult == SigninCoordinatorResultSuccess ||
-          signinResult == SigninCoordinatorProfileSwitch) &&
-         completionIdentity) ||
-            ((signinResult != SigninCoordinatorResultSuccess) &&
-             !completionIdentity),
-        base::NotFatalUntil::M151)
-      << "signinResult: " << signinResult
-      << ", identity: " << (completionIdentity ? "YES" : "NO");
+- (void)runCompletionWithSigninResult:
+    (SigninCoordinatorResultOrIdentity)signinResult {
+  if (signinResult.has_value()) {
+    CHECK(signinResult.value());
+  }
   // If `self.signinCompletion` is nil, this method has been probably called
   // twice.
-  CHECK(self.signinCompletion, base::NotFatalUntil::M151);
+  CHECK(self.signinCompletion);
   SigninCoordinatorCompletionCallback signinCompletion = self.signinCompletion;
   // The owner should call the stop method, during the callback.
   // `self.signinCompletion` needs to be set to nil before calling it.
   self.signinCompletion = nil;
-  signinCompletion(self, signinResult, completionIdentity);
+  signinCompletion(self, std::move(signinResult));
+}
+
+- (void)runCompletionWithSigninResult:(SigninCoordinatorResult)signinResult
+                   completionIdentity:(id<SystemIdentity>)completionIdentity {
+  [self
+      runCompletionWithSigninResult:
+          signin::SigninCoordinatorResultOrIdentityFromSigninCoordinatorResult(
+              signinResult, completionIdentity)];
 }
 
 #pragma mark - BuggyAuthenticationViewOwner

@@ -26,12 +26,16 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.annotation.Config;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.content_public.browser.InputMethodManagerWrapper;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.base.WindowAndroid;
-import org.robolectric.annotation.Config;
 
 import java.lang.ref.WeakReference;
 
@@ -39,7 +43,6 @@ import java.lang.ref.WeakReference;
 @RunWith(BaseRobolectricTestRunner.class)
 public class InputMethodManagerWrapperImplTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private static final boolean DEBUG = false;
 
     private class TestInputMethodManagerWrapperImpl extends InputMethodManagerWrapperImpl {
         public TestInputMethodManagerWrapperImpl(
@@ -62,12 +65,13 @@ public class InputMethodManagerWrapperImplTest {
     }
 
     @Mock private Context mContext;
-    @Mock private Activity mActivity;
     @Mock private Window mWindow;
     @Mock private WindowAndroid mWindowAndroid;
     @Mock private InputMethodManagerWrapper.Delegate mDelegate;
-    @Mock private View mView;
     @Mock private InputMethodManager mInputMethodManager;
+
+    private final View mView = new View(ContextUtils.getApplicationContext());
+    private Activity mActivity;
 
     private int mContextDisplayId = -1; // uninitialized
     private int mActivityDisplayId = -1; // uninitialized
@@ -83,9 +87,21 @@ public class InputMethodManagerWrapperImplTest {
         mImmw = new TestInputMethodManagerWrapperImpl(mContext, mWindowAndroid, mDelegate);
         when(mContext.getSystemService(Context.INPUT_METHOD_SERVICE))
                 .thenReturn(mInputMethodManager);
-        when(mActivity.getSystemService(Context.INPUT_METHOD_SERVICE))
-                .thenReturn(mInputMethodManager);
-        when(mActivity.getWindow()).thenReturn(mWindow);
+        mActivity =
+                new Activity() {
+                    @Override
+                    public Object getSystemService(String name) {
+                        if (Context.INPUT_METHOD_SERVICE.equals(name)) {
+                            return mInputMethodManager;
+                        }
+                        return super.getSystemService(name);
+                    }
+
+                    @Override
+                    public Window getWindow() {
+                        return mWindow;
+                    }
+                };
 
         mInOrder = inOrder(mInputMethodManager, mWindow);
     }
@@ -265,6 +281,7 @@ public class InputMethodManagerWrapperImplTest {
 
     @Test
     @Config(minSdk = Build.VERSION_CODES.BAKLAVA)
+    @EnableFeatures(ContentFeatures.ANDROID_REMOVE_SET_LOCAL_FOCUS_WORKAROUND_ON_BAKLAVA)
     public void testMultiDisplaysOnBaklavaAndAbove() throws Exception {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
         setDisplayIds(0, 1); // context and activity have different display IDs
@@ -273,8 +290,25 @@ public class InputMethodManagerWrapperImplTest {
 
         mImmw.showSoftInput(mView, 0, null);
 
-        // On Baklava and above, the multi-display workaround and delay are skipped,
-        // so showSoftInput is called immediately even without an InputConnection.
+        // On Baklava and above, when the feature is enabled, the multi-display workaround and delay
+        // are skipped, so showSoftInput is called immediately even without an InputConnection.
         mInOrder.verify(mInputMethodManager).showSoftInput(mView, 0, null);
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.BAKLAVA)
+    @DisableFeatures(ContentFeatures.ANDROID_REMOVE_SET_LOCAL_FOCUS_WORKAROUND_ON_BAKLAVA)
+    public void testMultiDisplaysOnBaklavaAndAbove_featureDisabled() throws Exception {
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
+        setDisplayIds(0, 1); // context and activity have different display IDs
+        when(mDelegate.hasInputConnection()).thenReturn(false);
+        when(mInputMethodManager.isActive(mView)).thenReturn(true);
+
+        mImmw.showSoftInput(mView, 0, null);
+
+        // On Baklava and above, when the feature is disabled, we still run the multi-display
+        // workaround and delay waiting for InputConnection.
+        mInOrder.verify(mWindow).setLocalFocus(true, true);
+        mInOrder.verifyNoMoreInteractions();
     }
 }

@@ -122,6 +122,9 @@ namespace http://www.w3.org/1999/xhtml
     property containerTimingIgnore
     property contains
     property contentEditable
+    property convertPointFromNode
+    property convertQuadFromNode
+    property convertRectFromNode
     property currentCSSZoom
     property customElementRegistry
     property dataset
@@ -143,6 +146,7 @@ namespace http://www.w3.org/1999/xhtml
     property getAttributeNode
     property getAttributeNodeNS
     property getBoundingClientRect
+    property getBoxQuads
     property getClientRects
     property getElementsByClassName
     property getElementsByTagName
@@ -183,6 +187,7 @@ namespace http://www.w3.org/1999/xhtml
     property moveBefore
     property namespaceURI
     property nextElementSibling
+    property nextFocusable
     property nextSibling
     property nodeName
     property nodeType
@@ -242,6 +247,7 @@ namespace http://www.w3.org/1999/xhtml
     property onfullscreenerror
     property ongotpointercapture
     property oninput
+    property oninstallresult
     property oninvalid
     property onkeydown
     property onkeypress
@@ -328,6 +334,7 @@ namespace http://www.w3.org/1999/xhtml
     property prependHTML
     property prependHTMLUnsafe
     property previousElementSibling
+    property previousFocusable
     property previousSibling
     property pseudo
     property querySelector
@@ -397,7 +404,6 @@ namespace http://www.w3.org/1999/xhtml
     property when
     property writingSuggestions
 html element a
-    property attributionSrc
     property charset
     property coords
     property download
@@ -430,7 +436,6 @@ html element acronym
 html element address
 html element area
     property alt
-    property attributionSrc
     property coords
     property download
     property hash
@@ -576,19 +581,28 @@ html element button
     property validity
     property value
     property willValidate
+html element camera
+    property error
+    property ontrack
+    property setConstraints
+    property track
 html element canvas
     property captureElementImage
     property captureStream
+    property clearElementGeometry
     property configureHighDynamicRange
+    property content
     property getContext
+    property getElementImageDefaultSize
     property getElementTransform
     property height
-    property layoutSubtree
+    property onelementgeometryupdate
     property onpaint
     property requestPaint
     property toBlob
     property toDataURL
     property transferControlToOffscreen
+    property updateElementGeometry
     property width
 html element caption
     property align
@@ -652,12 +666,6 @@ html element embed
     property name
     property src
     property type
-    property width
-html element fencedframe
-    property allow
-    property config
-    property height
-    property sandbox
     property width
 html element fieldset
     property checkValidity
@@ -776,7 +784,7 @@ html element iframe
     property allow
     property allowFullscreen
     property allowPaymentRequest
-    property browsingTopics
+    property connectionAllowlist
     property contentDocument
     property contentWindow
     property credentialless
@@ -796,16 +804,13 @@ html element iframe
     property referrerPolicy
     property sandbox
     property scrolling
-    property sharedStorageWritable
     property src
     property srcdoc
     property width
 html element img
     property align
     property alt
-    property attributionSrc
     property border
-    property browsingTopics
     property complete
     property crossOrigin
     property currentSrc
@@ -822,7 +827,6 @@ html element img
     property naturalHeight
     property naturalWidth
     property referrerPolicy
-    property sharedStorageWritable
     property sizes
     property src
     property srcset
@@ -883,6 +887,7 @@ html element input
     property step
     property stepDown
     property stepUp
+    property switch
     property type
     property useMap
     property validationMessage
@@ -898,15 +903,11 @@ html element ins
     property cite
     property dateTime
 html element install
-    property initialPermissionStatus
-    property installURL
     property invalidReason
     property isValid
+    property manifest
     property manifestId
-    property onpromptaction
-    property onpromptdismiss
     property onvalidationstatuschange
-    property permissionStatus
 html element kbd
 html element label
     property control
@@ -967,9 +968,17 @@ html element menu
     property compact
 html element menubar
 html element menuitem
-    property checked
     property command
     property commandForElement
+    property disabled
+    property interestForElement
+html element menuitemcheckbox
+    property checked
+    property defaultChecked
+    property disabled
+    property interestForElement
+html element menuitemradio
+    property checked
     property defaultChecked
     property disabled
     property interestForElement
@@ -988,6 +997,11 @@ html element meter
     property min
     property optimum
     property value
+html element microphone
+    property error
+    property ontrack
+    property setConstraints
+    property track
 html element nav
 html element nobr
 html element noembed
@@ -1079,7 +1093,6 @@ html element s
 html element samp
 html element script
     property async
-    property attributionSrc
     property blocking
     property cacheHint
     property charset
@@ -1200,15 +1213,22 @@ html element td
     property vAlign
     property width
 html element template
+    property buffer
     property content
+    property crossOrigin
     property htmlFor
+    property integrity
+    property referrerPolicy
+    property sanitize
     property shadowRootAdoptedStyleSheets
     property shadowRootClonable
     property shadowRootCustomElementRegistry
     property shadowRootDelegatesFocus
     property shadowRootMode
+    property shadowRootReferenceTarget
     property shadowRootSerializable
     property shadowRootSlotAssignment
+    property src
 html element textarea
     property autocomplete
     property checkValidity
@@ -1307,17 +1327,9 @@ html element ul
     property type
 html element usermedia
     property error
-    property initialPermissionStatus
-    property invalidReason
-    property isValid
-    property onpromptaction
-    property onpromptdismiss
     property onstream
-    property onvalidationstatuschange
-    property permissionStatus
     property setConstraints
     property stream
-    property type
 html element var
 html element video
     property HAVE_CURRENT_DATA
@@ -1507,6 +1519,9 @@ namespace http://www.w3.org/2000/svg
     property containerTiming
     property containerTimingIgnore
     property contains
+    property convertPointFromNode
+    property convertQuadFromNode
+    property convertRectFromNode
     property currentCSSZoom
     property customElementRegistry
     property dataset
@@ -1524,6 +1539,7 @@ namespace http://www.w3.org/2000/svg
     property getAttributeNode
     property getAttributeNodeNS
     property getBoundingClientRect
+    property getBoxQuads
     property getClientRects
     property getElementsByClassName
     property getElementsByTagName
@@ -1557,6 +1573,7 @@ namespace http://www.w3.org/2000/svg
     property moveBefore
     property namespaceURI
     property nextElementSibling
+    property nextFocusable
     property nextSibling
     property nodeName
     property nodeType
@@ -1611,6 +1628,7 @@ namespace http://www.w3.org/2000/svg
     property onfullscreenerror
     property ongotpointercapture
     property oninput
+    property oninstallresult
     property oninvalid
     property onkeydown
     property onkeypress
@@ -1694,6 +1712,7 @@ namespace http://www.w3.org/2000/svg
     property prependHTML
     property prependHTMLUnsafe
     property previousElementSibling
+    property previousFocusable
     property previousSibling
     property pseudo
     property querySelector
@@ -1760,19 +1779,29 @@ svg element a
     property getBBox
     property getCTM
     property getScreenCTM
+    property hash
+    property host
+    property hostname
     property href
     property hreflang
     property interestForElement
     property nearestViewportElement
+    property origin
+    property password
+    property pathname
     property ping
+    property port
+    property protocol
     property referrerPolicy
     property rel
     property relList
     property requiredExtensions
+    property search
     property systemLanguage
     property target
     property transform
     property type
+    property username
 svg element animate
     property beginElement
     property beginElementAt
@@ -2269,6 +2298,7 @@ svg element path
     property getBBox
     property getCTM
     property getPathData
+    property getPathSegmentAtLength
     property getPointAtLength
     property getScreenCTM
     property getTotalLength
@@ -2485,6 +2515,9 @@ svg element textPath
     property TEXTPATH_METHODTYPE_ALIGN
     property TEXTPATH_METHODTYPE_STRETCH
     property TEXTPATH_METHODTYPE_UNKNOWN
+    property TEXTPATH_SIDETYPE_LEFT
+    property TEXTPATH_SIDETYPE_RIGHT
+    property TEXTPATH_SIDETYPE_UNKNOWN
     property TEXTPATH_SPACINGTYPE_AUTO
     property TEXTPATH_SPACINGTYPE_EXACT
     property TEXTPATH_SPACINGTYPE_UNKNOWN
@@ -2506,6 +2539,7 @@ svg element textPath
     property nearestViewportElement
     property requiredExtensions
     property selectSubString
+    property side
     property spacing
     property startOffset
     property systemLanguage

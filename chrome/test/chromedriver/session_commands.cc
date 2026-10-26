@@ -88,6 +88,16 @@ Status EvaluateScriptAndIgnoreResult(Session* session,
   return web_view->EvaluateScript(frame_id, expression, await_promise, &result);
 }
 
+void SetSerializedTimeout(base::DictValue& timeouts,
+                          const std::string& key,
+                          base::TimeDelta timeout) {
+  if (timeout == base::TimeDelta::Max()) {
+    timeouts.Set(key, base::Value());
+  } else {
+    SetSafeInt(timeouts, key, timeout.InMilliseconds());
+  }
+}
+
 }  // namespace
 
 InitSessionParams::InitSessionParams(
@@ -170,6 +180,7 @@ base::DictValue CreateCapabilities(Session* session,
                               : kBrowserCapabilityName);
   caps.Set(session->w3c_compliant ? "browserVersion" : "version",
            session->chrome->GetBrowserInfo()->browser_version);
+  caps.Set("userAgent", session->chrome->GetBrowserInfo()->user_agent);
   std::string os_name = session->chrome->GetOperatingSystemName();
   if (os_name.find("Windows") != std::string::npos)
     os_name = "Windows";
@@ -193,16 +204,11 @@ base::DictValue CreateCapabilities(Session* session,
   } else {
     caps.Set("setWindowRect", true);
   }
-  if (session->script_timeout == base::TimeDelta::Max()) {
-    caps.SetByDottedPath("timeouts.script", base::Value());
-  } else {
-    SetSafeInt(caps, "timeouts.script",
-               session->script_timeout.InMilliseconds());
-  }
-  SetSafeInt(caps, "timeouts.pageLoad",
-             session->page_load_timeout.InMilliseconds());
-  SetSafeInt(caps, "timeouts.implicit",
-             session->implicit_wait.InMilliseconds());
+  base::DictValue timeouts;
+  SetSerializedTimeout(timeouts, "script", session->script_timeout);
+  SetSerializedTimeout(timeouts, "pageLoad", session->page_load_timeout);
+  SetSerializedTimeout(timeouts, "implicit", session->implicit_wait);
+  caps.Set("timeouts", std::move(timeouts));
   caps.Set("strictFileInteractability", session->strict_file_interactability);
   caps.Set(session->w3c_compliant ? "unhandledPromptBehavior"
                                   : "unexpectedAlertBehaviour",
@@ -215,6 +221,7 @@ base::DictValue CreateCapabilities(Session* session,
   caps.Set("webauthn:extension:minPinLength", !capabilities.IsAndroid());
   caps.Set("webauthn:extension:credBlob", !capabilities.IsAndroid());
   caps.Set("webauthn:extension:prf", !capabilities.IsAndroid());
+  caps.Set("webauthn:extension:cmtgKey", !capabilities.IsAndroid());
 
   // See https://github.com/fedidcg/FedCM/pull/478
   caps.Set("fedcm:accounts", true);
@@ -381,6 +388,10 @@ Status InitSessionHelper(const InitSessionParams& bound_params,
     if (status.IsError()) {
       return status;
     }
+    // Keep a handle to prevent the initial WebView from being disposed if it
+    // detaches while navigating or waiting for navigations.
+    std::unique_ptr<WebViewHolder> scoped_initial_web_view_lock =
+        initial_web_view->GetHolder();
 
     // Navigate the initial page to `about:blank` to align with the html spec:
     // https://html.spec.whatwg.org/multipage/document-sequences.html#creating-a-new-browsing-context
@@ -407,8 +418,15 @@ Status InitSessionHelper(const InitSessionParams& bound_params,
     }
 
     // Set the BiDi mapper web view to the new target.
-    session->chrome->GetWebViewById(session->bidi_mapper_web_view_id,
-                                    &bidi_mapper_web_view);
+    status = session->chrome->GetWebViewById(session->bidi_mapper_web_view_id,
+                                             &bidi_mapper_web_view);
+    if (status.IsError()) {
+      return status;
+    }
+    // Keep a handle to prevent the BiDi mapper WebView from being disposed if
+    // it detaches while navigating or communicating with the mapper.
+    std::unique_ptr<WebViewHolder> scoped_bidi_mapper_web_view_lock =
+        bidi_mapper_web_view->GetHolder();
 
     // Wait until the initial navigation is over to prevent the mapper from
     // being evicted by the navigation.
@@ -463,6 +481,13 @@ Status InitSessionHelper(const InitSessionParams& bound_params,
 }  // namespace
 
 namespace internal {
+
+base::DictValue CreateCapabilitiesForTesting(
+    Session* session,
+    const Capabilities& capabilities,
+    const base::DictValue& desired_caps) {
+  return CreateCapabilities(session, capabilities, desired_caps);
+}
 
 Status ConfigureSession(Session* session,
                         const base::DictValue& params,
@@ -775,6 +800,10 @@ Status ExecuteBidiSessionEnd(Session* session,
   status = session->chrome->GetWebViewById(session->bidi_mapper_web_view_id,
                                            &web_view);
   if (status.IsOk()) {
+    // Keep a handle to prevent the mapper WebView from being disposed during
+    // event processing.
+    std::unique_ptr<WebViewHolder> scoped_web_view_lock =
+        web_view->GetHolder();
     // Attempting to forward any pending BiDi responses / events.
     status = web_view->HandleReceivedEvents();
   }
@@ -829,45 +858,53 @@ Status ExecuteClose(Session* session,
   if (status.IsError())
     return status;
 
-  status = web_view->HandleReceivedEvents();
-  if (status.IsError())
-    return status;
+  std::string tab_id = web_view->GetTabId();
 
-  if (web_view->IsDialogOpen()) {
-    std::string alert_text;
-    status = web_view->GetDialogMessage(alert_text);
+  {
+    // Keep a handle to prevent the WebView from being disposed if it detaches
+    // during event processing before remaining checks (e.g. dialogs) finish.
+    std::unique_ptr<WebViewHolder> scoped_web_view_lock = web_view->GetHolder();
+
+    status = web_view->HandleReceivedEvents();
     if (status.IsError())
       return status;
 
-    std::string dialog_type;
-    status = web_view->GetTypeOfDialog(dialog_type);
-    if (status.IsError()) {
-      return status;
-    }
+    if (web_view->IsDialogOpen()) {
+      std::string alert_text;
+      status = web_view->GetDialogMessage(alert_text);
+      if (status.IsError())
+        return status;
 
-    PromptHandlerConfiguration prompt_handler_configuration;
-    status = session->unhandled_prompt_behavior.GetConfiguration(
-        dialog_type, prompt_handler_configuration);
-    if (status.IsError()) {
-      return status;
-    }
-
-    if (prompt_handler_configuration.type == PromptHandlerType::kAccept ||
-        prompt_handler_configuration.type == PromptHandlerType::kDismiss) {
-      status = web_view->HandleDialog(
-          prompt_handler_configuration.type == PromptHandlerType::kAccept,
-          session->prompt_text);
+      std::string dialog_type;
+      status = web_view->GetTypeOfDialog(dialog_type);
       if (status.IsError()) {
         return status;
       }
-    }
 
-    if (prompt_handler_configuration.notify) {
-      return Status(kUnexpectedAlertOpen, "{Alert text : " + alert_text + "}");
+      PromptHandlerConfiguration prompt_handler_configuration;
+      status = session->unhandled_prompt_behavior.GetConfiguration(
+          dialog_type, prompt_handler_configuration);
+      if (status.IsError()) {
+        return status;
+      }
+
+      if (prompt_handler_configuration.type == PromptHandlerType::kAccept ||
+          prompt_handler_configuration.type == PromptHandlerType::kDismiss) {
+        status = web_view->HandleDialog(
+            prompt_handler_configuration.type == PromptHandlerType::kAccept,
+            session->prompt_text);
+        if (status.IsError()) {
+          return status;
+        }
+      }
+
+      if (prompt_handler_configuration.notify) {
+        return Status(kUnexpectedAlertOpen, "{Alert text : " + alert_text + "}");
+      }
     }
   }
 
-  status = session->chrome->CloseWebView(web_view->GetTabId());
+  status = session->chrome->CloseWebView(tab_id);
   if (status.IsError())
     return status;
 
@@ -1069,8 +1106,6 @@ Status ExecuteSetTimeoutsW3C(Session* session,
     base::TimeDelta timeout;
     const std::string& type = setting.first;
     if (setting.second.is_none()) {
-      if (type != "script")
-        return Status(kInvalidArgument, "timeout can not be null");
       timeout = base::TimeDelta::Max();
     } else {
       if (!GetOptionalSafeInt(params, setting.first, &timeout_ms_int64) ||
@@ -1105,13 +1140,9 @@ Status ExecuteGetTimeouts(Session* session,
                           const base::DictValue& params,
                           std::unique_ptr<base::Value>* value) {
   base::DictValue timeouts;
-  if (session->script_timeout == base::TimeDelta::Max())
-    timeouts.Set("script", base::Value());
-  else
-    SetSafeInt(timeouts, "script", session->script_timeout.InMilliseconds());
-
-  SetSafeInt(timeouts, "pageLoad", session->page_load_timeout.InMilliseconds());
-  SetSafeInt(timeouts, "implicit", session->implicit_wait.InMilliseconds());
+  SetSerializedTimeout(timeouts, "script", session->script_timeout);
+  SetSerializedTimeout(timeouts, "pageLoad", session->page_load_timeout);
+  SetSerializedTimeout(timeouts, "implicit", session->implicit_wait);
 
   *value = base::Value::ToUniquePtrValue(base::Value(std::move(timeouts)));
   return Status(kOk);
@@ -1146,6 +1177,10 @@ Status ExecuteIsLoading(Session* session,
   Status status = session->GetTargetWindow(&web_view);
   if (status.IsError())
     return status;
+
+  // Keep a handle to prevent the WebView from being disposed if it detaches
+  // while checking for pending navigations.
+  std::unique_ptr<WebViewHolder> scoped_web_view_lock = web_view->GetHolder();
 
   bool is_pending;
   status = web_view->IsPendingNavigation(nullptr, &is_pending);

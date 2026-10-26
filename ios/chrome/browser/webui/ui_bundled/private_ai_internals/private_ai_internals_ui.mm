@@ -36,7 +36,9 @@ web::WebUIIOSDataSource* CreatePrivateAiInternalsHTMLSource() {
   source->AddString("default_url", private_ai::kPrivateAiUrl.Get());
   source->AddString(
       "default_api_key",
-      private_ai::PrivateAiInternalsPageHandler::kApiKeyPlaceholder);
+      private_ai::PrivateAiService::GetApiKey(::GetChannel()).empty()
+          ? ""
+          : private_ai::PrivateAiInternalsPageHandler::kApiKeyPlaceholder);
   source->AddString("default_proxy_url",
                     private_ai::kPrivateAiProxyServerUrl.Get());
   source->AddBoolean(
@@ -54,7 +56,7 @@ PrivateAiInternalsUI::PrivateAiInternalsUI(web::WebUIIOS* web_ui,
   web::WebUIIOSDataSource::Add(profile, CreatePrivateAiInternalsHTMLSource());
   web_ui->GetWebState()->GetInterfaceBinderForMainFrame()->AddInterface(
       base::BindRepeating(&PrivateAiInternalsUI::BindInterface,
-                          base::Unretained(this)));
+                          weak_ptr_factory_.GetWeakPtr()));
 }
 
 PrivateAiInternalsUI::~PrivateAiInternalsUI() {
@@ -69,10 +71,12 @@ void PrivateAiInternalsUI::BindInterface(
   auto* private_ai_service = PrivateAiServiceFactory::GetForProfile(profile);
 
   if (!private_ai_service) {
+    receiver.reset();
     return;
   }
   auto* token_manager = private_ai_service->GetTokenManager();
   if (!token_manager) {
+    receiver.reset();
     return;
   }
 
@@ -82,8 +86,16 @@ void PrivateAiInternalsUI::BindInterface(
         network::mojom::NetworkContextParams::New());
   }
 
+  auto network_context_getter = base::BindRepeating(
+      [](base::WeakPtr<PrivateAiInternalsUI> self)
+          -> network::mojom::NetworkContext* {
+        return self ? self->network_context_.get() : nullptr;
+      },
+      weak_ptr_factory_.GetWeakPtr());
+
   page_handler_ = std::make_unique<private_ai::PrivateAiInternalsPageHandler>(
-      token_manager, network_context_.get(), private_ai_service->GetClient(),
-      private_ai_service->GetLogger(), &oak_session_driver_ios_,
-      &network_driver_ios_, ::GetChannel(), std::move(receiver));
+      token_manager, std::move(network_context_getter),
+      private_ai_service->GetClient(), private_ai_service->GetLogger(),
+      &oak_session_driver_ios_, &network_driver_ios_, ::GetChannel(),
+      std::move(receiver));
 }

@@ -11,6 +11,7 @@ source_set("coordinator") {
   ]
   deps = [
     "//base",
+    "//components/optimization_guide/proto:optimization_guide_proto",
     "//ios/chrome/browser/intelligence/persist_tab_context/model",
     "//ios/chrome/browser/intelligence/proto_wrappers:utils",
     "//ios/chrome/browser/shared/coordinator/chrome_coordinator",
@@ -32,5 +33,29 @@ source_set("coordinator") {
     "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid:selected_grid_items",
     "//ios/chrome/browser/web/model:page_placeholder",
     "//ios/web/public",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "tab_picker_mediator_unittest.mm" ]
+  deps = [
+    ":coordinator",
+    "//base",
+    "//base/test:test_support",
+    "//ios/chrome/browser/shared/model/browser/test:test_support",
+    "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/browser/shared/model/web_state_list",
+    "//ios/chrome/browser/shared/public/commands",
+    "//ios/chrome/browser/snapshots/model",
+    "//ios/chrome/browser/tab_picker/public",
+    "//ios/chrome/browser/tab_picker/ui",
+    "//ios/chrome/browser/tab_switcher/ui_bundled",
+    "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid:grid_item_identifier",
+    "//ios/chrome/test:test_support",
+    "//ios/web/public/test",
+    "//ios/web/public/test/fakes",
+    "//testing/gtest",
+    "//third_party/ocmock",
   ]
 }

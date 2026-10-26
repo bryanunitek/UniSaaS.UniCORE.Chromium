@@ -12,7 +12,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -22,16 +21,19 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.Drawable;
 import android.view.ContextThemeWrapper;
 import android.view.View;
 import android.view.ViewGroup.MarginLayoutParams;
 import android.widget.ImageView;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
@@ -41,14 +43,18 @@ import org.chromium.base.ResettersForTesting;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxDrawableState;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.PositionalMode;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.RoundSides;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewProperties.Action;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
+import org.chromium.components.omnibox.OmniboxCapabilities;
+import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+import org.chromium.ui.modelutil.PropertyModelChangeProcessor.ViewBinder;
 
 import java.util.Arrays;
 import java.util.List;
@@ -56,12 +62,18 @@ import java.util.List;
 /** Tests for {@link BaseSuggestionViewBinder}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class BaseSuggestionViewBinderUnitTest {
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
+    @Mock private Runnable mRunnable;
+    private View mView;
     private Context mBareContext;
     private Context mContext;
     private Resources mResources;
     private PropertyModel mModel;
     private BaseSuggestionView<View> mBaseView;
     private BaseSuggestionViewBinder<View> mBinder;
+    private OmniboxResourceProvider mResourceProvider;
     private ImageView mIconView;
 
     @Before
@@ -71,18 +83,22 @@ public class BaseSuggestionViewBinderUnitTest {
         mContext = new ContextThemeWrapper(mBareContext, R.style.Theme_BrowserUI_DayNight);
         mResources = mContext.getResources();
 
-        mBaseView = spy(new BaseSuggestionView<>(new ImageView(mContext)));
+        mView = new View(mContext);
+        mBaseView = new BaseSuggestionView<>(new ImageView(mContext));
         mIconView = mBaseView.decorationIcon;
 
-        mModel = new PropertyModel(BaseSuggestionViewProperties.ALL_KEYS);
+        mResourceProvider = new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
+        mModel =
+                new PropertyModel.Builder(BaseSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider)
+                        .build();
         mBinder =
-                new BaseSuggestionViewBinder<>(
+                new TestBaseSuggestionViewBinder<>(
                         (m, v, p) -> {
                             assertEquals(mBaseView.contentView, v);
                         });
 
         PropertyModelChangeProcessor.create(mModel, mBaseView, mBinder);
-        BaseSuggestionViewBinder.initializeDimensions(mContext);
 
         ResettersForTesting.register(() -> BaseSuggestionViewBinder.sFocusableDrawableState = null);
     }
@@ -127,14 +143,12 @@ public class BaseSuggestionViewBinderUnitTest {
 
     @Test
     public void actionIcon_showIcon() {
-        Runnable callback = mock(Runnable.class);
         List<Action> list =
                 Arrays.asList(
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
-                                callback));
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
+                                mRunnable));
         mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, list);
 
         List<ActionButtonView> actionButtons = mBaseView.getActionButtons();
@@ -142,12 +156,12 @@ public class BaseSuggestionViewBinderUnitTest {
         assertEquals(View.VISIBLE, actionButtons.get(0).getVisibility());
         assertEquals(list.get(0).icon.drawable, actionButtons.get(0).getDrawable());
         assertNull(actionButtons.get(0).getBackground());
-        verify(mBaseView, times(1)).addView(actionButtons.get(0));
+        assertEquals(mBaseView, actionButtons.get(0).getParent());
 
         assertTrue(actionButtons.get(0).performClick());
         assertTrue(actionButtons.get(0).performClick());
         assertTrue(actionButtons.get(0).performClick());
-        verify(callback, times(3)).run();
+        verify(mRunnable, times(3)).run();
     }
 
     @Test
@@ -159,19 +173,16 @@ public class BaseSuggestionViewBinderUnitTest {
         List<Action> list =
                 Arrays.asList(
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
                                 call1),
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
                                 call2),
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
                                 call3));
         mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, list);
 
@@ -181,20 +192,20 @@ public class BaseSuggestionViewBinderUnitTest {
         assertEquals(View.VISIBLE, actionButtons.get(1).getVisibility());
         assertEquals(View.VISIBLE, actionButtons.get(2).getVisibility());
 
-        verify(mBaseView, times(1)).addView(actionButtons.get(0));
-        verify(mBaseView, times(1)).addView(actionButtons.get(1));
-        verify(mBaseView, times(1)).addView(actionButtons.get(2));
+        assertEquals(mBaseView, actionButtons.get(0).getParent());
+        assertEquals(mBaseView, actionButtons.get(1).getParent());
+        assertEquals(mBaseView, actionButtons.get(2).getParent());
 
         assertEquals(list.get(0).icon.drawable, actionButtons.get(0).getDrawable());
         assertEquals(list.get(1).icon.drawable, actionButtons.get(1).getDrawable());
         assertEquals(list.get(2).icon.drawable, actionButtons.get(2).getDrawable());
 
         assertTrue(actionButtons.get(0).performClick());
-        verify(call1, times(1)).run();
+        verify(call1).run();
         assertTrue(actionButtons.get(1).performClick());
-        verify(call2, times(1)).run();
+        verify(call2).run();
         assertTrue(actionButtons.get(2).performClick());
-        verify(call3, times(1)).run();
+        verify(call3).run();
     }
 
     @Test
@@ -202,19 +213,16 @@ public class BaseSuggestionViewBinderUnitTest {
         final List<Action> list =
                 Arrays.asList(
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
                                 CallbackUtils.emptyRunnable()),
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
                                 CallbackUtils.emptyRunnable()),
                         new Action(
-                                mContext,
                                 OmniboxDrawableState.forColor(0),
-                                R.string.accessibility_omnibox_btn_refine,
+                                mContext.getString(R.string.accessibility_omnibox_btn_refine),
                                 CallbackUtils.emptyRunnable()));
 
         final List<ActionButtonView> actionButtons = mBaseView.getActionButtons();
@@ -223,27 +231,27 @@ public class BaseSuggestionViewBinderUnitTest {
         final View actionButton1 = actionButtons.get(0);
         final View actionButton2 = actionButtons.get(1);
         final View actionButton3 = actionButtons.get(2);
-        verify(mBaseView, times(1)).addView(actionButton1);
-        verify(mBaseView, times(1)).addView(actionButton2);
-        verify(mBaseView, times(1)).addView(actionButton3);
+        assertEquals(mBaseView, actionButton1.getParent());
+        assertEquals(mBaseView, actionButton2.getParent());
+        assertEquals(mBaseView, actionButton3.getParent());
 
         mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, list.subList(0, 2));
         assertEquals(2, actionButtons.size());
-        verify(mBaseView, times(1)).removeView(actionButton3);
+        assertNull(actionButton3.getParent());
 
         mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, list.subList(0, 1));
         assertEquals(1, actionButtons.size());
-        verify(mBaseView, times(1)).removeView(actionButton2);
+        assertNull(actionButton2.getParent());
 
         mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, null);
         assertEquals(0, actionButtons.size());
-        verify(mBaseView, times(1)).removeView(actionButton1);
+        assertNull(actionButton1.getParent());
     }
 
     @Test
     public void actionIcon_dontCrashWhenRecycling() {
         // Force a dirty/recycled view that would have a button view, when the model does not carry
-        // any aciton.
+        // any action.
         assertNull(mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS));
         mBaseView.setActionButtonsCount(1);
         // Change in color scheme happening ahead of setting action could cause a crash.
@@ -326,7 +334,7 @@ public class BaseSuggestionViewBinderUnitTest {
         // LayerDrawable, whose bottom element represents the color.
         var defaultDrawable = BaseSuggestionViewBinder.sFocusableDrawableState;
 
-        mModel.set(SuggestionCommonProperties.COLOR_SCHEME, BrandedColorScheme.INCOGNITO);
+        setColorScheme(BrandedColorScheme.INCOGNITO);
         var lightModeDrawable = BaseSuggestionViewBinder.sFocusableDrawableState;
         assertNotSame(defaultDrawable, lightModeDrawable);
 
@@ -337,7 +345,7 @@ public class BaseSuggestionViewBinderUnitTest {
         assertSame(lightModeDrawable, BaseSuggestionViewBinder.sFocusableDrawableState);
 
         // Lastly, observe change when changing the color scheme to something else.
-        mModel.set(SuggestionCommonProperties.COLOR_SCHEME, BrandedColorScheme.APP_DEFAULT);
+        setColorScheme(BrandedColorScheme.APP_DEFAULT);
         assertNotSame(lightModeDrawable, BaseSuggestionViewBinder.sFocusableDrawableState);
     }
 
@@ -347,7 +355,7 @@ public class BaseSuggestionViewBinderUnitTest {
         // LayerDrawable, whose bottom element represents the color.
         var defaultDrawable = BaseSuggestionViewBinder.sFocusableDrawableState;
 
-        mModel.set(SuggestionCommonProperties.COLOR_SCHEME, BrandedColorScheme.LIGHT_BRANDED_THEME);
+        setColorScheme(BrandedColorScheme.LIGHT_BRANDED_THEME);
         var lightModeDrawable = BaseSuggestionViewBinder.sFocusableDrawableState;
         assertNotSame(defaultDrawable, lightModeDrawable);
 
@@ -358,7 +366,7 @@ public class BaseSuggestionViewBinderUnitTest {
         assertSame(lightModeDrawable, BaseSuggestionViewBinder.sFocusableDrawableState);
 
         // Lastly, observe change when changing the color scheme to something else.
-        mModel.set(SuggestionCommonProperties.COLOR_SCHEME, BrandedColorScheme.APP_DEFAULT);
+        setColorScheme(BrandedColorScheme.APP_DEFAULT);
         assertNotSame(lightModeDrawable, BaseSuggestionViewBinder.sFocusableDrawableState);
     }
 
@@ -369,13 +377,9 @@ public class BaseSuggestionViewBinderUnitTest {
         BaseSuggestionViewBinder.sFocusableDrawableState =
                 new ColorDrawable(Color.MAGENTA).getConstantState();
 
-        var bgCaptor = ArgumentCaptor.forClass(Drawable.class);
+        BaseSuggestionViewBinder.applySelectableBackground(mModel, mView, mResourceProvider);
 
-        var viewWithNoContext = mock(View.class);
-        BaseSuggestionViewBinder.applySelectableBackground(mModel, viewWithNoContext);
-        verify(viewWithNoContext).setBackground(bgCaptor.capture());
-
-        var color = ((ColorDrawable) bgCaptor.getValue()).getColor();
+        var color = ((ColorDrawable) mView.getBackground()).getColor();
 
         assertEquals(Color.MAGENTA, color);
     }
@@ -415,10 +419,15 @@ public class BaseSuggestionViewBinderUnitTest {
         var state1 = BaseSuggestionViewBinder.getFocusableDrawableStateForTesting();
 
         // Create a second MVP setup. Use Bare context that has no theme data.
-        var newModel = new PropertyModel(BaseSuggestionViewProperties.ALL_KEYS);
-        var viewWithNoContext = spy(new BaseSuggestionView<>(new ImageView(mBareContext)));
+        var viewWithNoContext = new BaseSuggestionView<>(new ImageView(mBareContext));
+        OmniboxResourceProvider bareResourceProvider =
+                new OmniboxResourceProvider(mBareContext, BrandedColorScheme.APP_DEFAULT);
+        var newModel =
+                new PropertyModel.Builder(BaseSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, bareResourceProvider)
+                        .build();
         PropertyModelChangeProcessor.create(
-                newModel, viewWithNoContext, new BaseSuggestionViewBinder<>((m, v, p) -> {}));
+                newModel, viewWithNoContext, new TestBaseSuggestionViewBinder<>((m, v, p) -> {}));
 
         // Apply the same color scheme to the new model.
         // Observe that we don't crash.
@@ -466,8 +475,6 @@ public class BaseSuggestionViewBinderUnitTest {
     }
 
     private void runDecorationIconPaddingTest() {
-        BaseSuggestionViewBinder.initializeDimensions(mContext);
-
         int smallRoundingRadius =
                 mResources.getDimensionPixelSize(R.dimen.omnibox_small_icon_rounding_radius);
         int largeRoundingRadius =
@@ -516,8 +523,105 @@ public class BaseSuggestionViewBinderUnitTest {
     }
 
     @Test
+    public void decorIcon_desktopDevice() {
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(true);
+        BaseSuggestionViewBinder.resetCachedResources();
+
+        int smallDesktopEdge =
+                mResources.getDimensionPixelSize(
+                        R.dimen.omnibox_desktop_small_decoration_icon_size);
+        int largeDesktopEdge =
+                mResources.getDimensionPixelSize(
+                        R.dimen.omnibox_desktop_large_decoration_icon_size);
+
+        Bitmap b = Bitmap.createBitmap(/* width= */ 2, /* height= */ 1, Bitmap.Config.ALPHA_8);
+
+        OmniboxDrawableState state =
+                OmniboxDrawableState.forFavIcon(new BitmapDrawable(mContext.getResources(), b));
+        mModel.set(BaseSuggestionViewProperties.ICON, state);
+        assertEquals(MarginLayoutParams.WRAP_CONTENT, mIconView.getLayoutParams().height);
+        assertEquals(smallDesktopEdge, mIconView.getLayoutParams().width);
+
+        state = OmniboxDrawableState.forImage(new BitmapDrawable(mContext.getResources(), b));
+        mModel.set(BaseSuggestionViewProperties.ICON, state);
+        assertEquals(MarginLayoutParams.WRAP_CONTENT, mIconView.getLayoutParams().height);
+        assertEquals(largeDesktopEdge, mIconView.getLayoutParams().width);
+
+        OmniboxCapabilities.setIsDesktopPlatformForTesting(false);
+        BaseSuggestionViewBinder.resetCachedResources();
+    }
+
+    @Test
     public void topPadding() {
         mModel.set(BaseSuggestionViewProperties.TOP_PADDING, 13);
         assertEquals(13, mBaseView.getPaddingTop());
+    }
+
+    @Test
+    public void bindContent_onlyCalledForContentAndColorSchemeKeys() {
+        List<PropertyKey> boundContentKeys = new java.util.ArrayList<>();
+        BaseSuggestionViewBinder<View> binder =
+                new TestBaseSuggestionViewBinder<>(
+                        (m, v, p) -> {
+                            boundContentKeys.add(p);
+                        });
+
+        binder.bind(mModel, mBaseView, SuggestionCommonProperties.RESOURCE_PROVIDER);
+        binder.bind(mModel, mBaseView, BaseSuggestionViewProperties.ICON);
+        binder.bind(mModel, mBaseView, BaseSuggestionViewProperties.TOP_PADDING);
+        binder.bind(mModel, mBaseView, ActionChipsProperties.ACTION_CHIPS);
+        binder.bind(mModel, mBaseView, SuggestionCommonProperties.SHOW_DIVIDER);
+        assertTrue(boundContentKeys.isEmpty());
+
+        binder.bind(mModel, mBaseView, SuggestionCommonProperties.COLOR_SCHEME);
+        assertEquals(List.of(SuggestionCommonProperties.COLOR_SCHEME), boundContentKeys);
+    }
+
+    @Test
+    public void actionButton_reusesAccessibilityDelegateAcrossBinds() {
+        Action action1 =
+                new Action(
+                        OmniboxDrawableState.forColor(0),
+                        "desc1",
+                        /* onClickAnnouncement= */ "ann1",
+                        CallbackUtils.emptyRunnable());
+        Action action2 =
+                new Action(
+                        OmniboxDrawableState.forColor(0),
+                        "desc2",
+                        /* onClickAnnouncement= */ "ann2",
+                        CallbackUtils.emptyRunnable());
+
+        mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, List.of(action1));
+        ActionButtonView button = mBaseView.getActionButtons().get(0);
+        View.AccessibilityDelegate delegate = button.getAccessibilityDelegate();
+        assertNotNull(delegate);
+        assertSame(action1, button.getTag());
+
+        mModel.set(BaseSuggestionViewProperties.ACTION_BUTTONS, List.of(action2));
+        assertSame(delegate, button.getAccessibilityDelegate());
+        assertSame(action2, button.getTag());
+        assertEquals("desc2", button.getContentDescription());
+    }
+
+    private void setColorScheme(@BrandedColorScheme int scheme) {
+        mResourceProvider.setBrandedColorScheme(scheme);
+        mModel.set(SuggestionCommonProperties.COLOR_SCHEME, scheme);
+    }
+
+    private static class TestBaseSuggestionViewBinder<T extends View>
+            extends BaseSuggestionViewBinder<T> {
+        private final ViewBinder<PropertyModel, T, PropertyKey> mContentBinder;
+
+        public TestBaseSuggestionViewBinder(
+                ViewBinder<PropertyModel, T, PropertyKey> contentBinder) {
+            super();
+            mContentBinder = contentBinder;
+        }
+
+        @Override
+        protected void bindContent(PropertyModel model, T contentView, PropertyKey propertyKey) {
+            mContentBinder.bind(model, contentView, propertyKey);
+        }
     }
 }

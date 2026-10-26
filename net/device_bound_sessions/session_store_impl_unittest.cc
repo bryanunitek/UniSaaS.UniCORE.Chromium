@@ -15,6 +15,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "base/test/bind.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -30,9 +31,11 @@
 #include "crypto/mock_unexportable_key.h"
 #include "crypto/scoped_fake_unexportable_key_provider.h"
 #include "crypto/scoped_mock_unexportable_key_provider.h"
+#include "crypto/sign.h"
 #include "crypto/unexportable_key.h"
 #include "net/base/features.h"
 #include "net/base/schemeful_site.h"
+#include "net/device_bound_sessions/deletion_reason.h"
 #include "net/device_bound_sessions/proto/storage.pb.h"
 #include "net/device_bound_sessions/session.h"
 #include "net/device_bound_sessions/session_params.h"
@@ -50,13 +53,19 @@ namespace {
 
 using ::base::test::ErrorIs;
 using ::base::test::ValueIs;
+using ::testing::_;
 using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::Key;
+using ::testing::NotNull;
+using ::testing::Pair;
+using ::testing::Property;
 using ::testing::Return;
 
 using AttestationKeySaveOutcome = SessionStoreImpl::AttestationKeySaveOutcome;
 
-constexpr crypto::SignatureVerifier::SignatureAlgorithm
-    kAcceptableAlgorithms[] = {crypto::SignatureVerifier::ECDSA_SHA256};
+constexpr crypto::sign::SignatureKind kAcceptableAlgorithms[] = {
+    crypto::sign::ECDSA_SHA256};
 constexpr unexportable_keys::BackgroundTaskPriority kTaskPriority =
     unexportable_keys::BackgroundTaskPriority::kUserBlocking;
 constexpr unexportable_keys::BackgroundTaskOrigin kTaskOrigin =
@@ -257,7 +266,7 @@ class SessionStoreImplTest : public net::TestWithTaskEnvironment {
   void RestoreSessionBindingKey(const SchemefulSite& site, Session* session) {
     base::RunLoop run_loop;
     store_->RestoreSessionBindingKey(
-        SessionKey{site, session->id()},
+        SessionKey{site, session->id()}, kTaskPriority,
         base::BindLambdaForTesting(
             [&run_loop, session](unexportable_keys::ServiceErrorOr<
                                  unexportable_keys::UnexportableSigningKeyId>
@@ -272,7 +281,7 @@ class SessionStoreImplTest : public net::TestWithTaskEnvironment {
                                     Session* session) {
     base::RunLoop run_loop;
     store_->RestoreSessionAttestationKey(
-        SessionKey{site, session->id()},
+        SessionKey{site, session->id()}, kTaskPriority,
         base::BindLambdaForTesting(
             [&run_loop,
              session](unexportable_keys::ServiceErrorOr<
@@ -290,9 +299,6 @@ class SessionStoreImplTest : public net::TestWithTaskEnvironment {
     return scoped_key_provider_
         .emplace<crypto::ScopedMockUnexportableKeyProvider>();
   }
-
- protected:
-  base::test::ScopedFeatureList feature_list_;
 
  private:
   base::ScopedTempDir temp_dir_;
@@ -519,7 +525,7 @@ TEST_F(SessionStoreImplTest, LoadSavedSessions) {
 }
 
 TEST_F(SessionStoreImplTest, DropLowerSchemaVersionSessions) {
-  feature_list_.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       features::kDeviceBoundSessions,
       {{features::kDeviceBoundSessionsSchemaVersion.name, "1"}});
   CreateStoreAndLoadSessions();
@@ -532,8 +538,7 @@ TEST_F(SessionStoreImplTest, DropLowerSchemaVersionSessions) {
   SessionStore::SessionsMap saved_sessions =
       CreateAndSaveSessions(cfgs, unexportable_key_service(), store());
 
-  feature_list_.Reset();
-  feature_list_.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       features::kDeviceBoundSessions,
       {{features::kDeviceBoundSessionsSchemaVersion.name, "2"}});
   MimicRestart();
@@ -543,7 +548,7 @@ TEST_F(SessionStoreImplTest, DropLowerSchemaVersionSessions) {
 }
 
 TEST_F(SessionStoreImplTest, DropHigherSchemaVersionSessions) {
-  feature_list_.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       features::kDeviceBoundSessions,
       {{features::kDeviceBoundSessionsSchemaVersion.name, "2"}});
   CreateStoreAndLoadSessions();
@@ -556,8 +561,7 @@ TEST_F(SessionStoreImplTest, DropHigherSchemaVersionSessions) {
   SessionStore::SessionsMap saved_sessions =
       CreateAndSaveSessions(cfgs, unexportable_key_service(), store());
 
-  feature_list_.Reset();
-  feature_list_.InitAndEnableFeatureWithParameters(
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
       features::kDeviceBoundSessions,
       {{features::kDeviceBoundSessionsSchemaVersion.name, "1"}});
   MimicRestart();
@@ -589,19 +593,21 @@ TEST_F(SessionStoreImplTest, PruneLoadedEntryWithInvalidSite) {
 
   // Run the 2-entry table through the store's cleaning method.
   std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
   SessionStore::SessionsMap sessions_map =
-      SessionStoreImpl::CreateSessionsFromLoadedData(loaded_tbl,
-                                                     keys_to_delete);
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
 
   // Verify:
   // - entry with valid site is present in the output sessions map.
   // - entry with invalid site is not present and is included in the
   //   keys_to_delete list.
-  EXPECT_EQ(sessions_map.size(), 1u);
-  SessionKey key{site2, Session::Id("session_id")};
-  EXPECT_EQ(sessions_map.count(key), 1u);
-  EXPECT_EQ(keys_to_delete.size(), 1u);
-  EXPECT_EQ(keys_to_delete[0], "about:blank");
+  EXPECT_THAT(sessions_map,
+              ElementsAre(Pair(SessionKey{site2, Session::Id("session_id")},
+                               NotNull())));
+  EXPECT_THAT(sites_to_update, IsEmpty());
+  EXPECT_THAT(keys_to_delete, ElementsAre("about:blank"));
 }
 
 // Note: There are several reasons why a session may be invalid. We only
@@ -609,14 +615,15 @@ TEST_F(SessionStoreImplTest, PruneLoadedEntryWithInvalidSite) {
 // reasons have been tested in SessionTest.FailCreateFromInvalidProto
 // in file session_unittest.cc
 TEST_F(SessionStoreImplTest, PruneLoadedEntryWithInvalidSession) {
+  base::HistogramTester histograms;
   // Create an entry with 1 valid and 1 invalid session.
   proto::Session sproto1 =
       CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
                          "session_1", "https://foo.example.test");
   // Create an invalid session.
   proto::Session sproto2 =
-      CreateSessionProto(unexportable_key_service(), "https://bar.example.test",
-                         "session_2", "https://bar.example.test");
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_2", "https://foo.example.test");
   sproto2.set_refresh_url("invalid_url");
 
   // Create a site proto (proto table's value field) consisting of the above 2
@@ -632,18 +639,28 @@ TEST_F(SessionStoreImplTest, PruneLoadedEntryWithInvalidSession) {
 
   // Run the DB table through the store's cleaning method.
   std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
   SessionStore::SessionsMap sessions_map =
-      SessionStoreImpl::CreateSessionsFromLoadedData(loaded_tbl,
-                                                     keys_to_delete);
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
 
-  // Verify that the entry is pruned even though only 1 out of the 2 sessions
-  // was invalid.
-  EXPECT_EQ(sessions_map.size(), 0u);
-  EXPECT_EQ(keys_to_delete.size(), 1u);
-  EXPECT_EQ(keys_to_delete[0], site.Serialize());
+  // Verify that the invalid session is pruned while the valid session for
+  // the same site is kept.
+  EXPECT_THAT(keys_to_delete, IsEmpty());
+  EXPECT_THAT(sites_to_update,
+              ElementsAre(Pair(site.Serialize(),
+                               Property(&proto::SiteSessions::sessions,
+                                        ElementsAre(Key("session_1"))))));
+  EXPECT_THAT(
+      sessions_map,
+      ElementsAre(Pair(SessionKey{site, Session::Id("session_1")}, NotNull())));
+  histograms.ExpectUniqueSample("Net.DeviceBoundSessions.DeletionReason",
+                                DeletionReason::kInvalidSessionParams, 1);
 }
 
 TEST_F(SessionStoreImplTest, PruneLoadedEntryWithSessionMissingWrappedKey) {
+  base::HistogramTester histograms;
   // Create a Session proto with missing wrapped key field.
   proto::Session sproto =
       CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
@@ -659,17 +676,22 @@ TEST_F(SessionStoreImplTest, PruneLoadedEntryWithSessionMissingWrappedKey) {
 
   // Run the table through the store's cleaning method.
   std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
   SessionStore::SessionsMap sessions_map =
-      SessionStoreImpl::CreateSessionsFromLoadedData(loaded_tbl,
-                                                     keys_to_delete);
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
 
   // Verify that the DB entry has been pruned in the output sessions map.
-  EXPECT_EQ(sessions_map.size(), 0u);
-  EXPECT_EQ(keys_to_delete.size(), 1u);
-  EXPECT_EQ(keys_to_delete[0], site.Serialize());
+  EXPECT_THAT(sessions_map, IsEmpty());
+  EXPECT_THAT(sites_to_update, IsEmpty());
+  EXPECT_THAT(keys_to_delete, ElementsAre(site.Serialize()));
+  histograms.ExpectUniqueSample("Net.DeviceBoundSessions.DeletionReason",
+                                DeletionReason::kInvalidSessionParams, 1);
 }
 
 TEST_F(SessionStoreImplTest, PruneLoadedEntryWithInvalidRefreshInitiator) {
+  base::HistogramTester histograms;
   // Create an entry with an invalid refresh initiator.
   proto::Session sproto =
       CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
@@ -677,26 +699,239 @@ TEST_F(SessionStoreImplTest, PruneLoadedEntryWithInvalidRefreshInitiator) {
   sproto.add_allowed_refresh_initiators("a.*.example.test");
 
   proto::SiteSessions site_proto;
-  (*site_proto.mutable_sessions())["session_id"] = std::move(sproto);
+  (*site_proto.mutable_sessions())["session_1"] = std::move(sproto);
   std::map<std::string, proto::SiteSessions> loaded_tbl;
   auto site = net::SchemefulSite(GURL("https://foo.example.test"));
   loaded_tbl[site.Serialize()] = std::move(site_proto);
 
   // Run the table through the store's cleaning method.
   std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
   SessionStore::SessionsMap sessions_map =
-      SessionStoreImpl::CreateSessionsFromLoadedData(loaded_tbl,
-                                                     keys_to_delete);
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
 
   // Verify that the DB entry has been pruned in the output sessions map.
-  EXPECT_EQ(sessions_map.size(), 0u);
-  EXPECT_EQ(keys_to_delete.size(), 1u);
-  EXPECT_EQ(keys_to_delete[0], site.Serialize());
+  EXPECT_THAT(sessions_map, IsEmpty());
+  EXPECT_THAT(sites_to_update, IsEmpty());
+  EXPECT_THAT(keys_to_delete, ElementsAre(site.Serialize()));
+  histograms.ExpectUniqueSample("Net.DeviceBoundSessions.DeletionReason",
+                                DeletionReason::kInvalidSessionParams, 1);
+}
+
+TEST_F(SessionStoreImplTest, LoadedEntryWithSessionIdMismatch) {
+  base::HistogramTester histograms;
+  // Create an entry where the map key does not match the session id in proto.
+  proto::Session sproto =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_1", "https://foo.example.test");
+
+  proto::SiteSessions site_proto;
+  (*site_proto.mutable_sessions())["session_2"] = std::move(sproto);
+  std::map<std::string, proto::SiteSessions> loaded_tbl;
+  auto site = net::SchemefulSite(GURL("https://foo.example.test"));
+  loaded_tbl[site.Serialize()] = std::move(site_proto);
+
+  std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
+  SessionStore::SessionsMap sessions_map =
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
+
+  // The session is loaded without pruning.
+  EXPECT_THAT(
+      sessions_map,
+      ElementsAre(Pair(SessionKey{site, Session::Id("session_1")}, NotNull())));
+  EXPECT_THAT(sites_to_update, IsEmpty());
+  EXPECT_THAT(keys_to_delete, IsEmpty());
+  histograms.ExpectTotalCount("Net.DeviceBoundSessions.DeletionReason", 0);
+}
+
+TEST_F(SessionStoreImplTest, PruneLoadedEntryWithExpiredSession) {
+  base::HistogramTester histograms;
+  // Create an entry with 1 valid and 1 expired session.
+  proto::Session sproto1 =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_1", "https://foo.example.test");
+  // Create an expired session.
+  proto::Session sproto2 =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_2", "https://foo.example.test");
+  base::Time expiry_date = base::Time::Now() - base::Days(1);
+  sproto2.set_expiry_time(
+      expiry_date.ToDeltaSinceWindowsEpoch().InMicroseconds());
+
+  proto::SiteSessions site_proto;
+  (*site_proto.mutable_sessions())["session_1"] = std::move(sproto1);
+  (*site_proto.mutable_sessions())["session_2"] = std::move(sproto2);
+
+  std::map<std::string, proto::SiteSessions> loaded_tbl;
+  auto site = net::SchemefulSite(GURL("https://foo.example.test"));
+  loaded_tbl[site.Serialize()] = std::move(site_proto);
+
+  std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
+  SessionStore::SessionsMap sessions_map =
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
+
+  // Verify that only the expired session is pruned and the valid session is
+  // kept.
+  EXPECT_THAT(keys_to_delete, IsEmpty());
+  EXPECT_THAT(sites_to_update,
+              ElementsAre(Pair(site.Serialize(),
+                               Property(&proto::SiteSessions::sessions,
+                                        ElementsAre(Key("session_1"))))));
+  EXPECT_THAT(
+      sessions_map,
+      ElementsAre(Pair(SessionKey{site, Session::Id("session_1")}, NotNull())));
+  histograms.ExpectUniqueSample("Net.DeviceBoundSessions.DeletionReason",
+                                DeletionReason::kExpired, 1);
+}
+
+TEST_F(SessionStoreImplTest, PruneLoadedEntryWithAllExpiredSessions) {
+  base::HistogramTester histograms;
+  // Create an entry where all sessions are expired.
+  proto::Session sproto1 =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_1", "https://foo.example.test");
+  base::Time expiry_date1 = base::Time::Now() - base::Days(1);
+  sproto1.set_expiry_time(
+      expiry_date1.ToDeltaSinceWindowsEpoch().InMicroseconds());
+
+  proto::Session sproto2 =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_2", "https://foo.example.test");
+  base::Time expiry_date2 = base::Time::Now() - base::Days(2);
+  sproto2.set_expiry_time(
+      expiry_date2.ToDeltaSinceWindowsEpoch().InMicroseconds());
+
+  proto::SiteSessions site_proto;
+  (*site_proto.mutable_sessions())["session_1"] = std::move(sproto1);
+  (*site_proto.mutable_sessions())["session_2"] = std::move(sproto2);
+
+  std::map<std::string, proto::SiteSessions> loaded_tbl;
+  auto site = net::SchemefulSite(GURL("https://foo.example.test"));
+  loaded_tbl[site.Serialize()] = std::move(site_proto);
+
+  std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
+  SessionStore::SessionsMap sessions_map =
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/true);
+
+  // Verify that all sessions are pruned and the whole site key is scheduled for
+  // deletion.
+  EXPECT_THAT(sessions_map, IsEmpty());
+  EXPECT_THAT(sites_to_update, IsEmpty());
+  EXPECT_THAT(keys_to_delete, ElementsAre(site.Serialize()));
+  histograms.ExpectUniqueSample("Net.DeviceBoundSessions.DeletionReason",
+                                DeletionReason::kExpired, 2);
+}
+
+TEST_F(SessionStoreImplTest,
+       CreateSessionsFromLoadedDataKeepExpiredWhenPruneDisabled) {
+  base::HistogramTester histograms;
+  // Create an entry with 1 valid and 1 expired session.
+  proto::Session sproto1 =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_1", "https://foo.example.test");
+  proto::Session sproto2 =
+      CreateSessionProto(unexportable_key_service(), "https://foo.example.test",
+                         "session_2", "https://foo.example.test");
+  base::Time expiry_date = base::Time::Now() - base::Days(1);
+  sproto2.set_expiry_time(
+      expiry_date.ToDeltaSinceWindowsEpoch().InMicroseconds());
+
+  proto::SiteSessions site_proto;
+  (*site_proto.mutable_sessions())["session_1"] = std::move(sproto1);
+  (*site_proto.mutable_sessions())["session_2"] = std::move(sproto2);
+
+  std::map<std::string, proto::SiteSessions> loaded_tbl;
+  auto site = net::SchemefulSite(GURL("https://foo.example.test"));
+  loaded_tbl[site.Serialize()] = std::move(site_proto);
+
+  std::vector<std::string> keys_to_delete;
+  std::map<std::string, proto::SiteSessions> sites_to_update;
+  SessionStore::SessionsMap sessions_map =
+      SessionStoreImpl::CreateSessionsFromLoadedData(
+          loaded_tbl, keys_to_delete, sites_to_update,
+          /*prune_expired_sessions=*/false);
+
+  // Both sessions should be deserialized without pruning or metric emission.
+  EXPECT_THAT(sites_to_update, IsEmpty());
+  EXPECT_THAT(keys_to_delete, IsEmpty());
+  EXPECT_THAT(
+      sessions_map,
+      ElementsAre(Pair(SessionKey{site, Session::Id("session_1")}, NotNull()),
+                  Pair(SessionKey{site, Session::Id("session_2")}, NotNull())));
+  histograms.ExpectTotalCount("Net.DeviceBoundSessions.DeletionReason", 0);
+}
+
+TEST_F(SessionStoreImplTest, LoadSessionsPrunesExpiredSessionsOnRestart) {
+  base::HistogramTester histograms;
+  CreateStoreAndLoadSessions();
+
+  // Save session 1_1 for site 1 with a brief expiry time.
+  std::unique_ptr<Session> session1_1 = CreateSessionHelper(
+      unexportable_key_service(), "https://foo.test", "session1_1");
+  session1_1->set_expiry_date(base::Time::Now() + base::Hours(1));
+  auto site1 = net::SchemefulSite(GURL("https://foo.test"));
+  store().SaveSession(site1, *session1_1,
+                      SessionStore::SaveSessionMode::kNewSession);
+
+  // Save session 1_2 for site 1 with a long expiry time.
+  std::unique_ptr<Session> session1_2 =
+      CreateSessionHelper(unexportable_key_service(), "https://foo.test",
+                          "session1_2", "https://foo.test");
+  session1_2->set_expiry_date(base::Time::Now() + base::Days(10));
+  store().SaveSession(site1, *session1_2,
+                      SessionStore::SaveSessionMode::kNewSession);
+
+  // Save session 2 for site 2 with a brief expiry time.
+  std::unique_ptr<Session> session2 =
+      CreateSessionHelper(unexportable_key_service(), "https://bar.test",
+                          "session2", "https://bar.test");
+  session2->set_expiry_date(base::Time::Now() + base::Hours(1));
+  auto site2 = net::SchemefulSite(GURL("https://bar.test"));
+  store().SaveSession(site2, *session2,
+                      SessionStore::SaveSessionMode::kNewSession);
+
+  EXPECT_EQ(store().GetAllSessions().size(), 3u);
+
+  // Fast forward time past session 1_1 and session 2's expiry, but before
+  // session 1_2's expiry.
+  FastForwardBy(base::Hours(2));
+
+  // GetAllSessions() should act as a pure read-only inspection and return all
+  // cached sessions (including expired ones) without crashing or pruning.
+  EXPECT_EQ(store().GetAllSessions().size(), 3u);
+  histograms.ExpectTotalCount("Net.DeviceBoundSessions.DeletionReason", 0);
+
+  // Restart and reload sessions from disk.
+  MimicRestart();
+
+  // On reload:
+  // - site 1 has 1 expired session and 1 valid session, so site 1 is updated in
+  //   the DB.
+  // - site 2 has all sessions expired, so site 2 is deleted from the DB.
+  SessionStore::SessionsMap loaded_sessions = LoadSessions();
+  EXPECT_THAT(loaded_sessions,
+              ElementsAre(Pair(SessionKey{site1, Session::Id("session1_2")},
+                               NotNull())));
+  EXPECT_EQ(store().GetAllSessions().size(), 1u);
+
+  histograms.ExpectUniqueSample("Net.DeviceBoundSessions.DeletionReason",
+                                DeletionReason::kExpired, 2);
 }
 
 TEST_F(SessionStoreImplTest, GarbageCollectsStaleKeys) {
   base::HistogramTester histograms;
-  feature_list_.InitAndEnableFeature(
+  AddScopedFeatureList().InitAndEnableFeature(
       unexportable_keys::kUnexportableKeyDeletion);
   crypto::MockUnexportableKeyProvider& mock_key_provider =
       SwitchToMockKeyProvider().mock();
@@ -783,7 +1018,7 @@ TEST_F(SessionStoreImplTest, GarbageCollectsStaleKeys) {
 }
 
 TEST_F(SessionStoreImplTest, GarbageCollectionDoesNotTriggerIfFeatureDisabled) {
-  feature_list_.InitAndDisableFeature(
+  AddScopedFeatureList().InitAndDisableFeature(
       unexportable_keys::kUnexportableKeyDeletion);
   crypto::MockUnexportableKeyProvider& mock_key_provider =
       SwitchToMockKeyProvider().mock();
@@ -1316,7 +1551,7 @@ TEST_F(SessionStoreImplTest, SaveSessionWithUnexpectedAttestationKeyError) {
 
 TEST_F(SessionStoreImplTest, GarbageCollectsStaleKeysWithAttestation) {
   base::HistogramTester histograms;
-  feature_list_.InitAndEnableFeature(
+  AddScopedFeatureList().InitAndEnableFeature(
       unexportable_keys::kUnexportableKeyDeletion);
   crypto::MockUnexportableKeyProvider& mock_key_provider =
       SwitchToMockKeyProvider().mock();
@@ -1482,9 +1717,69 @@ TEST_F(SessionStoreImplTest, RestoreSessionAttestationKeyNoKey) {
       unexportable_keys::UnexportableAttestationKeyId>>
       future;
   store().RestoreSessionAttestationKey(SessionKey{site, restored_session->id()},
-                                       future.GetCallback());
+                                       kTaskPriority, future.GetCallback());
   EXPECT_THAT(future.Get(),
               ErrorIs(unexportable_keys::ServiceError::kKeyNotFound));
+}
+
+// Verifies that the caller's priority is forwarded to the key service instead
+// of a hard-coded one.
+TEST_F(SessionStoreImplTest, RestoreSessionKeysForwardPriority) {
+  CreateStoreAndLoadSessions();
+
+  static constexpr std::string_view kFooSite = "https://foo.test";
+  auto site = net::SchemefulSite(GURL(kFooSite));
+  std::unique_ptr<Session> session = CreateSessionHelper(
+      GenerateNewSigningKey(unexportable_key_service()), kFooSite, kSessionId,
+      kFooSite, GenerateNewAttestationKey(unexportable_key_service()));
+  store().SaveSession(site, *session,
+                      SessionStore::SaveSessionMode::kNewSession);
+  DeleteStore();
+
+  // Reopen the same database with a mock key service.
+  testing::StrictMock<unexportable_keys::MockUnexportableKeyService>
+      mock_key_service;
+  auto mock_store =
+      std::make_unique<SessionStoreImpl>(GetDBPath(), mock_key_service);
+  base::test::TestFuture<SessionStore::SessionsMap> load_future;
+  mock_store->LoadSessions(load_future.GetCallback());
+  ASSERT_EQ(load_future.Take().size(), 1u);
+
+  // Use two different priorities, neither of which is the old hard-coded
+  // `kUserVisible`.
+  EXPECT_CALL(
+      mock_key_service,
+      FromWrappedSigningKeySlowlyAsync(
+          _, unexportable_keys::BackgroundTaskPriority::kUserBlocking, _))
+      .WillOnce(base::test::RunOnceCallback<2>(
+          base::unexpected(unexportable_keys::ServiceError::kKeyNotFound)));
+  EXPECT_CALL(mock_key_service,
+              FromWrappedAttestationKeySlowlyAsync(
+                  _, unexportable_keys::BackgroundTaskPriority::kBestEffort, _))
+      .WillOnce(base::test::RunOnceCallback<2>(
+          base::unexpected(unexportable_keys::ServiceError::kKeyNotFound)));
+
+  const SessionKey session_key{site, session->id()};
+  base::test::TestFuture<unexportable_keys::ServiceErrorOr<
+      unexportable_keys::UnexportableSigningKeyId>>
+      binding_future;
+  mock_store->RestoreSessionBindingKey(
+      session_key, unexportable_keys::BackgroundTaskPriority::kUserBlocking,
+      binding_future.GetCallback());
+  EXPECT_TRUE(binding_future.IsReady());
+
+  base::test::TestFuture<unexportable_keys::ServiceErrorOr<
+      unexportable_keys::UnexportableAttestationKeyId>>
+      attestation_future;
+  mock_store->RestoreSessionAttestationKey(
+      session_key, unexportable_keys::BackgroundTaskPriority::kBestEffort,
+      attestation_future.GetCallback());
+  EXPECT_TRUE(attestation_future.IsReady());
+
+  base::RunLoop run_loop;
+  mock_store->SetShutdownCallbackForTesting(run_loop.QuitClosure());
+  mock_store.reset();
+  run_loop.Run();
 }
 
 }  // namespace net::device_bound_sessions

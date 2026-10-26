@@ -47,10 +47,10 @@ import org.chromium.chrome.browser.browserservices.TrustedWebActivityClient;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.notifications.NotificationContentDetectionManager.SuspiciousNotificationWarningInteractions;
+import org.chromium.chrome.browser.notifications.NotificationUmaTracker.SystemNotificationLifecycleEvent;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker.SystemNotificationType;
 import org.chromium.chrome.browser.notifications.channels.SiteChannelsManager;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.usage_stats.UsageStatsService;
 import org.chromium.chrome.browser.webapps.ChromeWebApkHost;
@@ -79,9 +79,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 
 /**
  * Provides the ability for the NotificationPlatformBridgeAndroid to talk to the Android platform
@@ -187,20 +185,21 @@ public class NotificationPlatformBridge {
                     /* origin= */ assumeNonNull(
                             intent.getStringExtra(
                                     NotificationConstants.EXTRA_NOTIFICATION_INFO_ORIGIN)),
-                    /* scopeUrl= */ Objects.requireNonNullElse(
-                            intent.getStringExtra(
-                                    NotificationConstants.EXTRA_NOTIFICATION_INFO_SCOPE),
-                            ""),
+                    /* scopeUrl= */ getStringExtraOrEmpty(
+                            intent, NotificationConstants.EXTRA_NOTIFICATION_INFO_SCOPE),
                     /* profileId= */ intent.getStringExtra(
                             NotificationConstants.EXTRA_NOTIFICATION_INFO_PROFILE_ID),
                     /* incognito= */ intent.getBooleanExtra(
                             NotificationConstants.EXTRA_NOTIFICATION_INFO_PROFILE_INCOGNITO, false),
-                    /* webApkPackage= */ Objects.requireNonNullElse(
-                            intent.getStringExtra(
-                                    NotificationConstants.EXTRA_NOTIFICATION_INFO_WEBAPK_PACKAGE),
-                            ""),
+                    /* webApkPackage= */ getStringExtraOrEmpty(
+                            intent, NotificationConstants.EXTRA_NOTIFICATION_INFO_WEBAPK_PACKAGE),
                     /* channelId= */ intent.getStringExtra(
                             NotificationConstants.EXTRA_NOTIFICATION_INFO_CHANNEL_ID));
+        }
+
+        private static String getStringExtraOrEmpty(Intent intent, String key) {
+            String value = intent.getStringExtra(key);
+            return value == null ? "" : value;
         }
     }
 
@@ -514,7 +513,11 @@ public class NotificationPlatformBridge {
      * @param actionIndex The zero-based index of the action button, or -1 if not applicable.
      */
     static Uri makeIntentData(String notificationId, String origin, int actionIndex) {
-        return Uri.parse(origin).buildUpon().fragment(notificationId + "," + actionIndex).build();
+        return Uri.parse(origin)
+                .buildUpon()
+                .appendPath(notificationId)
+                .appendQueryParameter("actionIndex", String.valueOf(actionIndex))
+                .build();
     }
 
     /**
@@ -572,7 +575,7 @@ public class NotificationPlatformBridge {
         intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         return PendingIntentProvider.getBroadcast(
                 context,
-                PENDING_INTENT_REQUEST_CODE,
+                actionIndex >= 0 ? actionIndex : PENDING_INTENT_REQUEST_CODE,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT,
                 mutable);
@@ -737,7 +740,7 @@ public class NotificationPlatformBridge {
             final boolean isSuspicious,
             final boolean skipUAButtons) {
         final boolean vibrateEnabled =
-                UserPrefs.get(ProfileManager.getLastUsedRegularProfile())
+                UserPrefs.get(profile.getOriginalProfile())
                         .getBoolean(NOTIFICATIONS_VIBRATE_ENABLED);
         final boolean incognito = profile.isOffTheRecord();
         // TODO(peter): by-pass this check for non-Web Notification types.
@@ -777,15 +780,12 @@ public class NotificationPlatformBridge {
                                 Log.e(TAG, "Failed to display notification.", e);
                             }
                         })
-                .exceptionally(
-                        (Function<Throwable, @Nullable Void>)
-                                error -> {
-                                    Log.e(
-                                            TAG,
-                                            "Error occured when displaying notification.",
-                                            error);
-                                    return null;
-                                });
+                .whenComplete(
+                        (unused, error) -> {
+                            if (error != null) {
+                                Log.e(TAG, "Error occured when displaying notification.", error);
+                            }
+                        });
     }
 
     private CompletableFuture<String> getWebApkPackage(String scopeUrl) {
@@ -801,7 +801,7 @@ public class NotificationPlatformBridge {
 
         ChromeWebApkHost.checkChromeBacksWebApkAsync(
                 webApkPackage,
-                (doesBrowserBackWebApk, browserPackageName) -> {
+                (doesBrowserBackWebApk, _) -> {
                     try {
                         future.complete(doesBrowserBackWebApk ? webApkPackage : "");
                     } catch (Throwable t) {
@@ -850,12 +850,6 @@ public class NotificationPlatformBridge {
                         identifyingAttributes.webApkPackage);
         // Record whether it's known whether notifications can be shown to the user at all.
         NotificationSystemStatusUtil.recordAppNotificationStatusHistogram();
-
-        if (image != null) {
-            RecordHistogram.recordCount100000Histogram(
-                    "Notifications.Android.ImageMemorySizeInKB",
-                    image.getAllocationByteCount() / 1000);
-        }
 
         NotificationBuilderBase notificationBuilder =
                 prepareNotificationBuilder(
@@ -966,6 +960,21 @@ public class NotificationPlatformBridge {
                             // `skipUAButtons` set to true.
                             if (suspended && !skipUAButtons) {
                                 return;
+                            }
+
+                            // Track site notification arrival before channel blocks and Android
+                            // OS dispatch to measure top-of-funnel queued volume for Chrome-handled
+                            // site notifications. Excludes synthetic confirmation notifications
+                            // (skipUAButtons == true).
+                            if (!skipUAButtons
+                                    && (identifyingAttributes.notificationType
+                                                    == NotificationType.WEB_PERSISTENT
+                                            || identifyingAttributes.notificationType
+                                                    == NotificationType.WEB_NON_PERSISTENT)) {
+                                NotificationUmaTracker.getInstance()
+                                        .recordLifecycleEvent(
+                                                SystemNotificationType.SITES,
+                                                SystemNotificationLifecycleEvent.QUEUED);
                             }
 
                             // Display notification as Chrome.
@@ -1300,8 +1309,7 @@ public class NotificationPlatformBridge {
             String action) {
         PendingIntentProvider reportIntentProvider =
                 makePendingIntent(identifyingAttributes, action, /* actionIndex= */ -1, false);
-        @NotificationUmaTracker.ActionType
-        int umaActionType = NotificationUmaTracker.ActionType.UNKNOWN;
+        @NotificationUmaTracker.ActionType int umaActionType;
         switch (action) {
             case ACTION_REPORT_AS_SAFE:
                 umaActionType = NotificationUmaTracker.ActionType.REPORT_AS_SAFE;
@@ -1400,17 +1408,11 @@ public class NotificationPlatformBridge {
                             ContextUtils.getApplicationContext(), scopeUrl);
             if (webApkPackageFound != null) {
                 WebApkIdentityServiceClient.CheckBrowserBacksWebApkCallback callback =
-                        new WebApkIdentityServiceClient.CheckBrowserBacksWebApkCallback() {
-                            @Override
-                            public void onChecked(
-                                    boolean doesBrowserBackWebApk,
-                                    @Nullable String backingBrowser) {
+                        (doesBrowserBackWebApk, _) ->
                                 closeNotificationInternal(
                                         notificationId,
                                         doesBrowserBackWebApk ? webApkPackageFound : null,
                                         scopeUrl);
-                            }
-                        };
                 ChromeWebApkHost.checkChromeBacksWebApkAsync(webApkPackageFound, callback);
                 return;
             }
@@ -1734,7 +1736,6 @@ public class NotificationPlatformBridge {
                                 identifyingAttributes.origin,
                                 identifyingAttributes.profileId,
                                 identifyingAttributes.incognito);
-                return;
         }
     }
 
@@ -1875,7 +1876,7 @@ public class NotificationPlatformBridge {
                 boolean incognito,
                 @JniType("std::string") String webApkPackage,
                 int actionIndex,
-                @Nullable String reply);
+                @JniType("std::optional<std::u16string>") @Nullable String reply);
 
         void onNotificationClosed(
                 long nativeNotificationPlatformBridgeAndroid,

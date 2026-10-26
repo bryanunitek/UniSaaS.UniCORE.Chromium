@@ -24,7 +24,9 @@
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/ash_color_id.h"
+#include "ash/style/color_palette_controller.h"
+#include "ash/style/style_util.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/float/float_controller.h"
@@ -59,7 +61,6 @@
 #include "base/check_deref.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
-#include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ref.h"
@@ -77,9 +78,10 @@
 #include "ui/aura/window_delegate.h"
 #include "ui/base/ime/ash/ime_bridge.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/color/color_provider.h"
 #include "ui/compositor/compositor_metrics_tracker.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/compositor/presentation_time_recorder.h"
 #include "ui/display/screen.h"
 #include "ui/display/types/display_constants.h"
@@ -311,51 +313,13 @@ class SplitViewController::DividerSnapAnimation
     DCHECK(split_view_controller_->InSplitViewMode());
     DCHECK(!split_view_controller_->IsResizingWithDivider());
 
-    // TODO(b/327685487): Remove these when the crash is fixed.
-    const int divider_position_before_tween =
-        split_view_controller_->GetDividerPosition();
     split_view_controller_->split_view_divider()->SetDividerPosition(
         CurrentValueBetween(starting_position_, ending_position_));
-    const int divider_position_after_tween =
-        split_view_controller_->GetDividerPosition();
     split_view_controller_->NotifyDividerPositionChanged();
-    const int divider_position_after_notify =
-        split_view_controller_->GetDividerPosition();
     split_view_controller_->UpdateSnappedWindowsAndDividerBounds();
-    const int divider_position_after_update =
-        split_view_controller_->GetDividerPosition();
 
     // Updating the window may stop animation.
     if (is_animating()) {
-      // Map the tablet resize mode to a string.
-      base::flat_map<SplitViewController::TabletResizeMode, std::string>
-          resize_mode_as_string = {
-              {SplitViewController::TabletResizeMode::kNormal, "kNormal"},
-              {SplitViewController::TabletResizeMode::kFast, "kFast"},
-          };
-      SCOPED_CRASH_KEY_STRING32(
-          "b327685487", "tablet_resize_mode",
-          resize_mode_as_string[split_view_controller_->tablet_resize_mode_]);
-      SCOPED_CRASH_KEY_BOOL("b327685487", "in_tablet_mode", InTabletMode());
-      SCOPED_CRASH_KEY_BOOL(
-          "b327685487", "has_divider_widget",
-          !!split_view_controller_->split_view_divider()->divider_widget());
-      SCOPED_CRASH_KEY_BOOL("b327685487", "in_split_view",
-                            split_view_controller_->InSplitViewMode());
-      SCOPED_CRASH_KEY_BOOL("b327685487", "is_divider_resizing",
-                            split_view_controller_->IsResizingWithDivider());
-      SCOPED_CRASH_KEY_NUMBER("b327685487", "before_tween",
-                              divider_position_before_tween);
-      SCOPED_CRASH_KEY_NUMBER("b327685487", "after_tween",
-                              divider_position_after_tween);
-      SCOPED_CRASH_KEY_NUMBER("b327685487", "after_notify",
-                              divider_position_after_notify);
-      SCOPED_CRASH_KEY_NUMBER("b327685487", "after_update",
-                              divider_position_after_update);
-      SCOPED_CRASH_KEY_NUMBER("b327685487", "starting_position",
-                              starting_position_);
-      SCOPED_CRASH_KEY_NUMBER("b327685487", "ending_position",
-                              ending_position_);
       split_view_controller_->UpdateResizeBackdrop();
       split_view_controller_->SetWindowsTransformDuringResizing();
     }
@@ -1951,8 +1915,16 @@ void SplitViewController::UpdateBlackScrim(
 
   if (!black_scrim_layer_) {
     // Create an invisible black scrim layer.
-    black_scrim_layer_ = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-    black_scrim_layer_->SetColor(AshColorProvider::Get()->GetBackgroundColor());
+    black_scrim_layer_ = std::make_unique<ui::LayerSolidColor>();
+    black_scrim_layer_->SetName("SplitView:BlackScrim");
+    const SkColor default_color =
+        StyleUtil::GetColorProviderForNativeTheme()->GetColor(
+            kColorAshShieldAndBaseOpaque);
+    const SkColor background_color =
+        Shell::Get()
+            ->color_palette_controller()
+            ->GetUserWallpaperColorOrDefault(default_color);
+    black_scrim_layer_->SetColor(SkColor4f::FromColor(background_color));
     // Set the black scrim layer underneath split view divider.
     auto* divider_layer = split_view_divider_.GetDividerWindow()->layer();
     auto* divider_parent_layer = divider_layer->parent();
@@ -1996,8 +1968,8 @@ void SplitViewController::UpdateBlackScrim(
 void SplitViewController::UpdateResizeBackdrop() {
   // Creates a backdrop layer. It is stacked below the snapped window.
   auto create_backdrop = [](aura::Window* window) {
-    auto resize_backdrop_layer =
-        std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+    auto resize_backdrop_layer = std::make_unique<ui::LayerSolidColor>();
+    resize_backdrop_layer->SetName("SplitView:ResizeBackdrop");
 
     ui::Layer* parent = window->layer()->parent();
     ui::Layer* stacking_target = window->layer();
@@ -2009,12 +1981,12 @@ void SplitViewController::UpdateResizeBackdrop() {
 
   // Updates the bounds and color of a backdrop.
   auto update_backdrop = [this](SnapPosition position, aura::Window* window,
-                                ui::Layer* backdrop) {
+                                ui::LayerSolidColor* backdrop) {
     backdrop->SetBounds(GetSnappedWindowBoundsInParent(
         position, nullptr, chromeos::kDefaultSnapRatio));
-    backdrop->SetColor(window->GetProperty(
+    backdrop->SetColor(SkColor4f::FromColor(window->GetProperty(
         wm::IsActiveWindow(window) ? chromeos::kFrameActiveColorKey
-                                   : chromeos::kFrameInactiveColorKey));
+                                   : chromeos::kFrameInactiveColorKey)));
   };
 
   if (state_ == State::kPrimarySnapped || state_ == State::kBothSnapped) {

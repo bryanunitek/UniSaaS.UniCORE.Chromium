@@ -76,7 +76,7 @@ chromium-metrics-reviews@google.com.
 </variants>
 
 <histogram name="WebAudio.AudioBuffer.Length" units="frames"
-    expires_after="2026-08-09">
+    expires_after="2027-08-09">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -171,7 +171,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.AudioContext.HardwareSampleRate" units="Hz"
-    expires_after="2026-11-15">
+    expires_after="2027-01-17">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -221,7 +221,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="WebAudio.AudioContext.MediaPlaybackWhileNotVisible.InterruptionType"
-    enum="AudioContextInterruptionType" expires_after="2026-10-19">
+    enum="AudioContextInterruptionType" expires_after="2027-10-19">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>gabrielbrito@microsoft.com</owner>
@@ -282,14 +282,18 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="WebAudio.AudioDestination.HardwareBufferSize" units="units"
-    expires_after="2026-09-06">
+<histogram name="WebAudio.AudioDestination.HardwareBufferSize2" units="frames"
+    expires_after="2027-09-06">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
   <summary>
     The buffer size (in audio frames) for WebAudio rendering recommended by the
-    audio hardware. Recorded for every WebAudio AudioContext that is created.
+    audio hardware of the output device that the AudioContext renders to.
+    Recorded each time WebAudio creates an audio device for an AudioContext (on
+    construction, on setSinkId() and on destination channel count changes), if
+    the device authorization succeeds. Not recorded for silent sinks (sinkId
+    type &quot;none&quot;).
   </summary>
 </histogram>
 
@@ -318,7 +322,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.AudioDestination.{ModeTag}.FIFODelay{LatencyTag}"
-    units="ms" expires_after="2026-08-23">
+    units="ms" expires_after="2027-08-23">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -336,7 +340,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="WebAudio.AudioDestination.{ModeTag}.FIFOUnderrunCount{Duration}{LatencyTag}"
-    units="underruns" expires_after="2026-08-23">
+    units="underruns" expires_after="2027-08-23">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -356,7 +360,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="WebAudio.AudioDestination.{ModeTag}.RenderTimeRatio{LatencyTag}"
-    units="%" expires_after="2026-10-25">
+    units="%" expires_after="2027-10-25">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -370,7 +374,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="WebAudio.AudioDestination.{ModeTag}.RequestRenderGapTimeRatio{LatencyTag}"
-    units="%" expires_after="2026-08-23">
+    units="%" expires_after="2027-08-23">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -385,7 +389,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="WebAudio.AudioDestination.{ModeTag}.RequestRenderTimeRatio{LatencyTag}"
-    units="%" expires_after="2026-10-25">
+    units="%" expires_after="2027-10-25">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -398,8 +402,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
-    name="WebAudio.AudioDestination.{ModeTag}.TotalPlayoutDelay{LatencyTag}"
-    units="ms" expires_after="2026-08-23">
+    name="WebAudio.AudioDestination.{ModeTag}.TotalPlayoutDelay2{LatencyTag}"
+    units="ms" expires_after="2027-08-23">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -408,15 +412,36 @@ chromium-metrics-reviews@google.com.
     WebAudio graph to the speaker. This metric is categorized by
     &quot;ModeTag&quot;, which indicates the rendering mode: DualThread, used
     when audio worklet is involved. Or SingleThread, used when audio worklet is
-    not involved. The metric is averaged and reported at every 1000 render
-    callbacks.
+    not involved. The metric is averaged over all render quanta and reported at
+    every 1000 render callbacks. Replaces TotalPlayoutDelay, which was inflated
+    by the number of render quanta per callback (e.g. 4X for 512-frame
+    callbacks).
   </summary>
   <token key="ModeTag" variants="RenderMode"/>
   <token key="LatencyTag" variants="WebAudioLatencyTag"/>
 </histogram>
 
+<histogram
+    name="WebAudio.AudioDestination.{ModeTag}.UnexpectedFIFOUnderrunCount{Duration}{LatencyTag}"
+    units="underruns" expires_after="2027-07-13">
+  <owner>hongchan@chromium.org</owner>
+  <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
+  <summary>
+    The number of times the AudioDestination experienced an unexpected underrun
+    in bypass mode. The &quot;Intervals&quot; duration indicates that the metric
+    is measured and logged every 1000 audio render callbacks. For
+    &quot;Short&quot;, it is logged at the end of the audio stream. This metric
+    is categorized by &quot;ModeTag&quot;, which indicates the rendering mode:
+    DualThread, used when audio worklet is involved. Or SingleThread, used when
+    audio worklet is not involved.
+  </summary>
+  <token key="ModeTag" variants="RenderMode"/>
+  <token key="Duration" variants="WebAudioCallbackAggregationDuration"/>
+  <token key="LatencyTag" variants="WebAudioLatencyTag"/>
+</histogram>
+
 <histogram name="WebAudio.AudioNode.ProcessTimeRatio.{NodeTag}" units="%"
-    expires_after="2026-09-06">
+    expires_after="2027-09-06">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -432,7 +457,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.AudioWorklet.PeakDedicatedBackingThreadCount"
-    units="threads" expires_after="2026-12-01">
+    units="threads" expires_after="2027-12-01">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -443,7 +468,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.AudioWorklet.PeakSharedBackingThreadRefCount"
-    units="refcounts" expires_after="2026-12-01">
+    units="refcounts" expires_after="2027-12-01">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -454,7 +479,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.Autoplay" enum="WebAudioAutoplayStatus"
-    expires_after="2026-09-06">
+    expires_after="2027-09-06">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -477,7 +502,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.Autoplay.UnlockType"
-    enum="WebAudioAutoplayUnlockType" expires_after="2026-12-01">
+    enum="WebAudioAutoplayUnlockType" expires_after="2027-12-01">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -501,7 +526,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.ConvolverNode.ImpulseResponseLength" units="ms"
-    expires_after="2026-12-01">
+    expires_after="2027-12-01">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -550,7 +575,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.PushPullFIFO.UnderflowGlitches" enum="Boolean"
-    expires_after="2026-10-25">
+    expires_after="2027-10-25">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>
@@ -562,7 +587,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAudio.PushPullFIFO.UnderflowPercentage" units="%"
-    expires_after="2026-08-23">
+    expires_after="2027-08-23">
   <owner>mjwilson@chromium.org</owner>
   <owner>hongchan@chromium.org</owner>
   <owner>src/third_party/blink/renderer/modules/webaudio/OWNERS</owner>

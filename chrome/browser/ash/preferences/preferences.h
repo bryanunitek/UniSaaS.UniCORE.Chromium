@@ -16,6 +16,8 @@
 #include "components/prefs/pref_member.h"
 #include "components/sync_preferences/pref_service_syncable_observer.h"
 #include "components/user_manager/user_manager.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 
 class ApplicationLocaleStorage;
@@ -77,8 +79,11 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
                                    user_prefs::PrefRegistrySyncable* registry);
 
   // This method will initialize Chrome OS settings to values in user prefs.
-  // |user| is the user owning this preferences.
-  void Init(Profile* profile, const user_manager::User* user);
+  // |user| is the user owning this preferences. `prefs` is `profile`'s pref
+  // service, narrowed to the syncable type by the caller.
+  void Init(const user_manager::User* user,
+            Profile* profile,
+            sync_preferences::PrefServiceSyncable* prefs);
 
   void InitPrefsForTesting(sync_preferences::PrefServiceSyncable* prefs);
   void InitUserPrefsForTesting(
@@ -140,6 +145,10 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   // current prefs values. We set the delay and interval at once since an
   // underlying XKB API requires it.
   void UpdateAutoRepeatRate();
+
+  // Binds the AudioFocusManager remote if not already bound.
+  void EnsureAudioFocusManagerBound();
+  void OnAudioFocusManagerDisconnected();
 
   // Force natural scroll to on if --enable-natural-scroll-default is specified
   // on the cmd line.
@@ -209,6 +218,11 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   BooleanPrefMember pci_data_access_enabled_pref_;
 
   BooleanPrefMember consumer_auto_update_toggle_pref_;
+
+  BooleanPrefMember audio_focus_enforcement_enabled_;
+
+  // Remote to the global AudioFocusManager service.
+  mojo::Remote<media_session::mojom::AudioFocusManager> audio_focus_manager_;
 
   PrefChangeRegistrar pref_change_registrar_;
 

@@ -17,7 +17,6 @@
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/browser/ui/views/passwords/manage_passwords_view_ids.h"
-#include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
 #include "chrome/browser/ui/views/passwords/views_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
@@ -386,7 +385,7 @@ std::unique_ptr<views::View> CreateEditUsernameRow(
     const password_manager::PasswordForm& form,
     raw_ptr<views::Textfield>* textfield,
     raw_ptr<views::Label>* error_label) {
-  DCHECK(form.username_value.empty());
+  CHECK(form.username_value.empty(), base::NotFatalUntil::M162);
   const auto* const layout_provider = ChromeLayoutProvider::Get();
   auto row = std::make_unique<views::FlexLayoutView>();
   row->SetCollapseMargins(true);
@@ -397,9 +396,8 @@ std::unique_ptr<views::View> CreateEditUsernameRow(
                              views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
   row->SetCrossAxisAlignment(views::LayoutAlignment::kStart);
   row->AddChildView(CreateWrappedView(CreateIconView(
-      features::IsRoundedIconsEnabled()   ? kAccountCircleFilledIcon
-      : features::IsRoundedIconsEnabled() ? vector_icons::kAccountCircleIcon
-                                          : kAccountCircleOldIcon)));
+      features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                        : kAccountCircleOldIcon)));
   auto* username_with_error_label_view =
       row->AddChildView(std::make_unique<views::BoxLayoutView>());
   username_with_error_label_view->SetOrientation(
@@ -498,9 +496,7 @@ std::unique_ptr<RichHoverButton> CreateManagePasswordRow(
       /*action_image_icon=*/
       ui::ImageModel::FromVectorIcon(
           features::IsRoundedIconsEnabled() ? views::kOpenInNewIcon
-          : features::IsRoundedIconsEnabled()
-              ? vector_icons::kOpenInNewFlippableIcon
-              : vector_icons::kLaunchOldIcon,
+                                            : vector_icons::kLaunchOldIcon,
           ui::kColorIconSecondary,
           GetLayoutConstant(LayoutConstant::kPageInfoIconSize)));
   manage_password_row->SetID(static_cast<int>(
@@ -532,10 +528,9 @@ std::unique_ptr<views::View> ManagePasswordsDetailsView::CreateTitleView(
 
   if (on_back_clicked_callback) {
     auto back_button = views::CreateVectorImageButtonWithNativeTheme(
-        *on_back_clicked_callback,
-        features::IsRoundedIconsEnabled()   ? kArrowBackIcon
-        : features::IsRoundedIconsEnabled() ? vector_icons::kArrowBackIcon
-                                            : vector_icons::kArrowBackOldIcon);
+        *on_back_clicked_callback, features::IsRoundedIconsEnabled()
+                                       ? vector_icons::kArrowBackIcon
+                                       : vector_icons::kArrowBackOldIcon);
     back_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_ACCNAME_BACK));
     views::InstallCircleHighlightPathGenerator(back_button.get());
     back_button->SetProperty(views::kElementIdentifierKey, kBackButton);
@@ -585,19 +580,18 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
                 PasswordManagementBubbleInteractions::
                     kUsernameCopyButtonClicked));
     AddChildView(CreateDetailsRowWithActionButton(
-        features::IsRoundedIconsEnabled()   ? kAccountCircleFilledIcon
-        : features::IsRoundedIconsEnabled() ? vector_icons::kAccountCircleIcon
-                                            : kAccountCircleOldIcon,
+        features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                          : kAccountCircleOldIcon,
         std::move(username_label),
-        features::IsRoundedIconsEnabled() ? kContentCopyIcon : kCopyOldIcon,
+        features::IsRoundedIconsEnabled() ? vector_icons::kContentCopyIcon
+                                          : kCopyOldIcon,
         l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_UI_COPY_USERNAME),
         std::move(copy_username_button_callback),
         ManagePasswordsViewIDs::kCopyUsernameButton));
   } else if (allow_empty_username_edit) {
     read_username_row_ = AddChildView(CreateDetailsRowWithActionButton(
-        features::IsRoundedIconsEnabled()   ? kAccountCircleFilledIcon
-        : features::IsRoundedIconsEnabled() ? vector_icons::kAccountCircleIcon
-                                            : kAccountCircleOldIcon,
+        features::IsRoundedIconsEnabled() ? kAccountCircleFilledIcon
+                                          : kAccountCircleOldIcon,
         std::move(username_label),
         features::IsRoundedIconsEnabled() ? vector_icons::kEditFilledIcon
                                           : vector_icons::kEditOldIcon,
@@ -614,11 +608,10 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
                                 base::Unretained(this))));
     edit_username_row_->SetVisible(false);
   } else {
-    AddChildView(CreateDetailsRow(
-        features::IsRoundedIconsEnabled()   ? kAccountCircleFilledIcon
-        : features::IsRoundedIconsEnabled() ? vector_icons::kAccountCircleIcon
-                                            : kAccountCircleOldIcon,
-        std::move(username_label)));
+    AddChildView(CreateDetailsRow(features::IsRoundedIconsEnabled()
+                                      ? kAccountCircleFilledIcon
+                                      : kAccountCircleOldIcon,
+                                  std::move(username_label)));
   }
 
   std::unique_ptr<views::Label> password_label =
@@ -634,7 +627,10 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
     return;
   }
   auto copy_password_button_callback =
-      base::BindRepeating(&WriteToClipboard, password_form.password_value,
+      // TODO(crbug.com/513276101): Bind to PasswordString instead of
+      // plaintext password.
+      base::BindRepeating(&WriteToClipboard,
+                          password_form.password_value.value(),
                           /*is_confidential=*/true)
           .Then(on_activity_callback_)
           .Then(base::BindRepeating(
@@ -647,7 +643,8 @@ ManagePasswordsDetailsView::ManagePasswordsDetailsView(
                                         : vector_icons::kPasswordManagerOldIcon,
       CreatePasswordLabelWithEyeIconView(std::move(password_label),
                                          on_activity_callback_),
-      features::IsRoundedIconsEnabled() ? kContentCopyIcon : kCopyOldIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kContentCopyIcon
+                                        : kCopyOldIcon,
       l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_UI_COPY_PASSWORD),
       std::move(copy_password_button_callback),
       ManagePasswordsViewIDs::kCopyPasswordButton));
@@ -715,8 +712,8 @@ ManagePasswordsDetailsView::GetUserEnteredPasswordNoteValue() const {
 }
 
 void ManagePasswordsDetailsView::SwitchToEditUsernameMode() {
-  DCHECK(read_username_row_);
-  DCHECK(edit_username_row_);
+  CHECK(read_username_row_, base::NotFatalUntil::M162);
+  CHECK(edit_username_row_, base::NotFatalUntil::M162);
   read_username_row_->SetVisible(false);
   edit_username_row_->SetVisible(true);
   // The "Manage passwords" button should not be visible in the editor mode.
@@ -730,7 +727,7 @@ void ManagePasswordsDetailsView::SwitchToEditUsernameMode() {
                                    .bottom()));
 
   switched_to_edit_mode_callback_.Run();
-  DCHECK(username_textfield_);
+  CHECK(username_textfield_, base::NotFatalUntil::M162);
   username_textfield_->RequestFocus();
   on_activity_callback_.Run();
   LogUserInteractionsInPasswordManagementBubble(
@@ -751,7 +748,7 @@ void ManagePasswordsDetailsView::SwitchToEditNoteMode() {
                                    .bottom()));
 
   switched_to_edit_mode_callback_.Run();
-  DCHECK(note_textarea_);
+  CHECK(note_textarea_, base::NotFatalUntil::M162);
   on_activity_callback_.Run();
   note_textarea_->RequestFocus();
   LogUserInteractionsInPasswordManagementBubble(

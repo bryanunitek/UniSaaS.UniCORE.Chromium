@@ -37,7 +37,7 @@
 #include "components/autofill/core/browser/foundations/autofill_driver_router.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/autofill_external_delegate.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/autofill_constants.h"
@@ -48,6 +48,7 @@
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/test_matchers.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/version_info/version_info.h"
@@ -206,16 +207,17 @@ class FakeAutofillAgent : public mojom::AutofillAgent {
                base::OnceCallback<void(const std::string&)>),
               (override));
   MOCK_METHOD(void,
-              SendEmailVerificationToken,
-              (FieldRendererId email_field_id,
-               const std::string& email,
-               FieldRendererId token_field_id,
-               const std::string& token),
+              GetNonceForEmailVerification,
+              (FieldRendererId, GetNonceForEmailVerificationCallback),
               (override));
   MOCK_METHOD(void,
-              UpdateEmailVerificationState,
-              (FieldRendererId email_field_id,
-               mojom::EmailVerificationState state),
+              SendEmailVerificationToken,
+              (FieldRendererId, const std::string&, const std::string&),
+              (override));
+  MOCK_METHOD(void,
+              ObserveFieldVisibility,
+              (FieldRendererId,
+               mojo::PendingRemote<mojom::AutofillVisibilityObserver>),
               (override));
 
  private:
@@ -227,6 +229,7 @@ class FakeAutofillAgent : public mojom::AutofillAgent {
 
   // mojom::AutofillAgent:
   void TriggerFormExtraction() override {}
+  void ClearFormCache() override {}
 
   void ApplyFieldsAction(mojom::FormActionType action_type,
                          mojom::ActionPersistence action_persistence,
@@ -347,12 +350,14 @@ class MockBrowserAutofillManager : public BrowserAutofillManager {
                const FieldGlobalId&,
                const gfx::Rect&,
                AutofillSuggestionTriggerSource,
-               std::optional<PasswordSuggestionRequest>),
+               std::optional<PasswordSuggestionRequest>,
+               RendererEventPassKey),
               (override));
   MOCK_METHOD(void,
               OnFormsSeen,
               (std::vector<FormData> updated_forms,
-               std::vector<FormGlobalId> removed_forms),
+               std::vector<FormGlobalId> removed_forms,
+               RendererEventPassKey),
               (override));
 };
 
@@ -586,6 +591,10 @@ TEST_F(ContentAutofillDriverTest, Lift_Form) {
             url::Origin::CreateFromNormalizedTuple("https", "a.test", 443));
   ASSERT_EQ(form.fields().size(), 1u);
   EXPECT_EQ(form.fields().front().host_frame(), frame_token());
+  EXPECT_EQ(form.fields().front().host_form_signature(),
+            CalculateFormSignature(form));
+  EXPECT_EQ(form.fields().front().host_form_structural_signature(),
+            CalculateStructuralFormSignature(form));
 }
 
 // Test that forms in "about:" without parents have an empty FormData::url.
@@ -641,7 +650,7 @@ TEST_F(ContentAutofillDriverTest, WithNewVersion) {
       manager(),
       OnFormsSeen(ElementsAre(Property("FormData::version", &FormData::version,
                                        Gt(previous_version))),
-                  _));
+                  _, _));
   driver().renderer_events().FormsSeen(/*updated_forms=*/{form},
                                        /*removed_forms=*/{});
 }
@@ -661,7 +670,7 @@ TEST_F(ContentAutofillDriverTest, FormsSeen_UpdatedForm) {
                                form.renderer_id()),
                       Property("FormData::fields", &FormData::fields,
                                SizeIs(form.fields().size())))),
-                  IsEmpty()));
+                  IsEmpty(), _));
   driver().renderer_events().FormsSeen(/*updated_forms=*/{form},
                                        /*removed_forms=*/{});
 }
@@ -670,9 +679,11 @@ TEST_F(ContentAutofillDriverTest, FormsSeen_UpdatedForm) {
 // Does not test multiple frames.
 TEST_F(ContentAutofillDriverTest, FormsSeen_RemovedForm) {
   FormRendererId form_renderer_id = test::MakeFormRendererId();
-  EXPECT_CALL(manager(),
-              OnFormsSeen(IsEmpty(), ElementsAre(FormGlobalId(
-                                         frame_token(), form_renderer_id))));
+  EXPECT_CALL(
+      manager(),
+      OnFormsSeen(IsEmpty(),
+                  ElementsAre(FormGlobalId(frame_token(), form_renderer_id)),
+                  _));
   driver().renderer_events().FormsSeen(/*updated_forms=*/{},
                                        /*removed_forms=*/{form_renderer_id});
 }
@@ -695,7 +706,7 @@ TEST_F(ContentAutofillDriverTest, FormsSeen_UpdatedAndRemovedForm) {
                        form.renderer_id()),
               Property("FormData::fields", &FormData::fields,
                        SizeIs(form.fields().size())))),
-          ElementsAre(FormGlobalId(frame_token(), other_form_renderer_id))));
+          ElementsAre(FormGlobalId(frame_token(), other_form_renderer_id)), _));
   driver().renderer_events().FormsSeen(
       /*updated_forms=*/{form},
       /*removed_forms=*/{other_form_renderer_id});
@@ -713,7 +724,7 @@ TEST_F(ContentAutofillDriverTestWithAddressForm,
   driver().browser_events().ApplyFormAction(
       mojom::FormActionType::kFill, mojom::ActionPersistence::kFill,
       address_form().fields(), FillId::Create(),
-      /*supports_refill=*/false, triggered_origin, field_type_map(), Section());
+      /*supports_refill=*/false, triggered_origin, field_type_map());
 
   run_loop.RunUntilIdle();
 
@@ -740,7 +751,7 @@ TEST_F(ContentAutofillDriverTestWithAddressForm,
   driver().browser_events().ApplyFormAction(
       mojom::FormActionType::kFill, mojom::ActionPersistence::kPreview,
       address_form().fields(), FillId::Create(),
-      /*supports_refill=*/false, triggered_origin, field_type_map(), Section());
+      /*supports_refill=*/false, triggered_origin, field_type_map());
 
   run_loop.RunUntilIdle();
 
@@ -943,20 +954,6 @@ TEST_F(ContentAutofillDriverTest,
   EXPECT_EQ(expected_matches, actual_matches);
 }
 
-// Tests that calls from the renderer with trigger source
-// kPlusAddressUpdatedInBrowserProcess are classified as bad messages.
-TEST_F(ContentAutofillDriverTest, AskForValuesToFillChecksTriggerSource) {
-  BadMessageHelper bad_message_helper;
-  EXPECT_CALL(manager(), OnAskForValuesToFill).Times(0);
-  EXPECT_CALL(bad_message_helper.callback(),
-              Run("PlusAddressUpdatedInBrowserProcess is not a permitted "
-                  "trigger source in the renderer"));
-  driver().renderer_events().AskForValuesToFill(
-      FormData(), FieldRendererId(), gfx::Rect(),
-      AutofillSuggestionTriggerSource::kPlusAddressUpdatedInBrowserProcess,
-      std::nullopt);
-}
-
 // Test that the inactive render frame does not trigger the DOM search and
 // early return an empty string directly.
 TEST_F(ContentAutofillDriverTest,
@@ -1007,15 +1004,19 @@ TEST_F(ContentAutofillDriverTest, ExtractLabeledTextNodeValue_Success) {
   EXPECT_EQ(captured_result_for_test.Get<std::string>(), "$1,234.56");
 }
 
-class ContentAutofillDriverTest_PrerenderBadMessage
-    : public ContentAutofillDriverTest {
+class MockAutofillVisibilityObserver
+    : public mojom::AutofillVisibilityObserver {
+ public:
+  MOCK_METHOD(void, OnFieldBecameVisible, (), (override));
+};
+
+class ContentAutofillDriverTest_Prerender : public ContentAutofillDriverTest {
  private:
   content::test::ScopedPrerenderFeatureList prerender_feature_list_;
 };
 
 // Tests that a renderer event during prerendering causes a bad message.
-TEST_F(ContentAutofillDriverTest_PrerenderBadMessage,
-       BadMessageIfPrerendering) {
+TEST_F(ContentAutofillDriverTest_Prerender, BadMessageIfPrerendering) {
   content::test::ScopedPrerenderWebContentsDelegate web_contents_delegate(
       *web_contents());
   // This must "a.test" (or "http").
@@ -1032,6 +1033,38 @@ TEST_F(ContentAutofillDriverTest_PrerenderBadMessage,
   EXPECT_CALL(manager(rfh), OnFormsSeen).Times(0);
   driver(rfh).renderer_events().FormsSeen(/*updated_forms=*/{},
                                           /*removed_forms=*/{});
+}
+
+TEST_F(ContentAutofillDriverTest_Prerender,
+       ObserveFieldVisibilityDisconnectsIfInactive) {
+  content::test::ScopedPrerenderWebContentsDelegate web_contents_delegate(
+      *web_contents());
+  NavigateAndCommit(GURL("https://a.test/"));
+  content::RenderFrameHost* rfh =
+      content::WebContentsTester::For(web_contents())
+          ->AddPrerenderAndCommitNavigation(GURL("https://a.test/prerender"));
+  ASSERT_EQ(rfh->GetLifecycleState(),
+            content::RenderFrameHost::LifecycleState::kPrerendering);
+  // Prerendering frames are inactive. We use a prerendering frame here to
+  // simulate and test the behavior of an inactive driver.
+  ASSERT_FALSE(driver(rfh).IsActive());
+
+  testing::StrictMock<MockAutofillVisibilityObserver> observer;
+  mojo::Receiver<mojom::AutofillVisibilityObserver> receiver(&observer);
+  auto remote = receiver.BindNewPipeAndPassRemote();
+
+  base::MockCallback<base::OnceClosure> disconnect_handler;
+  receiver.set_disconnect_handler(disconnect_handler.Get());
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(disconnect_handler, Run()).WillOnce([&run_loop]() {
+    run_loop.Quit();
+  });
+
+  driver(rfh).browser_events().ObserveFieldVisibility(test::MakeFieldGlobalId(),
+                                                      std::move(remote));
+
+  run_loop.Run();
 }
 
 // Tests that a renderer event with a FieldRendererId that doesn't belong to the

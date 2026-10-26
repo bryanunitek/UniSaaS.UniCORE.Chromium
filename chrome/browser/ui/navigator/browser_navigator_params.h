@@ -27,7 +27,6 @@
 #include "content/public/common/referrer.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/navigation/was_activated_option.mojom.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
@@ -206,7 +205,7 @@ struct NavigateParams {
   //                        & no matching tab
   // CURRENT_TAB          no params.browser                 DCHECK FAILURE
   //                        & no params.source_contents
-  WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB;
+  WindowOpenDisposition disposition = WindowOpenDisposition::kCurrentTab;
 
   // Allows setting the opener for the case when new WebContents are created
   // (i.e. when |disposition| asks for a new tab or window).
@@ -308,6 +307,11 @@ struct NavigateParams {
   bool navigation_initiated_from_sync = false;
 #endif
 
+  // If true, opening a new window for this navigation can trigger session
+  // restore (if no browser windows were open and session restore is enabled).
+  // If false, the new window will not trigger session restore.
+  bool should_trigger_session_restore = true;
+
   // The profile that is initiating the navigation. If there is a non-NULL
   // browser passed in via |browser|, it's profile will be used instead.
   raw_ptr<Profile> initiating_profile = nullptr;
@@ -358,11 +362,6 @@ struct NavigateParams {
 
   // Indicates the reload type of this navigation.
   content::ReloadType reload_type = content::ReloadType::NONE;
-
-  // Optional impression associated with this navigation. Only set on
-  // navigations that originate from links with impression attributes. Used for
-  // conversion measurement.
-  std::optional<blink::Impression> impression;
 
   // True if the navigation was initiated by typing in the omnibox but the typed
   // text didn't have a scheme such as http or https (e.g. google.com), and

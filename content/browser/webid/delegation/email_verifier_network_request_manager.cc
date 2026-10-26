@@ -5,6 +5,7 @@
 #include "content/browser/webid/delegation/email_verifier_network_request_manager.h"
 
 #include <optional>
+#include <utility>
 
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
@@ -13,6 +14,7 @@
 #include "content/browser/webid/flags.h"
 #include "content/browser/webid/network_request_manager.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "net/base/isolation_info.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/url_util.h"
@@ -24,6 +26,7 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
+#include "url/origin.h"
 
 namespace content::webid {
 
@@ -32,6 +35,7 @@ namespace {
 constexpr char kWellKnownPath[] = "/.well-known/email-verification";
 
 // Well-known file JSON keys
+constexpr char kIssuerKey[] = "issuer";
 constexpr char kIssuanceEndpointKey[] = "issuance_endpoint";
 constexpr char kJwksUriKey[] = "jwks_uri";
 constexpr char kSigningAlgValuesSupportedKey[] = "signing_alg_values_supported";
@@ -48,6 +52,22 @@ void OnWellKnownParsed(
 
   if (fetch_status.parse_status != ParseStatus::kSuccess) {
     std::move(callback).Run(fetch_status, std::move(well_known));
+    return;
+  }
+
+  // The document must name the issuer it was fetched under, compared
+  // byte-for-byte, so that a document served at one identity cannot claim
+  // another.
+  //
+  // TODO(crbug.com/565774086): also reject a document that omits `issuer`.
+  // It is required, but Google's issuer does not publish it yet.
+  const base::Value* issuer = result->Find(kIssuerKey);
+  if (issuer && (!issuer->is_string() ||
+                 issuer->GetString() !=
+                     url::Origin::Create(well_known_url).Serialize())) {
+    std::move(callback).Run(
+        {ParseStatus::kInvalidResponseError, fetch_status.response_code},
+        std::move(well_known));
     return;
   }
 
@@ -120,20 +140,23 @@ EmailVerifierNetworkRequestManager::Create(RenderFrameHostImpl* host) {
   return std::make_unique<EmailVerifierNetworkRequestManager>(
       host->GetLastCommittedOrigin(),
       host->GetStoragePartition()->GetURLLoaderFactoryForBrowserProcess(),
-      host->BuildClientSecurityState(), host->GetFrameTreeNodeId());
+      host->BuildClientSecurityState(), host->GetFrameTreeNodeId(),
+      host->GetWeakDocumentPtr());
 }
 
 EmailVerifierNetworkRequestManager::EmailVerifierNetworkRequestManager(
     const url::Origin& relying_party_origin,
     scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
     network::mojom::ClientSecurityStatePtr client_security_state,
-    FrameTreeNodeId frame_tree_node_id)
+    FrameTreeNodeId frame_tree_node_id,
+    WeakDocumentPtr initiator_document)
     : NetworkRequestManager(
           relying_party_origin,
           loader_factory,
           std::move(client_security_state),
           network::mojom::RequestDestination::kEmailVerification,
-          frame_tree_node_id) {}
+          frame_tree_node_id,
+          std::move(initiator_document)) {}
 
 EmailVerifierNetworkRequestManager::~EmailVerifierNetworkRequestManager() =
     default;
@@ -189,16 +212,20 @@ void EmailVerifierNetworkRequestManager::FetchWellKnown(
 
 void EmailVerifierNetworkRequestManager::SendTokenRequest(
     const GURL& token_url,
-    const std::string& url_encoded_post_data,
+    const std::string& post_data,
+    const net::HttpRequestHeaders& extra_headers,
     TokenRequestCallback callback) {
   std::unique_ptr<network::ResourceRequest> resource_request =
       CreateCredentialedResourceRequest(
           token_url, CredentialedResourceRequestType::kNoOrigin);
   resource_request->request_initiator = url::Origin();
+  resource_request->headers.MergeFrom(extra_headers);
 
   DownloadJsonAndParse(
-      std::move(resource_request), url_encoded_post_data,
-      base::BindOnce(&OnTokenRequestParsed, std::move(callback)));
+      std::move(resource_request), post_data,
+      base::BindOnce(&OnTokenRequestParsed, std::move(callback)),
+      /*allow_http_error_results=*/false,
+      /*content_type=*/"application/json");
 }
 
 void EmailVerifierNetworkRequestManager::DownloadAndParseUncredentialedUrl(
@@ -209,8 +236,7 @@ void EmailVerifierNetworkRequestManager::DownloadAndParseUncredentialedUrl(
                                           /*send_origin=*/false,
                                           /*follow_redirects=*/true);
   DownloadJsonAndParse(std::move(resource_request),
-                       /*url_encoded_post_data=*/std::nullopt,
-                       std::move(callback));
+                       /*post_data=*/std::nullopt, std::move(callback));
 }
 
 }  // namespace content::webid

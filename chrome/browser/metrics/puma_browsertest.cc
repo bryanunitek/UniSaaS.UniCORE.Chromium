@@ -4,16 +4,18 @@
 
 #include <string>
 
-#include "base/metrics/puma_histogram_functions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/testing/metrics_consent_override.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/country_codes/country_codes.h"
 #include "components/metrics/private_metrics/private_metrics_features.h"
+#include "components/metrics/private_metrics/puma_histogram_functions.h"
 #include "components/metrics/private_metrics/puma_service.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/prefs/pref_service.h"
@@ -26,7 +28,7 @@
 #include "third_party/zlib/google/compression_utils.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #else
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
@@ -53,7 +55,7 @@ enum class TestEnum {
 }  // namespace
 
 #if !BUILDFLAG(IS_ANDROID)
-typedef Browser* PlatformBrowser;
+using PlatformBrowser = BrowserWindowInterface*;
 #else
 typedef std::unique_ptr<TestTabModel> PlatformBrowser;
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -150,12 +152,13 @@ class PumaBrowserTest : public SyncTest {
   }
 
   void RecordTestPumaMetric() {
-    base::PumaHistogramBoolean(base::PumaType::kRc, kTestBooleanHistogram,
-                               true);
-    base::PumaHistogramExactLinear(base::PumaType::kRc, kTestLinearHistogram,
-                                   50, 101);
-    base::PumaHistogramEnumeration(base::PumaType::kRc, kTestEnumHistogram,
-                                   TestEnum::kValueA);
+    metrics::private_metrics::PumaHistogramBoolean(
+        metrics::private_metrics::PumaType::kRc, kTestBooleanHistogram, true);
+    metrics::private_metrics::PumaHistogramExactLinear(
+        metrics::private_metrics::PumaType::kRc, kTestLinearHistogram, 50, 101);
+    metrics::private_metrics::PumaHistogramEnumeration(
+        metrics::private_metrics::PumaType::kRc, kTestEnumHistogram,
+        TestEnum::kValueA);
   }
 
   void FlushPumaService() {
@@ -225,9 +228,13 @@ IN_PROC_BROWSER_TEST_F(PumaBrowserTest, VerifyRcCoarseSystemProfile) {
   EXPECT_EQ(rc_profile.profile_country_id(),
             country_codes::CountryId("BE").Serialize());
 
-  // Verify channel. In a test environment, the channel is UNKNOWN.
+  // Verify channel.
   EXPECT_EQ(rc_profile.channel(),
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_WIN)
+            ::private_metrics::RcCoarseSystemProfile::CHANNEL_STABLE);
+#else
             ::private_metrics::RcCoarseSystemProfile::CHANNEL_UNKNOWN);
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_WIN)
 }
 // LINT.ThenChange(/ios/chrome/browser/metrics/model/puma_egtest.mm:VerifyRcCoarseSystemProfile)
 

@@ -4,21 +4,20 @@
 
 #include "components/autofill/core/browser/field_types.h"
 
+#include <array>
 #include <ostream>
 #include <string>
 #include <string_view>
 
+#include "base/check.h"
 #include "base/containers/fixed_flat_map.h"
-#include "base/containers/flat_map.h"
 #include "base/containers/to_vector.h"
-#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "components/autofill/core/common/html_field_types.h"
 #if BUILDFLAG(IS_ANDROID)
 #include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/password_manager/core/browser/features/password_features.h"
 #endif
 
 namespace autofill {
@@ -189,6 +188,10 @@ static constexpr auto kTypeNameToFieldType =
          {"FLIGHT_RESERVATION_TICKET_NUMBER", FLIGHT_RESERVATION_TICKET_NUMBER},
          {"FLIGHT_RESERVATION_CONFIRMATION_CODE",
           FLIGHT_RESERVATION_CONFIRMATION_CODE},
+         {"FLIGHT_RESERVATION_DEPARTURE_AIRPORT",
+          FLIGHT_RESERVATION_DEPARTURE_AIRPORT},
+         {"FLIGHT_RESERVATION_ARRIVAL_AIRPORT",
+          FLIGHT_RESERVATION_ARRIVAL_AIRPORT},
          {"FLIGHT_RESERVATION_DEPARTURE_DATE",
           FLIGHT_RESERVATION_DEPARTURE_DATE}});
 
@@ -297,8 +300,7 @@ bool IsFillableFieldType(FieldType field_type) {
 
     case ONE_TIME_CODE:
 #if BUILDFLAG(IS_ANDROID)
-      return base::FeatureList::IsEnabled(
-          password_manager::features::kAndroidSmsOtpFilling);
+      return true;
 #else
       return false;  // Feature is not applicable on other platforms
 #endif
@@ -328,6 +330,8 @@ bool IsFillableFieldType(FieldType field_type) {
     case FLIGHT_RESERVATION_FLIGHT_NUMBER:
     case FLIGHT_RESERVATION_TICKET_NUMBER:
     case FLIGHT_RESERVATION_CONFIRMATION_CODE:
+    case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
+    case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
     case ORDER_ID:
     case ORDER_DATE:
     case ORDER_MERCHANT_NAME:
@@ -365,15 +369,21 @@ bool IsFillableFieldType(FieldType field_type) {
 }
 
 std::string_view FieldTypeToStringView(FieldType type) {
-  static const base::NoDestructor<base::flat_map<FieldType, std::string_view>>
-      kFieldTypeToTypeName(base::MakeFlatMap<FieldType, std::string_view>(
-          kTypeNameToFieldType, {}, [](const auto& item) {
-            return std::make_pair(item.second, item.first);
-          }));
+  static constexpr auto kFieldTypeToTypeName = [] {
+    std::array<std::string_view, MAX_VALID_FIELD_TYPE> array{};
+    for (const auto& [type_name, field_type] : kTypeNameToFieldType) {
+      // Check against duplicate `FieldType` values in `kTypeNameToFieldType`.
+      CHECK(array[field_type].empty());
+      array[field_type] = type_name;
+    }
+    return array;
+  }();
 
-  auto it = kFieldTypeToTypeName->find(type);
-  if (it != kFieldTypeToTypeName->end()) {
-    return it->second;
+  if (0 <= type && type < MAX_VALID_FIELD_TYPE) {
+    std::string_view name = kFieldTypeToTypeName[type];
+    if (!name.empty()) {
+      return name;
+    }
   }
   NOTREACHED();
 }
@@ -434,6 +444,8 @@ std::string_view FieldTypeToDeveloperRepresentationString(FieldType type) {
     case FLIGHT_RESERVATION_FLIGHT_NUMBER:
     case FLIGHT_RESERVATION_TICKET_NUMBER:
     case FLIGHT_RESERVATION_CONFIRMATION_CODE:
+    case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
+    case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_DATE:
     case ORDER_ID:
     case ORDER_DATE:

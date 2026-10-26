@@ -33,7 +33,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
@@ -56,7 +56,7 @@ import org.chromium.chrome.test.transit.quick_delete.QuickDeleteDialogFacility;
 import org.chromium.chrome.test.transit.settings.SettingsStation;
 import org.chromium.chrome.test.transit.signin.SigninBottomSheetFacility;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
-import org.chromium.components.signin.SigninFeatures;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 import org.chromium.ui.test.util.RenderTestRule.Component;
 import org.chromium.ui.widget.ButtonCompat;
@@ -67,13 +67,9 @@ import java.util.List;
 // TODO(crbug.com/478907175): Remove casting when value returns the view type.
 /** Integration and render tests for the tips notifications feature promo. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@EnableFeatures({
-    ChromeFeatureList.ANDROID_TIPS_NOTIFICATIONS,
-    SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-})
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_STARTUP_PROMOS})
 @Batch(Batch.PER_CLASS)
-@Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
+@Restriction({DeviceRestriction.RESTRICTION_TYPE_NON_AUTO, DeviceFormFactor.PHONE_OR_TABLET})
 public class TipsNotificationsFeaturePromoTest {
     @Rule
     public FreshCtaTransitTestRule mCtaTestRule =
@@ -82,7 +78,8 @@ public class TipsNotificationsFeaturePromoTest {
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
-                    .setRevision(3)
+                    .setRevision(4)
+                    .setDescription("Ligatures and contextual alternates disabled in UI text")
                     .setBugComponent(Component.UI_NOTIFICATIONS)
                     .build();
 
@@ -126,6 +123,9 @@ public class TipsNotificationsFeaturePromoTest {
 
     @Test
     @MediumTest
+    // TODO(crbug.com/574047415): Remove once Public Transit can model Settings opening in a tab
+    // from a bottom sheet (the NTP's url bar and the sheet container stay displayed).
+    @DisableFeatures({ChromeFeatureList.SETTINGS_IN_TAB, ChromeFeatureList.SETTINGS_IN_TAB_DESKTOP})
     public void testESBBottomSheetMainPageAccept() {
         @TipsNotificationsFeatureType
         int featureType = TipsNotificationsFeatureType.ENHANCED_SAFE_BROWSING;
@@ -158,6 +158,9 @@ public class TipsNotificationsFeaturePromoTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    // TODO(crbug.com/574047415): Remove once Public Transit can model Settings opening in a tab
+    // from a bottom sheet (the NTP's url bar and the sheet container stay displayed).
+    @DisableFeatures({ChromeFeatureList.SETTINGS_IN_TAB, ChromeFeatureList.SETTINGS_IN_TAB_DESKTOP})
     public void testESBBottomSheetDetailPageAccept() throws IOException {
         @TipsNotificationsFeatureType
         int featureType = TipsNotificationsFeatureType.ENHANCED_SAFE_BROWSING;
@@ -347,6 +350,9 @@ public class TipsNotificationsFeaturePromoTest {
 
     @Test
     @MediumTest
+    // TODO(crbug.com/574047415): Remove once Public Transit can model Settings opening in a tab
+    // from a bottom sheet (the NTP's url bar and the sheet container stay displayed).
+    @DisableFeatures({ChromeFeatureList.SETTINGS_IN_TAB, ChromeFeatureList.SETTINGS_IN_TAB_DESKTOP})
     public void testBottomOmniboxBottomSheetMainPageAccept() {
         @TipsNotificationsFeatureType int featureType = TipsNotificationsFeatureType.BOTTOM_OMNIBOX;
 
@@ -381,6 +387,9 @@ public class TipsNotificationsFeaturePromoTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    // TODO(crbug.com/574047415): Remove once Public Transit can model Settings opening in a tab
+    // from a bottom sheet (the NTP's url bar and the sheet container stay displayed).
+    @DisableFeatures({ChromeFeatureList.SETTINGS_IN_TAB, ChromeFeatureList.SETTINGS_IN_TAB_DESKTOP})
     public void testBottomOmniboxBottomSheetDetailPageAccept() throws IOException {
         @TipsNotificationsFeatureType int featureType = TipsNotificationsFeatureType.BOTTOM_OMNIBOX;
         List<Integer> detailPageStepsRes =
@@ -496,6 +505,7 @@ public class TipsNotificationsFeaturePromoTest {
 
     @Test
     @MediumTest
+    @Restriction(DeviceFormFactor.PHONE)
     public void testSigninBottomSheetMainPageAccept() {
         @TipsNotificationsFeatureType int featureType = TipsNotificationsFeatureType.SIGNIN;
 
@@ -523,6 +533,7 @@ public class TipsNotificationsFeaturePromoTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @Restriction(DeviceFormFactor.PHONE)
     public void testSigninBottomSheetDetailPageAccept() throws IOException {
         @TipsNotificationsFeatureType int featureType = TipsNotificationsFeatureType.SIGNIN;
         List<Integer> detailPageStepsRes =

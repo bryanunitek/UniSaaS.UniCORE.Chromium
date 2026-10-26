@@ -4,25 +4,15 @@
 
 #include "components/browser_actuator/internal/browser_actuator_service_impl.h"
 
-#include <memory>
-
-#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_actuator {
+namespace {
 
-class BrowserActuatorServiceImplTest : public testing::Test {
- protected:
-  BrowserActuatorServiceImplTest()
-      : service_(std::make_unique<BrowserActuatorServiceImpl>()) {}
-  ~BrowserActuatorServiceImplTest() override = default;
-
-  base::test::TaskEnvironment task_environment_;
-  std::unique_ptr<BrowserActuatorServiceImpl> service_;
-};
-
-TEST_F(BrowserActuatorServiceImplTest, IsInitialized) {
-  EXPECT_TRUE(service_->IsInitialized());
+TEST(BrowserActuatorServiceImplTest, IsInitialized) {
+  BrowserActuatorServiceImpl service;
+  EXPECT_TRUE(service.IsInitialized());
 }
 
+}  // namespace
 }  // namespace browser_actuator

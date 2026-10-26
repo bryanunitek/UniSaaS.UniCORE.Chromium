@@ -132,6 +132,7 @@ class SoftwareVideoEncoderTest
     if (xor_mask) {
       auto frame = frame_pool_.CreateFrame(format, size, gfx::Rect(size), size,
                                            timestamp);
+      frame->set_color_space(gfx::ColorSpace::CreateREC601());
       FillFourColors(*frame, xor_mask);
       return frame;
     }
@@ -141,6 +142,7 @@ class SoftwareVideoEncoderTest
       four_colors_frame_.reset();
       four_colors_frame_ = frame_pool_.CreateFrame(
           format, size, gfx::Rect(size), size, timestamp);
+      four_colors_frame_->set_color_space(gfx::ColorSpace::CreateREC601());
       FillFourColors(*four_colors_frame_);
     }
 
@@ -197,10 +199,8 @@ class SoftwareVideoEncoderTest
     enforcer->location = loc.ToString();
     auto check_callback = base::BindLambdaForTesting(
         [enforcer{std::move(enforcer)}](EncoderStatus s) {
-          ASSERT_TRUE(s.is_ok())
-              << " Callback created: " << enforcer->location
-              << " Code: " << std::hex << static_cast<StatusCodeType>(s.code())
-              << " Error: " << s.message();
+          ASSERT_TRUE(s.is_ok()) << " Callback created: " << enforcer->location
+                                 << " Error: " << MediaSerializeForTesting(s);
           enforcer->called = true;
         });
 
@@ -229,8 +229,7 @@ class SoftwareVideoEncoderTest
     return base::BindLambdaForTesting(
         [enforcer{std::move(enforcer)}](DecoderStatus s) {
           EXPECT_TRUE(s.is_ok()) << " Callback created: " << enforcer->location
-                                 << " Code: " << static_cast<int>(s.code())
-                                 << " Error: " << s.message();
+                                 << " Error: " << MediaSerializeForTesting(s);
           enforcer->called = true;
         });
   }
@@ -243,8 +242,7 @@ class SoftwareVideoEncoderTest
                      base::BindLambdaForTesting([&](DecoderStatus status) {
                        EXPECT_TRUE(status.is_ok())
                            << " Callback created: " << location.ToString()
-                           << " Code: " << static_cast<int>(status.code())
-                           << " Error: " << status.message();
+                           << " Error: " << MediaSerializeForTesting(status);
                        run_loop.Quit();
                      }));
     run_loop.Run(location);
@@ -281,6 +279,30 @@ class SoftwareVideoEncoderTest
       default_options.subsampling = VideoChromaSampling::k444;
     }
     return default_options;
+  }
+
+  int GetTolerance(VideoPixelFormat format) const {
+    // Tolerance scales with the sample value range of the pixel format:
+    // 8-bit (range 0..255): tolerance = 10 (~3.9% relative error)
+    // 10-bit (range 0..1023): tolerance = 35 (~3.4% relative error)
+    // 12-bit (range 0..4095): tolerance = 140 (~3.4% relative error)
+    if (format == PIXEL_FORMAT_YUV420P10 || format == PIXEL_FORMAT_YUV422P10 ||
+        format == PIXEL_FORMAT_YUV444P10 || format == PIXEL_FORMAT_YUV420AP10) {
+      return 35;
+    }
+    if (format == PIXEL_FORMAT_YUV420P12 || format == PIXEL_FORMAT_YUV422P12 ||
+        format == PIXEL_FORMAT_YUV444P12) {
+      return 140;
+    }
+    return 10;
+  }
+
+  int GetMaxDiffPixels(const VideoFrame& frame) const {
+    // Scale allowed differing pixel count by the inverse chroma subsampling
+    // area.
+    return frame.visible_rect().width() * 4 /
+           VideoFrame::SampleSize(frame.format(), VideoFrame::Plane::kU)
+               .GetArea();
   }
 
   int AssignNextTemporalId(int frame_index, int number_temporal_layers) {
@@ -525,6 +547,12 @@ TEST_P(LargeTimestampOverflowTest, LargeTimestampOverflow) {
 }
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+
+// 4 seconds of video at 25fps (100 frames) is enough to verify the initial
+// keyframe, delta frames, and a periodic keyframe at the 3s mark while keeping
+// the round-trip encode/decode test fast.
+constexpr int kEncodeDecodeClipDurationSeconds = 4;
+
 TEST_P(SoftwareVideoEncoderTest, EncodeAndDecode) {
   VideoEncoder::Options options = CreateDefaultOptions();
   options.frame_size = gfx::Size(320, 200);
@@ -534,8 +562,8 @@ TEST_P(SoftwareVideoEncoderTest, EncodeAndDecode) {
     options.avc.produce_annexb = true;
   options.keyframe_interval = options.framerate.value() * 3;  // every 3s
   base::circular_deque<scoped_refptr<VideoFrame>> frames_to_encode;
-  int total_frames_count =
-      options.framerate.value() * 10;  // total duration 10s
+  const int total_frames_count =
+      options.framerate.value() * kEncodeDecodeClipDurationSeconds;
   int total_decoded_frames = 0;
 
   auto frame_duration = base::Seconds(1.0 / options.framerate.value());
@@ -560,10 +588,19 @@ TEST_P(SoftwareVideoEncoderTest, EncodeAndDecode) {
                   original_frame->visible_rect().size());
         EXPECT_EQ(decoded_frame->format(),
                   GetExpectedOutputPixelFormat(profile_));
-        if (decoded_frame->format() == original_frame->format()) {
-          EXPECT_LE(CountDifferentPixels(*decoded_frame, *original_frame, 10),
-                    original_frame->visible_rect().width());
+        scoped_refptr<VideoFrame> ref_frame = original_frame;
+        if (decoded_frame->format() != original_frame->format()) {
+          ref_frame = frame_pool_.CreateFrame(
+              decoded_frame->format(), original_frame->coded_size(),
+              original_frame->visible_rect(), original_frame->natural_size(),
+              original_frame->timestamp());
+          ASSERT_TRUE(
+              frame_converter_.ConvertAndScale(*original_frame, *ref_frame)
+                  .is_ok());
         }
+        EXPECT_LE(CountDifferentPixels(*decoded_frame, *ref_frame,
+                                       GetTolerance(ref_frame->format())),
+                  GetMaxDiffPixels(*ref_frame));
         ++total_decoded_frames;
       });
 
@@ -648,7 +685,7 @@ TEST_P(SoftwareVideoEncoderTest, EncodeAndDecodeWithEnablingDrop) {
 
   base::circular_deque<scoped_refptr<VideoFrame>> frames_to_encode;
   const int total_frames_count =
-      options.framerate.value() * 10;  // total duration 10s
+      options.framerate.value() * kEncodeDecodeClipDurationSeconds;
   int total_decoded_frames = 0;
   int dropped_frames_count = 0;
   base::circular_deque<base::TimeDelta> dropped_frame_timestamps;
@@ -691,10 +728,19 @@ TEST_P(SoftwareVideoEncoderTest, EncodeAndDecodeWithEnablingDrop) {
                   original_frame->visible_rect().size());
         EXPECT_EQ(decoded_frame->format(),
                   GetExpectedOutputPixelFormat(profile_));
-        if (decoded_frame->format() == original_frame->format()) {
-          EXPECT_LE(CountDifferentPixels(*decoded_frame, *original_frame, 10),
-                    original_frame->visible_rect().width());
+        scoped_refptr<VideoFrame> ref_frame = original_frame;
+        if (decoded_frame->format() != original_frame->format()) {
+          ref_frame = frame_pool_.CreateFrame(
+              decoded_frame->format(), original_frame->coded_size(),
+              original_frame->visible_rect(), original_frame->natural_size(),
+              original_frame->timestamp());
+          ASSERT_TRUE(
+              frame_converter_.ConvertAndScale(*original_frame, *ref_frame)
+                  .is_ok());
         }
+        EXPECT_LE(CountDifferentPixels(*decoded_frame, *ref_frame,
+                                       GetTolerance(ref_frame->format())),
+                  GetMaxDiffPixels(*ref_frame));
         ++total_decoded_frames;
       });
 
@@ -1579,6 +1625,11 @@ std::string PrintTestParams(
 SwVideoTestParams kH264Params[] = {
     {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_I420},
     {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_YUV420P10},
+    {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_YUV422P10},
+    {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_YUV444P10},
+    {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_YUV420P12},
+    {VideoCodec::kH264, H264PROFILE_BASELINE, PIXEL_FORMAT_YUV420AP10},
     {VideoCodec::kH264, H264PROFILE_MAIN, PIXEL_FORMAT_I420},
     {VideoCodec::kH264, H264PROFILE_HIGH, PIXEL_FORMAT_I420},
 };
@@ -1624,17 +1675,27 @@ SwVideoTestParams kVpxParams[] = {
     {VideoCodec::kVP9, VP9PROFILE_PROFILE0, PIXEL_FORMAT_I420},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE0, PIXEL_FORMAT_NV12},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE0, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE0, PIXEL_FORMAT_YUV420P10},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE0, PIXEL_FORMAT_YUV422P10},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE0, PIXEL_FORMAT_YUV444P10},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE1, PIXEL_FORMAT_I444},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE1, PIXEL_FORMAT_NV12},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE1, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE1, PIXEL_FORMAT_YUV420P10},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE1, PIXEL_FORMAT_YUV444P10},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_I420},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_NV12},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_YUV420P10},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_YUV420P12},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_I444},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_NV12},
     {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_YUV444P10},
     {VideoCodec::kVP8, VP8PROFILE_ANY, PIXEL_FORMAT_I420},
-    {VideoCodec::kVP8, VP8PROFILE_ANY, PIXEL_FORMAT_XRGB}};
+    {VideoCodec::kVP8, VP8PROFILE_ANY, PIXEL_FORMAT_NV12},
+    {VideoCodec::kVP8, VP8PROFILE_ANY, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kVP8, VP8PROFILE_ANY, PIXEL_FORMAT_YUV420P10}};
 
 INSTANTIATE_TEST_SUITE_P(VpxGeneric,
                          SoftwareVideoEncoderTest,
@@ -1643,7 +1704,9 @@ INSTANTIATE_TEST_SUITE_P(VpxGeneric,
 
 SwVideoTestParams kVpx10BitParams[] = {
     {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_I420},
-    {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_I420}};
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE2, PIXEL_FORMAT_YUV420P10},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_I420},
+    {VideoCodec::kVP9, VP9PROFILE_PROFILE3, PIXEL_FORMAT_YUV444P10}};
 
 INSTANTIATE_TEST_SUITE_P(Vpx10BitSpecific,
                          Vpx10BitVideoEncoderTest,
@@ -1688,9 +1751,13 @@ SwVideoTestParams kAv1Params[] = {
     {VideoCodec::kAV1, AV1PROFILE_PROFILE_MAIN, PIXEL_FORMAT_I420},
     {VideoCodec::kAV1, AV1PROFILE_PROFILE_MAIN, PIXEL_FORMAT_NV12},
     {VideoCodec::kAV1, AV1PROFILE_PROFILE_MAIN, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kAV1, AV1PROFILE_PROFILE_MAIN, PIXEL_FORMAT_YUV420P10},
+    {VideoCodec::kAV1, AV1PROFILE_PROFILE_MAIN, PIXEL_FORMAT_YUV422P10},
+    {VideoCodec::kAV1, AV1PROFILE_PROFILE_MAIN, PIXEL_FORMAT_YUV444P10},
     {VideoCodec::kAV1, AV1PROFILE_PROFILE_HIGH, PIXEL_FORMAT_I444},
     {VideoCodec::kAV1, AV1PROFILE_PROFILE_HIGH, PIXEL_FORMAT_NV12},
-    {VideoCodec::kAV1, AV1PROFILE_PROFILE_HIGH, PIXEL_FORMAT_XRGB}};
+    {VideoCodec::kAV1, AV1PROFILE_PROFILE_HIGH, PIXEL_FORMAT_XRGB},
+    {VideoCodec::kAV1, AV1PROFILE_PROFILE_HIGH, PIXEL_FORMAT_YUV444P10}};
 
 INSTANTIATE_TEST_SUITE_P(Av1Generic,
                          SoftwareVideoEncoderTest,
@@ -1738,5 +1805,93 @@ TEST(SoftwareVideoEncoderTest, DefaultBitrate) {
   EXPECT_EQ(GetDefaultVideoEncodeBitrate({1920, 1080}, 60u), 9'000'000u);
   EXPECT_EQ(GetDefaultVideoEncodeBitrate({1280, 720}, 1000u), 20'000'000u);
 }
+
+#if BUILDFLAG(ENABLE_OPENH264)
+class OpenH264VideoEncoderResolutionTest : public ::testing::Test {
+ public:
+  OpenH264VideoEncoderResolutionTest() = default;
+
+  void SetUp() override { encoder_ = std::make_unique<OpenH264VideoEncoder>(); }
+
+  void TearDown() override { encoder_.reset(); }
+
+ protected:
+  base::test::TaskEnvironment task_environment_;
+  std::unique_ptr<OpenH264VideoEncoder> encoder_;
+};
+
+TEST_F(OpenH264VideoEncoderResolutionTest, HighestValidResolution) {
+  // 4096x2304 is exactly 36864 macroblocks, which is the OpenH264 limit.
+  VideoEncoder::Options options;
+  options.frame_size = gfx::Size(4096, 2304);
+
+  base::RunLoop run_loop;
+  encoder_->Initialize(H264PROFILE_BASELINE, options,
+                       /*info_cb=*/base::DoNothing(),
+                       /*output_cb=*/base::DoNothing(),
+                       base::BindLambdaForTesting([&](EncoderStatus status) {
+                         EXPECT_TRUE(status.is_ok());
+                         run_loop.Quit();
+                       }));
+  run_loop.Run();
+}
+
+TEST_F(OpenH264VideoEncoderResolutionTest, ResolutionExceedingMaxMBs) {
+  // 4097x2304 is 37008 macroblocks, exceeding the OpenH264 limit of 36864.
+  VideoEncoder::Options options;
+  options.frame_size = gfx::Size(4097, 2304);
+
+  base::RunLoop run_loop;
+  encoder_->Initialize(
+      H264PROFILE_BASELINE, options, /*info_cb=*/base::DoNothing(),
+      /*output_cb=*/base::DoNothing(),
+      base::BindLambdaForTesting([&](EncoderStatus status) {
+        EXPECT_EQ(status.code(),
+                  EncoderStatus::Codes::kEncoderUnsupportedConfig);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(OpenH264VideoEncoderResolutionTest, WidthExceeding6p1AspectRatioLimit) {
+  // A resolution that is extremely wide (e.g. 17280x256) has 1080x16
+  // macroblocks. This is only 17280 macroblocks (well within OpenH264's 36864
+  // limit), but its width (1080 MBs) exceeds the Level 6.1 limit of Sqrt(139264
+  // * 8) = 1055.
+  VideoEncoder::Options options;
+  options.frame_size = gfx::Size(17280, 256);
+
+  base::RunLoop run_loop;
+  encoder_->Initialize(
+      H264PROFILE_BASELINE, options, /*info_cb=*/base::DoNothing(),
+      /*output_cb=*/base::DoNothing(),
+      base::BindLambdaForTesting([&](EncoderStatus status) {
+        EXPECT_EQ(status.code(),
+                  EncoderStatus::Codes::kEncoderUnsupportedConfig);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+
+TEST_F(OpenH264VideoEncoderResolutionTest, HeightExceeding6p1AspectRatioLimit) {
+  // A resolution that is extremely tall (e.g. 256x17280) has 16x1080
+  // macroblocks. This is only 17280 macroblocks (well within OpenH264's 36864
+  // limit), but its height (1080 MBs) exceeds the Level 6.1 limit of
+  // Sqrt(139264 * 8) = 1055.
+  VideoEncoder::Options options;
+  options.frame_size = gfx::Size(256, 17280);
+
+  base::RunLoop run_loop;
+  encoder_->Initialize(
+      H264PROFILE_BASELINE, options, /*info_cb=*/base::DoNothing(),
+      /*output_cb=*/base::DoNothing(),
+      base::BindLambdaForTesting([&](EncoderStatus status) {
+        EXPECT_EQ(status.code(),
+                  EncoderStatus::Codes::kEncoderUnsupportedConfig);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+}
+#endif
 
 }  // namespace media

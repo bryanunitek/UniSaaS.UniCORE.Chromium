@@ -7,13 +7,16 @@ package org.chromium.chrome.browser.customtabs.features.toolbar;
 import static androidx.browser.customtabs.CustomTabsIntent.COLOR_SCHEME_LIGHT;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.view.ContextThemeWrapper;
 
@@ -47,8 +50,11 @@ import org.chromium.chrome.browser.customtabs.features.toolbar.BrowserServicesTh
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.theme.ThemeColorProvider.TintObserver;
+import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 
@@ -340,6 +346,39 @@ public class BrowserServicesThemeColorProviderUnitTest {
     }
 
     @Test
+    public void testSSLStateUpdateRecomputesTheme() {
+        when(mCustomTabActivityTabProvider.get()).thenReturn(tab);
+        when(mToolbarThemeColorProvider.getToolbarBackgroundColor(eq(tab))).thenReturn(LIGHT_COLOR);
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+        themeColorProvider.setUseTabTheme(true);
+
+        assertEquals(
+                "Should use the page theme color before the SSL state changes",
+                LIGHT_COLOR,
+                themeColorProvider.getThemeColor());
+
+        int defaultColor = ChromeColors.getDefaultThemeColor(mContext, false);
+        when(mToolbarThemeColorProvider.getToolbarBackgroundColor(eq(tab)))
+                .thenReturn(defaultColor);
+        themeColorProvider.getTabObserver().onSSLStateUpdated(tab);
+
+        assertEquals(
+                "Should refresh the theme color when the SSL state changes",
+                defaultColor,
+                themeColorProvider.getThemeColor());
+        assertEquals(
+                "Should refresh the color scheme when the SSL state changes",
+                BrandedColorScheme.APP_DEFAULT,
+                themeColorProvider.getBrandedColorScheme());
+    }
+
+    @Test
     public void testIncognitoTheme() {
         // emulate incognito tab with chrome default theme
         var intentDataProvider =
@@ -360,6 +399,140 @@ public class BrowserServicesThemeColorProviderUnitTest {
                 "Should be incognito scheme",
                 BrandedColorScheme.INCOGNITO,
                 actual.brandedColorScheme);
+    }
+
+    @Test
+    public void testDesktopWindowing_ObserverRegisteredAndTriggered() {
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+
+        verify(mDesktopWindowStateManager).addObserver(themeColorProvider);
+
+        TintObserver tintObserver = mock(TintObserver.class);
+        themeColorProvider.addTintObserver(tintObserver);
+
+        // When in desktop windowing mode
+        Rect rect = new Rect(0, 0, 800, 40);
+        when(mDesktopWindowStateManager.getAppHeaderState())
+                .thenReturn(new AppHeaderState(rect, rect, true));
+
+        themeColorProvider.onDesktopWindowingModeChanged(true);
+
+        var expectedFocusTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mContext, BrandedColorScheme.APP_DEFAULT, true);
+        assertEquals(
+                "Focus tint should match active desktop window tint",
+                expectedFocusTint,
+                themeColorProvider.getActivityFocusTint());
+    }
+
+    @Test
+    public void testDesktopWindowing_ActivityFocusChanged() {
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+
+        Rect rect = new Rect(0, 0, 800, 40);
+        when(mDesktopWindowStateManager.getAppHeaderState())
+                .thenReturn(new AppHeaderState(rect, rect, true));
+
+        // When window focus is lost
+        themeColorProvider.onTopResumedActivityChanged(false);
+
+        var unfocusedTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mContext, BrandedColorScheme.APP_DEFAULT, false);
+        var focusedTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mContext, BrandedColorScheme.APP_DEFAULT, true);
+
+        assertEquals(
+                "Focus tint should be unfocused tint when activity loses focus",
+                unfocusedTint,
+                themeColorProvider.getActivityFocusTint());
+        assertNotEquals(
+                "Unfocused tint should differ from focused tint", focusedTint, unfocusedTint);
+
+        // When window focus is regained
+        themeColorProvider.onTopResumedActivityChanged(true);
+        assertEquals(
+                "Focus tint should be focused tint when activity gains focus",
+                focusedTint,
+                themeColorProvider.getActivityFocusTint());
+    }
+
+    @Test
+    public void testDesktopWindowing_ModeChangedWhileUnfocused() {
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+
+        Rect rect = new Rect(0, 0, 800, 40);
+        when(mDesktopWindowStateManager.getAppHeaderState())
+                .thenReturn(new AppHeaderState(rect, rect, true));
+        when(mDesktopWindowStateManager.isInUnfocusedDesktopWindow()).thenReturn(true);
+
+        themeColorProvider.onDesktopWindowingModeChanged(true);
+
+        var unfocusedTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mContext, BrandedColorScheme.APP_DEFAULT, false);
+        assertEquals(
+                "Focus tint should be unfocused tint when transitioning to DW mode while unfocused",
+                unfocusedTint,
+                themeColorProvider.getActivityFocusTint());
+    }
+
+    @Test
+    public void testDesktopWindowing_UnfocusedStartupState() {
+        when(mDesktopWindowStateManager.isInUnfocusedDesktopWindow()).thenReturn(true);
+        Rect rect = new Rect(0, 0, 800, 40);
+        when(mDesktopWindowStateManager.getAppHeaderState())
+                .thenReturn(new AppHeaderState(rect, rect, true));
+
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+
+        var unfocusedTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mContext, BrandedColorScheme.APP_DEFAULT, false);
+        assertEquals(
+                "Initial focus tint should be unfocused if starting in unfocused window",
+                unfocusedTint,
+                themeColorProvider.getActivityFocusTint());
+    }
+
+    @Test
+    public void testDestroy_UnregistersDesktopWindowStateManagerObserver() {
+        var intentDataProvider =
+                buildCctIntentDataProvider(
+                        COLOR_SCHEME_LIGHT,
+                        /* schemeParams= */ null,
+                        /* isOpenedByChrome= */ false,
+                        /* isIncognito= */ false);
+        var themeColorProvider = createThemeColorProvider(intentDataProvider);
+
+        themeColorProvider.destroy();
+        verify(mDesktopWindowStateManager).removeObserver(themeColorProvider);
     }
 
     private static WebappExtras buildWebAppExtras(final int displayMode) {

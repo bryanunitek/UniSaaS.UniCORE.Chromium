@@ -418,6 +418,11 @@ int DispatchCall() {
     if (!LoadLibraryA("dbghelp.dll")) {
       return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
     }
+    // Try to load msdia as well, since dbghelp depends on it for some
+    // functionality (pdb handling and symbolization). This might fail
+    // if we're already low integrity, in which case we won't get
+    // symbolized traces if we crash.
+    LoadLibraryA("msdia140.dll");
 #endif
 
     target->LowerToken();

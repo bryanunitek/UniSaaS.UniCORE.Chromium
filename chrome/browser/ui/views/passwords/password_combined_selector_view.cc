@@ -8,38 +8,49 @@
 #include <string>
 #include <vector>
 
-#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/task/cancelable_task_tracker.h"
+#include "build/branding_buildflags.h"
+#include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/passwords/account_avatar_fetcher.h"
 #include "chrome/browser/ui/passwords/password_combined_selector_controller.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/passwords/views_utils.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/favicon/core/favicon_service.h"
+#include "components/favicon_base/favicon_types.h"
+#include "components/keyed_service/core/service_access_type.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/url_formatter/elide_url.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/radio_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
+#include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/fill_layout.h"
@@ -151,11 +162,16 @@ class PasswordCombinedSelectorRowView : public AccountAvatarFetcherDelegate,
       const std::vector<std::u16string>& details,
       bool show_radio_button,
       bool is_federated,
+      bool is_remote_actor,
       const GURL& icon_url,
+      const GURL& page_url,
       network::mojom::URLLoaderFactory* loader_factory,
       const url::Origin& initiator,
+      favicon::FaviconService* favicon_service,
       PasswordCombinedSelectorRadioButtonDelegate* radio_delegate,
-      int index) {
+      int index,
+      int pos_in_set = 0,
+      int set_size = 0) {
     const int horizontal_padding = show_radio_button ? kHorizontalPadding : 0;
     SetBorder(views::CreateEmptyBorder(
         gfx::Insets::VH(kVerticalPadding, horizontal_padding)));
@@ -191,13 +207,37 @@ class PasswordCombinedSelectorRowView : public AccountAvatarFetcherDelegate,
           IDR_PROFILE_AVATAR_PLACEHOLDER_LARGE);
       UpdateAvatar(image.AsImageSkia());
 
-      if (icon_url.is_valid()) {
+      if (icon_url.is_valid() && loader_factory) {
         // Fetch the actual avatar.
         AccountAvatarFetcher* fetcher =
             new AccountAvatarFetcher(icon_url, weak_ptr_factory_.GetWeakPtr());
         fetcher->Start(loader_factory, initiator);
       }
       AddChildView(std::move(image_view));
+    } else if (is_remote_actor) {
+      auto image_view =
+          std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
+              features::IsRoundedIconsEnabled() ? vector_icons::kGlobeIcon
+                                                : vector_icons::kGlobeOldIcon,
+              ui::kColorIcon, kFluxPasswordIconSize));
+      image_view_ = image_view.get();
+      AddChildView(std::move(image_view));
+
+      GURL favicon_url = page_url.is_valid() ? page_url : initiator.GetURL();
+      if (favicon_url.is_valid() && favicon_url.SchemeIsHTTPOrHTTPS() &&
+          favicon_service) {
+        favicon_service->GetRawFaviconForPageURL(
+            favicon_url,
+            {favicon_base::IconType::kFavicon,
+             favicon_base::IconType::kTouchIcon,
+             favicon_base::IconType::kTouchPrecomposedIcon,
+             favicon_base::IconType::kWebManifestIcon},
+            /*desired_size_in_pixel=*/kFluxPasswordIconSize,
+            /*fallback_to_host=*/true,
+            base::BindOnce(&PasswordCombinedSelectorRowView::OnFaviconReady,
+                           weak_ptr_factory_.GetWeakPtr()),
+            &favicon_tracker_);
+      }
     } else {
       AddChildView(
           std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
@@ -213,17 +253,22 @@ class PasswordCombinedSelectorRowView : public AccountAvatarFetcherDelegate,
                               views::TableLayout::ColumnSize::kFixed, 0, 0);
     text_container->AddRows(1 + details.size(), views::TableLayout::kFixedSize);
 
-    text_container->AddChildView(
+    auto* username_label = text_container->AddChildView(
         std::make_unique<views::Label>(username, views::style::CONTEXT_LABEL,
                                        views::style::STYLE_BODY_3_MEDIUM));
+    username_label->SetID(PasswordCombinedSelectorView::kRowUsernameLabelId);
     for (const auto& detail : details) {
-      text_container->AddChildView(std::make_unique<views::Label>(
-          detail, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4));
+      auto* detail_label =
+          text_container->AddChildView(std::make_unique<views::Label>(
+              detail, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4));
+      detail_label->SetID(PasswordCombinedSelectorView::kRowDetailLabelId);
     }
+    SetID(PasswordCombinedSelectorView::kCredentialRowId);
 
     // Radio Button
     if (show_radio_button) {
-      MaybeAddRadioButton(username, details, radio_delegate, index);
+      MaybeAddRadioButton(username, details, radio_delegate, index, pos_in_set,
+                          set_size);
     }
   }
 
@@ -231,13 +276,19 @@ class PasswordCombinedSelectorRowView : public AccountAvatarFetcherDelegate,
       const std::u16string& username,
       const std::vector<std::u16string>& details,
       PasswordCombinedSelectorRadioButtonDelegate* delegate,
-      int index) {
+      int index,
+      int pos_in_set,
+      int set_size) {
     auto radio_button =
         std::make_unique<PasswordCombinedSelectorRadioButton>(delegate, index);
     std::vector<std::u16string> name_parts = {username};
     name_parts.insert(name_parts.end(), details.begin(), details.end());
     radio_button->GetViewAccessibility().SetName(
         base::JoinString(name_parts, u"\n"));
+    if (set_size > 0) {
+      radio_button->GetViewAccessibility().SetPosInSet(pos_in_set);
+      radio_button->GetViewAccessibility().SetSetSize(set_size);
+    }
     radio_button_ = AddChildView(std::move(radio_button));
   }
 
@@ -304,11 +355,23 @@ class PasswordCombinedSelectorRowView : public AccountAvatarFetcherDelegate,
     views::TableLayoutView::OnMouseReleased(event);
   }
 
+  void OnFaviconReady(const favicon_base::FaviconRawBitmapResult& result) {
+    if (result.is_valid() && image_view_) {
+      gfx::Image image = gfx::Image::CreateFrom1xPNGBytes(result.bitmap_data);
+      if (!image.IsEmpty()) {
+        image_view_->SetImageSize(
+            gfx::Size(kFluxPasswordIconSize, kFluxPasswordIconSize));
+        image_view_->SetImage(ui::ImageModel::FromImage(image));
+      }
+    }
+  }
+
  private:
   // AccountAvatarFetcherDelegate:
   raw_ptr<views::ImageView> image_view_ = nullptr;
   raw_ptr<PasswordCombinedSelectorRadioButton> radio_button_ = nullptr;
 
+  base::CancelableTaskTracker favicon_tracker_;
   base::WeakPtrFactory<PasswordCombinedSelectorRowView> weak_ptr_factory_{this};
 };
 
@@ -338,42 +401,76 @@ class PasswordCombinedSelectorListView : public views::View {
       wrapper->AddChildView(std::make_unique<views::Separator>());
     }
 
+    favicon::FaviconService* favicon_service =
+        web_contents ? FaviconServiceFactory::GetForProfile(
+                           Profile::FromBrowserContext(
+                               web_contents->GetBrowserContext()),
+                           ServiceAccessType::EXPLICIT_ACCESS)
+                     : nullptr;
+
+    mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory;
+    network::mojom::URLLoaderFactory* loader_factory = nullptr;
+    if (web_contents) {
+      url_loader_factory = GetURLLoaderForMainFrame(web_contents);
+      loader_factory = url_loader_factory.get();
+    }
+
+    bool is_remote_actor =
+        controller->GetDisplayType() ==
+        PasswordCombinedSelectorController::DisplayType::kRemoteActor;
+    const url::Origin initiator =
+        web_contents && web_contents->GetPrimaryMainFrame()
+            ? web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin()
+            : url::Origin();
+
     int i = 0;
     for (const std::unique_ptr<password_manager::PasswordForm>& form : forms) {
       if (i > 0) {
         wrapper->AddChildView(std::make_unique<views::Separator>());
       }
 
-      std::pair<std::u16string, std::u16string> labels =
-          GetCredentialLabelsForAccountChooser(*form);
-      std::u16string username = labels.first;
+      std::u16string username;
       std::vector<std::u16string> details;
-
-      if (!labels.second.empty()) {
-        for (const auto& line :
-             base::SplitString(labels.second, u"\n", base::TRIM_WHITESPACE,
-                               base::SPLIT_WANT_NONEMPTY)) {
-          details.push_back(line);
+      if (is_remote_actor) {
+        username = form->username_value;
+        details.push_back(u"••••••••");
+        if (form->match_type.has_value() &&
+            password_manager_util::GetMatchType(*form) !=
+                password_manager_util::GetLoginMatchType::kExact) {
+          details.push_back(url_formatter::FormatOriginForSecurityDisplay(
+              url::Origin::Create(form->url),
+              url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS));
         }
-      }
-      if (password_manager_util::GetMatchType(*form) !=
-          password_manager_util::GetLoginMatchType::kExact) {
-        details.push_back(url_formatter::FormatOriginForSecurityDisplay(
-            url::Origin::Create(form->url),
-            url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS));
-      }
-      if (!form->IsFederatedCredential()) {
-        details.push_back(l10n_util::GetStringUTF16(
-            IDS_PASSWORD_MANAGER_PASSWORD_FROM_GOOGLE_PASSWORD_MANAGER));
+      } else {
+        std::pair<std::u16string, std::u16string> labels =
+            GetCredentialLabelsForAccountChooser(*form);
+        username = labels.first;
+        if (!labels.second.empty()) {
+          for (const auto& line :
+               base::SplitString(labels.second, u"\n", base::TRIM_WHITESPACE,
+                                 base::SPLIT_WANT_NONEMPTY)) {
+            details.push_back(line);
+          }
+        }
+        if (password_manager_util::GetMatchType(*form) !=
+            password_manager_util::GetLoginMatchType::kExact) {
+          details.push_back(url_formatter::FormatOriginForSecurityDisplay(
+              url::Origin::Create(form->url),
+              url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS));
+        }
+        if (!form->IsFederatedCredential()) {
+          details.push_back(l10n_util::GetStringUTF16(
+              IDS_PASSWORD_MANAGER_PASSWORD_FROM_GOOGLE_PASSWORD_MANAGER));
+        }
       }
 
       auto* row = wrapper->AddChildView(
           std::make_unique<PasswordCombinedSelectorRowView>(
               username, details, show_radio_buttons,
-              form->IsFederatedCredential(), form->icon_url,
-              GetURLLoaderForMainFrame(web_contents).get(),
-              web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
-              delegate, i));
+              form->IsFederatedCredential(), is_remote_actor, form->icon_url,
+              form->url, loader_factory, initiator, favicon_service, delegate,
+              i, /*pos_in_set=*/i + 1,
+              /*set_size=*/static_cast<int>(forms.size())));
 
       if (i == 0) {
         selected_view_ = row;
@@ -385,6 +482,10 @@ class PasswordCombinedSelectorListView : public views::View {
     wrapper->SetOwnedGroup(kGroupId);
 
     if (show_radio_buttons) {
+      wrapper->SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
+      wrapper->GetViewAccessibility().SetRole(ax::mojom::Role::kRadioGroup);
+      wrapper->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
+          IDS_ACCOUNT_CHOOSER_RADIO_GROUP_ACCESSIBILITY_LABEL));
       wrapper->AddChildView(std::make_unique<views::Separator>());
     }
 
@@ -421,21 +522,9 @@ class PasswordCombinedSelectorListView : public views::View {
     return static_cast<PasswordCombinedSelectorRowView*>(forms[child_index]);
   }
 
-  std::vector<raw_ptr<views::RadioButton>> GetRadioButtons() {
-    std::vector<raw_ptr<views::RadioButton>> radio_buttons;
-    auto* scroll_view = static_cast<views::ScrollView*>(children()[0]);
-    views::View* wrapper = scroll_view->contents();
-    for (views::View* child : wrapper->children()) {
-      if (views::IsViewClass<PasswordCombinedSelectorRowView>(child)) {
-        auto* radio_button =
-            static_cast<PasswordCombinedSelectorRowView*>(child)
-                ->GetRadioButton();
-        if (radio_button) {
-          radio_buttons.push_back(radio_button);
-        }
-      }
-    }
-    return radio_buttons;
+  views::RadioButton* GetInitiallyFocusedRadioButton() {
+    PasswordCombinedSelectorRowView* row = GetRowView(0);
+    return row ? row->GetRadioButton() : nullptr;
   }
 
  private:
@@ -453,9 +542,7 @@ PasswordCombinedSelectorView::PasswordCombinedSelectorView(
     : controller_(controller), web_contents_(web_contents) {
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
              static_cast<int>(ui::mojom::DialogButton::kCancel));
-  SetButtonLabel(
-      ui::mojom::DialogButton::kOk,
-      l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_ACCOUNT_CHOOSER_SIGN_IN));
+  SetButtonLabel(ui::mojom::DialogButton::kOk, controller_->GetOkButtonLabel());
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH));
   SetModalType(ui::mojom::ModalType::kChild);
@@ -467,7 +554,7 @@ PasswordCombinedSelectorView::~PasswordCombinedSelectorView() = default;
 
 void PasswordCombinedSelectorView::ShowAccountChooser() {
   InitWindow();
-  DCHECK(!widget_);
+  CHECK(!widget_, base::NotFatalUntil::M162);
   SetOwnershipOfNewWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   widget_ = base::WrapUnique(
       constrained_window::ShowWebModalDialogViews(this, web_contents_));
@@ -483,11 +570,7 @@ void PasswordCombinedSelectorView::ControllerGone() {
 }
 
 std::u16string PasswordCombinedSelectorView::GetWindowTitle() const {
-  return l10n_util::GetStringFUTF16(
-      IDS_WEBAUTHN_SIGN_IN_TO_WEBSITE_DIALOG_TITLE,
-      url_formatter::FormatOriginForSecurityDisplay(
-          controller_->GetOrigin(),
-          url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC));
+  return controller_->GetTitle();
 }
 
 bool PasswordCombinedSelectorView::ShouldShowCloseButton() const {
@@ -500,7 +583,6 @@ ui::mojom::ModalType PasswordCombinedSelectorView::GetModalType() const {
 
 void PasswordCombinedSelectorView::WindowClosing() {
   list_view_ = nullptr;
-  radio_buttons_.clear();
   selected_form_ = nullptr;
   if (controller_) {
     // Determine the controller to notify, but clear the pointer before calling
@@ -527,12 +609,55 @@ bool PasswordCombinedSelectorView::ShouldAllowKeyEventsDuringInputProtection()
   return false;
 }
 
+views::View* PasswordCombinedSelectorView::GetInitiallyFocusedView() {
+  if (controller_ && controller_->GetLocalForms().size() > 1 && list_view_) {
+    if (views::RadioButton* button =
+            static_cast<PasswordCombinedSelectorListView*>(list_view_)
+                ->GetInitiallyFocusedRadioButton()) {
+      return button;
+    }
+  }
+  return DialogDelegate::GetInitiallyFocusedView();
+}
+
 void PasswordCombinedSelectorView::InitWindow() {
   auto main_view = std::make_unique<PasswordCombinedSelectorViewWrapper>();
-  main_view->SetLayoutManager(std::make_unique<views::FillLayout>());
+
+  std::u16string subtitle = controller_->GetSubtitle();
+  if (subtitle.empty()) {
+    main_view->SetLayoutManager(std::make_unique<views::FillLayout>());
+  } else {
+    main_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+        /*between_child_spacing=*/
+        views::LayoutProvider::Get()->GetDistanceMetric(
+            views::DISTANCE_RELATED_CONTROL_VERTICAL)));
+
+    auto* subtitle_label =
+        main_view->AddChildView(std::make_unique<views::StyledLabel>());
+    subtitle_label->SetText(subtitle);
+    subtitle_label->SetTextContext(views::style::CONTEXT_LABEL);
+    subtitle_label->SetDefaultTextStyle(views::style::STYLE_BODY_4);
+    subtitle_label->SetDefaultEnabledColorId(
+        ui::kColorLabelForegroundSecondary);
+    subtitle_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    subtitle_label->SetID(PasswordCombinedSelectorView::kSubtitleLabelId);
+
+    gfx::Range link_range = controller_->GetSubtitleLinkRange();
+    if (!link_range.is_empty()) {
+      views::StyledLabel::RangeStyleInfo link_style =
+          views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
+              &PasswordCombinedSelectorController::OnSubtitleLinkClicked,
+              base::Unretained(controller_.get())));
+      link_style.text_style = views::style::STYLE_LINK_4;
+      subtitle_label->AddStyleRange(link_range, link_style);
+    }
+  }
+
   auto list_view = std::make_unique<PasswordCombinedSelectorListView>(
       controller_.get(), web_contents_, this);
   list_view_ = main_view->AddChildView(std::move(list_view));
+  list_view_->SetID(PasswordCombinedSelectorView::kCredentialListId);
 
   const auto& forms = controller_->GetLocalForms();
   if (!forms.empty()) {
@@ -540,8 +665,6 @@ void PasswordCombinedSelectorView::InitWindow() {
     static_cast<PasswordCombinedSelectorListView*>(list_view_)
         ->SetSelectedIndex(0);
   }
-  radio_buttons_ = static_cast<PasswordCombinedSelectorListView*>(list_view_)
-                       ->GetRadioButtons();
 
   SetContentsView(std::move(main_view));
 }
@@ -559,4 +682,31 @@ void PasswordCombinedSelectorView::OnRadioButtonChecked(int index) {
   auto* list_view_ptr =
       static_cast<PasswordCombinedSelectorListView*>(list_view_);
   list_view_ptr->SetSelectedView(list_view_ptr->GetRowView(index));
+}
+
+void PasswordCombinedSelectorView::OnWidgetInitialized() {
+  views::DialogDelegate::OnWidgetInitialized();
+  if (!controller_->ShouldShowTopIllustration()) {
+    return;
+  }
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)  // nocheck
+  ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
+  auto image_view = std::make_unique<views::ImageView>();
+  image_view->SetImage(ui::ImageModel::FromImageSkia(
+      *bundle.GetImageSkiaNamed(IDR_REMOTE_ACTOR_SHARING_ILLUSTRATION)));
+  image_view->SetVerticalAlignment(views::ImageView::Alignment::kLeading);
+  if (auto* frame_view = GetBubbleFrameView()) {
+    frame_view->SetHeaderView(std::move(image_view));
+  }
+#else
+  // TODO(crbug.com/532482932): Add unbranded header.
+#endif
+}
+
+std::unique_ptr<AccountChooserPrompt> CreatePasswordCombinedSelectorPromptView(
+    PasswordCombinedSelectorController* controller,
+    content::WebContents* web_contents) {
+  return std::make_unique<PasswordCombinedSelectorView>(controller,
+                                                        web_contents);
 }

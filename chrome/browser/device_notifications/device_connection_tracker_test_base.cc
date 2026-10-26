@@ -18,9 +18,10 @@
 #include "chrome/browser/profiles/delete_profile_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/profile_deletion_observer.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"

@@ -21,19 +21,20 @@
 #include "base/task/current_thread.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
+#include "chrome/browser/enterprise/platform_auth/extensible_enterprise_sso_metadata.h"
 #include "chrome/browser/enterprise/platform_auth/extensible_enterprise_sso_policy_handler.h"
 #include "chrome/browser/enterprise/platform_auth/extensible_enterprise_sso_prefs_handler.h"
-#include "chrome/browser/enterprise/platform_auth/platform_auth_policy_observer.h"
 #include "chrome/browser/enterprise/platform_auth/platform_auth_proxying_url_loader_factory.h"
 #include "chrome/browser/enterprise/platform_auth/scoped_cf_prefs_observer_override.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/enterprise/platform_auth/platform_auth_features.h"
+#include "components/enterprise/platform_auth/url_session_helper.h"
 #include "components/enterprise/platform_auth/url_session_test_util.h"
 #include "components/enterprise/platform_auth/url_session_url_loader.h"
 #include "components/network_session_configurator/common/network_switches.h"
@@ -51,7 +52,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-using Config = enterprise_auth::CFPreferencesObserver::Config;
+using Config = enterprise_auth::CFPreferencesObserver::RawConfig;
 using ScopedPropList = base::apple::ScopedCFTypeRef<CFPropertyListRef>;
 using url_session_test_util::ResponseConfig;
 
@@ -119,10 +120,6 @@ class ExtensibleEnterpriseSsoOktaBrowserTest : public InProcessBrowserTest {
 
     session_override_.emplace();
 
-    PrefService* prefs = g_browser_process->local_state();
-    ASSERT_TRUE(prefs);
-    platform_auth_policy_observer_.emplace(prefs);
-
     // Make sure no traffic goes out into the real network.
     host_resolver()->AddRule("*", "127.0.0.1");
     https_server_.RegisterRequestHandler(base::BindRepeating(
@@ -174,7 +171,7 @@ class ExtensibleEnterpriseSsoOktaBrowserTest : public InProcessBrowserTest {
   }
 
   std::string CreateSsoRequest(std::string_view domain) {
-    std::string path = enterprise_auth::kOktaSsoURLPattern.Get();
+    std::string path = url_session_helper::kOktaSsoURLPattern;
 
     // Replace all wildcard segments in the path.
     base::ReplaceChars(path, "*", "123", &path);
@@ -185,7 +182,7 @@ class ExtensibleEnterpriseSsoOktaBrowserTest : public InProcessBrowserTest {
 
   void CheckSSORequest(bool expect_response,
                        std::string_view hostname = kDomain1,
-                       Browser* target_browser = nullptr) {
+                       BrowserWindowInterface* target_browser = nullptr) {
     if (!target_browser) {
       target_browser = browser();
     }
@@ -194,7 +191,7 @@ class ExtensibleEnterpriseSsoOktaBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(target_browser, test_url));
 
     const auto result = content::EvalJs(
-        target_browser->tab_strip_model()->GetActiveWebContents(),
+        target_browser->GetTabStripModel()->GetActiveWebContents(),
         content::JsReplace(
             R"(
             fetch($1, {
@@ -255,17 +252,16 @@ class ExtensibleEnterpriseSsoOktaBrowserTest : public InProcessBrowserTest {
   }
 
   Config GetConfig() {
-    return Config(
-        ScopedPropList(
-            ExtensibleEnterpriseSSOPrefsHandler::kOktaSSOExtensionID),
-        ScopedPropList(ExtensibleEnterpriseSSOPrefsHandler::kOktaSSOTeamID),
-        HostsToPropRef(configured_hosts_));
+    return Config{
+        .extension_id = base::SysUTF8ToCFStringRef(kOktaSsoExtensionId),
+        .team_id = base::SysUTF8ToCFStringRef(kOktaSsoTeamId),
+        .hosts = HostsToPropRef(configured_hosts_),
+        .urls = ScopedPropList(),
+    };
   }
 
   std::vector<std::string> configured_hosts_{kDomain1};
   base::RepeatingClosure config_update_callback_;
-  base::test::ScopedFeatureList feature_list_{enterprise_auth::kOktaSSO};
-  std::optional<PlatformAuthPolicyObserver> platform_auth_policy_observer_;
   testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
   policy::ScopedManagementServiceOverrideForTesting platform_management_{
       policy::ManagementServiceFactory::GetForPlatform(),
@@ -285,7 +281,8 @@ IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest, Successful) {
 IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest,
                        DoesNotProxyInIncognito) {
   // Create an Incognito browser window linked to the main profile.
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ASSERT_TRUE(incognito_browser);
 
   // The SSO proxying should not occur in an Incognito window.
@@ -295,23 +292,26 @@ IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest,
 IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest,
                        DoesNotProxyInGuestMode) {
   // Create a Guest browser window.
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   ASSERT_TRUE(guest_browser);
 
   // The SSO proxying should not occur in a Guest window.
   CheckSSORequest(/*expect_response=*/false, kDomain1, guest_browser);
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest, Unmanaged) {
-  policy::ScopedManagementServiceOverrideForTesting platform_management(
+// Simulates an unmanaged device. The override is a member so that it takes
+// effect before the browser-owned `PlatformAuthPolicyObserver` is created, and
+// it is declared after the base fixture's override so it takes precedence.
+class ExtensibleEnterpriseSsoOktaUnmanagedBrowserTest
+    : public ExtensibleEnterpriseSsoOktaBrowserTest {
+ protected:
+  policy::ScopedManagementServiceOverrideForTesting unmanaged_platform_{
       policy::ManagementServiceFactory::GetForPlatform(),
-      policy::EnterpriseManagementAuthority::NONE);
+      policy::EnterpriseManagementAuthority::NONE};
+};
 
-  // Reset the policy observer.
-  PrefService* prefs = g_browser_process->local_state();
-  ASSERT_TRUE(prefs);
-  platform_auth_policy_observer_.emplace(prefs);
-
+IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaUnmanagedBrowserTest,
+                       Unmanaged) {
   CheckSSORequest(false);
 }
 
@@ -342,11 +342,12 @@ IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest,
 IN_PROC_BROWSER_TEST_F(ExtensibleEnterpriseSsoOktaBrowserTest,
                        NotConfiguredHost) {
   configured_hosts_ = {};
-
-  // Reset the policy observer to trigger update.
-  PrefService* prefs = g_browser_process->local_state();
-  ASSERT_TRUE(prefs);
-  platform_auth_policy_observer_.emplace(prefs);
+  config_update_callback_.Run();
+  base::test::RunUntil([&]() {
+    return g_browser_process->local_state()
+        ->GetList(prefs::kExtensibleEnterpriseSSOConfiguredHosts)
+        .empty();
+  });
 
   CheckSSORequest(false);
 }

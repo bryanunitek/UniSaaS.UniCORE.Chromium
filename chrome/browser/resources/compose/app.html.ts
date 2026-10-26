@@ -8,28 +8,31 @@ import type {ComposeAppElement} from './app.js';
 import {InputMode} from './compose.mojom-webui.js';
 
 export function getHtml(this: ComposeAppElement) {
-  // clang-format off
   return html`
 <!--_html_template_start_-->
-<div id="firstRunDialog" class="dialog"
-    ?hidden="${!this.showFirstRunDialog_}">
+<div id="firstRunDialog" class="dialog" ?hidden="${!this.showFirstRunDialog_}">
   <div id="firstRunHeading">
     <div id="firstRunIconContainer">
-      <cr-icon icon="compose:compose"></cr-icon>
+      <cr-icon
+          icon="${this.webuiRoundedIconsEnabled_ ? 'compose:pen-spark' :
+                                                   'compose:compose-old'}">
+      </cr-icon>
     </div>
     <h1>$i18n{firstRunTitle}</h1>
     <cr-icon-button id="firstRunCloseButton" class="close-button"
-      iron-icon="cr:close" @click="${this.onCloseClick_}"
-      aria-label="$i18n{close}">
+        iron-icon="cr:close" @click="${this.onCloseClick_}"
+        aria-label="$i18n{close}">
     </cr-icon-button>
   </div>
 
   <div id="firstRunContainer">
     <div id="firstRunTopText">$i18n{firstRunMainTop}</div>
     <div id="firstRunMidText" ?hidden="${this.enterprise_}">
-        $i18nRaw{firstRunMainMid}</div>
+      $i18nRaw{firstRunMainMid}
+    </div>
     <div id="firstRunMidTextEnterprise" ?hidden="${!this.enterprise_}">
-        $i18nRaw{firstRunMainMidEnterprise}</div>
+      $i18nRaw{firstRunMainMidEnterprise}
+    </div>
     <div id="firstRunBottomText" @click="${this.onFirstRunBottomTextClick_}">
       $i18nRaw{firstRunMainBottom}
     </div>
@@ -37,7 +40,7 @@ export function getHtml(this: ComposeAppElement) {
 
   <div id="firstRunFooter" class="footer">
     <cr-button id="firstRunOkButton" class="action-button"
-      @click="${this.onFirstRunOkButtonClick_}">
+        @click="${this.onFirstRunOkButtonClick_}">
       $i18n{firstRunOkButton}
     </cr-button>
   </div>
@@ -47,7 +50,7 @@ export function getHtml(this: ComposeAppElement) {
   <div id="freMsbbHeading">
     <h1>$i18n{freMsbbTitle}</h1>
     <cr-icon-button id="closeButtonMSBB" class="close-button"
-      iron-icon="cr:close" @click="${this.onCloseClick_}">
+        iron-icon="cr:close" @click="${this.onCloseClick_}">
     </cr-icon-button>
   </div>
 
@@ -59,7 +62,7 @@ export function getHtml(this: ComposeAppElement) {
 
   <div id="freMsbbFooter" class="footer">
     <cr-button id="SettingsButton" class="action-button"
-      @click="${this.onMsbbSettingsClick_}">
+        @click="${this.onMsbbSettingsClick_}">
       $i18n{freMsbbSettingsButton}
     </cr-button>
   </div>
@@ -121,11 +124,13 @@ export function getHtml(this: ComposeAppElement) {
             <compose-result-text id="resultText"
                 .textInput="${this.responseText_}"
                 ?is-output-complete="${this.outputComplete_}"
-                @is-output-complete-changed="${this.onIsOutputCompleteChanged_}"
+                @is-output-complete-changed="${
+                    this.onIsOutputCompleteChanged_}"
                 ?has-output="${this.hasOutput_}"
                 @has-output-changed="${this.onHasOutputChanged_}"
                 ?has-partial-output="${this.hasPartialOutput_}"
-                @has-partial-output-changed="${this.onHasPartialOutputChanged_}"
+                @has-partial-output-changed="${
+                    this.onHasPartialOutputChanged_}"
                 @result-edit="${this.onResultEdit_}"
                 @set-result-focus="${this.onSetResultFocus_}">
             </compose-result-text>
@@ -151,7 +156,9 @@ export function getHtml(this: ComposeAppElement) {
                       @click="${this.onUndoClick_}">
                     <div aria-hidden="true"> $i18n{undoButtonText} </div>
                     <cr-icon aria-hidden="true" slot="suffix-icon"
-                      icon="compose:undo">
+                        icon="${this.webuiRoundedIconsEnabled_ ?
+                            'compose:undo' :
+                            'compose:undo-old'}">
                     </cr-icon>
                   </cr-button>
                 </div>
@@ -161,7 +168,9 @@ export function getHtml(this: ComposeAppElement) {
                       @click="${this.onRedoClick_}">
                     <div aria-hidden="true"> $i18n{redoButtonText} </div>
                     <cr-icon aria-hidden="true" slot="suffix-icon"
-                      icon="compose:redo">
+                        icon="${this.webuiRoundedIconsEnabled_ ?
+                            'compose:redo' :
+                            'compose:redo-old'}">
                     </cr-icon>
                   </cr-button>
                 </div>
@@ -182,15 +191,16 @@ export function getHtml(this: ComposeAppElement) {
         </div>
       </div>
       <cr-button id="submitButton" class="action-button"
-          @click="${this.onSubmitClick_}"
-          ?disabled="${!this.isSubmitEnabled_}">
-        <cr-icon slot="prefix-icon" icon="compose:compose"></cr-icon>
+          @click="${this.onSubmitClick_}" ?disabled="${!this.isSubmitEnabled_}">
+        <cr-icon slot="prefix-icon"
+            icon="${this.webuiRoundedIconsEnabled_ ? 'compose:pen-spark' :
+                                                     'compose:compose-old'}">
+        </cr-icon>
         $i18n{submitButton}
       </cr-button>
     </div>
 
-    <div id="resultFooter" class="footer"
-        ?hidden="${this.hideResults_()}"
+    <div id="resultFooter" class="footer" ?hidden="${this.hideResults_()}"
         ?inert="${this.hasPartialOutput_}">
       <div class="footer-text">
         <div @click="${this.onFooterClick_}">
@@ -198,10 +208,12 @@ export function getHtml(this: ComposeAppElement) {
               ?hidden="${!this.showOnDeviceDogfoodFooter_()}">
             $i18nRaw{onDeviceUsedFooter}
           </b>
-          <span ?hidden="${!this.showOnDeviceDogfoodFooter_()}"
-              >$i18nRaw{dogfoodFooter}</span>
-          <span ?hidden="${this.showOnDeviceDogfoodFooter_()}"
-              >$i18nRaw{resultFooter}</span>
+          <span ?hidden="${!this.showOnDeviceDogfoodFooter_()}">
+            $i18nRaw{dogfoodFooter}
+          </span>
+          <span ?hidden="${this.showOnDeviceDogfoodFooter_()}">
+            $i18nRaw{resultFooter}
+          </span>
         </div>
         <cr-feedback-buttons id="feedbackButtons"
             @selected-option-changed="${this.onFeedbackSelectedOptionChanged_}"
@@ -218,17 +230,22 @@ export function getHtml(this: ComposeAppElement) {
     <div id="errorFooter" class="footer"
         ?hidden="${!this.hasFailedResponse_()}">
       <div @click="${this.onFooterClick_}" class="footer-text">
-        <span ?hidden="${this.hasErrorWithLink_()}"
-          >${this.failedResponseErrorText_()}</span>
-        <span ?hidden="${!this.hasUnsupportedLanguageResponse_()}"
-          >$i18nRaw{errorUnsupportedLanguage}</span>
-        <span ?hidden="${!this.hasPermissionDeniedResponse_()}"
-          >$i18nRaw{errorPermissionDenied}</span>
+        <span ?hidden="${this.hasErrorWithLink_()}">
+          ${this.failedResponseErrorText_()}
+        </span>
+        <span ?hidden="${!this.hasUnsupportedLanguageResponse_()}">
+          $i18nRaw{errorUnsupportedLanguage}
+        </span>
+        <span ?hidden="${!this.hasPermissionDeniedResponse_()}">
+          $i18nRaw{errorPermissionDenied}
+        </span>
       </div>
       <cr-button id="errorGoBackButton" class="action-button"
           @click="${this.onErrorGoBackButtonClick_}"
           ?hidden="${!this.isBackFromErrorAvailable_()}">
-        <cr-icon aria-hidden="true" slot="prefix-icon" icon="compose:undo">
+        <cr-icon aria-hidden="true" slot="prefix-icon"
+            icon="${this.webuiRoundedIconsEnabled_ ? 'compose:undo' :
+                                                     'compose:undo-old'}">
         </cr-icon>
         <div aria-hidden="true">
           $i18nRaw{errorFilteredGoBackButton}
@@ -242,27 +259,26 @@ export function getHtml(this: ComposeAppElement) {
           .inputParams="${this.inputParams_}">
       </compose-textarea>
       <div class="footer">
-        <if expr="not(is_win)">
-          <cr-button id="cancelEditButton" class="tonal-button"
-              @click="${this.onCancelEditClick_}">
-            $i18n{editCancelButton}
-          </cr-button>
-        </if>
+<if expr="not(is_win)">
+        <cr-button id="cancelEditButton" class="tonal-button"
+            @click="${this.onCancelEditClick_}">
+          $i18n{editCancelButton}
+        </cr-button>
+</if>
         <cr-button id="submitEditButton" class="action-button"
             @click="${this.onSubmitEditClick_}"
             ?disabled="${!this.isEditSubmitEnabled_}">
           $i18n{editUpdateButton}
         </cr-button>
-        <if expr="is_win">
-          <cr-button id="cancelEditButton" class="tonal-button"
-              @click="${this.onCancelEditClick_}">
-            $i18n{editCancelButton}
-          </cr-button>
-        </if>
+<if expr="is_win">
+        <cr-button id="cancelEditButton" class="tonal-button"
+            @click="${this.onCancelEditClick_}">
+          $i18n{editCancelButton}
+        </cr-button>
+</if>
       </div>
     </div>
   </div>
 </div>
 <!--_html_template_end_-->`;
-  // clang-format on
 }

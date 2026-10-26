@@ -4,11 +4,20 @@
 
 #include "net/device_bound_sessions/url_fetcher.h"
 
+#include <optional>
+#include <utility>
+
+#include "base/check.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "net/base/features.h"
 #include "net/base/io_buffer.h"
+#include "net/base/net_errors.h"
+#include "net/base/url_util.h"
 #include "net/cert/x509_certificate.h"
+#include "net/device_bound_sessions/session_binding_utils.h"
 #include "net/device_bound_sessions/session_service.h"
+#include "net/http/http_request_headers.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/url_request/url_request_context.h"
@@ -56,10 +65,13 @@ constexpr int kBufferSize = 4096;
 
 URLFetcher::URLFetcher(const URLRequestContext* context,
                        GURL url,
+                       const url::Origin& referring_origin,
                        std::optional<net::NetLogSource> net_log_source,
-                       bool is_refresh)
+                       bool is_refresh,
+                       net::RequestPriority priority,
+                       base::TimeDelta timeout)
     : request_(context->CreateRequest(url,
-                                      IDLE,
+                                      priority,
                                       this,
                                       kRegistrationTrafficAnnotation,
                                       // TODO(crbug.com/533319700): Support
@@ -67,7 +79,9 @@ URLFetcher::URLFetcher(const URLRequestContext* context,
                                       net::handles::kInvalidNetworkHandle,
                                       /*is_for_websockets=*/false,
                                       net_log_source)),
-      buf_(base::MakeRefCounted<IOBufferWithSize>(kBufferSize)) {
+      buf_(base::MakeRefCounted<IOBufferWithSize>(kBufferSize)),
+      referring_origin_(referring_origin),
+      timeout_(timeout) {
   if (is_refresh &&
       base::FeatureList::IsEnabled(
           net::features::
@@ -79,16 +93,100 @@ URLFetcher::URLFetcher(const URLRequestContext* context,
 
 URLFetcher::~URLFetcher() = default;
 
+void URLFetcher::SetShouldFollowRedirectCallback(
+    ShouldFollowRedirectCallback callback) {
+  // Must be called before `Start()`, which sets `callback_`.
+  CHECK(!callback_);
+  should_follow_redirect_callback_ = std::move(callback);
+}
+
 void URLFetcher::Start(base::OnceClosure complete_callback) {
   callback_ = std::move(complete_callback);
+  CHECK(callback_);
+  if (timeout_.is_positive()) {
+    // SAFETY: `watchdog_timer_` is owned by `this` and destroyed before `this`.
+    watchdog_timer_.Start(
+        FROM_HERE, timeout_,
+        base::BindOnce(&URLFetcher::OnTimeout, base::Unretained(this)));
+  }
   request_->Start();
 }
 
-void URLFetcher::OnResponseStarted(URLRequest* request, int net_error) {
+void URLFetcher::OnTimeout() {
+  Complete(net::ERR_TIMED_OUT);
+}
+
+void URLFetcher::Complete(int net_error) {
+  if (!callback_) {
+    return;
+  }
+  watchdog_timer_.Stop();
   net_error_ = net_error;
-  if (net_error != OK) {
-    std::move(callback_).Run();
+  // Move `callback_` out immediately to avoid re-entrancy issues.
+  base::ScopedClosureRunner runner(std::move(callback_));
+  if (net_error != OK && request_->is_pending()) {
+    request_->CancelWithError(net_error);
+  }
+  // `this` may be deleted when `runner` runs at scope exit.
+}
+
+void URLFetcher::OnReceivedRedirect(URLRequest* request,
+                                    const RedirectInfo& redirect_info,
+                                    bool* defer_redirect) {
+  CHECK_EQ(request, request_.get());
+
+  // If `callback_` is null, the watchdog timer has already fired and invoked
+  // `OnTimeout()`, which cancelled the request with `ERR_TIMED_OUT`.
+  if (!callback_) {
+    return;
+  }
+
+  // Let the owner veto the redirect before anything is sent to the new URL.
+  if (should_follow_redirect_callback_ &&
+      !should_follow_redirect_callback_.Run(redirect_info)) {
+    *defer_redirect = true;
+    Complete(net::ERR_UNSAFE_REDIRECT);
     // `this` may be deleted.
+    return;
+  }
+
+  // 1. Strict Protocol-Downgrade Defense:
+  // DBSC authentication state and cryptographic headers are strictly bound to
+  // authenticated, cryptographic origins. Redirects targeting unencrypted or
+  // non-trustworthy (HTTP) transports are rejected immediately to guarantee
+  // zero plaintext leakage of session cookies and tokens.
+  if (!IsSecure(redirect_info.new_url)) {
+    *defer_redirect = true;
+    Complete(net::ERR_UNSAFE_REDIRECT);
+    return;
+  }
+
+  // 2. Fetch-Metadata Synchronization:
+  // Since `Sec-Fetch-Site` is dynamically calculated based on the relationship
+  // between the `referring_origin_` and the target URI, HTTP redirects across
+  // cross-origin boundaries render the initial header state stale.
+  // Directly append the updated 'Sec-Fetch-Site' assertion onto the active
+  // URLRequest before allowing the redirect execution chain to proceed.
+  std::string_view updated_sec_fetch_site =
+      SecFetchSiteForReferringOrigin(referring_origin_, redirect_info.new_url);
+  request->SetExtraRequestHeaderByName(kSecFetchSiteHeaderName,
+                                       updated_sec_fetch_site,
+                                       /*overwrite=*/true);
+
+  // 3. Synchronous Redirection Dispatch:
+  // For synchronous //net URLRequest delegates, setting `*defer_redirect =
+  // false` instructs the net::URLRequest state-machine to automatically forward
+  // the redirect wire request upon returning from this callback, absorbing all
+  // SetExtraRequestHeaderByName modifications.
+  *defer_redirect = false;
+}
+
+void URLFetcher::OnResponseStarted(URLRequest* request, int net_error) {
+  if (!callback_) {
+    return;
+  }
+  if (net_error != OK) {
+    Complete(net_error);
     return;
   }
 
@@ -99,14 +197,15 @@ void URLFetcher::OnResponseStarted(URLRequest* request, int net_error) {
     // `this` may be deleted.
     return;
   } else if (bytes_read_or_error != ERR_IO_PENDING) {
-    net_error_ = bytes_read_or_error;
-    std::move(callback_).Run();
-    // `this` may be deleted.
+    Complete(bytes_read_or_error);
     return;
   }
 }
 
 void URLFetcher::OnReadCompleted(URLRequest* request, int bytes_read_or_error) {
+  if (!callback_) {
+    return;
+  }
   if (bytes_read_or_error > 0) {
     data_received_.append(buf_->data(), bytes_read_or_error);
   }
@@ -118,13 +217,14 @@ void URLFetcher::OnReadCompleted(URLRequest* request, int bytes_read_or_error) {
     }
   }
 
-  if (bytes_read_or_error < 0 && bytes_read_or_error != ERR_IO_PENDING) {
-    net_error_ = bytes_read_or_error;
+  if (bytes_read_or_error == 0) {
+    // 0 bytes indicates EOF; the request completed successfully.
+    Complete(net::OK);
+    return;
   }
 
   if (bytes_read_or_error != ERR_IO_PENDING) {
-    std::move(callback_).Run();
-    // `this` may be deleted.
+    Complete(bytes_read_or_error);
     return;
   }
 }
@@ -135,9 +235,15 @@ std::string URLFetcher::TakeDataReceived() {
 
 void URLFetcher::OnCertificateRequested(URLRequest* request,
                                         SSLCertRequestInfo* cert_request_info) {
+  // If `callback_` is null, the watchdog timer has already fired and invoked
+  // `OnTimeout()`, which cancelled the request with `ERR_TIMED_OUT`.
+  if (!callback_) {
+    return;
+  }
+
   SessionService* service = request->context()->device_bound_session_service();
   if (!service) {
-    request->CancelWithError(ERR_SSL_CLIENT_AUTH_CERT_NEEDED);
+    Complete(ERR_SSL_CLIENT_AUTH_CERT_NEEDED);
     return;
   }
 
@@ -151,8 +257,14 @@ void URLFetcher::ContinueWithSelectedCertificate(
     scoped_refptr<X509Certificate> cert,
     scoped_refptr<SSLPrivateKey> key,
     bool cancel) {
+  // If `callback_` is null, the watchdog timer has already fired and invoked
+  // `OnTimeout()`, which cancelled the request with `ERR_TIMED_OUT`.
+  if (!callback_) {
+    return;
+  }
+
   if (cancel) {
-    request_->CancelWithError(ERR_SSL_CLIENT_AUTH_CERT_NEEDED);
+    Complete(ERR_SSL_CLIENT_AUTH_CERT_NEEDED);
   } else if (cert && key) {
     request_->ContinueWithCertificate(std::move(cert), std::move(key));
   } else {

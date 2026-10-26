@@ -451,6 +451,7 @@ static_library("arc_app_constants") {
 
 source_set("arc_metrics_constants") {
   sources = [ "metrics/arc_metrics_constants.h" ]
+  deps = [ "//base" ]
 }
 
 source_set("unit_tests") {
@@ -548,6 +549,7 @@ source_set("unit_tests") {
     "//chromeos/dbus/power:power_manager_proto",
     "//chromeos/ui/frame",
     "//components/account_id",
+    "//components/account_id:test_support",
     "//components/exo",
     "//components/exo:test_support",
     "//components/keyed_service/content",

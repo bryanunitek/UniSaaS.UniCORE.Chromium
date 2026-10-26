@@ -29,6 +29,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
@@ -40,6 +41,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/frame_request_callback_collection.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/animation_frame_timing_monitor.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/policy_container.h"
 #include "third_party/blink/renderer/core/frame/universal_global_scope.h"
@@ -47,6 +49,7 @@
 #include "third_party/blink/renderer/core/script/script.h"
 #include "third_party/blink/renderer/core/url/dom_origin_utils.h"
 #include "third_party/blink/renderer/core/workers/custom_event_message.h"
+#include "third_party/blink/renderer/core/workers/worker_classic_script_loader.h"
 #include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_settings.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
@@ -69,6 +72,7 @@ class FontFaceSet;
 struct GlobalScopeCreationParams;
 class InstalledScriptsManager;
 class OffscreenFontSelector;
+class SystemClipboard;
 class WorkerResourceTimingNotifier;
 class TrustedTypePolicyFactory;
 class V8UnionTrustedScriptURLOrUSVString;
@@ -82,7 +86,8 @@ class CORE_EXPORT WorkerGlobalScope
       public WindowOrWorkerGlobalScope,
       public UniversalGlobalScope,
       public Supplementable<WorkerGlobalScope>,
-      public DOMOriginUtils {
+      public DOMOriginUtils,
+      public AnimationFrameTimingMonitor::Client {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -98,7 +103,8 @@ class CORE_EXPORT WorkerGlobalScope
   // for Dedicated / Shared workers too so we can benefit from code caches.
   virtual CachedMetadataHandler* CreateWorkerScriptCachedMetadataHandler(
       const KURL& script_url,
-      std::unique_ptr<Vector<uint8_t>> meta_data) {
+      std::unique_ptr<Vector<uint8_t>> meta_data,
+      TextEncoding encoding) {
     return nullptr;
   }
 
@@ -120,6 +126,7 @@ class CORE_EXPORT WorkerGlobalScope
   WorkerGlobalScope* self() { return this; }
   WorkerLocation* location() const;
   WorkerNavigator* navigator() const override;
+  SystemClipboard* GetSystemClipboard() const;
   void close();
 
   String origin() const;
@@ -181,11 +188,13 @@ class CORE_EXPORT WorkerGlobalScope
 
   // These methods should be called in the scope of a pausable
   // task runner. ie. They should not be called when the context
-  // is paused.
+  // is paused. `encoding` is used only for `CachedMetadataHandler` as
+  // `source_code` is already decoded.
   void EvaluateClassicScript(const KURL& script_url,
                              String source_code,
                              std::unique_ptr<Vector<uint8_t>> cached_meta_data,
-                             const v8_inspector::V8StackTraceId& stack_id);
+                             const v8_inspector::V8StackTraceId& stack_id,
+                             TextEncoding encoding);
 
   // Should be called (in all successful cases) when the worker top-level
   // script fetch is finished.
@@ -229,6 +238,21 @@ class CORE_EXPORT WorkerGlobalScope
   base::TimeTicks TimeOrigin() const { return time_origin_; }
   WorkerSettings* GetWorkerSettings() const { return worker_settings_.get(); }
 
+  // AnimationFrameTimingMonitor::Client overrides. A worker has no rendering
+  // frame, so only congested-moment reporting is used.
+  void ReportLongTaskTiming(base::TimeTicks start,
+                            base::TimeTicks end,
+                            ExecutionContext* context) override {}
+  void ReportCongestedMoment(AnimationFrameTimingInfo*) override;
+  bool ShouldReportLongAnimationFrameTiming() const override { return true; }
+  bool RequestedMainFramePending() override { return false; }
+  ukm::UkmRecorder* MainFrameUkmRecorder() override { return nullptr; }
+  ukm::SourceId MainFrameUkmSourceId() override {
+    return ukm::kInvalidSourceId;
+  }
+
+  void CreateAnimationFrameTimingMonitor();
+
   void Trace(Visitor*) const override;
 
   virtual InstalledScriptsManager* GetInstalledScriptsManager() {
@@ -240,10 +264,6 @@ class CORE_EXPORT WorkerGlobalScope
   // TODO(crbug.com/451479061): Consider moving the following function
   // under trustedTypes/
   TrustedTypePolicyFactory* GetTrustedTypes() const override;
-
-  // TODO(https://crbug.com/835717): Remove this function after dedicated
-  // workers support off-the-main-thread script fetch by default.
-  virtual bool IsOffMainThreadScriptFetchDisabled() { return false; }
 
   // Takes the ownership of the parameters used to load the worker main module
   // script in renderer process.
@@ -282,14 +302,41 @@ class CORE_EXPORT WorkerGlobalScope
                     bool is_service_worker_global_scope);
 
   // ExecutionContext
-  void ExceptionThrown(ErrorEvent*) override;
+  void ExceptionThrown(ErrorEvent*, SanitizeScriptErrors) override;
   void RemoveURLFromMemoryCache(const KURL&) final;
 
+  void FetchClassicScript(
+      const KURL& script_url,
+      std::unique_ptr<WorkerMainScriptLoadParameters>
+          worker_main_script_load_params,
+      const FetchClientSettingsObjectSnapshot& outside_settings_object,
+      WorkerResourceTimingNotifier& outside_resource_timing_notifier,
+      mojom::blink::RequestContextType context_type,
+      network::mojom::RequestDestination destination,
+      const v8_inspector::V8StackTraceId& stack_id);
+  void DidReceiveResponseForClassicScript(
+      WorkerClassicScriptLoader* classic_script_loader);
+  void DidFetchClassicScript(WorkerClassicScriptLoader* classic_script_loader,
+                             const v8_inspector::V8StackTraceId& stack_id);
+  void RunClassicScript(
+      const KURL& response_url,
+      network::mojom::ReferrerPolicy response_referrer_policy,
+      Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+      DocumentPolicy::DocumentPolicyBundle response_document_policy,
+      const Vector<String>* response_origin_trial_tokens,
+      const String& source_code,
+      std::unique_ptr<Vector<uint8_t>> cached_meta_data,
+      const v8_inspector::V8StackTraceId&,
+      TextEncoding encoding);
+
+  // `out_response_encoding` should be used only for V8 code cache as
+  // `*out_source_code` is already decoded.
   virtual bool FetchClassicImportedScript(
       const KURL& script_url,
       KURL* out_response_url,
       String* out_source_code,
-      std::unique_ptr<Vector<uint8_t>>* out_cached_meta_data);
+      std::unique_ptr<Vector<uint8_t>>* out_cached_meta_data,
+      TextEncoding* out_response_encoding);
 
   // Notifies that the top-level worker script is ready to evaluate.
   // Worker top-level script is evaluated after it is fetched and
@@ -309,6 +356,10 @@ class CORE_EXPORT WorkerGlobalScope
   // Used for importScripts().
   // Also called by ServiceWorkerGlobalScope::importScripts.
   void ImportScriptsInternal(const Vector<String>& urls, ExceptionState&);
+
+  // The timestamp taken when FetchAndRunClassicScript() is called.
+  // Currently only used for `DedicatedWorkerGlobalScope` metrics.
+  base::TimeTicks fetch_classic_script_start_time_;
 
  private:
   void SetWorkerSettings(std::unique_ptr<WorkerSettings>);
@@ -330,9 +381,10 @@ class CORE_EXPORT WorkerGlobalScope
 
   mutable Member<WorkerLocation> location_;
   mutable Member<WorkerNavigator> navigator_;
+  mutable Member<SystemClipboard> system_clipboard_;
   mutable Member<TrustedTypePolicyFactory> trusted_types_;
 
-  WorkerThread* thread_;
+  raw_ptr<WorkerThread, UnprotectedInRelease | DanglingUntriaged> thread_;
 
   // The compositor task runner associated with the |AgentGroupScheduler| this
   // worker belongs to.
@@ -347,6 +399,8 @@ class CORE_EXPORT WorkerGlobalScope
   int last_pending_error_event_id_ = 0;
 
   Member<OffscreenFontSelector> font_selector_;
+
+  Member<AnimationFrameTimingMonitor> animation_frame_timing_monitor_;
 
   blink::BrowserInterfaceBrokerProxyImpl browser_interface_broker_proxy_;
 

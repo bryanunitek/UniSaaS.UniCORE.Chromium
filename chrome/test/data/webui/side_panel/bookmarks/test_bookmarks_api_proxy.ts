@@ -29,7 +29,7 @@ export class TestBookmarksApiProxy extends TestBrowserProxy implements
       'openBookmark',
       'contextMenuOpenBookmarkInNewTab',
       'contextMenuOpenBookmarkInNewWindow',
-      'contextMenuOpenBookmarkInIncognitoWindow',
+      'contextMenuOpenBookmarkInOffTheRecordWindow',
       'contextMenuOpenBookmarkInNewTabGroup',
       'contextMenuOpenBookmarkInSplitView',
       'contextMenuEdit',
@@ -40,7 +40,6 @@ export class TestBookmarksApiProxy extends TestBrowserProxy implements
       'createFolder',
       'deleteBookmarks',
       'dropBookmarks',
-      'editBookmarks',
       'renameBookmark',
       'setSortOrder',
       'setViewType',
@@ -93,9 +92,10 @@ export class TestBookmarksApiProxy extends TestBrowserProxy implements
     this.methodCalled('contextMenuOpenBookmarkInNewWindow', ids, source);
   }
 
-  contextMenuOpenBookmarkInIncognitoWindow(
+  contextMenuOpenBookmarkInOffTheRecordWindow(
       ids: string[], source: ActionSource) {
-    this.methodCalled('contextMenuOpenBookmarkInIncognitoWindow', ids, source);
+    this.methodCalled(
+        'contextMenuOpenBookmarkInOffTheRecordWindow', ids, source);
   }
 
   contextMenuOpenBookmarkInNewTabGroup(ids: string[], source: ActionSource) {
@@ -149,12 +149,6 @@ export class TestBookmarksApiProxy extends TestBrowserProxy implements
   dropBookmarks(parentId: string) {
     this.methodCalled('dropBookmarks', parentId);
     return Promise.resolve();
-  }
-
-  editBookmarks(
-      ids: string[], newTitle: string|undefined, newUrl: string|undefined,
-      newParentId: string|undefined) {
-    this.methodCalled('editBookmarks', ids, newTitle, newUrl, newParentId);
   }
 
   pasteToBookmark(parentId: string, destinationId?: string): Promise<void> {

@@ -14,11 +14,14 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
+#include "base/test/test_future.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_content_client_initializer.h"
 #include "content/public/test/test_renderer_host.h"
@@ -34,6 +37,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
 #include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
@@ -78,8 +82,11 @@ class TestTrackedElementManager
   }
 
   void ClickElement(tracked_element::mojom::TrackedElementIdentifierPtr id,
+                    tracked_element::mojom::InputType input_type,
                     ClickElementCallback callback) override {
-    interaction_events_.push_back("Click:" + id->native_identifier);
+    interaction_events_.push_back(
+        base::StringPrintf("Click:%s:%d", id->native_identifier.c_str(),
+                           static_cast<int>(input_type)));
     std::move(callback).Run(true);
   }
 
@@ -392,8 +399,7 @@ TEST_F(TrackedElementHandlerTest, DestroyHandlerCleansUpElement) {
       ui::ElementTracker::GetElementTracker()->GetElementInAnyContext(
           kTestElementIdentifier1);
   ASSERT_TRUE(element);
-  EXPECT_EQ(kTestSecondaryId1,
-            element->AsA<TrackedElementWebUI>()->secondary_identifier());
+  EXPECT_EQ(kTestSecondaryId1, element->GetSecondaryIdentifier());
   const ui::ElementContext context = element->context();
   EXPECT_TRUE(ui::ElementTracker::GetElementTracker()->IsElementVisible(
       kTestElementIdentifier1, context));
@@ -517,8 +523,19 @@ TEST_F(TrackedElementHandlerTest, Interaction) {
 
   const std::string name = kTestElementIdentifier1.GetName();
   EXPECT_TRUE(handler()->ClickElement(element));
-  EXPECT_THAT(manager.TakeInteractionEvents(),
-              testing::ElementsAre("Click:" + name));
+  EXPECT_THAT(
+      manager.TakeInteractionEvents(),
+      testing::ElementsAre(base::StringPrintf(
+          "Click:%s:%d", name.c_str(),
+          static_cast<int>(tracked_element::mojom::InputType::kDontCare))));
+
+  EXPECT_TRUE(handler()->ClickElement(
+      element, tracked_element::mojom::InputType::kKeyboard));
+  EXPECT_THAT(
+      manager.TakeInteractionEvents(),
+      testing::ElementsAre(base::StringPrintf(
+          "Click:%s:%d", name.c_str(),
+          static_cast<int>(tracked_element::mojom::InputType::kKeyboard))));
 
   EXPECT_TRUE(handler()->FocusElement(element));
   EXPECT_THAT(manager.TakeInteractionEvents(),
@@ -610,7 +627,9 @@ TEST_F(TrackedElementHandlerTest, VisibilityLockPreventsHiding) {
   // Release lock.
   lock.reset();
   // Now it should be hidden.
-  EXPECT_FALSE(tracker->IsElementVisible(kTestElementIdentifier1, context));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !tracker->IsElementVisible(kTestElementIdentifier1, context);
+  }));
 }
 
 TEST_F(TrackedElementHandlerTest, MultipleVisibilityLocks) {
@@ -634,7 +653,9 @@ TEST_F(TrackedElementHandlerTest, MultipleVisibilityLocks) {
   EXPECT_TRUE(tracker->IsElementVisible(kTestElementIdentifier1, context));
 
   lock2.reset();
-  EXPECT_FALSE(tracker->IsElementVisible(kTestElementIdentifier1, context));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !tracker->IsElementVisible(kTestElementIdentifier1, context);
+  }));
 }
 
 // Tests for multiple elements with the same ElementIdentifier but different
@@ -663,9 +684,8 @@ class TrackedElementHandlerSecondaryIdentifierTest
         tracker->GetAllMatchingElementsInAnyContext(kTestElementIdentifier1);
     ElementMap result;
     for (TrackedElement* el : elements) {
-      auto* const web_el = el->AsA<TrackedElementWebUI>();
-      CHECK(web_el);
-      CHECK(result.emplace(web_el->secondary_identifier(), web_el).second);
+      CHECK(el->IsA<TrackedElementWebUI>());
+      CHECK(result.emplace(el->GetSecondaryIdentifier(), el).second);
     }
     return result;
   }
@@ -825,7 +845,67 @@ TEST_F(TrackedElementHandlerWidgetTest, GetNativeView) {
   webview->SetWebContents(nullptr);
   widget->CloseNow();
 }
+
+TEST_F(TrackedElementHandlerWidgetTest, GetWebView) {
+  handler_remote()->TrackedElementVisibilityChanged(
+      MakeId(kTestElementIdentifier1, kTestSecondaryId1), true, kElementBounds);
+  tracked_element_handler_remote_.FlushForTesting();
+
+  auto* const element =
+      ui::ElementTracker::GetElementTracker()->GetElementInAnyContext(
+          kTestElementIdentifier1);
+  ASSERT_TRUE(element);
+  auto* const webui_element = element->AsA<TrackedElementWebUI>();
+  ASSERT_TRUE(webui_element);
+
+  // Before widget is initialized, GetWebView() should return nullptr.
+  EXPECT_EQ(nullptr, handler_->GetWebView());
+  EXPECT_EQ(nullptr, webui_element->GetWebView());
+
+  auto widget = std::make_unique<views::Widget>();
+  views::Widget::InitParams params =
+      CreateParams(views::Widget::InitParams::TYPE_WINDOW);
+  params.ownership = views::Widget::InitParams::CLIENT_OWNS_WIDGET;
+  widget->Init(std::move(params));
+  widget->Show();
+
+  auto* webview = widget->SetClientContentsView(
+      std::make_unique<views::WebView>(browser_context_.get()));
+  webview->SetWebContents(web_contents_.get());
+
+  // Should discover the WebView automatically.
+  EXPECT_EQ(webview, handler_->GetWebView());
+  EXPECT_EQ(webview, webui_element->GetWebView());
+
+  // Explicitly setting WebView should also work.
+  auto custom_webview =
+      std::make_unique<views::WebView>(browser_context_.get());
+  custom_webview->SetWebContents(web_contents_.get());
+  handler_->SetWebViewForTesting(custom_webview.get());
+  EXPECT_EQ(custom_webview.get(), handler_->GetWebView());
+  handler_->SetWebViewForTesting(webview);
+  EXPECT_EQ(webview, handler_->GetWebView());
+
+  custom_webview->SetWebContents(nullptr);
+  webview->SetWebContents(nullptr);
+  widget->CloseNow();
+}
 #endif
+
+TEST_F(TrackedElementHandlerTest, GetBoundsInWebContents) {
+  handler_remote()->TrackedElementVisibilityChanged(
+      MakeId(kTestElementIdentifier1, kTestSecondaryId1), true, kElementBounds);
+  tracked_element_handler_remote_.FlushForTesting();
+
+  auto* const element =
+      ui::ElementTracker::GetElementTracker()->GetElementInAnyContext(
+          kTestElementIdentifier1);
+  ASSERT_TRUE(element);
+  auto* const webui_element = element->AsA<TrackedElementWebUI>();
+  ASSERT_TRUE(webui_element);
+  EXPECT_EQ(gfx::ToRoundedRect(kElementBounds),
+            webui_element->GetBoundsInWebContents());
+}
 
 class TestWebUIController : public content::WebUIController {
  public:
@@ -856,6 +936,96 @@ TEST_F(TrackedElementHandlerTest, DocumentSingleton) {
   EXPECT_EQ(
       handler.get(),
       TrackedElementHandlerDocumentSingleton::GetOrCreate(main_rfh()).get());
+}
+
+TEST_F(TrackedElementHandlerTest, DocumentSingletonAsync) {
+  content::TestWebUI test_web_ui;
+  test_web_ui.set_web_contents(web_contents());
+  auto controller = std::make_unique<TestWebUIController>(&test_web_ui);
+
+  base::test::TestFuture<base::WeakPtr<TrackedElementHandler>> future;
+
+  // Initially should not invoke callback
+  TrackedElementHandlerDocumentSingleton::GetOrCreateAsync(
+      main_rfh(), future.GetCallback());
+  task_environment()->RunUntilIdle();
+  EXPECT_FALSE(future.IsReady());
+
+  // Register.
+  TrackedElementHandlerDocumentSingleton::Register(controller.get(),
+                                                   {kTestElementIdentifier1});
+
+  // Now should be able to get the value.
+  auto handler = future.Get();
+  ASSERT_TRUE(handler);
+  EXPECT_EQ(web_contents(), handler->web_contents());
+
+  // Retrieving again should return the same handler.
+  base::test::TestFuture<base::WeakPtr<TrackedElementHandler>> future2;
+  TrackedElementHandlerDocumentSingleton::GetOrCreateAsync(
+      main_rfh(), future2.GetCallback());
+  EXPECT_EQ(handler.get(), future2.Get().get());
+}
+
+// Tests for RenderFrameHost association and subframe handling.
+TEST_F(TrackedElementHandlerTest, MainFrameHandler) {
+  mojo::Remote<tracked_element::mojom::TrackedElementHandler> remote;
+  auto test_handler = std::make_unique<TrackedElementHandler>(
+      web_contents(), remote.BindNewPipeAndPassReceiver(),
+      ui::ElementContext::CreateFakeContextForTesting(web_contents()),
+      std::vector<ui::ElementIdentifier>{kTestElementIdentifier1}, main_rfh());
+  EXPECT_EQ(main_rfh(), test_handler->render_frame_host());
+
+  remote->TrackedElementVisibilityChanged(
+      MakeId(kTestElementIdentifier1, kTestSecondaryId1), true, kElementBounds);
+  remote.FlushForTesting();
+
+  auto* const element =
+      ui::ElementTracker::GetElementTracker()->GetElementInAnyContext(
+          kTestElementIdentifier1);
+  ASSERT_TRUE(element);
+  auto* const webui_element = element->AsA<TrackedElementWebUI>();
+  ASSERT_TRUE(webui_element);
+  EXPECT_EQ(gfx::ToRoundedRect(kElementBounds),
+            webui_element->GetBoundsInWebContents());
+  gfx::Rect expected_screen_bounds = webui_element->GetBoundsInWebContents();
+  expected_screen_bounds.Offset(
+      web_contents()->GetContainerBounds().OffsetFromOrigin());
+  EXPECT_EQ(expected_screen_bounds, webui_element->GetScreenBounds());
+}
+
+TEST_F(TrackedElementHandlerTest, SubframeHandler) {
+  content::RenderFrameHostTester::For(main_rfh())
+      ->InitializeRenderFrameIfNeeded();
+
+  content::RenderFrameHost* const subframe_rfh =
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("subframe");
+  ASSERT_TRUE(subframe_rfh);
+
+  mojo::Remote<tracked_element::mojom::TrackedElementHandler> remote;
+  auto test_handler = std::make_unique<TrackedElementHandler>(
+      web_contents(), remote.BindNewPipeAndPassReceiver(),
+      ui::ElementContext::CreateFakeContextForTesting(web_contents()),
+      std::vector<ui::ElementIdentifier>{kTestElementIdentifier1},
+      subframe_rfh);
+  EXPECT_EQ(subframe_rfh, test_handler->render_frame_host());
+
+  remote->TrackedElementVisibilityChanged(
+      MakeId(kTestElementIdentifier1, kTestSecondaryId1), true, kElementBounds);
+  remote.FlushForTesting();
+
+  auto* const element =
+      ui::ElementTracker::GetElementTracker()->GetElementInAnyContext(
+          kTestElementIdentifier1);
+  ASSERT_TRUE(element);
+  auto* const webui_element = element->AsA<TrackedElementWebUI>();
+  ASSERT_TRUE(webui_element);
+
+  // In test harnesses, if subframe_rfh has no view or default view, bounds
+  // will calculate safely without crashing.
+  const gfx::Rect bounds = webui_element->GetBoundsInWebContents();
+  EXPECT_FALSE(bounds.IsEmpty());
+  EXPECT_EQ(bounds.size(), gfx::ToRoundedRect(kElementBounds).size());
 }
 
 // TODO(crbug.com/40243115): add tests for element screen bounds. This requires

@@ -7,17 +7,23 @@
 
 #include <optional>
 
-#include "chrome/browser/ui/tabs/tab_menu_model_factory.h"
+#include "base/auto_reset.h"
+#include "base/callback_list.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+#include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
 #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
 #include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "chrome/browser/ui/views/tabs/tab/tab_context_menu_controller.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "ui/base/models/list_selection_model.h"
 
+class BrowserFrameView;
 class BrowserView;
 class ExpandOnHoverLock;
+class HorizontalTabClosingHelper;
+class RootTabCollectionNode;
 class TabCollectionNode;
 class TabGroup;
 class TabHoverCardController;
@@ -41,35 +47,49 @@ class TabStripCollectionController : public TabContextMenuController::Delegate {
  public:
   TabStripCollectionController(TabStripModel* model,
                                BrowserView* browser_view,
+                               RootTabCollectionNode& root_node,
                                TabDragHandler& drag_handler,
                                TabHoverCardController* hover_card_controller,
-                               std::unique_ptr<TabMenuModelFactory>
-                                   menu_model_factory_override = nullptr);
+                               TabStripOrientation orientation);
   TabStripCollectionController(const TabStripCollectionController&) = delete;
   TabStripCollectionController& operator=(const TabStripCollectionController&) =
       delete;
   ~TabStripCollectionController() override;
 
-  void ShowContextMenuForNode(TabCollectionNode* collection_node,
-                              views::View* source,
-                              const gfx::Point& point,
-                              ui::mojom::MenuSourceType source_type);
+  int GetTabCount() const;
+  const tabs::TabInterface* GetActiveTab() const;
+  const TabCollectionNode* GetAdjacentTab(
+      const tabs::TabInterface* tab_interface,
+      bool leading) const;
+  std::optional<tab_groups::TabGroupId> GetFocusedGroup() const;
+  bool IsGroupCollapsed(const tab_groups::TabGroupId& group_id) const;
+  std::optional<SkColor> GetGroupColor(
+      const tabs::TabInterface* tab_interface) const;
 
   void ShiftTabNext(const tabs::TabInterface* tab_interface);
   void ShiftTabPrevious(const tabs::TabInterface* tab_interface);
+  void ExtendSelectionNext(const tabs::TabInterface* tab_interface,
+                           const TabStripUserGestureDetails& gesture_detail);
+  void ExtendSelectionPrevious(
+      const tabs::TabInterface* tab_interface,
+      const TabStripUserGestureDetails& gesture_detail);
   void ShiftGroupUp(const tab_groups::TabGroupId& group);
   void ShiftGroupDown(const tab_groups::TabGroupId& group);
   void MoveTabFirst(const tabs::TabInterface* tab_interface);
   void MoveTabLast(const tabs::TabInterface* tab_interface);
   void SelectTab(const tabs::TabInterface* tab_interface,
                  const TabStripUserGestureDetails& event);
-  void CloseTab(const tabs::TabInterface* tab_interface);
+  void CloseTab(const tabs::TabInterface* tab_interface, CloseTabSource source);
   void ToggleSelected(const tabs::TabInterface* tab_interface);
   void AddSelectionFromAnchorTo(const tabs::TabInterface* tab_interface);
   void ExtendSelectionTo(const tabs::TabInterface* tab_interface);
   const ui::ListSelectionModel& GetSelectionModel() const;
   void ToggleTabGroupCollapsedState(const TabGroup* group,
                                     ToggleTabGroupCollapsedStateOrigin origin);
+
+  void ShowTabContextMenu(TabCollectionNode* collection_node,
+                          const gfx::Point& point,
+                          ui::mojom::MenuSourceType source_type);
   void ShowGroupEditorBubble(const TabCollectionNode* group_node);
   std::unique_ptr<views::Widget> ShowGroupEditorBubble(
       const tab_groups::TabGroupId& group_id,
@@ -86,6 +106,10 @@ class TabStripCollectionController : public TabContextMenuController::Delegate {
   }
 
   BrowserView* GetBrowserView() const { return browser_view_; }
+  BrowserFrameView* GetBrowserFrameView() const;
+  bool IsGlassFrame() const { return is_glass_frame_; }
+  void OnGlassFrameEligibilityChanged(bool is_eligible);
+  int GetStrokeThickness() const;
 
   TabDragHandler& GetDragHandler() { return drag_handler_.get(); }
   const TabDragHandler& GetDragHandler() const { return drag_handler_.get(); }
@@ -94,7 +118,14 @@ class TabStripCollectionController : public TabContextMenuController::Delegate {
     return hover_card_controller_.get();
   }
 
-  const tabs::TabInterface* GetActiveTab() const;
+  HorizontalTabClosingHelper* tab_closing_helper() const {
+    return tab_closing_helper_.get();
+  }
+
+  TabCollectionAnimatingLayoutManager::AnimationCoordinator&
+  animation_coordinator() {
+    return animation_coordinator_;
+  }
 
   // Notifies BrowserCommandController that the tab with keyboard focus has
   // changed.
@@ -103,6 +134,23 @@ class TabStripCollectionController : public TabContextMenuController::Delegate {
   void TabGroupFocusChanged(
       std::optional<tab_groups::TabGroupId> new_focused_group_id,
       std::optional<tab_groups::TabGroupId> old_focused_group_id);
+
+  // Updates freezing votes on all tabs when the focused group changes.
+  void UpdateAllTabsFocusFreezing();
+
+  // Updates the browser theme when focus mode is active for a tab group.
+  // Only updates themes for permanent tab groups; non-group focus mode does not
+  // theme the browser. Triggered when tab group focus changes or when the color
+  // of the currently focused tab group changes.
+  void UpdateFocusModeTheme(std::optional<tab_groups::TabGroupId> group_id);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Returns true if the tab should be locked for the task and false otherwise.
+  bool IsLockedForOnTask() const;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  [[nodiscard]] base::AutoReset<bool> ScopedAnimateLayout();
+  bool ShouldAnimateLayout() const;
 
  private:
   // TabContextMenuController::Delegate:
@@ -124,20 +172,36 @@ class TabStripCollectionController : public TabContextMenuController::Delegate {
   void RecordMetricsOnTabSelectionChange(
       std::optional<tab_groups::TabGroupId> group);
 
+  void ExpandCollapsedGroupsInSelectionRange(int target_index);
+
   void ShiftTabRelative(const tabs::TabInterface* tab_interface, int offset);
+  void ExtendSelectionRelative(
+      const tabs::TabInterface* tab_interface,
+      bool leading,
+      const TabStripUserGestureDetails& gesture_detail);
   void ShiftGroupRelative(const tab_groups::TabGroupId& group, int offset);
 
   void AnnounceTabAddedToGroup(tab_groups::TabGroupId group_id);
   void AnnounceTabRemovedFromGroup(tab_groups::TabGroupId group_id);
 
   std::unique_ptr<TabContextMenuController> context_menu_controller_;
-  std::unique_ptr<TabMenuModelFactory> menu_model_factory_;
   std::unique_ptr<ExpandOnHoverLock> expand_on_hover_lock_;
 
   raw_ptr<TabStripModel> model_;
   raw_ptr<BrowserView> browser_view_;
+  const raw_ref<RootTabCollectionNode> root_node_;
   const raw_ref<TabDragHandler> drag_handler_;
   raw_ptr<TabHoverCardController> hover_card_controller_;
+
+  TabCollectionAnimatingLayoutManager::AnimationCoordinator
+      animation_coordinator_;
+
+  bool is_animating_layout_change_ = false;
+
+  std::unique_ptr<HorizontalTabClosingHelper> tab_closing_helper_;
+
+  bool is_glass_frame_ = false;
+  base::CallbackListSubscription glass_frame_service_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_STRIP_COLLECTION_CONTROLLER_H_

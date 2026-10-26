@@ -4,13 +4,38 @@
 
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
 
+#import "components/actor/public/mojom/actor_types.mojom.h"
+#import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
+
 namespace actor {
+
+bool IsTerminalState(ActorTaskState state) {
+  switch (state) {
+    case ActorTaskState::kCancelled:
+    case ActorTaskState::kFinished:
+    case ActorTaskState::kFailed:
+      return true;
+    case ActorTaskState::kInit:
+    case ActorTaskState::kActing:
+    case ActorTaskState::kReflecting:
+    case ActorTaskState::kPausedByActor:
+    case ActorTaskState::kPausedByUser:
+    case ActorTaskState::kWaitingOnUser:
+      return false;
+  }
+}
 
 ActionResult::ActionResult(ToolExecutionResult result)
     : tool_result(std::move(result)) {}
 ActionResult::~ActionResult() = default;
 ActionResult::ActionResult(ActionResult&&) = default;
 ActionResult& ActionResult::operator=(ActionResult&&) = default;
+
+std::vector<ActionResult> MakeActionResults(mojom::ActionResultCode code) {
+  std::vector<ActionResult> results;
+  results.emplace_back(ToolExecutionResult(code));
+  return results;
+}
 
 // TabObservationResponse.
 TabObservationResponse::TabObservationResponse() = default;

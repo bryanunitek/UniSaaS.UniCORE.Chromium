@@ -7,14 +7,23 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_observer.h"
 
+class PrefService;
 class TabCollectionNode;
 class PinnedTabContainerView;
 class UnpinnedTabContainerView;
+class TabScrollButtonContainer;
+
+namespace tabs {
+class UnpinnedTabScrollTypeRecorder;
+class UnpinnedTabScrollableStateRecorder;
+}  // namespace tabs
 
 namespace views {
 class ScrollView;
@@ -39,6 +48,11 @@ class TabStripView final : public views::View,
 
   PinnedTabContainerView* GetPinnedTabsContainer() const;
   UnpinnedTabContainerView* GetUnpinnedTabsContainer() const;
+  TabScrollButtonContainer* GetScrollButtonContainer() const;
+  bool IsTabScrollButtonsPinned() const;
+
+  int leading_overlap() const { return leading_overlap_; }
+  void SetLeadingOverlap(int leading_overlap);
 
   views::ScrollView* pinned_tabs_scroll_view() const {
     return pinned_tabs_scroll_view_;
@@ -64,22 +78,51 @@ class TabStripView final : public views::View,
   void OnChildMoved(TabCollectionNode* moved_node);
   void OnTabChanged(const tabs::TabInterface* active_tab);
 
+  // Scrolls the scroll view(s) to ensure that the specified target tabs/views
+  // are visible within the viewport.
+  //
+  // - `active_tab` (or `view1`) is treated as the primary view, and `new_tab`
+  // (or
+  //   `view2`) is treated as the secondary view.
+  // - Attempts to scroll so that the combined bounds of both views are visible
+  //   simultaneously within the viewport.
+  // - If the combined bounds exceed the height of the scroll viewport, it falls
+  //   back to prioritizing the primary view (the active tab).
+  // - If the views belong to separate scroll containers (e.g., pinned vs.
+  //   unpinned), each container independently scrolls to reveal its target
+  //   view.
+  void ScrollToFitTabs(const tabs::TabInterface* active_tab,
+                       const tabs::TabInterface* new_tab);
+  void ScrollToFitViews(views::View* view1, views::View* view2);
+
   void RecordMousePressedInTab();
   bool IsFocusInTabStrip();
 
+  views::ScrollView* GetUnpinnedTabsScrollViewForTesting() {
+    return unpinned_tabs_scroll_view_;
+  }
+  views::ScrollView* GetPinnedTabsScrollViewForTesting() {
+    return pinned_tabs_scroll_view_;
+  }
+  views::View* GetPrimaryScrollTargetForTesting() const;
+  views::View* GetSecondaryScrollTargetForTesting() const;
+  tabs::UnpinnedTabScrollableStateRecorder*
+  unpinned_tab_scrollable_state_recorder_for_testing() {
+    return unpinned_tab_scrollable_state_recorder_.get();
+  }
+
  private:
-  class ActivatedViewTracker;
+  class TargetViewsTracker;
 
   views::View* AddScrollViewContents(std::unique_ptr<views::View> view);
   void RemoveScrollViewContents(views::View* view);
-  void ScrollToView(views::View* view);
   void SetScrollViewProperties(views::ScrollView* scroll_view);
   void ResetCollectionNode();
 
-  // Invoked after layout has been invoked for the activated view's associated
-  // ScrollView. Ensures that the activated view is visible in the viewport.
-  void EnsureVisibleInViewportPostActivationAndLayout(
-      views::ScrollView* scroll_view);
+  // Invoked after layout has been invoked for target views' associated
+  // ScrollView. Performs a best-effort attempt to ensure target views are
+  // visible in the viewport (prioritizing the active tab view if not all fit).
+  void EnsureViewsVisibleInViewportPostLayout(views::ScrollView* scroll_view);
 
   // Enables and disables overflow visuals on `scroll_view` respectively. Used
   // in combination to avoid visual artifacts caused by repeatedly scrolling-in
@@ -87,33 +130,43 @@ class TabStripView final : public views::View,
   void EnableOverflowVisuals(views::ScrollView* scroll_view);
   void DisableOverflowVisuals(views::ScrollView* scroll_view);
 
-  void UpdateColors();
-
-  bool IsFrameActive() const;
+  gfx::Rect GetBoundsInScrollViewContents(views::View* view,
+                                          views::ScrollView* scroll_view);
 
   void HideHoverCardOnScroll();
+  void OnScrollButtonsVisibilityChanged();
+
+  PrefService* GetPrefs() const;
 
   friend class TabStripViewLayout;
 
+  PrefChangeRegistrar pref_change_registrar_;
+  const TabStripOrientation orientation_;
   raw_ptr<TabCollectionNode> collection_node_ = nullptr;
   raw_ptr<views::ScrollView> pinned_tabs_scroll_view_ = nullptr;
   raw_ptr<PinnedTabContainerView> pinned_tabs_container_view_ = nullptr;
   raw_ptr<views::Separator> tabs_separator_ = nullptr;
   raw_ptr<views::ScrollView> unpinned_tabs_scroll_view_ = nullptr;
   raw_ptr<UnpinnedTabContainerView> unpinned_tabs_container_view_ = nullptr;
+  raw_ptr<TabScrollButtonContainer> tab_scroll_button_container_ = nullptr;
   bool is_collapsed_ = false;
+  int leading_overlap_ = 0;
 
   // Used for seek time metrics from the time the mouse enters the tabstrip.
   std::optional<base::TimeTicks> mouse_entered_tabstrip_time_;
   // Used to track if the time from mouse entered to tab switch been reported.
   bool has_reported_time_mouse_entered_to_switch_ = false;
 
-  // Tracks the most recently activated view as reported by
-  // `OnActiveTabChanged()`.
-  std::unique_ptr<ActivatedViewTracker> activated_view_tracker_;
+  std::unique_ptr<TargetViewsTracker> target_views_tracker_;
+  // Records the type of scroll that the user does on the unpinned tabs.
+  std::unique_ptr<tabs::UnpinnedTabScrollTypeRecorder>
+      unpinned_tab_scroll_type_recorder_;
+  // Records, every five minutes, whether the unpinned tabs are scrollable
+  // or not.
+  std::unique_ptr<tabs::UnpinnedTabScrollableStateRecorder>
+      unpinned_tab_scrollable_state_recorder_;
 
   base::CallbackListSubscription node_destroyed_subscription_;
-  base::CallbackListSubscription paint_as_active_subscription_;
   std::vector<base::CallbackListSubscription> callback_subscriptions_;
 
   base::ScopedObservation<views::Widget, views::WidgetObserver>

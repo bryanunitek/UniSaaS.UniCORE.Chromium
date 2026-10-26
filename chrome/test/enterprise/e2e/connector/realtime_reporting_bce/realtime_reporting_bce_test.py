@@ -4,7 +4,6 @@
 
 from datetime import datetime
 import logging
-import os
 
 from chrome_ent_test.infra.core import before_all
 from chrome_ent_test.infra.core import category
@@ -39,6 +38,8 @@ class RealTimeBCEReportingPipelineTest(ChromeReportingConnectorTestCase):
 
     # read service account private key from gs-bucket & write into local
     apiService = RealTimeReportingServer(
-        self.GetFileFromGCSBucket('secrets/ServiceAccountKey.json'))
+      self.GetFileFromGCSBucket('secrets/ServiceAccountKey.json')
+    )
     self.TryVerifyUntilTimeout(
-        verifyClass=apiService, content=VerifyContent(deviceId, testStartTime))
+      verifyClass=apiService, content=VerifyContent(deviceId, testStartTime)
+    )

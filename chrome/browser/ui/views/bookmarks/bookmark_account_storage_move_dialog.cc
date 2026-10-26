@@ -18,7 +18,7 @@
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog_delegate.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -34,6 +34,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/image_view.h"
@@ -81,7 +83,7 @@ void RecordDialogShown(BookmarkAccountStorageMoveDialogType type,
 }
 
 void ShowDialogOnRegularProfile(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const bookmarks::BookmarkNode* node,
     const bookmarks::BookmarkNode* target_folder,
     size_t index,
@@ -174,10 +176,10 @@ void ShowDialogOnRegularProfile(
 
     avatar_and_email_view->AddChildView(std::make_unique<views::ImageView>(
         ui::ImageModel::FromImage(profiles::GetSizedAvatarIcon(
-            account_info.account_image, kAvatarSize, kAvatarSize,
-            profiles::SHAPE_CIRCLE))));
-    avatar_and_email_view->AddChildView(
-        std::make_unique<views::Label>(base::UTF8ToUTF16(account_info.email)));
+            account_info.GetAvatarImage().value_or(gfx::Image()), kAvatarSize,
+            kAvatarSize, profiles::SHAPE_CIRCLE))));
+    avatar_and_email_view->AddChildView(std::make_unique<views::Label>(
+        base::UTF8ToUTF16(account_info.GetEmail())));
     avatar_and_email_view
         ->SetLayoutManager(std::make_unique<views::BoxLayout>())
         ->set_between_child_spacing(horizontal_spacing);
@@ -200,7 +202,7 @@ void OpenDialogInOriginalProfileBookmarksManager(
     size_t index,
     BookmarkAccountStorageMoveDialogType dialog_type,
     base::OnceClosure closed_callback,
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   // `browser` may be null in case of failure to instantiate a window.
   if (!browser) {
     return;
@@ -208,17 +210,17 @@ void OpenDialogInOriginalProfileBookmarksManager(
 
   CHECK(!browser->GetProfile()->IsOffTheRecord());
   // Open BookmarksManager page.
-  browser->OpenURL(content::OpenURLParams(
-                       GURL(chrome::kChromeUIBookmarksURL), content::Referrer(),
-                       WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                       ui::PAGE_TRANSITION_LINK, false),
-                   /*navigation_handle_callback=*/{});
+  browser->OpenURL(
+      content::OpenURLParams::CreateBrowserInitiated(
+          GURL(chrome::kChromeUIBookmarksURL),
+          WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK),
+      /*navigation_handle_callback=*/{});
 
   ShowDialogOnRegularProfile(browser, node, target_folder, index, dialog_type,
                              std::move(closed_callback));
 }
 
-void ShowDialog(Browser* browser,
+void ShowDialog(BrowserWindowInterface* browser,
                 const bookmarks::BookmarkNode* node,
                 const bookmarks::BookmarkNode* target_folder,
                 size_t index,
@@ -230,14 +232,14 @@ void ShowDialog(Browser* browser,
     // we do not do this, a new empty incognito browser opens as result of
     // `profiles::OpenBrowserWindowForProfile()`, which is confusing, so it is
     // better to exit early.
-    if (IncognitoModePrefs::GetAvailability(
-            browser->GetProfile()->GetPrefs()) ==
+    if (IncognitoModePrefs::GetAvailability(browser->GetProfile()) ==
         policy::IncognitoModeAvailability::kForced) {
       return;
     }
-    base::OnceCallback<void(Browser*)> on_browser_ready = base::BindOnce(
-        &OpenDialogInOriginalProfileBookmarksManager, node, target_folder,
-        index, dialog_type, std::move(closed_callback));
+    base::OnceCallback<void(BrowserWindowInterface*)> on_browser_ready =
+        base::BindOnce(&OpenDialogInOriginalProfileBookmarksManager, node,
+                       target_folder, index, dialog_type,
+                       std::move(closed_callback));
     profiles::OpenBrowserWindowForProfile(
         std::move(on_browser_ready), /*always_create=*/false,
         /*is_new_profile=*/false, /*open_command_line_urls=*/false,
@@ -255,7 +257,7 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kBookmarkAccountStorageMoveDialogOkButton);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kBookmarkAccountStorageMoveDialogCancelButton);
 
 void ShowBookmarkAccountStorageMoveDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const bookmarks::BookmarkNode* node,
     const bookmarks::BookmarkNode* target_folder,
     size_t index,
@@ -265,7 +267,7 @@ void ShowBookmarkAccountStorageMoveDialog(
              std::move(closed_callback));
 }
 
-void ShowBookmarkAccountStorageUploadDialog(Browser* browser,
+void ShowBookmarkAccountStorageUploadDialog(BrowserWindowInterface* browser,
                                             const bookmarks::BookmarkNode* node,
                                             base::OnceClosure closed_callback) {
   bookmarks::BookmarkModel* model =

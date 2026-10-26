@@ -2,42 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/functional/bind.h"
-#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/media_router/media_router_ui_service.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/cast/cast_toolbar_button_controller.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/media_router/app_menu_test_api.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_coordinator.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_view.h"
 #include "chrome/browser/ui/views/media_router/media_router_dialog_controller_views.h"
-#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
+#include "chrome/browser/ui/views/toolbar/pinned_action_test_accessor.h"
+#include "chrome/browser/ui/views/toolbar/test_support/app_menu_test_accessor.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/media_router/browser/media_router_dialog_controller.h"
 #include "components/media_router/browser/media_router_metrics.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "content/public/test/test_utils.h"
-#include "ui/events/base_event_utils.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
-#include "ui/views/layout/animating_layout_manager_test_util.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
@@ -51,69 +45,53 @@ class MediaRouterUIInteractiveUITest : public InProcessBrowserTest {
   // Returns the dialog controller for the active WebContents.
   MediaRouterDialogController* GetDialogController() {
     return MediaRouterDialogController::GetOrCreateForWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   views::Widget* GetDialogWidget() {
     // interactive_ui_tests are not run on android, so
     // MediaRouterDialogControllerViews is the only implementation of
     // MediaRouterDialogController.
-    return static_cast<MediaRouterDialogControllerViews*>(GetDialogController())
-        ->GetCastDialogCoordinatorForTesting()
+    auto* controller =
+        static_cast<MediaRouterDialogControllerViews*>(GetDialogController());
+    if (auto* widget = controller->GetCastDialogCoordinatorForTesting()
+                           .GetCastDialogWidget()) {
+      return widget;
+    }
+    base::RunLoop run_loop;
+    controller->SetDialogCreationCallbackForTesting(run_loop.QuitClosure());
+    run_loop.Run();
+    return controller->GetCastDialogCoordinatorForTesting()
         .GetCastDialogWidget();
   }
 
-  ui::SimpleMenuModel* GetIconContextMenu() {
-    return static_cast<ui::SimpleMenuModel*>(GetCastIcon()->menu_model());
-  }
-
   void WaitForAnimations() {
-    CHECK(!features::IsWebUIPinnedToolbarActionsEnabled())
-        << "Test needs modification to support WebUIPinnedToolbarActions";
-    views::test::WaitForAnimatingLayoutManager(
-        static_cast<PinnedToolbarActionsContainer*>(
-            BrowserView::GetBrowserViewForBrowser(browser())
-                ->toolbar_button_provider()
-                ->GetPinnedToolbarActions()));
+    PinnedActionTestAccessor::WaitForAnimation(browser());
   }
 
   void PressToolbarIcon() {
     WaitForAnimations();
-    views::test::InteractionTestUtilSimulatorViews::PressButton(
-        GetCastIcon(), ui::test::InteractionTestUtil::InputType::kMouse);
+    PinnedActionTestAccessor(browser(), kActionRouteMedia).Click();
   }
 
   bool ToolbarIconExists() {
     base::RunLoop().RunUntilIdle();
-    ToolbarButton* cast_icon = GetCastIcon();
-    return cast_icon && cast_icon->GetVisible();
+    return PinnedActionTestAccessor(browser(), kActionRouteMedia).GetVisible();
   }
 
   void SetAlwaysShowActionPref(bool always_show) {
-    CastToolbarButtonController::SetAlwaysShowActionPref(browser()->profile(),
-                                                         always_show);
-  }
-
- private:
-  ToolbarButton* GetCastIcon() {
-    CHECK(!features::IsWebUIPinnedToolbarActionsEnabled())
-        << "Test needs modification to support WebUIPinnedToolbarActions";
-    return views::AsViewClass<ToolbarButton>(
-        BrowserView::GetBrowserViewForBrowser(browser())
-            ->toolbar_button_provider()
-            ->GetPinnedToolbarActions()
-            ->GetBubbleAnchor(kActionRouteMedia)
-            .GetIfView());
+    CastToolbarButtonController::SetAlwaysShowActionPref(
+        browser()->GetProfile(), always_show);
   }
 };
 
 IN_PROC_BROWSER_TEST_F(MediaRouterUIInteractiveUITest,
                        OpenDialogFromContextMenu) {
   // Start with one tab showing about:blank.
-  ASSERT_EQ(1, browser()->tab_strip_model()->count());
+  ASSERT_EQ(1, browser()->GetTabStripModel()->count());
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   MediaRouterDialogController* dialog_controller = GetDialogController();
   content::ContextMenuParams params;
   params.page_url =
@@ -135,15 +113,14 @@ IN_PROC_BROWSER_TEST_F(MediaRouterUIInteractiveUITest,
 
 IN_PROC_BROWSER_TEST_F(MediaRouterUIInteractiveUITest, OpenDialogFromAppMenu) {
   // Start with one tab showing about:blank.
-  ASSERT_EQ(1, browser()->tab_strip_model()->count());
+  ASSERT_EQ(1, browser()->GetTabStripModel()->count());
 
-  std::unique_ptr<test::AppMenuTestApi> app_menu_test_api =
-      test::AppMenuTestApi::Create(browser());
-  app_menu_test_api->ShowMenu();
+  AppMenuTestAccessor app_menu(browser());
+  app_menu.ShowMenu();
 
   MediaRouterDialogController* dialog_controller = GetDialogController();
   ASSERT_FALSE(dialog_controller->IsShowingMediaRouterDialog());
-  app_menu_test_api->ExecuteCommand(IDC_ROUTE_MEDIA);
+  app_menu.ExecuteCommand(IDC_ROUTE_MEDIA);
   views::test::WidgetVisibleWaiter(GetDialogWidget()).Wait();
   EXPECT_TRUE(dialog_controller->IsShowingMediaRouterDialog());
 
@@ -226,7 +203,7 @@ IN_PROC_BROWSER_TEST_F(MediaRouterUIInteractiveUITest,
   MediaRouterDialogController* dialog_controller = GetDialogController();
   // We start off at about:blank page.
   // Make sure there is 1 tab and media router is enabled.
-  ASSERT_EQ(1, browser()->tab_strip_model()->count());
+  ASSERT_EQ(1, browser()->GetTabStripModel()->count());
 
   SetAlwaysShowActionPref(true);
   EXPECT_TRUE(ToolbarIconExists());
@@ -239,8 +216,8 @@ IN_PROC_BROWSER_TEST_F(MediaRouterUIInteractiveUITest,
   {
     views::test::WidgetDestroyedWaiter waiter(GetDialogWidget());
     content::TestNavigationObserver reload_observer(
-        browser()->tab_strip_model()->GetActiveWebContents());
-    chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
+        browser()->GetTabStripModel()->GetActiveWebContents());
+    chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
     reload_observer.Wait();
 
     waiter.Wait();

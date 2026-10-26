@@ -5,6 +5,7 @@
 package org.chromium.android_webview.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import static org.chromium.android_webview.test.OnlyRunIn.ProcessMode.MULTI_PROCESS;
 
@@ -17,13 +18,14 @@ import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 
 import org.chromium.android_webview.AwBrowserContext;
-import org.chromium.android_webview.AwBrowserContextStore;
 import org.chromium.android_webview.AwContents;
+import org.chromium.android_webview.test.util.MemoryMetricsLoggerUtilsJni;
 import org.chromium.base.ChildBindingState;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.content_public.browser.test.util.ChildProcessUtils;
 import org.chromium.content_public.browser.test.util.RenderProcessHostUtils;
 import org.chromium.net.test.util.TestWebServer;
@@ -47,14 +49,9 @@ public class SpareRendererTest extends AwParameterizedTest {
     @MediumTest
     @OnlyRunIn(MULTI_PROCESS)
     @Feature({"AndroidWebView"})
+    @CommandLineFlags.Add({"enable-features=CreateSpareRendererForDefaultProfile"})
     public void testSpareProcessUsed() throws Throwable {
         mRule.startBrowserProcess();
-        assertEquals(0, RenderProcessHostUtils.getCurrentRenderProcessCount());
-        assertEquals(0, RenderProcessHostUtils.getSpareRenderProcessHostCount());
-
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> AwBrowserContext.getDefault().warmUpSpareRenderer());
-
         assertEquals(0, RenderProcessHostUtils.getCurrentRenderProcessCount());
         assertEquals(1, RenderProcessHostUtils.getSpareRenderProcessHostCount());
 
@@ -99,16 +96,9 @@ public class SpareRendererTest extends AwParameterizedTest {
     @MediumTest
     @OnlyRunIn(MULTI_PROCESS)
     @Feature({"AndroidWebView"})
-    @CommandLineFlags.Add({
-        "enable-features=SpareRendererProcessPriority:not-perceptible-binding/true"
-    })
+    @CommandLineFlags.Add({"enable-features=CreateSpareRendererForDefaultProfile"})
     public void testProcessBindingState() throws Throwable {
         mRule.startBrowserProcess();
-        assertEquals(0, RenderProcessHostUtils.getCurrentRenderProcessCount());
-        assertEquals(0, RenderProcessHostUtils.getSpareRenderProcessHostCount());
-
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> AwBrowserContext.getDefault().warmUpSpareRenderer());
         assertEquals(0, RenderProcessHostUtils.getCurrentRenderProcessCount());
         assertEquals(1, RenderProcessHostUtils.getSpareRenderProcessHostCount());
 
@@ -120,23 +110,32 @@ public class SpareRendererTest extends AwParameterizedTest {
         // The binding state is recalculated multiple times after the renderer is launched. Wait
         // for one second for the binding state to settle down.
         Thread.sleep(1100);
-        assertEquals(
-                ChildBindingState.NOT_PERCEPTIBLE,
-                RenderProcessHostUtils.getSpareRenderBindingState());
+        assertEquals(ChildBindingState.WAIVED, RenderProcessHostUtils.getSpareRenderBindingState());
+
+        // The spare renderer has never hosted a WebView, so its memory should be attributed to
+        // the SpareNeverUsed state.
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectAnyRecord("Memory.Renderer.PrivateMemoryFootprint.SpareNeverUsed")
+                        .expectNoRecords("Memory.Renderer.PrivateMemoryFootprint.Active")
+                        .expectNoRecords("Memory.Renderer.PrivateMemoryFootprint.SpareKeptAlive")
+                        .expectNoRecords("Memory.Renderer.PrivateMemoryFootprint.Unknown")
+                        .build();
+        assertTrue(MemoryMetricsLoggerUtilsJni.get().forceRecordHistograms());
+        histogramWatcher.assertExpected();
     }
 
     @Test
     @MediumTest
     @OnlyRunIn(MULTI_PROCESS)
     @Feature({"AndroidWebView"})
+    @CommandLineFlags.Add({"enable-features=CreateSpareRendererForDefaultProfile"})
     public void testChildConnectionUsedBySpareRenderer() throws Throwable {
-        // We start a child connection during browser initialization.
+        // startBrowserProcess() pre-warms a child connection early on and later initializes the
+        // default profile. Default profile initialization now triggers a spare renderer, which is
+        // expected to reuse that pre-warmed connection, resulting in a single connected child
+        // service overall.
         mRule.startBrowserProcess();
-        assertEquals(1, ChildProcessUtils.getConnectedSandboxedServicesCount());
-        // Creating a non-default profile creates a spare renderer that is expected to reuse the
-        // pre-warmed child connection.
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> AwBrowserContextStore.getNamedContext("NonDefault", true));
         assertEquals(1, ChildProcessUtils.getConnectedSandboxedServicesCount());
     }
 }

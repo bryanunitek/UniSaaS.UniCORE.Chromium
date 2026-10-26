@@ -4,10 +4,19 @@
 
 #include "chrome/browser/dictation/listener_stream_provider.h"
 
+#include <ostream>
+
+#include "base/check.h"
+#include "base/dcheck_is_on.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "base/state_transitions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/dictation/dictation_context_fetcher.h"
 #include "chrome/browser/dictation/dictation_keyed_service.h"
 #include "chrome/browser/dictation/features.h"
+#include "chrome/browser/dictation/logging.h"
+#include "chrome/browser/dictation/metrics.h"
 #include "chrome/browser/dictation/stream_provider_delegate.h"
 #include "chrome/browser/dictation/target.h"
 #include "chrome/common/extensions/api/dictation_private.h"
@@ -37,6 +46,43 @@ extensions::api::dictation_private::DictationContext ConvertToApiContext(
   return api_context;
 }
 
+const char* ToString(StreamProvider::StreamState state) {
+  switch (state) {
+    case StreamProvider::StreamState::kInitializing:
+      return "kInitializing";
+    case StreamProvider::StreamState::kFailed:
+      return "kFailed";
+    case StreamProvider::StreamState::kTranscribing:
+      return "kTranscribing";
+    case StreamProvider::StreamState::kComplete:
+      return "kComplete";
+  }
+}
+
+std::ostream& operator<<(std::ostream& out, StreamProvider::StreamState state) {
+  return out << ToString(state);
+}
+
+void DCheckStreamStateTransition(StreamProvider::StreamState old_state,
+                                 StreamProvider::StreamState new_state) {
+#if DCHECK_IS_ON()
+  using enum StreamProvider::StreamState;
+  static const base::NoDestructor<
+      base::StateTransitions<StreamProvider::StreamState>>
+      kTransitions(base::StateTransitions<StreamProvider::StreamState>({
+          // The extension may redundantly report kInitializing when it starts
+          // a stream.
+          {kInitializing, {kInitializing, kTranscribing, kFailed, kComplete}},
+          {kTranscribing, {kFailed, kComplete}},
+          {kFailed, {}},
+          {kComplete, {}},
+      }));
+  DCHECK(kTransitions->IsTransitionValid(old_state, new_state))
+      << "Invalid transition: " << ToString(old_state) << " -> "
+      << ToString(new_state);
+#endif  // DCHECK_IS_ON()
+}
+
 }  // namespace
 
 ListenerStreamProvider::ListenerStreamProvider(
@@ -45,6 +91,8 @@ ListenerStreamProvider::ListenerStreamProvider(
     : delegate_(delegate), browser_context_(browser_context) {}
 
 ListenerStreamProvider::~ListenerStreamProvider() {
+  RecordExitMetric(DictationStreamEndTrigger::kDestructor);
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ") destroyed";
   if (stream_id_) {
     GetMultiplexer().UnregisterStreamProvider(stream_id_);
   }
@@ -60,6 +108,8 @@ void ListenerStreamProvider::BindToTargetAndConnect(
   DictationMultiplexer& multiplexer = GetMultiplexer();
   stream_id_ = multiplexer.GenerateStreamId();
   multiplexer.RegisterStreamProvider(stream_id_, this);
+
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__;
 
   context_fetcher_ = std::make_unique<DictationContextFetcher>();
   if (kSendContextAsync.Get()) {
@@ -81,17 +131,19 @@ void ListenerStreamProvider::StartStream(
   extensions::api::dictation_private::StartStreamDetails details;
   details.stream_id = stream_id_.value();
 
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__;
+
   if (result.has_value()) {
     details.context = ConvertToApiContext(std::move(*result));
   }
 
   extensions::api::dictation_private::StartStreamFlags flags;
   flags.eval_mode = kDictationEvalMode.Get();
+  flags.web_speech_api_backend = kWebSpeechApiBackend.Get();
   details.flags = std::move(flags);
 
-  base::ListValue event_args =
-      extensions::api::dictation_private::OnStartStream::Create(details);
-
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::dictation_private::OnStartStream::Create(details));
   auto event = std::make_unique<extensions::Event>(
       extensions::events::DICTATION_PRIVATE_ON_START_STREAM,
       extensions::api::dictation_private::OnStartStream::kEventName,
@@ -113,9 +165,8 @@ void ListenerStreamProvider::OnAsyncContextCaptured(DictationContext result) {
   details.stream_id = stream_id_.value();
   details.context = ConvertToApiContext(std::move(result));
 
-  base::ListValue event_args =
-      extensions::api::dictation_private::OnContextUpdate::Create(details);
-
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::dictation_private::OnContextUpdate::Create(details));
   auto event = std::make_unique<extensions::Event>(
       extensions::events::DICTATION_PRIVATE_ON_CONTEXT_UPDATE,
       extensions::api::dictation_private::OnContextUpdate::kEventName,
@@ -125,7 +176,9 @@ void ListenerStreamProvider::OnAsyncContextCaptured(DictationContext result) {
       ->BroadcastEvent(std::move(event));
 }
 
-void ListenerStreamProvider::Stop() {
+void ListenerStreamProvider::Stop(DictationStreamEndTrigger trigger) {
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__;
+  RecordExitMetric(trigger);
   context_fetcher_.reset();
 
   if (!stream_id_) {
@@ -139,9 +192,8 @@ void ListenerStreamProvider::Stop() {
   extensions::api::dictation_private::EndStreamDetails details;
   details.stream_id = stream_id_.value();
 
-  base::ListValue event_args =
-      extensions::api::dictation_private::OnEndStream::Create(details);
-
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::dictation_private::OnEndStream::Create(details));
   auto event = std::make_unique<extensions::Event>(
       extensions::events::DICTATION_PRIVATE_ON_END_STREAM,
       extensions::api::dictation_private::OnEndStream::kEventName,
@@ -154,6 +206,8 @@ void ListenerStreamProvider::Stop() {
 
 void ListenerStreamProvider::OnTranscriptionUpdated(const std::string& data,
                                                     bool is_final) {
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__
+                           << " data: " << data << ", is_final: " << is_final;
   latest_transcription_ = data;
   is_final_for_testing_ = is_final;
 
@@ -161,31 +215,90 @@ void ListenerStreamProvider::OnTranscriptionUpdated(const std::string& data,
   // element is no longer valid.
 
   target_->SetComposition(base::UTF8ToUTF16(data), is_final);
-
-  if (update_callback_for_testing_) {
-    update_callback_for_testing_.Run();
-  }
 }
 
-void ListenerStreamProvider::OnStreamStateChanged(StreamState state) {
-  // TODO(crbug.com/502587072): Assert state transitions are correct.
+void ListenerStreamProvider::OnStreamStateChanged(StreamState state,
+                                                  StreamErrorReason reason) {
+  if (state == StreamState::kComplete) {
+    RecordExitMetric(DictationStreamEndTrigger::kSpeechComplete);
+    VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__
+                             << " Complete pending commit";
+    target_->CommitComposition(
+        base::UTF8ToUTF16(latest_transcription_),
+        base::BindOnce(&ListenerStreamProvider::OnPendingInsertionsComplete,
+                       weak_ptr_factory_.GetWeakPtr()));
+    // Once the extension informs us that the steam is complete, we need to wait
+    // for our target to finish inserting text, before marking this stream
+    // provider complete. Otherwise this provider would be deleted while having
+    // uncommitted text.
+    return;
+  }
+
+  if (state == StreamState::kFailed) {
+    RecordExitMetric(DictationStreamEndTrigger::kSpeechError);
+  }
+
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__
+                           << " " << state_ << " --> " << state;
+
+  DCheckStreamStateTransition(state_, state);
   StreamState old_state = state_;
   state_ = state;
 
-  delegate_->DidUpdateStreamProviderState(*this, old_state);
-
-  if (state == StreamState::kComplete) {
-    target_->CommitComposition(base::UTF8ToUTF16(latest_transcription_));
-  }
-
-  if (update_callback_for_testing_) {
-    update_callback_for_testing_.Run();
-  }
+  delegate_->DidUpdateStreamProviderState(*this, old_state, reason);
 }
 
-void ListenerStreamProvider::SetOnUpdateForTesting(  // IN-TEST
-    base::RepeatingClosure callback) {
-  update_callback_for_testing_ = std::move(callback);
+void ListenerStreamProvider::OnPendingInsertionsComplete() {
+  VT_LOG(browser_context_) << "Stream(" << stream_id_ << ")::" << __func__
+                           << " " << state_ << " --> "
+                           << StreamState::kComplete;
+
+  DCheckStreamStateTransition(state_, StreamState::kComplete);
+  StreamState old_state = state_;
+  state_ = StreamState::kComplete;
+
+  delegate_->DidUpdateStreamProviderState(*this, old_state);
+}
+
+void ListenerStreamProvider::RecordExitMetric(
+    DictationStreamEndTrigger trigger) {
+  if (trigger == DictationStreamEndTrigger::kTest) {
+    return;
+  }
+
+  if (has_recorded_exit_status_) {
+    return;
+  }
+  has_recorded_exit_status_ = true;
+
+  DictationStreamExitStatus status;
+  switch (trigger) {
+    case DictationStreamEndTrigger::kDoneButton:
+    case DictationStreamEndTrigger::kEscapeKey:
+    case DictationStreamEndTrigger::kHotkeyToggle:
+      status = DictationStreamExitStatus::kUserDone;
+      break;
+    case DictationStreamEndTrigger::kCancelButton:
+      status = DictationStreamExitStatus::kUserCancelled;
+      break;
+    case DictationStreamEndTrigger::kSpeechComplete:
+    case DictationStreamEndTrigger::kFocusChange:
+    case DictationStreamEndTrigger::kUserTyping:
+    case DictationStreamEndTrigger::kNewSessionTriggered:
+    case DictationStreamEndTrigger::kShutdown:
+      status = DictationStreamExitStatus::kAutoDone;
+      break;
+    case DictationStreamEndTrigger::kDestructor:
+      status = DictationStreamExitStatus::kAutoCancelled;
+      break;
+    case DictationStreamEndTrigger::kSpeechError:
+      status = DictationStreamExitStatus::kSpeechError;
+      break;
+    case DictationStreamEndTrigger::kTest:
+      NOTREACHED();
+  }
+
+  RecordDictationStreamExitStatus(status);
 }
 
 const std::string&
@@ -200,6 +313,10 @@ bool ListenerStreamProvider::IsTranscriptionFinalForTesting() const {
 
 ListenerStreamProvider::StreamState ListenerStreamProvider::GetState() const {
   return state_;
+}
+
+Target* ListenerStreamProvider::GetTarget() {
+  return target_.get();
 }
 
 const Target* ListenerStreamProvider::GetTarget() const {

@@ -126,13 +126,6 @@ enum class MemtagMode {
   kAsync,
 };
 
-enum class RetagMode {
-  // Allocations are retagged by incrementing the current tag.
-  kIncrement,
-
-  // Allocations are retagged with a random tag.
-  kRandom,
-};
 
 using MemoryTaggingEnabledProcesses = internal::PAFeatureEnabledProcesses;
 
@@ -156,7 +149,6 @@ BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
     kBackupRefPtrSuppressCorruptionDetectedCrash);
 BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocMemoryTagging);
 BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(MemtagMode, kMemtagModeParam);
-BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(RetagMode, kRetagModeParam);
 BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(MemoryTaggingEnabledProcesses,
                                        kMemoryTaggingEnabledProcessesParam);
 // Kill switch for memory tagging. Skips any code related to memory tagging when
@@ -175,6 +167,19 @@ BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocUseDenserDistribution);
 BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocMemoryReclaimer);
 BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(TimeDelta,
                                        kPartitionAllocMemoryReclaimerInterval);
+BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocAdaptiveMemoryReclaimInterval);
+BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    TimeDelta,
+    kPartitionAllocAdaptiveMemoryReclaimMinInterval);
+BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    TimeDelta,
+    kPartitionAllocAdaptiveMemoryReclaimMaxInterval);
+BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    TimeDelta,
+    kPartitionAllocAdaptiveMemoryReclaimDefaultInterval);
+BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kPartitionAllocAdaptiveMemoryReclaimMinDecommittableBytes);
 BASE_EXPORT BASE_DECLARE_FEATURE(
     kPartitionAllocStraightenLargerSlotSpanFreeLists);
 BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
@@ -182,10 +187,6 @@ BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
     kPartitionAllocStraightenLargerSlotSpanFreeListsMode);
 BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocSortSmallerSlotSpanFreeLists);
 BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocSortActiveSlotSpans);
-
-#if BUILDFLAG(IS_WIN)
-BASE_EXPORT BASE_DECLARE_FEATURE(kPageAllocatorRetryOnCommitFailure);
-#endif
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
@@ -203,19 +204,13 @@ BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(
     int,
     kPartitionAllocBackgroundEmptySlotSpanRingSize);
 
-// When enabled, uses a more nuanced heuristic to determine if slot
-// spans can be treated as "single-slot."
-//
-// See also: https://crbug.com/333443437
-BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocUseSmallSingleSlotSpans);
-
 #if PA_BUILDFLAG(ENABLE_PARTITION_LOCK_PRIORITY_INHERITANCE)
 BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocUsePriorityInheritanceLocks);
 #endif  // PA_BUILDFLAG(ENABLE_PARTITION_LOCK_PRIORITY_INHERITANCE)
 
-BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocFreeWithSize);
-BASE_EXPORT BASE_DECLARE_FEATURE_PARAM(bool,
-                                       kPartitionAllocStrictFreeSizeCheck);
+BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocTighterAlignedAllocBound);
+
+BASE_EXPORT BASE_DECLARE_FEATURE(kPartitionAllocMemoryPressureMonitor);
 
 }  // namespace base::features
 

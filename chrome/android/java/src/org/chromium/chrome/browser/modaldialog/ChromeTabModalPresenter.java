@@ -12,6 +12,8 @@ import android.view.ViewGroup;
 import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewStub;
 
+import androidx.core.content.ContextCompat;
+
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -31,6 +33,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+import org.chromium.components.browser_ui.modaldialog.ModalDialogFeatureMap;
 import org.chromium.components.browser_ui.modaldialog.TabModalPresenter;
 import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
@@ -199,20 +202,10 @@ public class ChromeTabModalPresenter extends TabModalPresenter
             mScrimModel = null;
         }
 
-        int bottomInset =
-                mEdgeToEdgeControllerSupplier != null && mEdgeToEdgeControllerSupplier.get() != null
-                        ? mEdgeToEdgeControllerSupplier.get().getBottomInsetPx()
-                        : 0;
-        // We want to apply a scrim when only the nav bar is present (without the bottom control
-        // toolbar) and bottom chin is enabled.Note: Bottom inset is 0 in 3-button mode.
-        boolean isOnlyNavBarPresent =
-                (bottomInset == mBrowserControlsVisibilityManager.getBottomControlsHeight());
-        boolean affectsNavBar =
-                isOnlyNavBarPresent && EdgeToEdgeUtils.isEdgeToEdgeBottomChinEnabled(mActivity);
-        int bottomMargin =
-                affectsNavBar ? 0 : mBrowserControlsVisibilityManager.getBottomControlsHeight();
+        boolean affectsNavBar = doesScrimAffectNavBar();
+        int bottomMargin = getScrimBottomMargin(affectsNavBar);
 
-        mScrimModel =
+        var scrimModelBuilder =
                 new PropertyModel.Builder(ScrimProperties.ALL_KEYS)
                         .with(ScrimProperties.AFFECTS_STATUS_BAR, false)
                         .with(ScrimProperties.AFFECTS_NAVIGATION_BAR, affectsNavBar)
@@ -221,9 +214,20 @@ public class ChromeTabModalPresenter extends TabModalPresenter
                                 mActivity.findViewById(R.id.tab_modal_dialog_container))
                         .with(
                                 ScrimProperties.TOP_MARGIN,
-                                mBrowserControlsVisibilityManager.getTopControlsHeight())
-                        .with(ScrimProperties.BOTTOM_MARGIN, bottomMargin)
-                        .build();
+                                getContainerTopMargin(mBrowserControlsVisibilityManager))
+                        .with(ScrimProperties.BOTTOM_MARGIN, bottomMargin);
+
+        if (ModalDialogFeatureMap.isLargeFormFactorUiEnabled(mActivity)) {
+            scrimModelBuilder.with(
+                    ScrimProperties.BACKGROUND_COLOR,
+                    ContextCompat.getColor(mActivity, R.color.modal_dialog_scrim_color_lff));
+        }
+
+        if (mContainerParent != null && mContainerParent.getId() != R.id.coordinator) {
+            scrimModelBuilder.with(ScrimProperties.CUSTOM_PARENT, mContainerParent);
+        }
+
+        mScrimModel = scrimModelBuilder.build();
 
         mScrimManager.showScrim(mScrimModel);
     }
@@ -242,7 +246,8 @@ public class ChromeTabModalPresenter extends TabModalPresenter
             // Dismiss the action bar that obscures the dialogs but preserve the text selection.
             WebContents webContents = mActiveTab.getWebContents();
             if (webContents != null) {
-                saveOrRestoreTextSelection(webContents, true);
+                saveOrRestoreTextSelection(
+                        webContents, /* save= */ true, /* restoreFocus= */ false);
             }
 
             // Force toolbar to show and disable overflow menu.
@@ -257,10 +262,15 @@ public class ChromeTabModalPresenter extends TabModalPresenter
         } else {
             if (mActiveTab == null) return;
 
-            // Show the action bar back if it was dismissed when the dialogs were showing.
             WebContents webContents = mActiveTab.getWebContents();
             if (webContents != null) {
-                saveOrRestoreTextSelection(webContents, false);
+                // Show the action bar back if it was dismissed when the dialogs were showing, and
+                // give focus back to the page unless the tab is no longer shown and selected, e.g.
+                // the dialog is being suspended or dismissed because of a tab switch.
+                boolean restoreFocus =
+                        mActiveTab.isUserInteractable()
+                                && mActiveTab == mTabModelSelector.getCurrentTab();
+                saveOrRestoreTextSelection(webContents, /* save= */ false, restoreFocus);
             }
 
             onTabModalDialogStateChanged(false);
@@ -300,14 +310,6 @@ public class ChromeTabModalPresenter extends TabModalPresenter
         if (mScrimManager != null && mScrimModel != null) {
             mScrimManager.hideScrim(mScrimModel, /* animate= */ false);
             mScrimModel = null;
-        }
-
-        if (mContainerParent != null
-                && mContainerParent.getId() != R.id.coordinator
-                && mContainerParent.getParent() instanceof ViewGroup coordinator) {
-            View nextSibling = coordinator.findViewById(R.id.constrained_views_container);
-            UiUtils.removeViewFromParent(mContainerParent);
-            UiUtils.insertBefore(coordinator, mContainerParent, assumeNonNull(nextSibling));
         }
 
         super.removeDialogView(model);
@@ -356,25 +358,24 @@ public class ChromeTabModalPresenter extends TabModalPresenter
         ViewGroup dialogContainer = getDialogContainer();
         if (dialogContainer == null) return;
 
-        if (toFront) {
-            dialogContainer.bringToFront();
-        } else {
-            assumeNonNull(mContainerParent);
-            assumeNonNull(mDefaultNextSiblingView);
-            UiUtils.removeViewFromParent(dialogContainer);
-            UiUtils.insertBefore(mContainerParent, dialogContainer, mDefaultNextSiblingView);
-        }
-
         if (mContainerParent != null
                 && mContainerParent.getId() != R.id.coordinator
                 && mContainerParent.getParent() instanceof ViewGroup coordinator) {
             if (toFront) {
                 mContainerParent.bringToFront();
             } else {
-                View controlContainer = coordinator.findViewById(R.id.control_container);
+                assumeNonNull(mDefaultNextSiblingView);
                 UiUtils.removeViewFromParent(mContainerParent);
-                UiUtils.insertBefore(
-                        coordinator, mContainerParent, assumeNonNull(controlContainer));
+                UiUtils.insertBefore(coordinator, mContainerParent, mDefaultNextSiblingView);
+            }
+        } else {
+            if (toFront) {
+                dialogContainer.bringToFront();
+            } else {
+                assumeNonNull(mContainerParent);
+                assumeNonNull(mDefaultNextSiblingView);
+                UiUtils.removeViewFromParent(dialogContainer);
+                UiUtils.insertBefore(mContainerParent, dialogContainer, mDefaultNextSiblingView);
             }
         }
     }
@@ -456,17 +457,50 @@ public class ChromeTabModalPresenter extends TabModalPresenter
         return webContents.getMainFrame().areInputEventsIgnored();
     }
 
+    private boolean doesScrimAffectNavBar() {
+        int bottomInset =
+                mEdgeToEdgeControllerSupplier != null && mEdgeToEdgeControllerSupplier.get() != null
+                        ? mEdgeToEdgeControllerSupplier.get().getBottomInsetPx()
+                        : 0;
+        // We want to apply a scrim when only the nav bar is present (without the bottom control
+        // toolbar) and bottom chin is enabled. Note: Bottom inset is 0 in 3-button mode.
+        boolean isOnlyNavBarPresent =
+                (bottomInset == mBrowserControlsVisibilityManager.getBottomControlsHeight());
+        return isOnlyNavBarPresent
+                && EdgeToEdgeUtils.isEdgeToEdgeBottomChinSupportedByDevice(mActivity);
+    }
+
+    private int getScrimBottomMargin(boolean affectsNavBar) {
+        return affectsNavBar ? 0 : mBrowserControlsVisibilityManager.getBottomControlsHeight();
+    }
+
     private void maybeUpdateDialogLayout() {
         if (mShouldUpdateContainerLayoutParams && getDialogContainer() != null) {
             MarginLayoutParams params = (MarginLayoutParams) getDialogContainer().getLayoutParams();
             params.topMargin = getContainerTopMargin(mBrowserControlsVisibilityManager);
             params.bottomMargin = mBottomControlsHeight;
             getDialogContainer().setLayoutParams(params);
+            if (mScrimModel != null) {
+                mScrimModel.set(
+                        ScrimProperties.TOP_MARGIN,
+                        getContainerTopMargin(mBrowserControlsVisibilityManager));
+                boolean affectsNavBar = doesScrimAffectNavBar();
+                mScrimModel.set(ScrimProperties.BOTTOM_MARGIN, getScrimBottomMargin(affectsNavBar));
+                mScrimModel.set(ScrimProperties.AFFECTS_NAVIGATION_BAR, affectsNavBar);
+            }
             mShouldUpdateContainerLayoutParams = false;
         }
     }
 
     @Nullable ViewGroup getContainerParentForTest() {
         return mContainerParent;
+    }
+
+    @Nullable PropertyModel getScrimModelForTesting() {
+        return mScrimModel;
+    }
+
+    void setScrimModelForTesting(@Nullable PropertyModel model) {
+        mScrimModel = model;
     }
 }

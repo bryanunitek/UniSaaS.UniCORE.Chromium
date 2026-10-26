@@ -9,10 +9,12 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/affiliations/core/browser/mock_affiliation_service.h"
 #include "components/password_manager/core/browser/affiliation/affiliated_match_helper.h"
 #include "components/password_manager/core/browser/features/password_features.h"
@@ -21,6 +23,7 @@
 #include "components/password_manager/core/browser/password_store/mock_password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -33,6 +36,7 @@ using ::affiliations::FacetURI;
 using ::affiliations::GroupedFacets;
 using ::affiliations::MockAffiliationService;
 using ::base::test::RunOnceCallback;
+using base::test::ValueIs;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::IsEmpty;
@@ -51,7 +55,6 @@ std::vector<testing::Matcher<const StoredCredential&>> MatchesForms(
   }
   return matchers;
 }
-using ::testing::VariantWith;
 
 constexpr const char kTestWebURL[] = "https://example.com/";
 constexpr const char kTestPSLURL[] = "https://one.example.com/";
@@ -74,7 +77,7 @@ PasswordForm CreateForm(const std::string& url_string,
                         std::u16string_view password) {
   PasswordForm form;
   form.username_value = std::u16string(username);
-  form.password_value = std::u16string(password);
+  form.password_value = PasswordString(std::u16string(password));
   form.url = GURL(url_string);
   form.signon_realm = url_string;
   form.in_store = PasswordForm::Store::kProfileStore;
@@ -124,7 +127,7 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, NoMatchesTest) {
   GetLoginsWithAffiliationsRequestHandler(
       observed_form, backend(), &match_helper(), result_callback.Get());
 
-  EXPECT_CALL(result_callback, Run(VariantWith<LoginsResult>(IsEmpty())));
+  EXPECT_CALL(result_callback, Run(ValueIs(IsEmpty())));
   RunUntilIdle();
 }
 
@@ -153,12 +156,12 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, ExactAndPslMatchesTest) {
 
   std::vector<PasswordForm> expected_forms;
   expected_forms.push_back(CreateForm(kTestWebURL, u"username1", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kExact;
+  expected_forms.back().match_type = affiliations::MatchType::kExact;
   expected_forms.push_back(CreateForm(kTestPSLURL, u"username2", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kPSL;
+  expected_forms.back().match_type = affiliations::MatchType::kPSL;
 
-  EXPECT_CALL(result_callback, Run(VariantWith<LoginsResult>(ElementsAreArray(
-                                   MatchesForms(expected_forms)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -194,16 +197,16 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, AffiliatedMatchesOnlyTest) {
 #if !BUILDFLAG(IS_ANDROID)
   expected_forms.push_back(
       CreateForm(kAffiliatedWebURL, u"username1", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kAffiliated;
+  expected_forms.back().match_type = affiliations::MatchType::kAffiliated;
 #endif
   expected_forms.push_back(
       CreateForm(kAffiliatedAndroidApp, u"username2", u"password"));
   expected_forms.back().affiliated_web_realm = kAffiliatedWebURL;
-  expected_forms.back().match_type = PasswordForm::MatchType::kAffiliated;
+  expected_forms.back().match_type = affiliations::MatchType::kAffiliated;
 
-  EXPECT_CALL(result_callback,
-              Run(VariantWith<LoginsResult>(
-                  UnorderedElementsAreArray(MatchesForms(expected_forms)))));
+  EXPECT_CALL(
+      result_callback,
+      Run(ValueIs(UnorderedElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -244,20 +247,20 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest,
 
   std::vector<PasswordForm> expected_forms;
   expected_forms.push_back(CreateForm(kTestWebURL, u"username1", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kExact;
+  expected_forms.back().match_type = affiliations::MatchType::kExact;
   expected_forms.push_back(CreateForm(kTestPSLURL, u"username2", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kPSL;
+  expected_forms.back().match_type = affiliations::MatchType::kPSL;
   expected_forms.push_back(
       CreateForm(kAffiliatedWebURL, u"username3", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kAffiliated;
+  expected_forms.back().match_type = affiliations::MatchType::kAffiliated;
   expected_forms.push_back(
       CreateForm(kAffiliatedAndroidApp, u"username4", u"password"));
   expected_forms.back().affiliated_web_realm = kAffiliatedWebURL;
-  expected_forms.back().match_type = PasswordForm::MatchType::kAffiliated;
+  expected_forms.back().match_type = affiliations::MatchType::kAffiliated;
 
-  EXPECT_CALL(result_callback,
-              Run(VariantWith<LoginsResult>(
-                  UnorderedElementsAreArray(MatchesForms(expected_forms)))));
+  EXPECT_CALL(
+      result_callback,
+      Run(ValueIs(UnorderedElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -289,13 +292,13 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, AffiliationsArePSLTest) {
 
   std::vector<PasswordForm> expected_forms;
   expected_forms.push_back(CreateForm(kTestWebURL, u"username1", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kExact;
+  expected_forms.back().match_type = affiliations::MatchType::kExact;
   expected_forms.push_back(CreateForm(kTestPSLURL, u"username2", u"password"));
   expected_forms.back().match_type =
-      PasswordForm::MatchType::kAffiliated | PasswordForm::MatchType::kPSL;
+      affiliations::MatchType::kAffiliated | affiliations::MatchType::kPSL;
 
-  EXPECT_CALL(result_callback, Run(VariantWith<LoginsResult>(ElementsAreArray(
-                                   MatchesForms(expected_forms)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -323,11 +326,10 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, GroupedMatchesOnlyTest) {
 
   PasswordForm expected_form =
       CreateForm(kGroupWebURL, u"username", u"password");
-  expected_form.match_type = PasswordForm::MatchType::kGrouped;
+  expected_form.match_type = affiliations::MatchType::kGrouped;
 
-  EXPECT_CALL(
-      result_callback,
-      Run(VariantWith<LoginsResult>(ElementsAre(MatchesForm(expected_form)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAre(MatchesForm(expected_form)))));
   RunUntilIdle();
 }
 
@@ -369,12 +371,12 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest,
       CreateForm(kAffiliatedAndroidApp, u"username1", u"password"));
   expected_forms.back().affiliated_web_realm = kTestWebURL;
   expected_forms.back().match_type =
-      PasswordForm::MatchType::kAffiliated | PasswordForm::MatchType::kGrouped;
+      affiliations::MatchType::kAffiliated | affiliations::MatchType::kGrouped;
   expected_forms.push_back(CreateForm(kGroupWebURL, u"username2", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kGrouped;
+  expected_forms.back().match_type = affiliations::MatchType::kGrouped;
 
-  EXPECT_CALL(result_callback, Run(VariantWith<LoginsResult>(ElementsAreArray(
-                                   MatchesForms(expected_forms)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -414,14 +416,14 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest,
   std::vector<PasswordForm> expected_forms;
   expected_forms.push_back(
       CreateForm("https://a.slack.com/", u"test", u"test"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kExact;
+  expected_forms.back().match_type = affiliations::MatchType::kExact;
   expected_forms.push_back(
       CreateForm("https://b.slack.com/", u"test2", u"test"));
   // The second form is only affiliated not PSL matched.
-  expected_forms.back().match_type = PasswordForm::MatchType::kAffiliated;
+  expected_forms.back().match_type = affiliations::MatchType::kAffiliated;
 
-  EXPECT_CALL(result_callback, Run(VariantWith<LoginsResult>(ElementsAreArray(
-                                   MatchesForms(expected_forms)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -451,11 +453,10 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest,
 
   PasswordForm expected_form =
       CreateForm("https://a.slack.com/", u"test", u"test");
-  expected_form.match_type = PasswordForm::MatchType::kExact;
+  expected_form.match_type = affiliations::MatchType::kExact;
 
-  EXPECT_CALL(
-      result_callback,
-      Run(VariantWith<LoginsResult>(ElementsAre(MatchesForm(expected_form)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAre(MatchesForm(expected_form)))));
   RunUntilIdle();
 }
 
@@ -496,20 +497,20 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, ChangePasswordURLIsSet) {
   GetLoginsWithAffiliationsRequestHandler(
       observed_form, backend(), &match_helper(), result_callback.Get());
 
-  exact_form.match_type = PasswordForm::MatchType::kExact;
+  exact_form.match_type = affiliations::MatchType::kExact;
   exact_form.change_password_url = change_password_url;
 
-  affiliated_form.match_type = PasswordForm::MatchType::kAffiliated;
+  affiliated_form.match_type = affiliations::MatchType::kAffiliated;
   affiliated_form.affiliated_web_realm = kTestWebURL;
   affiliated_form.change_password_url = change_password_url;
 
-  grouped_form.match_type = PasswordForm::MatchType::kGrouped;
+  grouped_form.match_type = affiliations::MatchType::kGrouped;
   grouped_form.change_password_url = change_password_url;
 
   EXPECT_CALL(result_callback,
-              Run(VariantWith<LoginsResult>(UnorderedElementsAre(
-                  MatchesForm(exact_form), MatchesForm(affiliated_form),
-                  MatchesForm(grouped_form)))));
+              Run(ValueIs(UnorderedElementsAre(MatchesForm(exact_form),
+                                               MatchesForm(affiliated_form),
+                                               MatchesForm(grouped_form)))));
   RunUntilIdle();
 }
 
@@ -534,12 +535,12 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest, AffiliatedMatchHelperNull) {
 
   std::vector<PasswordForm> expected_forms;
   expected_forms.push_back(CreateForm(kTestWebURL, u"username1", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kExact;
+  expected_forms.back().match_type = affiliations::MatchType::kExact;
   expected_forms.push_back(CreateForm(kTestPSLURL, u"username2", u"password"));
-  expected_forms.back().match_type = PasswordForm::MatchType::kPSL;
+  expected_forms.back().match_type = affiliations::MatchType::kPSL;
 
-  EXPECT_CALL(result_callback, Run(VariantWith<LoginsResult>(ElementsAreArray(
-                                   MatchesForms(expected_forms)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAreArray(MatchesForms(expected_forms)))));
   RunUntilIdle();
 }
 
@@ -585,12 +586,11 @@ TEST_F(GetLoginsWithAffiliationsRequestHandlerTest,
       observed_form, backend(), &match_helper(), result_callback.Get());
 
   PasswordForm expected_form = federated_credential;
-  expected_form.match_type = PasswordForm::MatchType::kAffiliated;
+  expected_form.match_type = affiliations::MatchType::kAffiliated;
   expected_form.skip_zero_click = true;
 
-  EXPECT_CALL(
-      result_callback,
-      Run(VariantWith<LoginsResult>(ElementsAre(MatchesForm(expected_form)))));
+  EXPECT_CALL(result_callback,
+              Run(ValueIs(ElementsAre(MatchesForm(expected_form)))));
   RunUntilIdle();
 }
 

@@ -10,7 +10,6 @@ import android.animation.Animator;
 import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.Bitmap.Config;
 import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -28,9 +27,6 @@ import android.widget.ImageView;
 
 import androidx.annotation.VisibleForTesting;
 
-import jp.tomorrowkey.android.gifplayer.BaseGifDrawable;
-import jp.tomorrowkey.android.gifplayer.BaseGifImage;
-
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -38,11 +34,21 @@ import org.chromium.chrome.browser.logo.LogoBridge.Logo;
 
 /**
  * This view shows the default search provider's logo and fades in a new logo if one becomes
- * available. It also maintains a {@link BaseGifDrawable} that will be played when the user clicks
- * this view and we have an animated GIF logo ready.
+ * available. It also maintains an {@link AnimatedImageDrawable} that will be played when the user
+ * clicks this view and we have an animated GIF logo ready.
  */
 @NullMarked
 public class LogoView extends ImageView implements OnClickListener {
+    /** Handles tasks for the {@link LogoView} shown on an NTP. */
+    public interface ClickHandler {
+        /**
+         * Called when the user clicks on the logo.
+         *
+         * @param isAnimatedLogoShowing Whether the animated GIF logo is playing.
+         */
+        void onLogoClicked(boolean isAnimatedLogoShowing);
+    }
+
     // Number of milliseconds for a new logo to fade in.
     private static final int LOGO_TRANSITION_TIME_MS = 400;
 
@@ -50,7 +56,7 @@ public class LogoView extends ImageView implements OnClickListener {
     private @Nullable Drawable mLogoDrawable;
     private @Nullable Drawable mNewLogoDrawable;
     private @Nullable Drawable mDefaultGoogleLogoDrawable;
-    private @Nullable Drawable mAnimatedLogoDrawable;
+    private @Nullable AnimatedImageDrawable mAnimatedLogoDrawable;
 
     private @Nullable ObjectAnimator mFadeAnimation;
     private boolean mLogoIsDefault;
@@ -64,7 +70,7 @@ public class LogoView extends ImageView implements OnClickListener {
      */
     private float mTransitionAmount;
 
-    private LogoProperties.@Nullable ClickHandler mClickHandler;
+    private @Nullable ClickHandler mClickHandler;
     private @Nullable Callback<LogoBridge.Logo> mOnLogoAvailableCallback;
     private int mDoodleSize;
     private boolean mIsNightMode;
@@ -124,8 +130,8 @@ public class LogoView extends ImageView implements OnClickListener {
         setImageDrawable(null);
     }
 
-    /** Sets the {@link LogoProperties.ClickHandler} to notify when the logo is pressed. */
-    void setClickHandler(LogoProperties.ClickHandler clickHandler) {
+    /** Sets the {@link ClickHandler} to notify when the logo is pressed. */
+    void setClickHandler(ClickHandler clickHandler) {
         mClickHandler = clickHandler;
     }
 
@@ -190,28 +196,12 @@ public class LogoView extends ImageView implements OnClickListener {
     }
 
     /** Starts playing the given animated GIF logo. */
-    // TODO(crbug.com/434200490): Replace Object reference with ImageDecoder.Source when the
-    // refactoring is fully rolled out.
-    void playAnimatedLogo(Object animatedLogo) {
-        if (animatedLogo instanceof BaseGifImage) {
-            mAnimatedLogoDrawable =
-                    new BaseGifDrawable((BaseGifImage) animatedLogo, Config.ARGB_8888);
-        } else if (animatedLogo instanceof AnimatedImageDrawable) {
-            mAnimatedLogoDrawable = (AnimatedImageDrawable) animatedLogo;
-        } else {
-            assert false : "Unexpected logo type: " + animatedLogo;
-            return;
-        }
-
+    void playAnimatedLogo(AnimatedImageDrawable animatedLogo) {
+        mAnimatedLogoDrawable = animatedLogo;
         setImageDrawable(mAnimatedLogoDrawable);
         setScaleType(ScaleType.FIT_CENTER);
         setAlpha(1.0f);
-
-        if (mAnimatedLogoDrawable instanceof BaseGifDrawable) {
-            ((BaseGifDrawable) mAnimatedLogoDrawable).start();
-        } else if (mAnimatedLogoDrawable instanceof AnimatedImageDrawable) {
-            ((AnimatedImageDrawable) mAnimatedLogoDrawable).start();
-        }
+        mAnimatedLogoDrawable.start();
     }
 
     /**
@@ -409,7 +399,7 @@ public class LogoView extends ImageView implements OnClickListener {
         return mAnimationEnabled;
     }
 
-    LogoProperties.@Nullable ClickHandler getClickHandlerForTesting() {
+    @Nullable ClickHandler getClickHandlerForTesting() {
         return mClickHandler;
     }
 

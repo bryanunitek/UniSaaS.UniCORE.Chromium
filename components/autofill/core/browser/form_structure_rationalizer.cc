@@ -22,15 +22,16 @@
 #include "base/containers/map_util.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "build/buildflag.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
-#include "components/autofill/core/browser/data_model/data_model_utils.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/data_model/data_model_util.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_util.h"
 #include "components/autofill/core/browser/form_parsing/credit_card_field_parser.h"
 #include "components/autofill/core/browser/form_parsing/regex_patterns.h"
 #include "components/autofill/core/browser/form_structure_rationalization_engine.h"
@@ -267,8 +268,10 @@ void FormStructureRationalizer::RationalizeAutocompleteAttributes(
                 features::kAutofillEnableExpirationDateImprovements)) {
           FieldType server_hint = field->server_type();
           FieldType forced_field_type =
-              field->server_type_prediction_is_override() ? field->server_type()
-                                                          : NO_SERVER_DATA;
+              field->PredictionSource() ==
+                      AutofillPredictionSource::kServerOverride
+                  ? field->server_type()
+                  : NO_SERVER_DATA;
           CreditCardFieldParser::ExpirationDateFormat format =
               CreditCardFieldParser::DetermineExpirationDateFormat(
                   *field, /*fallback_type=*/CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR,
@@ -295,8 +298,10 @@ void FormStructureRationalizer::RationalizeAutocompleteAttributes(
                 features::kAutofillEnableExpirationDateImprovements)) {
           FieldType server_hint = field->server_type();
           FieldType forced_field_type =
-              field->server_type_prediction_is_override() ? field->server_type()
-                                                          : NO_SERVER_DATA;
+              field->PredictionSource() ==
+                      AutofillPredictionSource::kServerOverride
+                  ? field->server_type()
+                  : NO_SERVER_DATA;
           // The default for select or list elements does not really matter
           // because it's practically always chosen from the select options.
           // The default for text elements was chosen base on statistics from
@@ -573,8 +578,10 @@ void FormStructureRationalizer::RationalizeCreditCardFieldPredictions(
           current_field_type == CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR) {
         FieldType server_hint = field->server_type();
         FieldType forced_field_type =
-            field->server_type_prediction_is_override() ? server_hint
-                                                        : NO_SERVER_DATA;
+            field->PredictionSource() ==
+                    AutofillPredictionSource::kServerOverride
+                ? server_hint
+                : NO_SERVER_DATA;
         CreditCardFieldParser::ExpirationDateFormat format =
             CreditCardFieldParser::DetermineExpirationDateFormat(
                 *field, /*fallback_type=*/CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR,
@@ -728,13 +735,37 @@ void FormStructureRationalizer::RationalizeCreditCardNumberOffsets(
     begin = end;
   }
 }
-
-void FormStructureRationalizer::RationalizeDateFormatStrings(
+void FormStructureRationalizer::RationalizeFormatStrings(
     LogManager* log_manager) {
   if (!base::FeatureList::IsEnabled(features::kAutofillAiWithDataSchema)) {
     return;
   }
 
+  for (const std::unique_ptr<AutofillField>& field : fields_) {
+    if (!field->format_string()) {
+      continue;
+    }
+    const bool is_format_string_compatible = std::ranges::any_of(
+        field->Type().GetTypes(), [&](FieldType field_type) {
+          return AutofillFormatString::IsTypeCompatible(
+              field->format_string()->type, field_type);
+        });
+    base::UmaHistogramBoolean("Autofill.FormatString.IsCompatible",
+                              is_format_string_compatible);
+    if (!is_format_string_compatible) {
+      LOG_AF(log_manager) << LoggingScope::kRationalization
+                          << LogMessage::kRationalization
+                          << "Cleared incompatible format string of "
+                          << field->global_id();
+      field->ClearFormatString();
+    }
+  }
+
+  RationalizeDateFormatStrings(log_manager);
+}
+
+void FormStructureRationalizer::RationalizeDateFormatStrings(
+    LogManager* log_manager) {
   auto set_format = [&](AutofillField& field, std::u16string format_string) {
     LOG_AF(log_manager) << LoggingScope::kRationalization
                         << LogMessage::kRationalization
@@ -869,7 +900,8 @@ void FormStructureRationalizer::RationalizeStreetAddressAndAddressLine(
     if (previous_field.ComputedType().GetAddressType() !=
             ADDRESS_HOME_STREET_ADDRESS ||
         previous_field.section() != (*field)->section() ||
-        previous_field.server_type_prediction_is_override()) {
+        previous_field.PredictionSource() ==
+            AutofillPredictionSource::kServerOverride) {
       continue;
     }
     LOG_AF(log_manager)
@@ -1012,10 +1044,11 @@ void FormStructureRationalizer::RationalizeRepeatedZipCodeFields(
   auto has_zip_type = [](const std::unique_ptr<AutofillField>& field) {
     FieldType type = field->ComputedType().GetAddressType();
     return field->is_visible() &&
-           (type == ADDRESS_HOME_ZIP || type == ADDRESS_HOME_ZIP_SUFFIX);
+           (type == ADDRESS_HOME_ZIP || type == ADDRESS_HOME_ZIP_PREFIX ||
+            type == ADDRESS_HOME_ZIP_SUFFIX);
   };
-  // Invariant: All fields in [begin, end[ are ADDRESS_HOME_ZIP or
-  // ADDRESS_HOME_ZIP_SUFFIX.
+  // Invariant: All fields in [begin, end[ are ADDRESS_HOME_ZIP,
+  // ADDRESS_HOME_ZIP_PREFIX or ADDRESS_HOME_ZIP_SUFFIX.
   auto begin = fields_.begin();
   auto end = begin;
   while ((begin = std::find_if(end, fields_.end(), has_zip_type)) !=
@@ -1029,7 +1062,21 @@ void FormStructureRationalizer::RationalizeRepeatedZipCodeFields(
     const bool is_max_length_small =
         first_zip.max_length() <= kMaxZipCodePartLength &&
         second_zip.max_length() <= kMaxZipCodePartLength;
-    if (second_zip.Type().GetAddressType() == ADDRESS_HOME_ZIP_SUFFIX) {
+    const bool is_first_prefix =
+        first_zip.Type().GetAddressType() == ADDRESS_HOME_ZIP_PREFIX;
+    const bool is_second_suffix =
+        second_zip.Type().GetAddressType() == ADDRESS_HOME_ZIP_SUFFIX;
+    if (is_first_prefix && is_second_suffix) {
+      continue;
+    }
+    if (is_first_prefix) {
+      LOG_AF(log_manager)
+          << LoggingScope::kRationalization << LogMessage::kRationalization
+          << "Zip Code Rationalization: Converting sequence of (zip_prefix, "
+             "zip) to (zip_prefix, zip_suffix)";
+      second_zip.SetTypeTo(AutofillType(ADDRESS_HOME_ZIP_SUFFIX),
+                           AutofillPredictionSource::kRationalization);
+    } else if (is_second_suffix) {
       LOG_AF(log_manager)
           << LoggingScope::kRationalization << LogMessage::kRationalization
           << "Zip Code Rationalization: Converting sequence of (zip, "
@@ -1044,6 +1091,17 @@ void FormStructureRationalizer::RationalizeRepeatedZipCodeFields(
       first_zip.SetTypeTo(AutofillType(ADDRESS_HOME_ZIP_PREFIX),
                           AutofillPredictionSource::kRationalization);
       second_zip.SetTypeTo(AutofillType(ADDRESS_HOME_ZIP_SUFFIX),
+                           AutofillPredictionSource::kRationalization);
+    } else if (second_zip.PredictionSource() ==
+               AutofillPredictionSource::kHeuristics) {
+      // Prevents filling the full zip code twice when repeated zip fields don't
+      // qualify as a prefix/suffix pair. This only applies to heuristics, since
+      // the confidence in other prediction sources is higher.
+      LOG_AF(log_manager)
+          << LoggingScope::kRationalization << LogMessage::kRationalization
+          << "Zip Code Rationalization: Converting sequence of (zip, "
+             "zip) to (zip, unknown)";
+      second_zip.SetTypeTo(AutofillType(UNKNOWN_TYPE),
                            AutofillPredictionSource::kRationalization);
     }
   }
@@ -1075,7 +1133,7 @@ void FormStructureRationalizer::RationalizeFieldTypePredictions(
   RationalizeCreditCardFieldPredictions(log_manager);
   RationalizeMultiOriginCreditCardFields(main_origin, log_manager);
   RationalizeCreditCardNumberOffsets(log_manager);
-  RationalizeDateFormatStrings(log_manager);
+  RationalizeFormatStrings(log_manager);
   RationalizeRepeatedStreetAddressFields(log_manager);
   if (base::FeatureList::IsEnabled(features::kAutofillSupportSplitZipCode)) {
     RationalizeRepeatedZipCodeFields(log_manager);

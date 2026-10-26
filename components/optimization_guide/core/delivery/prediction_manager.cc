@@ -27,7 +27,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/uuid.h"
 #include "components/optimization_guide/core/delivery/model_info.h"
@@ -36,16 +35,13 @@
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/delivery/optimization_target_model_observer.h"
 #include "components/optimization_guide/core/delivery/prediction_model_download_manager.h"
+#include "components/optimization_guide/core/delivery/prediction_model_fetcher.h"
 #include "components/optimization_guide/core/delivery/prediction_model_fetcher_impl.h"
 #include "components/optimization_guide/core/delivery/prediction_model_override.h"
 #include "components/optimization_guide/core/delivery/prediction_model_store.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_permissions_util.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/optimization_guide_internals/webui/optimization_guide_internals.mojom.h"
 #include "components/optimization_guide/proto/models.pb.h"
@@ -177,7 +173,6 @@ void PredictionManager::SetPredictionModelDownloadManagerForTesting(
         prediction_model_download_manager) {
   prediction_model_download_manager_ =
       std::move(prediction_model_download_manager);
-  init_time_ = base::TimeTicks::Now();
 }
 
 void PredictionManager::FetchModels() {
@@ -193,7 +188,7 @@ void PredictionManager::FetchModels() {
   proto::ModelInfo base_model_info;
   // There should only be one supported model engine version at a time.
   base_model_info.add_supported_model_engine_versions(
-      proto::MODEL_ENGINE_VERSION_TFLITE_2_22_0);
+      proto::ModelEngineVersion_MAX);
   // This histogram is used for integration tests. Do not remove.
   // Update this to be 10000 if/when we exceed 100 model engine versions.
   LOCAL_HISTOGRAM_COUNTS_100(
@@ -204,13 +199,6 @@ void PredictionManager::FetchModels() {
   if (!prediction_model_download_manager_ ||
       !prediction_model_download_manager_->ShouldFetchModels()) {
     return;
-  }
-
-  if (prediction_model_fetch_timer_.IsFirstModelFetch()) {
-    DCHECK(!init_time_.is_null());
-    base::UmaHistogramMediumTimes(
-        "OptimizationGuide.PredictionManager.FirstModelFetchSinceServiceInit",
-        base::TimeTicks::Now() - init_time_);
   }
 
   // Models should not be fetched if there are no optimization targets
@@ -311,16 +299,21 @@ scoped_refptr<base::SequencedTaskRunner> PredictionManager::GetModelTaskRunner(
 
 void PredictionManager::OnModelsFetched(
     const std::vector<proto::ModelInfo> models_request_info,
-    std::unique_ptr<proto::GetModelsResponse> get_models_response_data) {
+    base::expected<proto::GetModelsResponse, PredictionModelFetchError>
+        get_models_response_data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   TRACE_EVENT("optimization_guide", "PredictionManager::OnModelsFetched");
 
-  if (!get_models_response_data) {
+  if (!get_models_response_data.has_value()) {
     for (const auto& model_info : models_request_info) {
       ModelProviderRegistry::RecordLifecycleState(
           model_info.optimization_target(),
           ModelDeliveryEvent::kGetModelsResponseFailure);
+    }
+    if (get_models_response_data.error() ==
+        PredictionModelFetchError::kNotRetryable) {
+      prediction_model_fetch_timer_.NotifyModelFetchNonRetryableFailure();
     }
     return;
   }
@@ -412,7 +405,7 @@ void PredictionManager::StartModelDownload(
 void PredictionManager::MaybeDownloadOrUpdatePredictionModel(
     proto::OptimizationTarget optimization_target,
     const proto::PredictionModel& get_models_response_model,
-    std::unique_ptr<proto::PredictionModel> loaded_model) {
+    std::optional<ModelInfo> loaded_model) {
   if (!loaded_model) {
     // Model load failed, redownload the model.
     ModelProviderRegistry::RecordLifecycleState(
@@ -527,7 +520,7 @@ void PredictionManager::OnModelReady(const base::FilePath& base_model_dir,
   if (registry_.IsRegistered(model.model_info().optimization_target())) {
     OnLoadPredictionModel(model.model_info().optimization_target(),
                           /*record_availability_metrics=*/false,
-                          std::make_unique<proto::PredictionModel>(model));
+                          ModelInfo::CreateFromProto(model));
   }
 }
 
@@ -580,7 +573,6 @@ void PredictionManager::MaybeInitializeModelDownloads(
     ProfileDownloadServiceTracker& download_service_tracker,
     PrefService* local_state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  init_time_ = base::TimeTicks::Now();
   if (!prediction_model_download_manager_) {
     prediction_model_download_manager_ =
         std::make_unique<PredictionModelDownloadManager>(
@@ -611,9 +603,13 @@ void PredictionManager::OnPredictionModelOverrideLoaded(
   VLOG(0) << "Loading override for "
           << proto::OptimizationTarget_Name(optimization_target)
           << (is_available ? " succeeded" : " failed");
+  std::optional<ModelInfo> model_info;
+  if (prediction_model) {
+    model_info = ModelInfo::CreateFromProto(*prediction_model);
+  }
   OnLoadPredictionModel(optimization_target,
                         /*record_availability_metrics=*/false,
-                        std::move(prediction_model));
+                        std::move(model_info));
   RecordModelAvailableAtRegistration(optimization_target, is_available);
 }
 
@@ -653,38 +649,32 @@ void PredictionManager::LoadPredictionModels(
 void PredictionManager::OnLoadPredictionModel(
     proto::OptimizationTarget optimization_target,
     bool record_availability_metrics,
-    std::unique_ptr<proto::PredictionModel> model) {
+    std::optional<ModelInfo> model_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!model) {
-    if (record_availability_metrics) {
-      RecordModelAvailableAtRegistration(optimization_target, false);
-    }
-    return;
-  }
-  bool success = ProcessAndStoreLoadedModel(*model);
-  DCHECK_EQ(optimization_target, model->model_info().optimization_target());
+
+  base::UmaHistogramBoolean(
+      base::StrCat({"OptimizationGuide.IsPredictionModelValid.",
+                    GetStringNameForOptimizationTarget(optimization_target)}),
+      model_info.has_value());
+
+  bool success = model_info && registry_.IsRegistered(optimization_target);
   if (record_availability_metrics) {
     RecordModelAvailableAtRegistration(optimization_target, success);
   }
-  OnProcessLoadedModel(*model, success);
-}
-
-void PredictionManager::OnProcessLoadedModel(
-    const proto::PredictionModel& model,
-    bool success) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
   if (success) {
+    int64_t version = model_info->version;
+    if (ShouldUpdateStoredModelForTarget(optimization_target, version)) {
+      StoreLoadedModelInfo(optimization_target, std::move(*model_info));
+    }
     base::UmaHistogramSparse(
         base::StrCat({"OptimizationGuide.PredictionModelLoadedVersion.",
-                      GetStringNameForOptimizationTarget(
-                          model.model_info().optimization_target())}),
-        model.model_info().version());
-    return;
+                      GetStringNameForOptimizationTarget(optimization_target)}),
+        version);
+  } else {
+    RemoveModelFromStore(
+        optimization_target,
+        PredictionModelStoreModelRemovalReason::kModelLoadFailed);
   }
-  RemoveModelFromStore(
-      model.model_info().optimization_target(),
-      PredictionModelStoreModelRemovalReason::kModelLoadFailed);
 }
 
 void PredictionManager::RemoveModelFromStore(
@@ -699,53 +689,6 @@ void PredictionManager::RemoveModelFromStore(
   }
 }
 
-bool PredictionManager::ProcessAndStoreLoadedModel(
-    const proto::PredictionModel& model) {
-  TRACE_EVENT("optimization_guide",
-              "PredictionManager::ProcessAndStoreLoadedModel");
-
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!model.model_info().has_optimization_target()) {
-    return false;
-  }
-  if (!model.model_info().has_version()) {
-    return false;
-  }
-  if (!model.has_model()) {
-    return false;
-  }
-
-  proto::OptimizationTarget optimization_target =
-      model.model_info().optimization_target();
-  if (!registry_.IsRegistered(optimization_target)) {
-    return false;
-  }
-
-  std::unique_ptr<ModelInfo> model_info = ModelInfo::Create(model);
-
-  base::UmaHistogramBoolean(
-      base::StrCat({"OptimizationGuide.IsPredictionModelValid.",
-                    GetStringNameForOptimizationTarget(optimization_target)}),
-      !!model_info);
-
-  if (!model_info) {
-    return false;
-  }
-
-  // See if we should update the loaded model.
-  if (!ShouldUpdateStoredModelForTarget(optimization_target,
-                                        model.model_info().version())) {
-    return true;
-  }
-
-  // Update prediction model file if that is what we have loaded.
-  if (model_info) {
-    StoreLoadedModelInfo(optimization_target, std::move(model_info));
-  }
-
-  return true;
-}
-
 bool PredictionManager::ShouldUpdateStoredModelForTarget(
     proto::OptimizationTarget optimization_target,
     int64_t new_version) const {
@@ -758,9 +701,8 @@ bool PredictionManager::ShouldUpdateStoredModelForTarget(
 
 void PredictionManager::StoreLoadedModelInfo(
     proto::OptimizationTarget optimization_target,
-    std::unique_ptr<ModelInfo> model_info) {
+    ModelInfo model_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(model_info);
   registry_.UpdateModel(optimization_target, std::move(model_info));
 }
 
@@ -772,11 +714,11 @@ base::FilePath PredictionManager::GetBaseModelDirForDownload(
 
 void PredictionManager::OverrideTargetModelForTesting(
     proto::OptimizationTarget optimization_target,
-    std::unique_ptr<ModelInfo> model_info) {
+    std::optional<ModelInfo> model_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (model_info) {
     registry_.UpdateModelImmediatelyForTesting(  // IN-TEST
-        optimization_target, std::move(model_info));
+        optimization_target, std::move(*model_info));
   } else {
     registry_.RemoveModel(optimization_target);
   }

@@ -20,7 +20,23 @@ extern const char kAccountInfo[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kAccountPreviewPreference[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewSwitchingPreference[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kAccountPreviewDataLastUpdatePref[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewDataLast429TimePref[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewNonPeriodicFetchCountPref[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewDataLastFetchAccounts[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewSelectionHeuristicScoresLastRecordedPref[];
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewSwitchingHeuristicLastRecordedPref[];
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kAccountPreviewExternalAppAccount[];
+#endif
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kGaiaCookieHash[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
@@ -53,12 +69,6 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kHistorySyncLastDeclinedTimestamp[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kHistorySyncSuccessiveDeclineCount[];
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kHistoryPageHistorySyncPromoLastDismissedTimestamp[];
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kHistoryPageHistorySyncPromoShownAfterDismissal[];
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kHistoryPageHistorySyncPromoShownCount[];
 #if BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kRestrictAccountsToPatterns[];
@@ -76,13 +86,11 @@ extern const char kGaiaCookieLastListAccountsBinaryData[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kSigninAllowedOnNextStartup[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kSigninInterceptionIDPCookiesUrl[];
+extern const char kAddressSignInPromoShownCountPerProfile[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kAddressSignInPromoShownCountPerProfileForLimitsExperiment[];
+extern const char kBookmarkSignInPromoShownCountPerProfile[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kBookmarkSignInPromoShownCountPerProfileForLimitsExperiment[];
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const char kPasswordSignInPromoShownCountPerProfileForLimitsExperiment[];
+extern const char kPasswordSignInPromoShownCountPerProfile[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const char kProfileSeparationSettings[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)

@@ -5,8 +5,11 @@
 #include "chrome/browser/touch_to_fill/autofill/android/touch_to_fill_autofill_view_impl.h"
 
 #include "base/android/jni_android.h"
+#include "chrome/android/chrome_jni_headers/TouchToFillAutofillViewBridge_jni.h"
 #include "chrome/browser/touch_to_fill/autofill/android/touch_to_fill_autofill_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/jni_zero.h"
+#include "ui/android/window_android.h"
 
 namespace autofill {
 
@@ -14,28 +17,76 @@ TouchToFillAutofillViewImpl::TouchToFillAutofillViewImpl(
     content::WebContents* web_contents)
     : web_contents_(web_contents) {}
 
-TouchToFillAutofillViewImpl::~TouchToFillAutofillViewImpl() = default;
+TouchToFillAutofillViewImpl::~TouchToFillAutofillViewImpl() {
+  if (java_object_) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    Java_TouchToFillAutofillViewBridge_destroy(env, java_object_);
+  }
+}
+
+bool TouchToFillAutofillViewImpl::EnsureJavaBridge(
+    TouchToFillAutofillController* controller) {
+  if (!web_contents_ || !web_contents_->GetTopLevelNativeWindow()) {
+    return false;
+  }
+  controller_ = controller;
+  if (!java_object_) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    java_object_ = Java_TouchToFillAutofillViewBridge_create(
+        env, jni_zero::MakeRaw(this),
+        web_contents_->GetTopLevelNativeWindow()->GetJavaObject(),
+        web_contents_->GetJavaWebContents());
+  }
+  return !!java_object_;
+}
 
 bool TouchToFillAutofillViewImpl::ShowPersonalContextNotice(
     TouchToFillAutofillController* controller) {
-  // TODO(crbug.com/521715456): Implement show notice when Java bridge is
-  // implemented.
+  if (!EnsureJavaBridge(controller)) {
+    return false;
+  }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_TouchToFillAutofillViewBridge_showPersonalContextNotice(env,
+                                                               java_object_);
+  return true;
+}
+
+bool TouchToFillAutofillViewImpl::ShowPrivateInferenceNotice(
+    TouchToFillAutofillController* controller) {
+  if (!EnsureJavaBridge(controller)) {
+    return false;
+  }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_TouchToFillAutofillViewBridge_showPrivateInferenceNotice(env,
+                                                                java_object_);
   return true;
 }
 
 void TouchToFillAutofillViewImpl::Hide() {
-  // TODO(crbug.com/521715456): Implement hide notice when Java bridge is
-  // implemented.
+  if (java_object_) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    Java_TouchToFillAutofillViewBridge_hide(env, java_object_);
+  }
 }
 
 void TouchToFillAutofillViewImpl::OnNoticeAcknowledged(JNIEnv* env) {
-  // TODO(crbug.com/521715456): Implement method when Java bridge is
-  // implemented.
+  if (controller_) {
+    controller_->OnNoticeAcknowledged();
+  }
+}
+
+void TouchToFillAutofillViewImpl::OnSettingsLinkClicked(JNIEnv* env) {
+  if (controller_) {
+    controller_->OnSettingsLinkClicked();
+  }
 }
 
 void TouchToFillAutofillViewImpl::OnDismissed(JNIEnv* env) {
-  // TODO(crbug.com/521715456): Implement method when Java bridge is
-  // implemented.
+  if (controller_) {
+    controller_->OnDismissed();
+  }
 }
 
 }  // namespace autofill
+
+DEFINE_JNI(TouchToFillAutofillViewBridge)

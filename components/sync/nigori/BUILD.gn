@@ -36,7 +36,7 @@ static_library("nigori") {
     "sync_encryption_handler_observer_list.h",
   ]
 
-  deps = [ "//components/os_crypt/async/common" ]
+  deps = [ "//components/os_crypt/common" ]
 
   public_deps = [
     "//base",
@@ -46,6 +46,4 @@ static_library("nigori") {
     "//components/sync/model/crypto",
     "//components/sync/protocol",
   ]
-
-  configs += [ "//build/config/compiler:wexit_time_destructors" ]
 }

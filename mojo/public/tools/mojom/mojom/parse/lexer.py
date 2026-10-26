@@ -2,14 +2,12 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import os.path
-import sys
 
 from mojom import fileutil
 from mojom.error import Error
 
 fileutil.AddLocalRepoThirdPartyDirToModulePath()
-from ply.lex import LexToken, TOKEN
+from ply.lex import LexToken, TOKEN  # noqa: E402
 
 
 class LexError(Error):
@@ -20,7 +18,6 @@ class LexError(Error):
 
 
 # We have methods which look like they could be functions:
-# pylint: disable=R0201
 class Lexer:
   def __init__(self, filename):
     self.filename = filename
@@ -39,24 +36,25 @@ class Lexer:
   ## Reserved keywords
   ##
   keywords = (
-      'HANDLE',
-      'IMPORT',
-      'MODULE',
-      'STRUCT',
-      'UNION',
-      'INTERFACE',
-      'ENUM',
-      'CONST',
-      'TRUE',
-      'FALSE',
-      'DEFAULT',
-      'ARRAY',
-      'MAP',
-      'PENDING_REMOTE',
-      'PENDING_RECEIVER',
-      'PENDING_ASSOCIATED_REMOTE',
-      'PENDING_ASSOCIATED_RECEIVER',
-      'FEATURE',
+    'HANDLE',
+    'IMPORT',
+    'MODULE',
+    'STRUCT',
+    'UNION',
+    'INTERFACE',
+    'ENUM',
+    'CONST',
+    'TRUE',
+    'FALSE',
+    'DEFAULT',
+    'ARRAY',
+    'MAP',
+    'HASH_MAP',
+    'PENDING_REMOTE',
+    'PENDING_RECEIVER',
+    'PENDING_ASSOCIATED_REMOTE',
+    'PENDING_ASSOCIATED_RECEIVER',
+    'FEATURE',
   )
 
   keyword_map = {}
@@ -67,55 +65,48 @@ class Lexer:
   ## All the tokens recognized by the lexer
   ##
   tokens = keywords + (
-      # Identifiers
-      'NAME',
-
-      # Constants
-      'ORDINAL',
-      'INT_CONST_DEC',
-      'INT_CONST_HEX',
-      'FLOAT_CONST',
-
-      # String literals
-      'STRING_LITERAL',
-
-      # Operators
-      'MINUS',
-      'PLUS',
-      'QSTN',
-
-      # Assignment
-      'EQUALS',
-
-      # Request / response
-      'RESPONSE',
-
-      # Delimiters
-      'LPAREN',
-      'RPAREN',  # ( )
-      'LBRACKET',
-      'RBRACKET',  # [ ]
-      'LBRACE',
-      'RBRACE',  # { }
-      'LANGLE',
-      'RANGLE',  # < >
-      'SEMI',  # ;
-      'COMMA',
-      'PIPE',  # |
-      'AMPERSAND',  # &
-      'DOT',  # , .
-
-      # Conditional keywords
-      'RESULT',
+    # Identifiers
+    'NAME',
+    # Constants
+    'ORDINAL',
+    'INT_CONST_DEC',
+    'INT_CONST_HEX',
+    'FLOAT_CONST',
+    # String literals
+    'STRING_LITERAL',
+    # Operators
+    'MINUS',
+    'PLUS',
+    'QSTN',
+    # Assignment
+    'EQUALS',
+    # Request / response
+    'RESPONSE',
+    # Delimiters
+    'LPAREN',
+    'RPAREN',  # ( )
+    'LBRACKET',
+    'RBRACKET',  # [ ]
+    'LBRACE',
+    'RBRACE',  # { }
+    'LANGLE',
+    'RANGLE',  # < >
+    'SEMI',  # ;
+    'COMMA',
+    'PIPE',  # |
+    'AMPERSAND',  # &
+    'DOT',  # , .
+    # Conditional keywords
+    'RESULT',
   )
 
   states = [
-      # Lex state to parse method response type. This is because we use
-      # 'result' as a keyword when declaring the return type of a method.
-      # E.g.: FooMethod() => result<T, E>
-      # This state is needed to disambiguate the keyword from an identifier in
-      # the context of a response return type.
-      ('responsetype', 'inclusive'),
+    # Lex state to parse method response type. This is because we use
+    # 'result' as a keyword when declaring the return type of a method.
+    # E.g.: FooMethod() => result<T, E>
+    # This state is needed to disambiguate the keyword from an identifier in
+    # the context of a response return type.
+    ('responsetype', 'inclusive'),
   ]
 
   ##
@@ -146,8 +137,9 @@ class Lexer:
   hex_escape = r"""(x[0-9a-fA-F]+)"""
   bad_escape = r"""([\\][^a-zA-Z._~^!=&\^\-\\?'"x0-7])"""
 
-  escape_sequence = \
-      r"""(\\("""+simple_escape+'|'+decimal_escape+'|'+hex_escape+'))'
+  escape_sequence = (
+    r"""(\\(""" + simple_escape + '|' + decimal_escape + '|' + hex_escape + '))'
+  )
 
   # string literals (K&R2: A.2.6)
   string_char = r"""([^"\\\n]|""" + escape_sequence + ')'
@@ -157,9 +149,15 @@ class Lexer:
   # floating constants (K&R2: A.2.5.3)
   exponent_part = r"""([eE][-+]?[0-9]+)"""
   fractional_constant = r"""([0-9]*\.[0-9]+)|([0-9]+\.)"""
-  floating_constant = \
-      '(((('+fractional_constant+')'+ \
-      exponent_part+'?)|([0-9]+'+exponent_part+')))'
+  floating_constant = (
+    '(((('
+    + fractional_constant
+    + ')'
+    + exponent_part
+    + '?)|([0-9]+'
+    + exponent_part
+    + ')))'
+  )
 
   # Ordinals
   ordinal = r'@[0-9]+'
@@ -167,7 +165,8 @@ class Lexer:
   # Don't allow ordinal values in octal (even invalid octal, like 09) or
   # hexadecimal.
   octal_or_hex_ordinal_disallowed = (
-      r'@((0[0-9]+)|(' + hex_prefix + hex_digits + '))')
+    r'@((0[0-9]+)|(' + hex_prefix + hex_digits + '))'
+  )
 
   comment = r'(/\*(.|\n)*?\*/)|(//.*(\n[ \t]*//.*)*)'
 

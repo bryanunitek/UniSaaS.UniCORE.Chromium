@@ -71,36 +71,37 @@ LayoutSVGPath::~LayoutSVGPath() = default;
 void LayoutSVGPath::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGShape::StyleDidChange(diff, old_style, style_change_context);
+  LayoutSVGShape::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
   SVGResources::UpdateMarkers(*this, old_style);
   if (old_style) {
-    const ComputedStyle& style = StyleRef();
-    if (PathGeometryChanged(*old_style, style)) {
+    if (PathGeometryChanged(*old_style, new_style)) {
       SetNeedsShapeUpdate();
     }
     // If the presence of markers changed, a shape update is needed to update
     // the marker positions.
-    if (old_style->HasMarkers() != style.HasMarkers()) {
+    if (old_style->HasMarkers() != new_style.HasMarkers()) {
       SetNeedsShapeUpdate();
     }
     // If any marker changed, bounds need to be recomputed.
     if (!base::ValuesEquivalent(old_style->MarkerStartResource(),
-                                style.MarkerStartResource()) ||
+                                new_style.MarkerStartResource()) ||
         !base::ValuesEquivalent(old_style->MarkerMidResource(),
-                                style.MarkerMidResource()) ||
+                                new_style.MarkerMidResource()) ||
         !base::ValuesEquivalent(old_style->MarkerEndResource(),
-                                style.MarkerEndResource())) {
+                                new_style.MarkerEndResource())) {
       SetNeedsBoundariesUpdate();
     }
   }
 }
 
-void LayoutSVGPath::WillBeDestroyed() {
+void LayoutSVGPath::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
-  SVGResources::ClearMarkers(*this, Style());
-  LayoutSVGShape::WillBeDestroyed();
+  SVGResources::ClearMarkers(*this, style);
+  LayoutSVGShape::WillBeDestroyed(style);
 }
 
 bool LayoutSVGPath::CalculateGeometryDependsOnViewport() const {
@@ -124,14 +125,14 @@ const StylePath* LayoutSVGPath::GetStylePath() const {
   NOT_DESTROYED();
   if (!IsA<SVGPathElement>(*GetElement()))
     return nullptr;
-  return StyleRef().D();
+  return Style().D();
 }
 
 void LayoutSVGPath::UpdateMarkerPositions() {
   NOT_DESTROYED();
   marker_positions_.clear();
 
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   if (!style.HasMarkers()) {
     return;
   }
@@ -155,7 +156,7 @@ void LayoutSVGPath::UpdateMarkerBounds() {
   SVGElementResourceClient* client = SVGResources::GetClient(*this);
   CHECK(client);
 
-  const ComputedStyle& style = StyleRef();
+  const ComputedStyle& style = Style();
   auto* marker_start = GetSVGResourceAsType<LayoutSVGResourceMarker>(
       *client, style.MarkerStartResource());
   auto* marker_mid = GetSVGResourceAsType<LayoutSVGResourceMarker>(

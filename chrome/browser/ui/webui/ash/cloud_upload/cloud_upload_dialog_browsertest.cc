@@ -16,6 +16,8 @@
 #include "ash/constants/ash_switches.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/constants/webui_url_constants.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback_helpers.h"
@@ -28,9 +30,9 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
 #include "chrome/browser/ash/file_manager/file_tasks.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
@@ -45,6 +47,7 @@
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_open_metrics.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_dialog.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
@@ -56,6 +59,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
@@ -66,6 +70,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/common/constants.h"
 #include "storage/browser/file_system/external_mount_points.h"
+#include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -232,8 +237,7 @@ content::WebContents* LaunchCloudUploadDialogAndGetWebContentsForDialog(
 // Set email (using a domain from |kNonManagedDomainPatterns|) to login a
 // non-managed user. Intended to be used in the override of |SetUpCommandLine|
 // from |InProcessBrowserTest| to ensure
-// |IsEligibleAndEnabledUploadOfficeToCloud| returns the result of
-// |IsUploadOfficeToCloudEnabled| in browser tests.
+// |IsEligibleAndEnabledUploadOfficeToCloud| returns true in browser tests.
 void SetUpCommandLineForNonManagedUser(base::CommandLine* command_line) {
   command_line->AppendSwitchASCII(switches::kLoginUser, "testuser@gmail.com");
   command_line->AppendSwitchASCII(switches::kLoginProfile, "user");
@@ -261,13 +265,9 @@ auto IsOpenInOfficeTask() {
 // selected on the JS side gets executed.
 class FileHandlerDialogBrowserTest : public InProcessBrowserTest {
  public:
-  FileHandlerDialogBrowserTest() {
-    feature_list_.InitWithFeatures({chromeos::features::kUploadOfficeToCloud},
-                                   {});
-  }
+  FileHandlerDialogBrowserTest() = default;
 
-  explicit FileHandlerDialogBrowserTest(int num_tasks)
-      : FileHandlerDialogBrowserTest() {
+  explicit FileHandlerDialogBrowserTest(int num_tasks) {
     num_tasks_ = num_tasks;
   }
 
@@ -275,7 +275,7 @@ class FileHandlerDialogBrowserTest : public InProcessBrowserTest {
   FileHandlerDialogBrowserTest& operator=(const FileHandlerDialogBrowserTest&) =
       delete;
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
@@ -303,8 +303,7 @@ class FileHandlerDialogBrowserTest : public InProcessBrowserTest {
 
  protected:
   // Use a non-managed user in this browser test to ensure
-  // |IsEligibleAndEnabledUploadOfficeToCloud| returns the result of
-  // |IsUploadOfficeToCloudEnabled|.
+  // |IsEligibleAndEnabledUploadOfficeToCloud| returns true.
   void SetUpCommandLine(base::CommandLine* command_line) override {
     SetUpCommandLineForNonManagedUser(command_line);
   }
@@ -314,9 +313,6 @@ class FileHandlerDialogBrowserTest : public InProcessBrowserTest {
   std::vector<file_manager::file_tasks::TaskDescriptor> tasks_;
   std::vector<storage::FileSystemURL> files_;
   base::HistogramTester histogram_;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 // Tests that a new Files app window is created if no Files app window exists.
@@ -712,7 +708,7 @@ gfx::NativeWindow LaunchFilesAppAndWait(Profile* profile) {
   params.url = files_swa_url;
   ash::LaunchSystemWebAppAsync(profile, ash::SystemWebAppType::FILE_MANAGER,
                                params);
-  Browser* files_app = ui_test_utils::WaitForBrowserToOpen();
+  BrowserWindowInterface* files_app = ui_test_utils::WaitForBrowserToOpen();
   return files_app->GetWindow()->GetNativeWindow();
 }
 
@@ -830,29 +826,22 @@ class FileHandlerDialogBrowserTestWithAutomatedFlow
   // mime types.
   bool ExplicitFileHandlersForOfficeExtensionsAndMimeTypesNotSet() {
     return ExplicitFileHandlersForExtensionsAndMimeTypesNotSet(
-               fm_tasks::WordGroupExtensions(),
-               fm_tasks::WordGroupMimeTypes()) &&
-           ExplicitFileHandlersForExtensionsAndMimeTypesNotSet(
-               fm_tasks::ExcelGroupExtensions(),
-               fm_tasks::ExcelGroupMimeTypes()) &&
-           ExplicitFileHandlersForExtensionsAndMimeTypesNotSet(
-               fm_tasks::PowerPointGroupExtensions(),
-               fm_tasks::PowerPointGroupMimeTypes());
+        fm_tasks::OfficeGroupExtensions(), fm_tasks::OfficeGroupMimeTypes());
   }
 
   // Tests that there are no explicit file handlers set for the given extensions
   // and mime types.
   bool ExplicitFileHandlersForExtensionsAndMimeTypesNotSet(
-      const std::set<std::string>& extensions,
-      const std::set<std::string>& mime_types) {
+      base::span<const std::string_view> extensions,
+      base::span<const std::string_view> mime_types) {
     const auto& prefs = *profile()->GetPrefs();
-    for (const auto& extension : extensions) {
+    for (std::string_view extension : extensions) {
       if (fm_tasks::GetDefaultTaskFromPrefs(prefs,
                                             /*mime_type=*/{}, extension)) {
         return false;
       }
     }
-    for (const auto& mime_type : mime_types) {
+    for (std::string_view mime_type : mime_types) {
       fm_tasks::TaskDescriptor default_task;
       if (fm_tasks::GetDefaultTaskFromPrefs(prefs, mime_type,
                                             /*suffix=*/{})) {
@@ -889,8 +878,8 @@ class FileHandlerDialogBrowserTestWithAutomatedFlow
   // Tests that there are no explicit file handlers set for the given extensions
   // and mime types are set to a task with a given |action_id|.
   bool ExplicitFileHandlersForExtensionsAndMimeTypesSetTo(
-      const std::set<std::string>& extensions,
-      const std::set<std::string>& mime_types,
+      base::span<const std::string_view> extensions,
+      base::span<const std::string_view> mime_types,
       std::string_view action_id) {
     return ExplicitFileHandlersForExtensionsAndMimeTypesSetTo(
         extensions, mime_types,
@@ -903,18 +892,18 @@ class FileHandlerDialogBrowserTestWithAutomatedFlow
   // Tests that there are no explicit file handlers set for the given extensions
   // and mime types are set to a particular |task|.
   bool ExplicitFileHandlersForExtensionsAndMimeTypesSetTo(
-      const std::set<std::string>& extensions,
-      const std::set<std::string>& mime_types,
+      base::span<const std::string_view> extensions,
+      base::span<const std::string_view> mime_types,
       const fm_tasks::TaskDescriptor& task) {
     const auto& prefs = *profile()->GetPrefs();
-    for (const auto& extension : extensions) {
+    for (std::string_view extension : extensions) {
       if (fm_tasks::GetDefaultTaskFromPrefs(prefs,
                                             /*mime_type=*/{},
                                             extension) != task) {
         return false;
       }
     }
-    for (const auto& mime_type : mime_types) {
+    for (std::string_view mime_type : mime_types) {
       if (fm_tasks::GetDefaultTaskFromPrefs(prefs, mime_type, /*suffix=*/{}) !=
           task) {
         return false;
@@ -1013,16 +1002,21 @@ IN_PROC_BROWSER_TEST_P(FileHandlerDialogBrowserTestWithAutomatedFlow,
 // office extensions or mime types.
 IN_PROC_BROWSER_TEST_P(FileHandlerDialogBrowserTestWithAutomatedFlow,
                        PreexistingFileHandlersAreNotOverwritten) {
-  std::set<std::string> test_extensions({".docx", ".pptx", ".xslx"});
-  std::set<std::string> test_mime_types({"application/msword",
-                                         "application/vnd.ms-excel",
-                                         "application/vnd.ms-excel"});
+  base::flat_set<std::string_view> test_extensions({".docx", ".pptx", ".xlsx"});
+  base::flat_set<std::string_view> test_mime_types(
+      {"application/msword", "application/vnd.ms-excel",
+       "application/vnd.ms-powerpoint"});
 
   // Create sets of office extensions excluding the ones reserved for testing.
-  std::set<std::string> word_extensions(fm_tasks::WordGroupExtensions());
-  std::set<std::string> excel_extensions(fm_tasks::ExcelGroupExtensions());
-  std::set<std::string> power_point_extensions(
-      fm_tasks::PowerPointGroupExtensions());
+  base::flat_set<std::string_view> word_extensions(
+      fm_tasks::WordGroupExtensions().begin(),
+      fm_tasks::WordGroupExtensions().end());
+  base::flat_set<std::string_view> excel_extensions(
+      fm_tasks::ExcelGroupExtensions().begin(),
+      fm_tasks::ExcelGroupExtensions().end());
+  base::flat_set<std::string_view> power_point_extensions(
+      fm_tasks::PowerPointGroupExtensions().begin(),
+      fm_tasks::PowerPointGroupExtensions().end());
   for (const auto& extension : test_extensions) {
     word_extensions.erase(extension);
     excel_extensions.erase(extension);
@@ -1030,10 +1024,15 @@ IN_PROC_BROWSER_TEST_P(FileHandlerDialogBrowserTestWithAutomatedFlow,
   }
 
   // Create sets of office mime types excluding the ones reserved for testing.
-  std::set<std::string> word_mime_types(fm_tasks::WordGroupMimeTypes());
-  std::set<std::string> excel_mime_types(fm_tasks::ExcelGroupMimeTypes());
-  std::set<std::string> power_point_mime_types(
-      fm_tasks::PowerPointGroupMimeTypes());
+  base::flat_set<std::string_view> word_mime_types(
+      fm_tasks::WordGroupMimeTypes().begin(),
+      fm_tasks::WordGroupMimeTypes().end());
+  base::flat_set<std::string_view> excel_mime_types(
+      fm_tasks::ExcelGroupMimeTypes().begin(),
+      fm_tasks::ExcelGroupMimeTypes().end());
+  base::flat_set<std::string_view> power_point_mime_types(
+      fm_tasks::PowerPointGroupMimeTypes().begin(),
+      fm_tasks::PowerPointGroupMimeTypes().end());
   for (const auto& mime_type : test_mime_types) {
     word_mime_types.erase(mime_type);
     excel_mime_types.erase(mime_type);
@@ -1234,10 +1233,7 @@ IN_PROC_BROWSER_TEST_F(FileHandlerDialogBrowserTest,
 // cannot change the default task set.
 class FixUpFlowBrowserTest : public InProcessBrowserTest {
  public:
-  FixUpFlowBrowserTest() {
-    feature_list_.InitAndEnableFeature(
-        chromeos::features::kUploadOfficeToCloud);
-  }
+  FixUpFlowBrowserTest() = default;
 
   FixUpFlowBrowserTest(const FixUpFlowBrowserTest&) = delete;
   FixUpFlowBrowserTest& operator=(const FixUpFlowBrowserTest&) = delete;
@@ -1272,15 +1268,11 @@ class FixUpFlowBrowserTest : public InProcessBrowserTest {
 
  protected:
   // Use a non-managed user in this browser test to ensure
-  // |IsEligibleAndEnabledUploadOfficeToCloud| returns the result of
-  // |IsUploadOfficeToCloudEnabled|.
+  // |IsEligibleAndEnabledUploadOfficeToCloud| returns true.
   void SetUpCommandLine(base::CommandLine* command_line) override {
     SetUpCommandLineForNonManagedUser(command_line);
   }
   std::vector<storage::FileSystemURL> files_;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 using file_manager::file_tasks::kActionIdWebDriveOfficeWord;
@@ -1510,7 +1502,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Launch a settings page.
   ash::LaunchSystemWebAppAsync(profile(), ash::SystemWebAppType::SETTINGS);
-  Browser* files_app = ui_test_utils::WaitForBrowserToOpen();
+  BrowserWindowInterface* files_app = ui_test_utils::WaitForBrowserToOpen();
   gfx::NativeWindow settings = files_app->GetWindow()->GetNativeWindow();
 
   auto* modal_parent_widget =
@@ -1816,12 +1808,11 @@ class CloudOpenTaskBrowserTest : public InProcessBrowserTest {
     upload_task_->OnMoveConfirmationComplete(user_response);
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
  protected:
   // Use a non-managed user in this browser test to ensure
-  // |IsEligibleAndEnabledUploadOfficeToCloud| returns the result of
-  // |IsUploadOfficeToCloudEnabled|.
+  // |IsEligibleAndEnabledUploadOfficeToCloud| returns true.
   void SetUpCommandLine(base::CommandLine* command_line) override {
     SetUpCommandLineForNonManagedUser(command_line);
   }

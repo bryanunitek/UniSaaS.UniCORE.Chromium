@@ -8,13 +8,19 @@
 #include <stdint.h>
 
 #include <optional>
+#include <string>
 
 #include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/display/display_export.h"
 #include "ui/display/types/display_constants.h"
-#include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/geometry/rect.h"
+
+namespace gfx {
+class ColorSpace;
+class DisplayColorSpaces;
+class DisplayColorSpacesRef;
+}  // namespace gfx
 
 namespace display {
 
@@ -68,6 +74,8 @@ class DISPLAY_EXPORT Display final {
     AVAILABLE,
     UNAVAILABLE,
   };
+
+  static constexpr float kRefreshRateEpsilon = 0.01f;
 
   // Creates a display with kInvalidDisplayId as default.
   Display();

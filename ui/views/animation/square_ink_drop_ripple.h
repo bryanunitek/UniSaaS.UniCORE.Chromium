@@ -12,8 +12,8 @@
 #include "base/callback_list.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_not_drawn.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
@@ -21,10 +21,6 @@
 #include "ui/views/animation/ink_drop_ripple.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/views_export.h"
-
-namespace ui {
-class Layer;
-}  // namespace ui
 
 namespace views {
 class CircleLayerDelegate;
@@ -185,7 +181,7 @@ class VIEWS_EXPORT SquareInkDropRipple : public InkDropRipple {
   // The root layer that parents the animating layers. The root layer is used to
   // manipulate opacity and location, and its children are used to manipulate
   // the different painted shapes that compose the ink drop.
-  ui::Layer root_layer_;
+  ui::LayerNotDrawn root_layer_;
 
   // Sequence scheduled callback subscription for the root layer.
   base::CallbackListSubscription root_callback_subscription_;

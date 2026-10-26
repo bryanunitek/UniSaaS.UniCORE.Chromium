@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -18,9 +19,11 @@
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/sharing/incoming_password_sharing_invitation_sync_bridge.h"
 #include "components/sync/model/data_type_controller_delegate.h"
 #include "components/sync/service/sync_service.h"
+#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace password_manager {
@@ -36,8 +39,25 @@ bool IsValidString16(const std::u16string& str) {
   return str.size() <= kMaxString16Length;
 }
 
+bool IsValidString16(crypto::SecureU16String str) {
+  return str.size() <= kMaxString16Length;
+}
+
 bool IsValidString(const std::string& str) {
   return str.size() <= kMaxString16Length;
+}
+
+// Returns true if `icon_url` is empty, or if it is valid, HTTP/HTTPS, and
+// same-origin with `credential_url`. If it is cross-origin or invalid, it is
+// not a valid icon URL for the shared credential and should be stripped to
+// prevent cross-user tracking beacons.
+bool IsValidIconUrlForSharedCredential(const GURL& icon_url,
+                                       const GURL& credential_url) {
+  if (icon_url.is_empty()) {
+    return true;
+  }
+  return icon_url.is_valid() && icon_url.SchemeIsHTTPOrHTTPS() &&
+         url::IsSameOriginWith(icon_url, credential_url);
 }
 
 bool IsValidSharedPasswordForm(const PasswordForm& form) {
@@ -56,7 +76,8 @@ bool IsValidSharedPasswordForm(const PasswordForm& form) {
       !IsValidString16(form.password_element)) {
     return false;
   }
-  if (!IsValidString16(form.password_value) || form.password_value.empty()) {
+  if (!IsValidString16(form.password_value.secure_value()) ||
+      form.password_value.empty()) {
     return false;
   }
   if (!IsValidString(form.signon_realm) || form.signon_realm.empty()) {
@@ -68,6 +89,9 @@ bool IsValidSharedPasswordForm(const PasswordForm& form) {
   }
   if (!form.sender_profile_image_url.is_empty() &&
       !form.sender_profile_image_url.is_valid()) {
+    return false;
+  }
+  if (!IsValidIconUrlForSharedCredential(form.icon_url, form.url)) {
     return false;
   }
   return true;
@@ -127,8 +151,8 @@ std::vector<PasswordForm> IncomingSharingInvitationToPasswordForms(
     PasswordForm form;
     form.username_value =
         base::UTF8ToUTF16(incoming_credentials.username_value());
-    form.password_value =
-        base::UTF8ToUTF16(incoming_credentials.password_value());
+    form.password_value = PasswordString(
+        base::UTF8ToUTF16(incoming_credentials.password_value()));
 
     form.url = GURL(password_group_element_data.origin());
     form.username_element =
@@ -141,6 +165,9 @@ std::vector<PasswordForm> IncomingSharingInvitationToPasswordForms(
     form.display_name =
         base::UTF8ToUTF16(password_group_element_data.display_name());
     form.icon_url = GURL(password_group_element_data.avatar_url());
+    if (!IsValidIconUrlForSharedCredential(form.icon_url, form.url)) {
+      form.icon_url = GURL();
+    }
     form.date_created = base::Time::Now();
     form.type = PasswordForm::Type::kReceivedViaSharing;
     form.skip_zero_click = true;
@@ -183,16 +210,17 @@ ProcessIncomingSharingInvitationTask::~ProcessIncomingSharingInvitationTask() =
 
 void ProcessIncomingSharingInvitationTask::OnGetPasswordStoreResultsOrErrorFrom(
     PasswordStoreInterface* store,
-    LoginsResultOrError results_or_error) {
-  if (std::holds_alternative<PasswordStoreBackendError>(results_or_error)) {
+    base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+        results_or_error) {
+  if (!results_or_error) {
     std::move(done_processing_invitation_callback_).Run(this);
     return;
   }
-  auto results = std::get<LoginsResult>(std::move(results_or_error));
+  std::vector<StoredCredential> results = std::move(*results_or_error);
 
   // Grouped credentials are ignored because they have different domains.
   std::erase_if(results, [](const auto& form) {
-    return form.match_type == PasswordForm::MatchType::kGrouped;
+    return form.match_type == affiliations::MatchType::kGrouped;
   });
   // TODO(crbug.com/40269204): process PSL and affilated credentials if needed.
   // TODO(crbug.com/40269204): process conflicting passwords differently if

@@ -17,11 +17,11 @@ LayoutTableRow::LayoutTableRow(Element* element) : LayoutBlock(element) {}
 
 LayoutTableRow* LayoutTableRow::CreateAnonymousWithParent(
     const LayoutObject& parent) {
-  const ComputedStyle* new_style =
+  const ComputedStyle& new_style =
       parent.GetDocument().GetStyleResolver().CreateAnonymousStyleWithDisplay(
-          parent.StyleRef(), EDisplay::kTableRow);
+          parent.Style(), EDisplay::kTableRow);
   auto* new_row = MakeGarbageCollected<LayoutTableRow>(nullptr);
-  new_row->SetDocumentForAnonymous(&parent.GetDocument());
+  new_row->SetDocumentForAnonymous(parent.GetDocument());
   new_row->SetStyle(new_style);
   return new_row;
 }
@@ -60,59 +60,13 @@ LayoutTable* LayoutTableRow::Table() const {
   return nullptr;
 }
 
-void LayoutTableRow::AddChildBeforeDescendant(LayoutObject* new_child,
-                                              LayoutObject* before_descendant) {
-  NOT_DESTROYED();
-  DCHECK_NE(before_descendant->Parent(), this);
-
-  if (new_child->IsTableCell()) {
-    LayoutObject* before_child =
-        SplitAnonymousBoxesAroundChild(before_descendant);
-    DCHECK_EQ(before_child->Parent(), this);
-    AddChild(new_child, before_child);
-    return;
-  }
-
-  LayoutObject* before_descendant_container = before_descendant->Parent();
-  while (before_descendant_container->Parent() != this) {
-    before_descendant_container = before_descendant_container->Parent();
-  }
-  CHECK(before_descendant_container->IsAnonymous());
-  CHECK(before_descendant_container->IsTableCell());
-
-  // Insert the child into the anonymous table-cell instead of here.
-  before_descendant_container->AddChild(new_child, before_descendant);
-}
-
 void LayoutTableRow::AddChild(LayoutObject* new_child,
                               LayoutObject* before_child) {
   NOT_DESTROYED();
   if (LayoutTable* table = Table()) {
     table->TableGridStructureChanged();
   }
-
-  if (before_child && before_child->Parent() != this) {
-    AddChildBeforeDescendant(new_child, before_child);
-    return;
-  }
-
-  if (!new_child->IsTableCell()) {
-    LayoutObject* after_child =
-        before_child ? before_child->PreviousSibling() : LastChild();
-
-    if (after_child && after_child->IsAnonymous()) {
-      after_child->AddChild(new_child);
-      return;
-    }
-
-    // No suitable existing anonymous table-cell - create a new one.
-    LayoutTableCell* cell = LayoutTableCell::CreateAnonymousWithParent(*this);
-    LayoutBox::AddChild(cell, before_child);
-    cell->AddChild(new_child);
-    return;
-  }
-
-  LayoutBox::AddChild(new_child, before_child);
+  LayoutBlock::AddChild(new_child, before_child);
 }
 
 void LayoutTableRow::RemoveChild(LayoutObject* child) {
@@ -122,7 +76,7 @@ void LayoutTableRow::RemoveChild(LayoutObject* child) {
   }
   // Invalidate background in case this doesn't need layout which would
   // trigger the invalidation, e.g. when the last child is removed.
-  if (StyleRef().HasBackground()) {
+  if (Style().HasBackground()) {
     SetBackgroundNeedsFullPaintInvalidation();
   }
 
@@ -140,16 +94,22 @@ void LayoutTableRow::WillBeRemovedFromTree() {
 void LayoutTableRow::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   if (LayoutTable* table = Table()) {
-    if ((old_style && !old_style->BorderVisuallyEqual(StyleRef())) ||
-        (old_style && old_style->GetWritingDirection() !=
-                          StyleRef().GetWritingDirection())) {
+    if (old_style &&
+        (!old_style->BorderVisuallyEqual(new_style) ||
+         old_style->GetWritingDirection() != new_style.GetWritingDirection())) {
       table->GridBordersChanged();
     }
   }
-  LayoutBlock::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBlock::StyleDidChange(diff, old_style, new_style, style_change_context);
+}
+
+LayoutBlock* LayoutTableRow::CreateAnonymousChild() const {
+  NOT_DESTROYED();
+  return LayoutTableCell::CreateAnonymousWithParent(*this);
 }
 
 LayoutBox* LayoutTableRow::CreateAnonymousBoxWithSameTypeAs(
@@ -158,7 +118,7 @@ LayoutBox* LayoutTableRow::CreateAnonymousBoxWithSameTypeAs(
   return CreateAnonymousWithParent(*parent);
 }
 
-LayoutBlock* LayoutTableRow::StickyContainer() const {
+LayoutBox* LayoutTableRow::StickyContainer() const {
   NOT_DESTROYED();
   return Table();
 }

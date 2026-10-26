@@ -17,9 +17,10 @@ config("private_config") {
 source_set("libprotobuf-mutator") {
   testonly = true
 
-  # Remove *San and coverage for a performance boost.
+  # Remove coverage and sanitizers other than ASan for a performance boost.
+  # ASan is kept enabled to match Protobuf. See https://crbug.com/558759075.
   configs -= not_fuzzed_remove_configs
-  configs += not_fuzzed_add_configs
+  configs += not_fuzzed_needs_asan_add_configs
   configs += [ ":private_config" ]
 
   public_configs = [ ":public_config" ]
@@ -59,6 +60,7 @@ if (use_libfuzzer) {
     deps = [
       ":libprotobuf-mutator",
       ":lpm_test_fuzzer_proto",
+      ":lpm_test_fuzzer_proto_fuzzable",
     ]
 
     # Don't actually run this on CF. It's only a test to ensure builds work.
@@ -75,20 +77,8 @@ fuzzable_proto_library("lpm_test_fuzzer_proto") {
   ]
 }
 
-# Avoid CQ complaints on platforms we don't care about (ie: iOS).
-# Also prevent people from using this to include protobuf_full into a production
-# build of Chrome.
-if (use_fuzzing_engine_with_lpm) {
-  # Group that can provide protobuf_full to non-testonly targets
-  # TODO(crbug.com/505034799): Remove in favor of `:protobuf_full_for_fuzzing`.
-  group("protobuf_full") {
-    public_deps = [ "//third_party/protobuf:protobuf_full" ]
-  }
-}
-
 # Wrapper group that provides protobuf_full to fuzzing and test targets without
-# having to add them to protobuf's visibility list. Similar to `protobuf_full`
-# above.
+# having to add them to protobuf's visibility list.
 group("protobuf_full_for_fuzzing") {
   testonly = true
   public_deps = [ "//third_party/protobuf:protobuf_full" ]

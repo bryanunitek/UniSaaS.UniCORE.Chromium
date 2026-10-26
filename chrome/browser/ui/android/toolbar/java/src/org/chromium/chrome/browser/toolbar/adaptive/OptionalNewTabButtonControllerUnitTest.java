@@ -13,7 +13,6 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -35,10 +34,8 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
@@ -56,7 +53,6 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link OptionalNewTabButtonController}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class OptionalNewTabButtonControllerUnitTest {
     private static final int WIDTH_DELTA = 50;
 
@@ -80,7 +76,7 @@ public final class OptionalNewTabButtonControllerUnitTest {
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
 
         doReturn(JUnitTestGURLs.EXAMPLE_URL).when(mTab).getUrl();
         doReturn(mContext).when(mTab).getContext();
@@ -104,8 +100,8 @@ public final class OptionalNewTabButtonControllerUnitTest {
         TrackerFactory.setTrackerForTests(mTracker);
     }
 
-    @EnableFeatures(ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2)
     @Test
+    @DisabledTest(message = "crbug.com/550515015")
     public void testIphCommandHelper() {
         assertNull(
                 mOptionalNewTabButtonController
@@ -127,7 +123,6 @@ public final class OptionalNewTabButtonControllerUnitTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2)
     public void testIphEvent() {
         doReturn(true)
                 .when(mTracker)
@@ -135,7 +130,7 @@ public final class OptionalNewTabButtonControllerUnitTest {
                         FeatureConstants
                                 .ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_NEW_TAB_FEATURE);
 
-        View view = mock(View.class);
+        View view = new View(mContext);
         mOptionalNewTabButtonController
                 .get(mTab)
                 .getButtonSpec()
@@ -153,16 +148,7 @@ public final class OptionalNewTabButtonControllerUnitTest {
 
     @Test
     @Config(qualifiers = "sw600dp")
-    @Features.DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
-    public void testShouldShowButton_tablet_resizeRefactorDisabled() {
-        mTabStripVisibilitySupplier.set(StripVisibilityState.HIDDEN_BY_FADE);
-        assertFalse(mOptionalNewTabButtonController.shouldShowButton(mTab));
-    }
-
-    @Test
-    @Config(qualifiers = "sw600dp")
-    @Features.EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
-    public void testShouldShowButton_tablet_resizeRefactorEnabled() {
+    public void testShouldShowButton_tablet() {
         // Hide the tab strip.
         mTabStripVisibilitySupplier.set(StripVisibilityState.HIDDEN_BY_FADE);
         assertTrue(mOptionalNewTabButtonController.shouldShowButton(mTab));
@@ -174,7 +160,6 @@ public final class OptionalNewTabButtonControllerUnitTest {
 
     @Test
     @Config(qualifiers = "sw600dp")
-    @Features.EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void testShouldShowButton_onTabStripVisibilityStateChanged() {
         mOptionalNewTabButtonController.addObserver(mButtonDataObserver);
 

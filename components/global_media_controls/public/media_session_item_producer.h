@@ -9,12 +9,14 @@
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "base/timer/timer.h"
 #include "components/global_media_controls/public/media_item_manager_observer.h"
 #include "components/global_media_controls/public/media_item_producer.h"
 #include "components/global_media_controls/public/media_item_ui_observer.h"
 #include "components/global_media_controls/public/media_item_ui_observer_set.h"
 #include "components/global_media_controls/public/media_session_notification_item.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/media_session/public/cpp/media_position.h"
 #include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "services/media_session/public/mojom/media_controller.mojom.h"
 
@@ -89,6 +91,16 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaSessionItemProducer
 
   void SetAudioSinkId(const std::string& id, const std::string& sink_id);
 
+  void NotifyMediaSessionInfoChanged(
+      const std::string& id,
+      const media_session::mojom::MediaSessionInfoPtr& session_info);
+  void NotifyMediaSessionActionsChanged(
+      const std::string& id,
+      const std::vector<media_session::mojom::MediaSessionAction>& actions);
+  void NotifyMediaSessionPositionChanged(
+      const std::string& id,
+      const std::optional<media_session::MediaPosition>& position);
+
   media_session::mojom::RemotePlaybackMetadataPtr
   GetRemotePlaybackMetadataFromItem(const std::string& id);
 
@@ -106,7 +118,7 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaSessionItemProducer
   // as to show the origin associated with the request rather than that for the
   // top frame.
   void UpdateMediaItemSourceOrigin(const std::string& id,
-                                   const url::Origin& origin);
+                                   const std::optional<url::Origin>& origin);
 
  private:
   friend class MediaSessionItemProducerTest;

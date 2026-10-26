@@ -9,7 +9,7 @@ import {CrUrlListItemSize} from 'chrome://resources/cr_elements/cr_url_list_item
 import {FocusOutlineManager} from 'chrome://resources/js/focus_outline_manager.js';
 import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
 import {getDeepActiveElement} from 'chrome://resources/js/util.js';
-import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 import {getTrustedHtml} from 'chrome://webui-test/trusted_html.js';
 
@@ -53,6 +53,22 @@ suite('CrUrlListItemTest', () => {
     const slottedElement = element.$.customIcon.assignedElements()[0];
     assertTrue(!!slottedElement);
     assertEquals('customIcon', slottedElement.id);
+  });
+
+  test('ExposesIconContainerPart', () => {
+    const iconContainer =
+        element.shadowRoot.querySelector<HTMLElement>('#iconContainer');
+    assertTrue(!!iconContainer);
+    assertEquals('iconContainer', iconContainer.getAttribute('part'));
+
+    assertNotEquals('42px', getComputedStyle(iconContainer).marginInlineEnd);
+
+    const style = document.createElement('style');
+    style.textContent =
+        'cr-url-list-item::part(iconContainer) { margin-inline-end: 42px; }';
+    document.body.appendChild(style);
+
+    assertEquals('42px', getComputedStyle(iconContainer).marginInlineEnd);
   });
 
   test('TruncatesAndDisplaysCount', async () => {
@@ -219,16 +235,30 @@ suite('CrUrlListItemTest', () => {
     element.title = 'My title';
     element.description = 'My description';
     await element.updateComplete;
-    assertEquals('My title', element.$.anchor.ariaLabel);
-    assertEquals('My description', element.$.anchor.ariaDescription);
+    assertEquals(null, element.$.anchor.ariaLabel);
+    assertEquals(null, element.$.anchor.ariaDescription);
     assertEquals('My title', element.$.button.ariaLabel);
     assertEquals('My description', element.$.button.ariaDescription);
+
+    element.asAnchor = true;
+    await element.updateComplete;
+    assertEquals('My title', element.$.anchor.ariaLabel);
+    assertEquals('My description', element.$.anchor.ariaDescription);
+    assertEquals(null, element.$.button.ariaLabel);
+    assertEquals(null, element.$.button.ariaDescription);
 
     element.itemAriaLabel = 'My aria label';
     element.itemAriaDescription = 'My aria description';
     await element.updateComplete;
     assertEquals('My aria label', element.$.anchor.ariaLabel);
     assertEquals('My aria description', element.$.anchor.ariaDescription);
+    assertEquals(null, element.$.button.ariaLabel);
+    assertEquals(null, element.$.button.ariaDescription);
+
+    element.asAnchor = false;
+    await element.updateComplete;
+    assertEquals(null, element.$.anchor.ariaLabel);
+    assertEquals(null, element.$.anchor.ariaDescription);
     assertEquals('My aria label', element.$.button.ariaLabel);
     assertEquals('My aria description', element.$.button.ariaDescription);
   });

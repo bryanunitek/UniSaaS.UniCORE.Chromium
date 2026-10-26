@@ -5,17 +5,38 @@
 #include "services/webnn/webnn_utils.h"
 
 #include <algorithm>
-#include <set>
+#include <bitset>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
+#include "base/types/fixed_array.h"
 #include "services/webnn/public/cpp/webnn_errors.h"
 #include "services/webnn/public/mojom/webnn_graph.mojom.h"
+#include "third_party/tflite/buildflags.h"
+
+#if BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+#include "third_party/xnnpack/src/include/xnnpack.h"  // nogncheck
+#endif  // BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
 
 namespace webnn {
 
 namespace {
+
+#if BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+BASE_FEATURE(kWebNNUseXNNPackForConstantTransposeFolding,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+
+size_t GetLinearOffset(base::span<const uint32_t> multi_dim_index,
+                       base::span<const uint32_t> strides) {
+  size_t offset = 0;
+  for (size_t i = 0; i < multi_dim_index.size(); ++i) {
+    offset += base::strict_cast<size_t>(multi_dim_index[i]) * strides[i];
+  }
+  return offset;
+}
 
 std::string OpKindToString(mojom::Conv2d::Kind kind) {
   switch (kind) {
@@ -50,14 +71,16 @@ bool ValidateAxes(base::span<const uint32_t> axes) {
     return false;
   }
 
-  // TODO(crbug.com/40206287): Replace `std::set` with `std::bitset` for
-  // duplication check after the maximum number of operand dimensions has been
-  // settled and validated before using this function. Use `std::set` here at
-  // present to avoid dimensions count check. Dimensions number issue tracked in
-  // https://github.com/webmachinelearning/webnn/issues/456.
-  if (rank != std::set<uint32_t>(axes.begin(), axes.end()).size()) {
-    // Axes should not contain duplicate values.
-    return false;
+  std::bitset<kMaxTensorRank> seen_axes;
+  for (uint32_t axis : axes) {
+    if (axis >= kMaxTensorRank) {
+      return false;
+    }
+    if (seen_axes.test(axis)) {
+      // Axes should not contain duplicate values.
+      return false;
+    }
+    seen_axes.set(axis);
   }
 
   return true;
@@ -310,24 +333,10 @@ std::string NotSupportedOperatorError(const mojom::ElementWiseUnary& op) {
   return base::StrCat({"Unsupported operator ", OpKindToString(op.kind), "."});
 }
 
-std::string NotSupportedArgumentTypeError(std::string_view op_name,
-                                          std::string_view argument_name,
-                                          OperandDataType type) {
-  return base::StrCat({"Unsupported data type ", DataTypeToString(type),
-                       " for ", op_name, " argument ", argument_name, "."});
-}
-
 std::string NotSupportedInputArgumentTypeError(std::string_view op_name,
                                                OperandDataType type) {
   return base::StrCat({"Unsupported data type ", DataTypeToString(type),
                        " for ", op_name, " argument input."});
-}
-
-std::string NotSupportedOptionTypeError(std::string_view op_name,
-                                        std::string_view option_name,
-                                        OperandDataType type) {
-  return base::StrCat({"Unsupported data type ", DataTypeToString(type),
-                       " for ", op_name, " option ", option_name});
 }
 
 std::vector<uint32_t> PermuteArray(base::span<const uint32_t> array,
@@ -435,6 +444,115 @@ webnn::PaddingMode FromMojoPaddingMode(mojom::PaddingMode::Tag tag) {
     case mojom::PaddingMode::Tag::kReflection:
       return webnn::PaddingMode::kReflection;
   }
+}
+
+base::HeapArray<uint8_t> TransposeConstantData(
+    base::span<const uint8_t> data,
+    base::span<const uint32_t> shape,
+    base::span<const uint32_t> permutation,
+    size_t element_size) {
+  const size_t rank = shape.size();
+  CHECK_EQ(rank, permutation.size());
+  CHECK_GT(element_size, 0u);
+
+  base::FixedArray<uint32_t> transposed_shape(rank);
+  for (size_t i = 0; i < rank; ++i) {
+    transposed_shape[i] = shape[permutation[i]];
+  }
+
+  auto transposed_data = base::HeapArray<uint8_t>::Uninit(data.size());
+
+#if BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+  if (base::FeatureList::IsEnabled(
+          kWebNNUseXNNPackForConstantTransposeFolding) &&
+      rank <= XNN_MAX_TENSOR_DIMS) {
+    base::FixedArray<size_t> xnn_shape(rank);
+    base::FixedArray<size_t> xnn_perm(rank);
+    for (size_t i = 0; i < rank; ++i) {
+      xnn_shape[i] = shape[i];
+      xnn_perm[i] = permutation[i];
+    }
+
+    switch (element_size) {
+      case 1: {
+        xnn_status status = xnn_run_transpose_nd_x8(
+            data.data(), transposed_data.data(), rank, xnn_shape.data(),
+            xnn_perm.data(), 0, nullptr);
+        CHECK_EQ(status, xnn_status_success);
+        break;
+      }
+      case 2: {
+        xnn_status status = xnn_run_transpose_nd_x16(
+            data.data(), transposed_data.data(), rank, xnn_shape.data(),
+            xnn_perm.data(), 0, nullptr);
+        CHECK_EQ(status, xnn_status_success);
+        break;
+      }
+      case 4: {
+        xnn_status status = xnn_run_transpose_nd_x32(
+            data.data(), transposed_data.data(), rank, xnn_shape.data(),
+            xnn_perm.data(), 0, nullptr);
+        CHECK_EQ(status, xnn_status_success);
+        break;
+      }
+      case 8: {
+        xnn_status status = xnn_run_transpose_nd_x64(
+            data.data(), transposed_data.data(), rank, xnn_shape.data(),
+            xnn_perm.data(), 0, nullptr);
+        CHECK_EQ(status, xnn_status_success);
+        break;
+      }
+      default:
+        NOTREACHED() << "Unsupported element size: " << element_size;
+    }
+    return transposed_data;
+  }
+#endif  // BUILDFLAG(BUILD_TFLITE_WITH_XNNPACK)
+
+  // `permutation` maps a result axis to the source axis it comes from; the
+  // inverse maps a source axis to where it ends up.
+  base::FixedArray<uint32_t> inverse_permutation(rank);
+  for (size_t i = 0; i < rank; ++i) {
+    inverse_permutation[permutation[i]] = base::checked_cast<uint32_t>(i);
+  }
+
+  const std::vector<uint32_t> original_strides = CalculateStrides(shape);
+  const std::vector<uint32_t> transposed_strides =
+      CalculateStrides(transposed_shape);
+
+  size_t number_of_elements = 1;
+  for (size_t i = 0; i < rank; ++i) {
+    number_of_elements *= shape[i];
+  }
+
+  base::span<uint8_t> transposed_span = transposed_data.as_span();
+  base::FixedArray<uint32_t> transposed_idx(rank, 0);
+  base::FixedArray<uint32_t> original_idx(rank);
+
+  for (size_t i = 0; i < number_of_elements; ++i) {
+    for (size_t d = 0; d < rank; ++d) {
+      original_idx[d] = transposed_idx[inverse_permutation[d]];
+    }
+
+    size_t original_offset = GetLinearOffset(original_idx, original_strides);
+    size_t transposed_offset =
+        GetLinearOffset(transposed_idx, transposed_strides);
+
+    transposed_span.subspan(transposed_offset * element_size, element_size)
+        .copy_from(data.subspan(original_offset * element_size, element_size));
+
+    for (size_t dimension = rank; dimension-- > 0;) {
+      transposed_idx[dimension]++;
+      if (transposed_idx[dimension] < transposed_shape[dimension]) {
+        // Not overflowed, continue to next element.
+        break;
+      }
+      // Reset and carry over.
+      transposed_idx[dimension] = 0;
+    }
+  }
+
+  return transposed_data;
 }
 
 }  // namespace webnn

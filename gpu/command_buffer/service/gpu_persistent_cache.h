@@ -12,9 +12,15 @@
 
 #include "base/containers/flat_set.h"
 #include "base/containers/heap_array.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/containers/span.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/synchronization/atomic_flag.h"
+#include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/thread_annotations.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "components/persistent_cache/buffer_provider.h"
 #include "components/persistent_cache/pending_backend.h"
@@ -115,22 +121,9 @@ class GPU_GLES2_EXPORT GpuPersistentCache :
                            use_shader_cache_shm_count = nullptr);
 
 #if BUILDFLAG(USE_DAWN) || BUILDFLAG(SKIA_USE_DAWN)
-  // dawn::platform::CachingInterface implementation.
-  size_t FindKey(std::span<const std::byte> key) override;
-  size_t LoadData(std::span<const std::byte> key,
-                  std::span<std::byte> dest) override;
-  void StoreData(std::span<const std::byte> key,
-                 std::span<const std::byte> src) override;
-  // TODO(503801946): Remove these outdated non-spanified implementations once
-  // we have migrated to use the one's above.
-  size_t LoadData(const void* key,
-                  size_t key_size,
-                  void* value,
-                  size_t value_size) override;
-  void StoreData(const void* key,
-                 size_t key_size,
-                 const void* value,
-                 size_t value_size) override;
+  size_t FindKey(std::string_view key);
+  size_t LoadData(std::string_view key, base::span<uint8_t> dest);
+  void StoreData(std::string_view key, base::span<const uint8_t> src);
 #endif
 
   // GrContextOptions::PersistentCache implementation.
@@ -147,7 +140,12 @@ class GPU_GLES2_EXPORT GpuPersistentCache :
                       const void* value,
                       int64_t value_size);
 
-  void PurgeMemory(base::MemoryPressureLevel memory_pressure_level);
+  // Memory coordinator interface:
+  // Triggers immediate eviction of cache entries down to `memory_limit`.
+  void OnReleaseMemory(base::MemoryLimit memory_limit);
+  // Updates the target cache size limit non-destructively without forcing
+  // immediate eviction.
+  void OnUpdateMemoryLimit(base::MemoryLimit memory_limit);
 
   void OnMemoryDump(const std::string& dump_name,
                     base::trace_event::ProcessMemoryDump* pmd);
@@ -159,6 +157,15 @@ class GPU_GLES2_EXPORT GpuPersistentCache :
   friend class base::RefCountedThreadSafe<GpuPersistentCache>;
 
   ~GpuPersistentCache() override;
+
+#if BUILDFLAG(USE_DAWN) || BUILDFLAG(SKIA_USE_DAWN)
+  // dawn::platform::CachingInterface implementation.
+  size_t FindKey(std::span<const std::byte> key) override;
+  size_t LoadData(std::span<const std::byte> key,
+                  std::span<std::byte> dest) override;
+  void StoreData(std::span<const std::byte> key,
+                 std::span<const std::byte> src) override;
+#endif
 
   struct DiskCache;
 
@@ -188,7 +195,8 @@ class GPU_GLES2_EXPORT GpuPersistentCache :
   static bool IsCacheHitResult(CacheLoadResult result);
 
   CacheLoadResult LoadImpl(std::string_view key,
-                           persistent_cache::BufferProvider buffer_provider);
+                           persistent_cache::BufferProvider buffer_provider,
+                           bool skip_memory_cache);
   void StoreImpl(std::string_view key,
                  base::span<const uint8_t> value,
                  bool skip_memory_cache);
@@ -243,7 +251,12 @@ class GPU_GLES2_EXPORT GpuPersistentCacheCollection
 
   scoped_refptr<GpuPersistentCache> GetCache(const GpuDiskCacheHandle& handle);
 
-  void PurgeMemory(base::MemoryPressureLevel memory_pressure_level);
+  // Memory coordinator interface:
+  // Triggers immediate eviction of cache entries down to `memory_limit`.
+  void OnReleaseMemory(base::MemoryLimit memory_limit);
+  // Updates the target cache size limit non-destructively without forcing
+  // immediate eviction.
+  void OnUpdateMemoryLimit(base::MemoryLimit memory_limit);
 
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
@@ -256,6 +269,8 @@ class GPU_GLES2_EXPORT GpuPersistentCacheCollection
   base::Lock mutex_;
   std::map<GpuDiskCacheHandle, scoped_refptr<GpuPersistentCache>> caches_
       GUARDED_BY(mutex_);
+  base::MemoryLimit current_memory_limit_ GUARDED_BY(mutex_) =
+      base::kNoMemoryPressureThreshold;
 };
 
 }  // namespace gpu

@@ -16,11 +16,9 @@
 #import "base/ios/block_types.h"
 #import "base/time/time.h"
 #import "components/signin/public/identity_manager/account_info.h"
-#import "components/signin/public/identity_manager/tribool.h"
 #import "components/sync/base/data_type.h"
 #import "ios/chrome/app/change_profile_continuation.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
-#import "ios/chrome/browser/signin/model/capabilities_types.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 
 class Browser;
@@ -129,8 +127,6 @@ void RecordFullscreenSigninPromoStarted(
     ChromeAccountManagerService* account_manager_service,
     const base::Version& current_version);
 
-// Converts a SystemIdentityCapabilityResult to a Tribool.
-Tribool TriboolFromCapabilityResult(SystemIdentityCapabilityResult result);
 
 // Returns the list of all accounts on the device, in the order provided by the
 // system, including the ones that are assigned to other profiles.
@@ -193,6 +189,31 @@ bool DifferentUserIsSignedInInAnotherScene(SceneState* scene_state);
 
 // Returns the regular browser.
 Browser* GetRegularBrowser(Browser* browser);
+
+// Checks that `identity` is nil if and only if `result` is not
+// `SigninCoordinatorResultSuccess`.
+void CheckSigninCoordinatorResultAndIdentity(SigninCoordinatorResult result,
+                                             id<SystemIdentity> identity);
+
+// Converts `result` to the legacy `SigninCoordinatorResult` enum value.
+// Returns `SigninCoordinatorResultSuccess` if `result` contains an identity,
+// or the underlying error code otherwise.
+// TODO(crbug.com/552435229): Remove once SigninCoordinatorResultSuccess is
+// removed.
+SigninCoordinatorResult
+SigninCoordinatorResultFromSigninCoordinatorResultOrIdentity(
+    SigninCoordinatorResultOrIdentity result);
+
+// Converts the legacy (`result`, `identity`) pair into
+// `SigninCoordinatorResultOrIdentity`.
+// `identity` must be non-nil if and only if `result` is
+// `SigninCoordinatorResultSuccess`.
+// TODO(crbug.com/552435229): Remove once SigninCoordinatorResultSuccess is
+// removed.
+SigninCoordinatorResultOrIdentity
+SigninCoordinatorResultOrIdentityFromSigninCoordinatorResult(
+    SigninCoordinatorResult result,
+    id<SystemIdentity> identity);
 
 }  // namespace signin
 

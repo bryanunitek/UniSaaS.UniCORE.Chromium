@@ -25,8 +25,8 @@
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -170,7 +170,7 @@ class AppUsageTelemetrySamplerBrowserTest
                         const base::TimeDelta& running_time) {
     // Launch web app and simulate web app usage before closing the browser
     // window to prevent further usage tracking.
-    Browser* const app_browser =
+    BrowserWindowInterface* const app_browser =
         ::web_app::LaunchWebAppBrowser(profile(), app_id);
     test::MockClock::Get().Advance(running_time);
     ::web_app::CloseAndWait(app_browser);

@@ -4,7 +4,7 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/ad_intervention_browser_test_utils.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
@@ -32,10 +32,8 @@ class LargeStickyAdViolationBrowserTest
     std::vector<base::test::FeatureRef> enabled = {
         subresource_filter::kAdTagging,
         subresource_filter::kAdsInterventionsEnforced};
-    std::vector<base::test::FeatureRef> disabled = {
-        blink::features::kFrequencyCappingForLargeStickyAdDetection};
 
-    feature_list_.InitWithFeatures(enabled, disabled);
+    feature_list_.InitWithFeatures(enabled, /*disabled_features=*/{});
     subresource_filter::SubresourceFilterBrowserTest::SetUp();
   }
 
@@ -113,8 +111,7 @@ class LargeStickyAdViolationBrowserTestWithoutEnforcement
     std::vector<base::test::FeatureRef> enabled = {
         subresource_filter::kAdTagging};
     std::vector<base::test::FeatureRef> disabled = {
-        subresource_filter::kAdsInterventionsEnforced,
-        blink::features::kFrequencyCappingForLargeStickyAdDetection};
+        subresource_filter::kAdsInterventionsEnforced};
 
     feature_list_.InitWithFeatures(enabled, disabled);
     subresource_filter::SubresourceFilterBrowserTest::SetUp();

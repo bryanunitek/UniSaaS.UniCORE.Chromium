@@ -24,6 +24,7 @@
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/numerics/checked_math.h"
 #include "base/process/memory.h"
 #include "base/process/process_handle.h"
 #include "base/process/process_info.h"
@@ -185,7 +186,7 @@ FieldTrial::PickleState::PickleState(const PickleState& other) = default;
 
 FieldTrial::PickleState::~PickleState() = default;
 
-void FieldTrial::AppendGroup(const std::string& name,
+void FieldTrial::AppendGroup(std::string_view name,
                              Probability group_probability) {
   // When the group choice was previously forced, we only need to return the
   // the id of the chosen group, and anything can be returned for the others.
@@ -286,6 +287,13 @@ FieldTrial* FieldTrial::CreateSimulatedFieldTrial(
 bool FieldTrial::ParseFieldTrialsString(std::string_view trials_string,
                                         bool override_trials,
                                         std::vector<State>& entries) {
+  // Each trial consumes two separator-delimited tokens (name and group), so
+  // this is an upper bound on the number of entries that will be parsed.
+  entries.reserve(static_cast<size_t>(std::ranges::count(
+                      trials_string, kPersistentStringSeparator)) /
+                      2 +
+                  1);
+
   size_t next_item = 0;
   while (next_item < trials_string.length()) {
     // Parse one entry. Entries have the format
@@ -376,7 +384,7 @@ void FieldTrial::SetTrialRegistered() {
   trial_registered_ = true;
 }
 
-void FieldTrial::SetGroupChoice(const std::string& group_name, int number) {
+void FieldTrial::SetGroupChoice(std::string_view group_name, int number) {
   group_ = number;
   if (group_name.empty()) {
     StringAppendF(&group_name_, "%d", group_);
@@ -431,11 +439,10 @@ FieldTrialList::FieldTrialList() {
 
 FieldTrialList::~FieldTrialList() {
   AutoLock auto_lock(lock_);
-  while (!registered_.empty()) {
-    auto it = registered_.begin();
-    it->second->Release();
-    registered_.erase(it->first);
+  for (auto& [_, trial] : registered_) {
+    trial->Release();
   }
+  registered_.clear();
   // Note: If this DCHECK fires in a test that uses ScopedFeatureList, it is
   // likely caused by nested ScopedFeatureLists being destroyed in a different
   // order than they are initialized.
@@ -510,6 +517,7 @@ std::vector<FieldTrial::State> FieldTrialList::GetAllFieldTrialStates(
   }
 
   AutoLock auto_lock(global_->lock_);
+  states.reserve(global_->registered_.size());
   for (const auto& registered : global_->registered_) {
     FieldTrial::PickleState trial;
     registered.second->GetStateWhileLocked(&trial);
@@ -521,6 +529,7 @@ std::vector<FieldTrial::State> FieldTrialList::GetAllFieldTrialStates(
     entry.activated = trial.activated;
     entry.trial_name = *trial.trial_name;
     entry.group_name = *trial.group_name;
+    entry.is_overridden = trial.is_overridden;
     states.push_back(std::move(entry));
   }
   return states;
@@ -861,8 +870,9 @@ bool FieldTrialList::GetParamsFromSharedMemory(FieldTrial* field_trial,
           field_trial->ref_, &allocated_size);
   CHECK(entry);
 
-  uint64_t actual_size = sizeof(internal::FieldTrialEntry) + entry->pickle_size;
-  if (allocated_size < actual_size) {
+  base::CheckedNumeric<uint64_t> actual_size = sizeof(internal::FieldTrialEntry);
+  actual_size += entry->pickle_size;
+  if (!actual_size.IsValid() || allocated_size < actual_size.ValueOrDie()) {
     return false;
   }
 
@@ -1174,10 +1184,11 @@ void FieldTrialList::Register(FieldTrial* trial, bool is_randomized_trial) {
   DCHECK(global_);
 
   AutoLock auto_lock(global_->lock_);
-  CHECK(!global_->PreLockedFind(trial->trial_name())) << trial->trial_name();
+  auto [_, inserted] =
+      global_->registered_.try_emplace(trial->trial_name(), trial);
+  CHECK(inserted) << trial->trial_name();
   trial->AddRef();
   trial->SetTrialRegistered();
-  global_->registered_[trial->trial_name()] = trial;
 
   if (is_randomized_trial) {
     ++global_->num_registered_randomized_trials_;
@@ -1231,16 +1242,17 @@ void FieldTrialList::GetActiveFieldTrialGroupsInternal(
     for (const auto& [override_trial_name, runtime_override] :
          base::RuntimeFieldTrialOverrides::GetInstance()
              ->GetRuntimeOverrides()) {
-      // Runtime FieldTrial overrides are all considered active, so include them
-      // all.
-      FieldTrial::ActiveGroup active_group;
-      active_group.trial_name = runtime_override.trial_name;
-      active_group.group_name = runtime_override.group_name;
-      active_group.is_overridden = false;
-      active_groups->push_back(std::move(active_group));
-      if (runtime_override.overridden_trial) {
+      // Only active runtime overrides should be included. However, if an
+      // override is inactive but overrides a field trial, we should still stop
+      // reporting that field trial.
+      if (runtime_override->is_active()) {
+        active_groups->emplace_back(runtime_override->trial_name(),
+                                    runtime_override->group_name(),
+                                    /*is_overridden=*/false);
+      }
+      if (runtime_override->overridden_trial()) {
         trials_to_ignore.insert(
-            runtime_override.overridden_trial->trial_name());
+            runtime_override->overridden_trial()->trial_name());
       }
     }
   }

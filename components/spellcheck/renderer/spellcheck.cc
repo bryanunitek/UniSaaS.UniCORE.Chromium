@@ -18,10 +18,12 @@
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "components/spellcheck/common/spellcheck_common.h"
 #include "components/spellcheck/common/spellcheck_features.h"
@@ -33,7 +35,8 @@
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_visitor.h"
 #include "content/public/renderer/render_thread.h"
-#include "third_party/blink/public/platform/web_runtime_features.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "services/service_manager/public/cpp/local_interface_provider.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
@@ -195,13 +198,20 @@ void SpellCheck::Initialize(
     std::vector<spellcheck::mojom::SpellCheckBDictLanguagePtr> dictionaries,
     const std::vector<std::string>& custom_words,
     bool enable) {
+  base::ScopedUmaHistogramTimer timer("SpellCheck.Renderer.InitializeTime");
   languages_.clear();
+  dictionary_state_ = DictionaryState::kInitialized;
 
   for (const auto& dictionary : dictionaries)
     AddSpellcheckLanguage(std::move(dictionary->file), dictionary->language);
 
-  custom_dictionary_.Init(
-      std::set<std::string>(custom_words.begin(), custom_words.end()));
+  if (base::FeatureList::IsEnabled(
+          spellcheck::kAsyncSpellcheckCustomDictionaryInit)) {
+    custom_dictionary_.InitAsync(custom_words);
+  } else {
+    custom_dictionary_.Init(
+        std::set<std::string>(custom_words.begin(), custom_words.end()));
+  }
 #if BUILDFLAG(USE_RENDERER_SPELLCHECKER)
   if (!spellcheck::UseBrowserSpellChecker()) {
     PostDelayedSpellCheckTask(pending_request_param_.release());
@@ -211,15 +221,6 @@ void SpellCheck::Initialize(
   spellcheck_enabled_ = enable;
   UpdateSpellcheckEnabled updater(enable);
   content::RenderFrame::ForEach(&updater);
-}
-
-void SpellCheck::SpellCheckCustomDictionaryChanged(
-    const std::vector<std::string>& words_added,
-    const std::vector<std::string>& words_removed) {
-  if (blink::WebRuntimeFeatures::IsSpellCheckCustomDictionaryAPIEnabled()) {
-    const std::set<std::string> added(words_added.begin(), words_added.end());
-    NotifyDictionaryObservers(ConvertToWebStringFromUtf8(added));
-  }
 }
 
 void SpellCheck::CustomDictionaryChanged(
@@ -447,6 +448,13 @@ bool SpellCheck::SpellCheckParagraph(
       return true;
     }
 
+    // A zero misspelling length here indicates all renderer languages skipped
+    // the remaining text, not that a misspelling was identified. So stop
+    // scanning.
+    if (misspelling_length == 0) {
+      break;
+    }
+
     // A word is correctly spelled if it is in the profile custom dictionary
     // or in the per-document word set.
     const bool in_custom_dictionary =
@@ -486,9 +494,28 @@ void SpellCheck::RequestTextChecking(
 }
 #endif
 
+void SpellCheck::RequestDictionaryIfNeeded() {
+  if (!base::FeatureList::IsEnabled(
+          spellcheck::kOnDemandSpellcheckInitialization)) {
+    return;
+  }
+
+  if (dictionary_state_ > DictionaryState::kNotRequested) {
+    return;
+  }
+
+  mojo::Remote<spellcheck::mojom::SpellCheckInitializationHost> host;
+  embedder_provider_->GetInterface(host.BindNewPipeAndPassReceiver());
+  host->RequestDictionary();
+  dictionary_state_ = DictionaryState::kRequested;
+}
+
 bool SpellCheck::InitializeIfNeeded() {
-  if (languages_.empty())
-    return true;
+  RequestDictionaryIfNeeded();
+
+  if (languages_.empty()) {
+    return dictionary_state_ != DictionaryState::kInitialized;
+  }
 
   bool initialize_if_needed = false;
   for (auto& language : languages_)

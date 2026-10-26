@@ -8,6 +8,7 @@ import static org.chromium.components.webapk.lib.common.WebApkConstants.WEBAPK_P
 import static org.chromium.webapk.lib.common.WebApkConstants.EXTRA_WEBAPK_PACKAGE_NAME;
 
 import android.content.Intent;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.text.TextUtils;
@@ -22,9 +23,13 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.metrics.LaunchCauseMetrics;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.browserservices.intents.WebApkExtras;
+import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
+import org.chromium.chrome.browser.browserservices.intents.WebappInfo;
 import org.chromium.chrome.browser.browserservices.intents.WebappIntentUtils;
 import org.chromium.chrome.browser.customtabs.BaseCustomTabActivity;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
+import org.chromium.ui.util.ColorUtils;
 
 /** Displays a webapp in a nearly UI-less Chrome (InfoBars still appear). */
 @NullMarked
@@ -42,7 +47,21 @@ public class WebappActivity extends BaseCustomTabActivity {
             return sIntentDataProviderForTesting;
         }
 
-        return TextUtils.isEmpty(WebappIntentUtils.getWebApkPackageName(intent))
+        String webApkPackageName = WebappIntentUtils.getWebApkPackageName(intent);
+        if (TextUtils.isEmpty(webApkPackageName) && getIntentDataProvider() != null) {
+            WebApkExtras webApkExtras = getIntentDataProvider().getWebApkExtras();
+            if (webApkExtras != null && !TextUtils.isEmpty(webApkExtras.webApkPackageName)) {
+                webApkPackageName = webApkExtras.webApkPackageName;
+                intent.putExtra(EXTRA_WEBAPK_PACKAGE_NAME, webApkPackageName);
+            }
+        }
+
+        if (TextUtils.isEmpty(IntentUtils.safeGetStringExtra(intent, WebappConstants.EXTRA_URL))
+                && intent.getData() != null) {
+            intent.putExtra(WebappConstants.EXTRA_URL, intent.getDataString());
+        }
+
+        return TextUtils.isEmpty(webApkPackageName)
                 ? WebappIntentDataProviderFactory.create(intent)
                 : WebApkIntentDataProviderFactory.create(intent);
     }
@@ -94,7 +113,19 @@ public class WebappActivity extends BaseCustomTabActivity {
 
     @Override
     protected @Nullable Drawable getBackgroundDrawable() {
-        return null;
+        if (BaseCustomTabActivity.isWindowInitiallyTranslucent(this)) {
+            return null;
+        }
+        BrowserServicesIntentDataProvider intentDataProvider = getIntentDataProvider();
+        if (intentDataProvider != null) {
+            WebappInfo webappInfo = WebappInfo.create(intentDataProvider);
+            if (webappInfo != null && intentDataProvider.getWebappExtras() != null) {
+                int backgroundColor =
+                        ColorUtils.getOpaqueColor(webappInfo.backgroundColorFallbackToDefault());
+                return new ColorDrawable(backgroundColor);
+            }
+        }
+        return super.getBackgroundDrawable();
     }
 
     @Override

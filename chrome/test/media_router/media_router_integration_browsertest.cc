@@ -17,6 +17,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/media/router/mojo/media_router_desktop.h"
@@ -41,6 +42,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
@@ -70,8 +72,9 @@ class NoRoutesObserver : public MediaRoutesObserver {
   ~NoRoutesObserver() override = default;
 
   void OnRoutesUpdated(const std::vector<MediaRoute>& routes) override {
-    if (callback_ && routes.empty())
+    if (callback_ && routes.empty()) {
       std::move(callback_).Run();
+    }
   }
 
  private:
@@ -99,7 +102,7 @@ MediaRouterIntegrationBrowserTest::MediaRouterIntegrationBrowserTest(
 MediaRouterIntegrationBrowserTest::~MediaRouterIntegrationBrowserTest() =
     default;
 
-Browser* MediaRouterIntegrationBrowserTest::browser() {
+BrowserWindowInterface* MediaRouterIntegrationBrowserTest::browser() {
   return InProcessBrowserTest::browser();
 }
 
@@ -156,7 +159,7 @@ void MediaRouterIntegrationBrowserTest::SetUpInProcessBrowserTestFixture() {
 
 void MediaRouterIntegrationBrowserTest::SetUpOnMainThread() {
   MediaRouterDesktop* router = static_cast<MediaRouterDesktop*>(
-      MediaRouterFactory::GetApiForBrowserContext(browser()->profile()));
+      MediaRouterFactory::GetApiForBrowserContext(browser()->GetProfile()));
   mojo::PendingRemote<mojom::MediaRouter> media_router_remote;
   mojo::PendingRemote<mojom::MediaRouteProvider> provider_remote;
   router->BindToMojoReceiver(
@@ -176,8 +179,9 @@ bool MediaRouterIntegrationBrowserTest::ConditionalWait(
     const base::RepeatingCallback<bool(void)>& callback) {
   base::ElapsedTimer timer;
   do {
-    if (callback.Run())
+    if (callback.Run()) {
       return true;
+    }
 
     base::RunLoop run_loop;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -197,8 +201,9 @@ void MediaRouterIntegrationBrowserTest::Wait(base::TimeDelta timeout) {
 
 void MediaRouterIntegrationBrowserTest::WaitUntilNoRoutes(
     WebContents* web_contents) {
-  if (!test_provider_->HasRoutes())
+  if (!test_provider_->HasRoutes()) {
     return;
+  }
 
   // TODO(crbug.com/1374499): There can't be a good reason to use the observer
   // API to check for routes asynchronously, which is fragile.  However, some
@@ -281,7 +286,7 @@ void MediaRouterIntegrationBrowserTest::OpenTestPageInNewTab(
   base::FilePath full_path = GetResourceFile(file_name);
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GetTestPageUrl(full_path),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   // Opening a new tab creates new WebContents, so we must re-configure the
   // test UI for it.
@@ -331,8 +336,9 @@ void MediaRouterIntegrationBrowserTest::ParseCommandLine() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 
   receiver_ = command_line->GetSwitchValueASCII("receiver");
-  if (receiver_.empty())
+  if (receiver_.empty()) {
     receiver_ = "test-sink-1";
+  }
 }
 
 void MediaRouterIntegrationBrowserTest::CheckSessionValidity(
@@ -346,7 +352,7 @@ void MediaRouterIntegrationBrowserTest::CheckSessionValidity(
 }
 
 WebContents* MediaRouterIntegrationBrowserTest::GetActiveWebContents() {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 void MediaRouterIntegrationBrowserTest::RunBasicTest() {

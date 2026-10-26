@@ -67,7 +67,6 @@ class ChromeExtensionRegistrarDelegate;
 class ComponentLoader;
 class CorruptedExtensionReinstaller;
 class DelayedInstallManager;
-class ExtensionActionStorageManager;
 class ExtensionAllowlist;
 class ExtensionErrorController;
 class ExtensionRegistry;
@@ -238,6 +237,8 @@ class ExtensionService : public ExtensionServiceInterface,
   void ProfileMarkedForPermanentDeletionForTest() {
     OnProfileMarkedForPermanentDeletion(profile_);
   }
+
+  void OnInstalledExtensionsLoadedForTest() { OnInstalledExtensionsLoaded(); }
 #endif
 
   // Load Extension Flags.
@@ -371,9 +372,6 @@ class ExtensionService : public ExtensionServiceInterface,
   // The manager for extensions that were externally installed that is
   // responsible for prompting the user about suspicious extensions. Not owned.
   raw_ptr<ExternalInstallManager> external_install_manager_ = nullptr;
-
-  std::unique_ptr<ExtensionActionStorageManager>
-      extension_action_storage_manager_;
 
   std::unique_ptr<ChromeExtensionRegistrarDelegate>
       extension_registrar_delegate_;

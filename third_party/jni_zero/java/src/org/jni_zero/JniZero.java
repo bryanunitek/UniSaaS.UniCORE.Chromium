@@ -4,6 +4,8 @@
 
 package org.jni_zero;
 
+import org.jni_zero.internal.Nullable;
+
 import java.util.Collections;
 
 /** Core APIs. */
@@ -11,6 +13,33 @@ import java.util.Collections;
 public class JniZero {
     private static ClassLoader sPendingJniClassLoader;
     private static boolean sInitialized;
+    private static boolean sRawPtrHooksEnabled;
+    private static @Nullable SafePointersTrackerFactory sTrackerFactory;
+
+    static boolean isRawPtrHooksEnabled() {
+        return sRawPtrHooksEnabled;
+    }
+
+    /** Seam for //base's LifetimeAssert to attach leak tracking without a //base dep. */
+    public interface SafePointersTrackerFactory {
+        /**
+         * @param creationContext Names the JNI method that handed the pointer to Java, or null.
+         */
+        SafePointersTracker create(Object target, @Nullable String creationContext);
+    }
+
+    public interface SafePointersTracker {
+        void destroy();
+    }
+
+    public static void setSafePointersTrackerFactory(SafePointersTrackerFactory factory) {
+        sTrackerFactory = factory;
+    }
+
+    static @Nullable SafePointersTracker createSafePointersTracker(
+            Object target, @Nullable String creationContext) {
+        return sTrackerFactory == null ? null : sTrackerFactory.create(target, creationContext);
+    }
 
     /** Sets the ClassLoader used to resolve classes by JNI Zero. */
     public static void setJniClassLoader(ClassLoader classLoader) {
@@ -22,8 +51,14 @@ public class JniZero {
     }
 
     @CalledByNative
-    private static Object[] init() {
+    private static long getNativePtr(JniPtrInner<?> ptr) {
+        return JniZeroInternal.getNativePtr(ptr);
+    }
+
+    @CalledByNative
+    private static Object[] init(boolean rawPtrHooksEnabled) {
         sInitialized = true;
+        sRawPtrHooksEnabled = rawPtrHooksEnabled;
         // For JVM (works fine on ART), cannot call from Java -> Native during InitVM because the
         // System.loadLibrary() call has not yet completed. Could work around this by using
         // RegisterNatives(), but simpler to return an array than to make Java->Native work.

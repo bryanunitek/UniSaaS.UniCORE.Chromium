@@ -4,10 +4,15 @@
 
 #include "chrome/browser/extensions/extension_commands_global_registry.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/uuid.h"
+#include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/extension_keybinding_registry.h"
 #include "components/prefs/pref_service.h"
@@ -21,8 +26,8 @@
 
 #if defined(USE_AURA) && !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
@@ -61,6 +66,46 @@ gfx::AcceleratedWidget GetAcceleratedWidgetForContext(
   return gfx::kNullAcceleratedWidget;
 #endif  // defined(USE_AURA) && !BUILDFLAG(IS_ANDROID)
 }
+
+// Persists the state of the global accelerator listener in local state. The
+// listener outlives local state, so local state is looked up on every access.
+class LocalStateStore : public ui::GlobalAcceleratorListener::StateStore {
+ public:
+  LocalStateStore() = default;
+  LocalStateStore(const LocalStateStore&) = delete;
+  LocalStateStore& operator=(const LocalStateStore&) = delete;
+  ~LocalStateStore() override = default;
+
+  // ui::GlobalAcceleratorListener::StateStore:
+  base::DictValue Load() override {
+    PrefService* local_state = GetLocalState();
+    if (!local_state) {
+      return base::DictValue();
+    }
+    return local_state->GetDict(pref_names::kGlobalShortcutsPortalState)
+        .Clone();
+  }
+
+  void Save(base::DictValue state) override {
+    PrefService* local_state = GetLocalState();
+    if (!local_state) {
+      return;
+    }
+    local_state->SetDict(pref_names::kGlobalShortcutsPortalState,
+                         std::move(state));
+  }
+
+ private:
+  static PrefService* GetLocalState() {
+    PrefService* local_state =
+        g_browser_process ? g_browser_process->local_state() : nullptr;
+    if (!local_state ||
+        !local_state->FindPreference(pref_names::kGlobalShortcutsPortalState)) {
+      return nullptr;
+    }
+    return local_state;
+  }
+};
 
 }  // namespace
 
@@ -118,7 +163,15 @@ ExtensionCommandsGlobalRegistry* ExtensionCommandsGlobalRegistry::Get(
 
 ui::GlobalAcceleratorListener*
 ExtensionCommandsGlobalRegistry::GetGlobalAcceleratorListener() const {
+#if BUILDFLAG(IS_CHROMEOS)
+  // Global extension commands are not supported on ChromeOS (see also
+  // IsGlobalShortcutEnabled() in extensions_ui.cc). The ChromeOS
+  // GlobalAcceleratorListener only exists for browser features, e.g. the Glic
+  // hotkey, so don't use it for extension commands.
+  return nullptr;
+#else
   return ui::GlobalAcceleratorListener::GetInstance();
+#endif
 }
 
 bool ExtensionCommandsGlobalRegistry::IsRegistered(
@@ -146,9 +199,9 @@ bool ExtensionCommandsGlobalRegistry::PopulateCommands(
         extensions::CommandService::GLOBAL, commands);
   }
 
-  // All commands should be sent to the portal so the user can manually
-  // assign them, but they must be sanitized first to prevent hijacking
-  // reserved shortcuts.
+  // Send all commands, with the accelerators of non-global commands cleared
+  // to prevent hijacking reserved shortcuts. The listener decides which
+  // commands to register.
   ui::CommandMap all_commands;
   if (!command_service->GetNamedCommands(
           extension->id(), extensions::CommandService::ALL,
@@ -168,6 +221,11 @@ bool ExtensionCommandsGlobalRegistry::PopulateCommands(
     if (!active_global_commands.contains(cmd_pair.first)) {
       cmd_pair.second.set_accelerator(ui::Accelerator());
     }
+  }
+
+  if (!state_store_set_) {
+    state_store_set_ = true;
+    instance->SetStateStore(std::make_unique<LocalStateStore>());
   }
 
   PrefService* prefs = user_prefs::UserPrefs::Get(browser_context_);
@@ -227,7 +285,7 @@ void ExtensionCommandsGlobalRegistry::OnKeyPressed(
 void ExtensionCommandsGlobalRegistry::ExecuteCommand(
     const ExtensionId& extension_id,
     const std::string& command_id) {
-  CommandExecuted(extension_id, command_id);
+  CommandExecuted(extension_id, command_id, ui::Accelerator());
 }
 
 }  // namespace extensions

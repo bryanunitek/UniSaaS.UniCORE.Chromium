@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/views/location_bar/record_replay_page_action_controller.h"
 
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/record_replay/save_recording_bubble_controller_impl.h"
@@ -41,8 +40,17 @@ views::BubbleAnchor GetAnchorForBubble(tabs::TabInterface& tab) {
   if (!browser_view) {
     return views::BubbleAnchor();
   }
-  return browser_view->toolbar_button_provider()->GetPageActionBubbleAnchor(
-      kActionRecordReplay);
+  auto* provider = browser_view->toolbar_button_provider();
+  views::BubbleAnchor anchor =
+      provider->GetPageActionBubbleAnchor(kActionRecordReplay);
+  // `GetPageActionBubbleAnchor` can return a null anchor if the action is not
+  // hosted directly inside the page action container (e.g., when displayed on
+  // the toolbar). Fall back to `GetBubbleAnchor` so the bubble anchors
+  // properly.
+  if (anchor.IsNull()) {
+    anchor = provider->GetBubbleAnchor(kActionRecordReplay);
+  }
+  return anchor;
 }
 
 }  // namespace

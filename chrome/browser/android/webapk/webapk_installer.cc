@@ -49,6 +49,7 @@
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
@@ -217,7 +218,8 @@ void WebApkInstaller::InstallOrUpdateWebApk(const std::string& package_name,
                                       package_name);
     Java_WebApkInstaller_installWebApkAsync(
         env, java_ref_, webapk_package_, webapk_version_, short_name_, token,
-        webapps::ShortcutInfo::SOURCE_ADD_TO_HOMESCREEN_PWA);
+        webapps::ShortcutInfo::SOURCE_ADD_TO_HOMESCREEN_PWA,
+        manifest_id_.spec());
   } else {
     Java_WebApkInstaller_updateAsync(env, java_ref_, webapk_package_,
                                      webapk_version_, short_name_, token);
@@ -281,6 +283,10 @@ void WebApkInstaller::InstallAsync(content::WebContents* web_contents,
   short_name_ = shortcut_info.short_name;
   finish_callback_ = std::move(finish_callback);
   manifest_id_ = install_shortcut_info_->manifest_id;
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_WebApkInstaller_registerPending(env, java_ref_, manifest_id_.spec());
+
   install_source_ = install_source;
   task_type_ = INSTALL;
 
@@ -462,7 +468,7 @@ void WebApkInstaller::OnGotIconMurmur2Hashes(
     return;
   }
 
-  DCHECK(install_shortcut_info_);
+  CHECK(install_shortcut_info_, base::NotFatalUntil::M161);
 
   // New WebAPK installs uses icon data from |icons|. |primary_icon| and
   // |splash_icon| are for updates only.
@@ -528,7 +534,7 @@ void WebApkInstaller::OnInstallProtoBuilt(
 void WebApkInstaller::SendRequest(
     const net::NetworkTrafficAnnotationTag& traffic_annotation,
     const std::string& serialized_proto) {
-  DCHECK(server_url_.is_valid());
+  CHECK(server_url_.is_valid(), base::NotFatalUntil::M161);
 
   timer_.Start(
       FROM_HERE, base::Milliseconds(webapk_server_timeout_ms_),

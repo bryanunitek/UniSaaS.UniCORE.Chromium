@@ -4,7 +4,8 @@
 
 #include "chrome/updater/external_constants_builder.h"
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <iterator>
 #include <optional>
 #include <string>
@@ -170,7 +171,7 @@ ExternalConstantsBuilder::ClearServerKeepAliveSeconds() {
 ExternalConstantsBuilder& ExternalConstantsBuilder::SetCrxVerifierFormat(
     crx_file::VerifierFormat crx_verifier_format) {
   overrides_.Set(kDevOverrideKeyCrxVerifierFormat,
-                 static_cast<int>(crx_verifier_format));
+                 std::to_underlying(crx_verifier_format));
   return *this;
 }
 

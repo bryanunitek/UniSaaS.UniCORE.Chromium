@@ -40,7 +40,6 @@
 #include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
 #include "components/omnibox/browser/zero_suggest_provider.h"
-#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/search/search.h"
 #include "components/search_engines/template_url_service.h"
@@ -87,6 +86,12 @@ bool AllowLocalHistoryZeroSuggestSuggestions(AutocompleteProviderClient* client,
     // Allow local history zero-suggest where remote zero-suggest is eligible.
     const auto [result_type, _] =
         ZeroSuggestProvider::GetResultTypeAndEligibility(client, input);
+    if (result_type == ZeroSuggestProvider::ResultType::kRemoteSendURL) {
+      return base::FeatureList::IsEnabled(
+          omnibox::IsSearchResultsPage(input.current_page_classification())
+              ? omnibox::kZeroSuggestPrefetchingOnSRP
+              : omnibox::kZeroSuggestPrefetchingOnWeb);
+    }
     return result_type != ZeroSuggestProvider::ResultType::kNone;
   }
 
@@ -97,10 +102,12 @@ bool AllowLocalHistoryZeroSuggestSuggestions(AutocompleteProviderClient* client,
   }
 
   // Allow local history query suggestions only when the omnibox is empty and is
-  // focused from the NTP.
+  // focused from the NTP or Omnibox Everywhere.
   return input.focus_type() == metrics::OmniboxFocusType::INTERACTION_FOCUS &&
          input.type() == OmniboxInputType::EMPTY &&
-         omnibox::IsNTPPage(input.current_page_classification());
+         (omnibox::IsNTPPage(input.current_page_classification()) ||
+          input.current_page_classification() ==
+              metrics::OmniboxEventProto::OMNIBOX_EVERYWHERE);
 }
 
 }  // namespace
@@ -141,16 +148,10 @@ void LocalHistoryZeroSuggestProvider::DeleteMatch(
   if (!url_db)
     return;
 
-  // Even if local history uses the non-normalized term for its match
-  // contents, the db should still delete the normalized version of the
-  // contents in order to delete all duplicates. Technically, always calling
-  // `ToLower()` shouldn't hurt, but this is safer.
-  auto omnibox_mia_zps_config = omnibox_feature_configs::MiaZPS::Get();
-  const std::u16string& match_contents =
-      (omnibox_mia_zps_config.enabled &&
-       omnibox_mia_zps_config.local_history_non_normalized_contents)
-          ? history::NormalizeTerm(match.contents)
-          : match.contents;
+  // Local history uses the non-normalized term for its match contents, but the
+  // db should still delete the normalized version of the contents in order to
+  // delete all duplicates.
+  const std::u16string match_contents = history::NormalizeTerm(match.contents);
 
   // TODO(crbug.com/421889863): Consider using
   // `DeleteMatchingURLsForKeywordFromHistory()` for deletion of term.
@@ -192,7 +193,7 @@ LocalHistoryZeroSuggestProvider::LocalHistoryZeroSuggestProvider(
     AutocompleteProviderClient* client,
     AutocompleteProviderListener* listener)
     : AutocompleteProvider(
-          AutocompleteProvider::TYPE_ZERO_SUGGEST_LOCAL_HISTORY),
+          AutocompleteProvider::Type::kZeroSuggestLocalHistory),
       max_matches_(AutocompleteResult::GetMaxMatches(true)),
       client_(client) {
   AddListener(listener);
@@ -235,17 +236,11 @@ void LocalHistoryZeroSuggestProvider::QueryURLDatabase(
       "Omnibox.LocalHistoryZeroSuggest.SearchTermsExtractionTimeV2",
       db_query_timer.Elapsed());
 
-  auto omnibox_mia_zps_config = omnibox_feature_configs::MiaZPS::Get();
-
   int relevance = omnibox::kLocalHistoryZeroSuggestRelevance;
   for (const auto& result : results) {
-    const std::u16string& suggestion_term =
-        (omnibox_mia_zps_config.enabled &&
-         omnibox_mia_zps_config.local_history_non_normalized_contents)
-            ? result->term
-            : result->normalized_term;
     SearchSuggestionParser::SuggestResult suggestion(
-        /*suggestion=*/suggestion_term, AutocompleteMatchType::SEARCH_HISTORY,
+        /*suggestion=*/result->term,
+        omnibox::AutocompleteMatchType::kSearchHistory,
         /*suggest_type=*/omnibox::TYPE_NATIVE_CHROME,
         /*subtypes=*/{}, /*from_keyword=*/false,
         /*navigational_intent=*/omnibox::NAV_INTENT_NONE, relevance--,

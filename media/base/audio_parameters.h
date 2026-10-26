@@ -201,24 +201,28 @@ class MEDIA_EXPORT AudioParameters {
     // stream.
     FUCHSIA_RENDER_USAGE_SHIFT = 12,
     FUCHSIA_RENDER_USAGE_MASK = 0xF << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_UNKNOWN = 0 << FUCHSIA_RENDER_USAGE_SHIFT,
     FUCHSIA_RENDER_USAGE_BACKGROUND = 1 << FUCHSIA_RENDER_USAGE_SHIFT,
     FUCHSIA_RENDER_USAGE_MEDIA = 2 << FUCHSIA_RENDER_USAGE_SHIFT,
     FUCHSIA_RENDER_USAGE_INTERRUPTION = 3 << FUCHSIA_RENDER_USAGE_SHIFT,
     FUCHSIA_RENDER_USAGE_SYSTEM_AGENT = 4 << FUCHSIA_RENDER_USAGE_SHIFT,
     FUCHSIA_RENDER_USAGE_COMMUNICATION = 5 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_ACCESSIBILITY = 6 << FUCHSIA_RENDER_USAGE_SHIFT,
 
     IGNORE_UI_GAINS = 1 << 16,
 
-    VOICE_ISOLATION_SUPPORTED = 1 << 17,  // Set when system voice isolation is
-                                          // supported.
-    CLIENT_CONTROLLED_VOICE_ISOLATION =
-        1 << 18,                // Set when client forces to
-                                // enable/disable the platform voice
-                                // isolation effects. False indicates
-                                // to use platform default state.
-    VOICE_ISOLATION = 1 << 19,  // Enable/Disable platform voice isolation.
-                                // Only meaningful when
-                                // CLIENT_CONTROLLED_VOICE_ISOLATION is set.
+    // Set when voice isolation is supported for the stream/device (either by
+    // the system, e.g. on ChromeOS, or by software within Chrome, e.g. on
+    // desktop platforms).
+    VOICE_ISOLATION_SUPPORTED = 1 << 17,
+
+    // Controls whether platform-level voice isolation is client-configurable
+    // (used on ChromeOS). False indicates platform default state.
+    CLIENT_CONTROLLED_VOICE_ISOLATION = 1 << 18,
+
+    // Enable/Disable platform voice isolation. Only meaningful when
+    // CLIENT_CONTROLLED_VOICE_ISOLATION is set.
+    VOICE_ISOLATION = 1 << 19,
 
     DEEP_NOISE_SUPPRESSION = 1 << 20,  // Also called Voice Focus on Windows.
   };
@@ -324,8 +328,9 @@ class MEDIA_EXPORT AudioParameters {
   void set_format(Format format) { format_ = format; }
   Format format() const { return format_; }
 
-  void SetChannelLayoutConfig(ChannelLayout layout, int channels);
-
+  void set_channel_layout_config(ChannelLayoutConfig config) {
+    channel_layout_config_ = config;
+  }
   const ChannelLayoutConfig& channel_layout_config() const {
     return channel_layout_config_;
   }
@@ -344,7 +349,7 @@ class MEDIA_EXPORT AudioParameters {
   }
   int frames_per_buffer() const { return frames_per_buffer_; }
 
-  std::optional<HardwareCapabilities> hardware_capabilities() const {
+  const std::optional<HardwareCapabilities>& hardware_capabilities() const {
     return hardware_capabilities_;
   }
 

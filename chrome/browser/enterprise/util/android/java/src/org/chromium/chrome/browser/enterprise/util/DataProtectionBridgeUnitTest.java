@@ -19,8 +19,8 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -30,13 +30,13 @@ import org.chromium.content_public.browser.WebContents;
 
 /** Unit tests for {@link DataProtectionBridge}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DataProtectionBridgeUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private DataProtectionBridge.Natives mDataProtectionBridgeJniMock;
     @Mock private WebContents mWebContents;
     @Mock private Runnable mCallback;
+    @Mock private Callback<Boolean> mScreenshotCallback;
     @Mock private Profile mProfile;
     @Mock private Tab mTab;
 
@@ -107,5 +107,14 @@ public class DataProtectionBridgeUnitTest {
         when(mDataProtectionBridgeJniMock.isScreenshotAllowed(mTab)).thenReturn(false);
         assertFalse(DataProtectionBridge.isScreenshotAllowed(mTab));
         verify(mDataProtectionBridgeJniMock, times(2)).isScreenshotAllowed(mTab);
+    }
+
+    @Test
+    public void testRegisterAndClearScreenshotSubscriptionCallback() {
+        DataProtectionBridge.registerScreenshotSubscriptionCallback(mTab, mScreenshotCallback);
+        verify(mDataProtectionBridgeJniMock)
+                .registerScreenshotSubscriptionCallback(mTab, mScreenshotCallback);
+        DataProtectionBridge.clearScreenshotSubscriptionCallback(mTab);
+        verify(mDataProtectionBridgeJniMock).clearScreenshotSubscriptionCallback(mTab);
     }
 }

@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/auto_reset.h"
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -164,12 +165,6 @@ void MenuHost::InitMenuHost(const InitParams& init_params) {
     params.activatable = Widget::InitParams::Activatable::kYes;
   }
 
-#if BUILDFLAG(IS_WIN)
-  // On Windows use the software compositor to ensure that we don't block
-  // the UI thread blocking issue during command buffer creation. We can
-  // revert this change once http://crbug.com/125248 is fixed.
-  params.force_software_compositing = true;
-#endif
   Init(std::move(params));
   std::optional<std::string> show_menu_host_duration_histogram =
       menu_controller->TakeShowMenuHostDurationHistogram();
@@ -213,6 +208,13 @@ void MenuHost::ShowMenuHost(bool do_capture) {
   // Doing a capture may make us get capture lost. Ignore it while we're in the
   // process of showing.
   base::AutoReset<bool> reseter(&ignore_capture_lost_, true);
+#if defined(USE_AURA)
+  std::unique_ptr<aura::Window::ScopedDeleteBlocker> delete_blocker;
+  if (GetNativeWindow()) {
+    delete_blocker =
+        std::make_unique<aura::Window::ScopedDeleteBlocker>(GetNativeWindow());
+  }
+#endif
   ShowInactive();
 
   // ShowInactive() can trigger events that cause the menu to be destroyed
@@ -248,8 +250,11 @@ void MenuHost::ShowMenuHost(bool do_capture) {
 }
 
 void MenuHost::HideMenuHost() {
+  if (destroying_ && !IsVisible()) {
+    return;
+  }
   MenuController* menu_controller =
-      submenu_->GetMenuItem()->GetMenuController();
+      submenu_ ? submenu_->GetMenuItem()->GetMenuController() : nullptr;
   if (GetOwner() && menu_controller &&
       menu_controller->send_gesture_events_to_owner()) {
     gfx::NativeView target_view = native_view_for_gestures_
@@ -265,14 +270,28 @@ void MenuHost::HideMenuHost() {
 }
 
 void MenuHost::DestroyMenuHost() {
-  HideMenuHost();
+  if (destroying_) {
+    DUMP_WILL_BE_CHECK(false);
+    return;
+  }
   destroying_ = true;
+  MenuController* menu_controller =
+      submenu_ ? submenu_->GetMenuItem()->GetMenuController() : nullptr;
+
+  bool defer_destruction = menu_controller && menu_controller->IsStackActive();
+  if (defer_destruction) {
+    menu_controller->DeferWidgetDestruction(GetWeakPtr());
+  }
+
+  HideMenuHost();
   submenu_ = nullptr;
 #if defined(USE_AURA)
   pre_dispatch_handler_.reset();
 #endif
   static_cast<MenuHostRootView*>(GetRootView())->ClearSubmenu();
-  Close();
+  if (!defer_destruction) {
+    Close();
+  }
 }
 
 void MenuHost::SetMenuHostBounds(const gfx::Rect& bounds) {
@@ -289,6 +308,7 @@ void MenuHost::SetMenuHostOwnedWindowAnchor(
 
 void MenuHost::ReleaseMenuHostCapture() {
   if (native_widget_private()->HasCapture()) {
+    base::AutoReset<bool> reseter(&ignore_capture_lost_, true);
     native_widget_private()->ReleaseCapture();
   }
 }

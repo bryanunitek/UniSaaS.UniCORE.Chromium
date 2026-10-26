@@ -15,10 +15,10 @@ source_set("impl") {
 
   deps = [
     ":zoom",
-    "//chrome/browser/ui",
     "//chrome/browser/ui:browser_actions",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/views/frame:browser_view_header",
     "//chrome/browser/ui/views/frame:toolbar_button_provider",
     "//chrome/browser/ui/views/location_bar",
     "//chrome/browser/ui/views/page_action",
@@ -34,9 +34,10 @@ source_set("interactive_ui_tests") {
   sources = [ "zoom_view_interactive_ui_tests.cc" ]
 
   deps = [
-    "//chrome/browser/ui",
+    "//chrome/browser/ui:browser_commands",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/views/frame:browser_view_header",
     "//chrome/browser/ui/views/frame:toolbar_button_provider",
     "//chrome/browser/ui/views/location_bar",
     "//chrome/browser/ui/views/page_action",

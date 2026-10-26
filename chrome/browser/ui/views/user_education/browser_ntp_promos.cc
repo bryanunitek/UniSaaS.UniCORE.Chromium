@@ -20,6 +20,7 @@
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/user_education/impl/browser_user_education_context.h"
 #include "chrome/browser/user_education/ntp_promo_identifiers.h"
 #include "chrome/grit/branded_strings.h"
@@ -34,6 +35,8 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/common/extension_urls.h"
 #include "ui/actions/actions.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 using user_education::NtpPromoContent;
 using user_education::NtpPromoSpecification;
@@ -50,10 +53,6 @@ Profile* GetProfile(ContextPtr context) {
 
 NtpPromoSpecification::Eligibility CheckExtensionsPromoEligibility(
     ContextPtr context) {
-  // TODO(webium): add user education context for WebUI browser.
-  if (!context) {
-    return NtpPromoSpecification::Eligibility::kIneligible;
-  }
   return extensions::util::AnyCurrentlyInstalledExtensionIsFromWebstore(
              GetProfile(context))
              ? NtpPromoSpecification::Eligibility::kCompleted
@@ -78,16 +77,12 @@ void InvokeExtensionsPromo(ContextPtr context) {
   NavigateParams params(
       context->AsA<BrowserUserEducationContext>()->GetBrowserView().browser(),
       url_with_utm, ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::CURRENT_TAB;
+  params.disposition = WindowOpenDisposition::kCurrentTab;
   Navigate(&params);
 }
 
 NtpPromoSpecification::Eligibility CheckCustomizationPromoEligibility(
     ContextPtr context) {
-  // TODO(webium): add user education context for WebUI browser.
-  if (!context) {
-    return NtpPromoSpecification::Eligibility::kIneligible;
-  }
   auto* profile = GetProfile(context);
   auto* background_service =
       NtpCustomBackgroundServiceFactory::GetForProfile(profile);
@@ -107,16 +102,13 @@ NtpPromoSpecification::Eligibility CheckCustomizationPromoEligibility(
 void InvokeCustomizationPromo(ContextPtr context) {
   actions::ActionManager::Get()
       .FindAction(kActionSidePanelShowCustomizeChrome,
-                  context->AsA<BrowserUserEducationContext>()
-                      ->GetBrowser()
-                      ->GetActions()
+                  BrowserActions::From(
+                      context->AsA<BrowserUserEducationContext>()->GetBrowser())
                       ->root_action_item())
       ->InvokeAction(
           actions::ActionInvocationContext::Builder()
-              .SetProperty(
-                  kSidePanelOpenTriggerKey,
-                  static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
-                      SidePanelOpenTrigger::kNewTabPageCustomizationPromo))
+              .SetProperty(kSidePanelOpenTriggerKey,
+                           SidePanelOpenTrigger::kNewTabPageCustomizationPromo)
               .Build());
 }
 

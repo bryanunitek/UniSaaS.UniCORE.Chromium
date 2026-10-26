@@ -13,11 +13,9 @@
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
 #include "base/threading/thread_checker.h"
+#include "components/optimization_guide/core/feature_registry/feature_keys.h"
 #include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
-#include "components/optimization_guide/core/model_execution/feature_keys.h"
-#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
 #include "components/optimization_guide/core/model_execution/settings_enabled_observer.h"
-#include "components/optimization_guide/core/optimization_guide_prefs.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
@@ -29,6 +27,11 @@ class ManagementService;
 }
 
 namespace optimization_guide {
+
+// Enables model quality logs regardless of other client-side settings, as long
+// as the client is a dogfood client.
+inline constexpr char kEnableModelQualityDogfoodLoggingSwitch[] =
+    "enable-model-quality-dogfood-logging";
 
 // Class that keeps track of user opt-in settings, including the visibility of
 // settings and the user's opt-in state.

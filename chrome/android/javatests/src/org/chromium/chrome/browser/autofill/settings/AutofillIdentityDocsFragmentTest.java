@@ -55,6 +55,7 @@ import androidx.test.filters.SmallTest;
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -83,15 +84,16 @@ import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManager.Entity
 import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManagerFactory;
 import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
 import org.chromium.chrome.browser.device_reauth.BiometricStatus;
+import org.chromium.chrome.browser.device_reauth.DeviceAuthAvailabilityCheckerBridge;
 import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.preferences.Pref;
-import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsInTab;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.autofill.autofill_ai.EntityInstance;
@@ -118,14 +120,13 @@ import java.util.List;
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures({
-    ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID,
     ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA,
     ChromeFeatureList.AUTOFILL_AI_AVAILABLE_BY_DEFAULT,
 })
 public class AutofillIdentityDocsFragmentTest {
     @Rule
-    public SettingsActivityTestRule<AutofillIdentityDocsFragment> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(AutofillIdentityDocsFragment.class);
+    public SettingsTestRule<AutofillIdentityDocsFragment> mSettingsTestRule =
+            new SettingsTestRule<>(AutofillIdentityDocsFragment.class);
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -164,13 +165,16 @@ public class AutofillIdentityDocsFragmentTest {
     @Test
     @SmallTest
     public void testHelpMenuTriggersAutofillHelp() {
-        SettingsActivity settingsActivity = mSettingsActivityTestRule.startSettingsActivity();
+        // Settings in a tab doesn't have a help button or menu.
+        Assume.assumeTrue(!SettingsInTab.shouldOpenSettingsInTab());
+
+        mSettingsTestRule.startSettingsActivity();
 
         onView(withId(R.id.menu_id_targeted_help)).perform(click());
 
         verify(mHelpAndFeedbackLauncher)
                 .show(
-                        settingsActivity,
+                        mSettingsTestRule.getActivity(),
                         ContextUtils.getApplicationContext()
                                 .getString(R.string.help_context_autofill),
                         /* url= */ null);
@@ -179,15 +183,15 @@ public class AutofillIdentityDocsFragmentTest {
     @Test
     @SmallTest
     public void testSearchIndexWhenAllEnabled() {
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     AutofillIdentityDocsFragment.SEARCH_INDEX_DATA_PROVIDER
                             .updateDynamicPreferences(
-                                    mSettingsActivityTestRule.getActivity(),
+                                    mSettingsTestRule.getActivity(),
                                     mSearchIndexDataMock,
-                                    mSettingsActivityTestRule.getFragment().getProfile());
+                                    mSettingsTestRule.getFragment().getProfile());
                 });
 
         verify(mSearchIndexDataMock, atLeastOnce())
@@ -202,15 +206,15 @@ public class AutofillIdentityDocsFragmentTest {
     @SmallTest
     @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
     public void testSearchIndexEmptyWhenFeatureDisabled() {
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     AutofillIdentityDocsFragment.SEARCH_INDEX_DATA_PROVIDER
                             .updateDynamicPreferences(
-                                    mSettingsActivityTestRule.getActivity(),
+                                    mSettingsTestRule.getActivity(),
                                     mSearchIndexDataMock,
-                                    mSettingsActivityTestRule.getFragment().getProfile());
+                                    mSettingsTestRule.getFragment().getProfile());
                 });
 
         verify(mSearchIndexDataMock, never())
@@ -234,11 +238,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     assertNotNull(fragment.findPreference("guid1"));
                     assertNull(
                             "Vehicle entity should NOT be visible in Identity Docs",
@@ -269,11 +273,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     Preference passportCategory = fragment.findPreference("Passport");
                     Criteria.checkThat(
                             "Passport entity category should exist",
@@ -332,11 +336,11 @@ public class AutofillIdentityDocsFragmentTest {
         when(mEntityDataManager.canEnableOrDisableAutofillAiForType(EntityTypeName.PASSPORT))
                 .thenReturn(false);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     Preference passportCategory = fragment.findPreference("Passport");
                     Criteria.checkThat(
                             "Passport entity category should exist",
@@ -370,11 +374,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     Preference category =
                             fragment.findPreference(disabledType.getTypeNameAsString());
                     Criteria.checkThat(
@@ -400,11 +404,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     Preference category =
                             fragment.findPreference(readOnlyType.getTypeNameAsString());
                     Criteria.checkThat(
@@ -439,11 +443,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     Preference category =
                             fragment.findPreference(disabledType.getTypeNameAsString());
                     Criteria.checkThat(
@@ -467,7 +471,7 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap1);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         // Capture the observer registered by the fragment.
         ArgumentCaptor<EntityDataManagerObserver> captor =
@@ -479,7 +483,7 @@ public class AutofillIdentityDocsFragmentTest {
         CriteriaHelper.pollUiThread(
                 () -> {
                     Preference passportEntity =
-                            mSettingsActivityTestRule.getFragment().findPreference("guid1");
+                            mSettingsTestRule.getFragment().findPreference("guid1");
                     Criteria.checkThat(
                             "Passport entity should exist",
                             passportEntity,
@@ -497,7 +501,7 @@ public class AutofillIdentityDocsFragmentTest {
         CriteriaHelper.pollUiThread(
                 () -> {
                     Preference passportEntity =
-                            mSettingsActivityTestRule.getFragment().findPreference("guid1");
+                            mSettingsTestRule.getFragment().findPreference("guid1");
                     Criteria.checkThat(
                             "Passport entity should no longer exist",
                             passportEntity,
@@ -514,12 +518,12 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(true);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     PreferenceGroup group = (PreferenceGroup) fragment.findPreference("Passport");
                     Preference addBtn = group.findPreference("Passport Add");
                     addBtn.performClick();
@@ -531,13 +535,13 @@ public class AutofillIdentityDocsFragmentTest {
     @Test
     @MediumTest
     public void testToggle_correctStateWhenTurnedOff() {
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(false);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     ChromeSwitchPreference toggle =
-                            mSettingsActivityTestRule
+                            mSettingsTestRule
                                     .getFragment()
                                     .findPreference(
                                             AutofillIdentityDocsFragment.PREF_OPT_IN_TOGGLE);
@@ -554,13 +558,13 @@ public class AutofillIdentityDocsFragmentTest {
     @Test
     @MediumTest
     public void testToggle_correctStateWhenTurnedOn() {
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(true);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     ChromeSwitchPreference toggle =
-                            mSettingsActivityTestRule
+                            mSettingsTestRule
                                     .getFragment()
                                     .findPreference(
                                             AutofillIdentityDocsFragment.PREF_OPT_IN_TOGGLE);
@@ -577,11 +581,11 @@ public class AutofillIdentityDocsFragmentTest {
     @MediumTest
     public void testToggleDisabled_whenAutofillAiSettingsDisabled() {
         when(mEntityDataManager.canEnableOrDisableAutofillAiForType(anyInt())).thenReturn(false);
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     ChromeSwitchPreference toggle =
                             fragment.findPreference(
                                     AutofillIdentityDocsFragment.PREF_OPT_IN_TOGGLE);
@@ -597,11 +601,13 @@ public class AutofillIdentityDocsFragmentTest {
     @MediumTest
     public void testToggleManagedByPolicy() {
         when(mEntityDataManager.getIsAutofillAiDisabledByEnterprisePolicy()).thenReturn(true);
-        mSettingsActivityTestRule.startSettingsActivity();
+        when(mEntityDataManager.getIsAutofillAiEntityTypeDisabledByEnterprisePolicy(anyInt()))
+                .thenReturn(true);
+        mSettingsTestRule.startSettingsActivity();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     ChromeSwitchPreference toggle =
                             fragment.findPreference(
                                     AutofillIdentityDocsFragment.PREF_OPT_IN_TOGGLE);
@@ -616,12 +622,12 @@ public class AutofillIdentityDocsFragmentTest {
     @Test
     @MediumTest
     public void testScreenSetup() {
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
-        AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+        AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
         assertThat(fragment.getPageTitle().get())
                 .isEqualTo(
-                        mSettingsActivityTestRule
+                        mSettingsTestRule
                                 .getActivity()
                                 .getString(R.string.autofill_identity_docs_title));
         ThreadUtils.runOnUiThreadBlocking(
@@ -632,6 +638,7 @@ public class AutofillIdentityDocsFragmentTest {
 
     @Test
     @MediumTest
+    @DisableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
     public void testAutofillAiEntities_opensEditorOnSuccessfulReauth() {
         EntityType passportType = getPassportEntityType();
         LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
@@ -650,11 +657,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getEntityInstance("guid1")).thenReturn(entityInstance);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         Preference passportEntity =
                 ThreadUtils.runOnUiThreadBlocking(
-                        () -> mSettingsActivityTestRule.getFragment().findPreference("guid1"));
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
 
         // Click entity and capture reauth callback.
         ThreadUtils.runOnUiThreadBlocking(passportEntity::performClick);
@@ -669,6 +676,7 @@ public class AutofillIdentityDocsFragmentTest {
 
     @Test
     @MediumTest
+    @DisableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
     public void testAutofillAiEntities_doesNotOpenEditorOnFailedReauth() {
         EntityType passportType = getPassportEntityType();
         LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
@@ -688,11 +696,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getEntityInstance("guid1")).thenReturn(entityInstance);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         Preference passportEntity =
                 ThreadUtils.runOnUiThreadBlocking(
-                        () -> mSettingsActivityTestRule.getFragment().findPreference("guid1"));
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
 
         // Click entity and capture reauth callback.
         ThreadUtils.runOnUiThreadBlocking(passportEntity::performClick);
@@ -708,6 +716,128 @@ public class AutofillIdentityDocsFragmentTest {
 
     @Test
     @MediumTest
+    @EnableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
+    public void testAutofillAiEntities_refactorFlagEnabled_opensEditorOnSuccessfulReauth() {
+        EntityType passportType = getPassportEntityType();
+        LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
+                new LinkedHashMap<>();
+        instancesMap.put(
+                passportType, Arrays.asList(TestUtils.buildGermanyPassportWithLabels("guid1")));
+        when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
+
+        EntityInstance entityInstance =
+                new EntityInstance.Builder(passportType)
+                        .setGuid("guid1")
+                        .setRecordType(RecordType.LOCAL)
+                        .setUseCount(0)
+                        .setRequiresReauthToSee(true)
+                        .build();
+
+        when(mEntityDataManager.getEntityInstance("guid1")).thenReturn(entityInstance);
+        DeviceAuthAvailabilityCheckerBridge.setBiometricAvailabilityStatusForTesting(
+                BiometricStatus.BIOMETRICS_AVAILABLE);
+
+        mSettingsTestRule.startSettingsActivity();
+
+        Preference passportEntity =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
+
+        // Click entity and capture reauth callback.
+        ThreadUtils.runOnUiThreadBlocking(passportEntity::performClick);
+        ArgumentCaptor<Callback<Boolean>> callbackCaptor = MockitoHelper.callbackCaptor();
+        verify(mMockReauthenticatorBridge).reauthenticate(callbackCaptor.capture());
+        verify(mMockReauthenticatorBridge, never()).getBiometricAvailabilityStatus();
+
+        // Simulate successful reauth.
+        ThreadUtils.runOnUiThreadBlocking(() -> callbackCaptor.getValue().onResult(true));
+
+        onView(withText("Edit passport")).inRoot(isDialog()).check(matches(isDisplayed()));
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
+    public void testAutofillAiEntities_refactorFlagEnabled_doesNotOpenEditorOnFailedReauth() {
+        EntityType passportType = getPassportEntityType();
+        LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
+                new LinkedHashMap<>();
+        instancesMap.put(
+                passportType, Arrays.asList(TestUtils.buildGermanyPassportWithLabels("guid1")));
+        when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
+
+        EntityInstance entityInstance =
+                new EntityInstance.Builder(passportType)
+                        .setGuid("guid1")
+                        .setRecordType(
+                                org.chromium.components.autofill.autofill_ai.RecordType.LOCAL)
+                        .setUseCount(0)
+                        .setRequiresReauthToSee(true)
+                        .build();
+
+        when(mEntityDataManager.getEntityInstance("guid1")).thenReturn(entityInstance);
+        DeviceAuthAvailabilityCheckerBridge.setBiometricAvailabilityStatusForTesting(
+                BiometricStatus.BIOMETRICS_AVAILABLE);
+
+        mSettingsTestRule.startSettingsActivity();
+
+        Preference passportEntity =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
+
+        // Click entity and capture reauth callback.
+        ThreadUtils.runOnUiThreadBlocking(passportEntity::performClick);
+        ArgumentCaptor<Callback<Boolean>> callbackCaptor = MockitoHelper.callbackCaptor();
+        verify(mMockReauthenticatorBridge).reauthenticate(callbackCaptor.capture());
+        verify(mMockReauthenticatorBridge, never()).getBiometricAvailabilityStatus();
+
+        // Simulate failed reauth.
+        ThreadUtils.runOnUiThreadBlocking(() -> callbackCaptor.getValue().onResult(false));
+
+        // Editor should NOT be open.
+        onView(withText("Edit passport")).check(doesNotExist());
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DEVICE_REAUTH_REFACTOR)
+    public void
+            testAutofillAiEntities_refactorFlagEnabled_biometricsUnavailable_opensEditorWithoutReauth() {
+        EntityType passportType = getPassportEntityType();
+        LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
+                new LinkedHashMap<>();
+        instancesMap.put(
+                passportType, Arrays.asList(TestUtils.buildGermanyPassportWithLabels("guid1")));
+        when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
+
+        EntityInstance entityInstance =
+                new EntityInstance.Builder(passportType)
+                        .setGuid("guid1")
+                        .setRecordType(RecordType.LOCAL)
+                        .setUseCount(0)
+                        .setRequiresReauthToSee(true)
+                        .build();
+
+        when(mEntityDataManager.getEntityInstance("guid1")).thenReturn(entityInstance);
+        DeviceAuthAvailabilityCheckerBridge.setBiometricAvailabilityStatusForTesting(
+                BiometricStatus.UNAVAILABLE);
+
+        mSettingsTestRule.startSettingsActivity();
+
+        Preference passportEntity =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
+
+        // Click entity - reauth should not be triggered since biometrics are unavailable.
+        ThreadUtils.runOnUiThreadBlocking(passportEntity::performClick);
+        verify(mMockReauthenticatorBridge, never()).getBiometricAvailabilityStatus();
+        verify(mMockReauthenticatorBridge, never()).reauthenticate(any());
+
+        onView(withText("Edit passport")).inRoot(isDialog()).check(matches(isDisplayed()));
+    }
+
+    @Test
+    @MediumTest
     @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_SHOW_WALLET_DISABLED_BANNER)
     public void testDisabledWalletDataSharingDataCard_shownWhenDisabled() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
@@ -718,8 +848,8 @@ public class AutofillIdentityDocsFragmentTest {
         when(mEntityDataManager.isWalletPublicPassStorageEnabled()).thenReturn(false);
         when(mEntityDataManager.canShowWalletDataSharingPromotion()).thenReturn(true);
 
-        mSettingsActivityTestRule.startSettingsActivity();
-        AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+        mSettingsTestRule.startSettingsActivity();
+        AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
 
         assertNotNull(fragment.findPreference(AutofillAiDelegate.DISABLED_WALLET_DATA_SHARING));
     }
@@ -735,8 +865,8 @@ public class AutofillIdentityDocsFragmentTest {
                 });
         when(mEntityDataManager.isWalletPublicPassStorageEnabled()).thenReturn(true);
 
-        mSettingsActivityTestRule.startSettingsActivity();
-        AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+        mSettingsTestRule.startSettingsActivity();
+        AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
 
         assertNull(fragment.findPreference(AutofillAiDelegate.DISABLED_WALLET_DATA_SHARING));
     }
@@ -751,8 +881,8 @@ public class AutofillIdentityDocsFragmentTest {
                 });
         when(mEntityDataManager.isWalletPublicPassStorageEnabled()).thenReturn(false);
 
-        mSettingsActivityTestRule.startSettingsActivity();
-        AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+        mSettingsTestRule.startSettingsActivity();
+        AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
 
         assertNull(fragment.findPreference(AutofillAiDelegate.DISABLED_WALLET_DATA_SHARING));
     }
@@ -769,8 +899,8 @@ public class AutofillIdentityDocsFragmentTest {
                 });
         when(mEntityDataManager.isWalletPublicPassStorageEnabled()).thenReturn(false);
 
-        mSettingsActivityTestRule.startSettingsActivity();
-        AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+        mSettingsTestRule.startSettingsActivity();
+        AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
 
         assertNull(fragment.findPreference(AutofillAiDelegate.DISABLED_WALLET_DATA_SHARING));
     }
@@ -783,7 +913,7 @@ public class AutofillIdentityDocsFragmentTest {
                     AutofillClientProviderUtils.setAutofillAvailabilityToUseForTesting(
                             AndroidAutofillAvailabilityStatus.AVAILABLE);
                 });
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         onView(withId(R.id.card_button))
                 .check(matches(withText(R.string.autofill_disable_settings_button_label)))
@@ -802,15 +932,15 @@ public class AutofillIdentityDocsFragmentTest {
                             AndroidAutofillAvailabilityStatus.AVAILABLE);
                 });
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     AutofillIdentityDocsFragment.SEARCH_INDEX_DATA_PROVIDER
                             .updateDynamicPreferences(
-                                    mSettingsActivityTestRule.getActivity(),
+                                    mSettingsTestRule.getActivity(),
                                     mSearchIndexDataMock,
-                                    mSettingsActivityTestRule.getFragment().getProfile());
+                                    mSettingsTestRule.getFragment().getProfile());
                 });
 
         verify(mSearchIndexDataMock, atLeastOnce())
@@ -838,13 +968,13 @@ public class AutofillIdentityDocsFragmentTest {
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
         when(mEntityDataManager.isEligibleToAutofillAi()).thenReturn(true);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(true);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     PreferenceCategory category =
-                            mSettingsActivityTestRule.getFragment().findPreference("Passport");
+                            mSettingsTestRule.getFragment().findPreference("Passport");
                     Preference addPassport = category.findPreference("Passport" + " Add");
                     assertNotNull(addPassport);
                     addPassport.performClick();
@@ -852,7 +982,7 @@ public class AutofillIdentityDocsFragmentTest {
 
         onView(withText("Add passport")).inRoot(isDialog()).check(matches(isDisplayed()));
 
-        Context context = mSettingsActivityTestRule.getFragment().getContext();
+        Context context = mSettingsTestRule.getFragment().getContext();
         String expectedNoticeText =
                 context.getString(R.string.autofill_ai_save_or_update_local_entity_source_notice);
         onView(withText(expectedNoticeText)).check(matches(isDisplayed()));
@@ -878,13 +1008,13 @@ public class AutofillIdentityDocsFragmentTest {
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
         when(mEntityDataManager.isEligibleToAutofillAi()).thenReturn(true);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(true);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     PreferenceCategory category =
-                            mSettingsActivityTestRule.getFragment().findPreference("Passport");
+                            mSettingsTestRule.getFragment().findPreference("Passport");
                     Preference addPassport = category.findPreference("Passport" + " Add");
                     assertNotNull(addPassport);
                     addPassport.performClick();
@@ -892,7 +1022,7 @@ public class AutofillIdentityDocsFragmentTest {
 
         onView(withText("Add passport")).inRoot(isDialog()).check(matches(isDisplayed()));
 
-        Context context = mSettingsActivityTestRule.getFragment().getContext();
+        Context context = mSettingsTestRule.getFragment().getContext();
         String walletTitle = context.getString(R.string.autofill_google_wallet_title);
         String expectedNoticeText =
                 context.getString(
@@ -907,7 +1037,6 @@ public class AutofillIdentityDocsFragmentTest {
 
     @Test
     @MediumTest
-    @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WALLET_PRIVATE_PASSES_DEEP_LINK)
     public void testAutofillAiEntities_opensWalletDefaultPage_whenUrlIsNull() throws Exception {
         EntityType passportType = TestUtils.getPassportEntityType();
 
@@ -921,11 +1050,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         Preference passportEntity =
                 ThreadUtils.runOnUiThreadBlocking(
-                        () -> mSettingsActivityTestRule.getFragment().findPreference("guid1"));
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
         assertNotNull(passportEntity);
 
         // Mock the intent that should be fired.
@@ -945,7 +1074,6 @@ public class AutofillIdentityDocsFragmentTest {
 
     @Test
     @MediumTest
-    @EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WALLET_PRIVATE_PASSES_DEEP_LINK)
     public void testAutofillAiEntities_opensWalletPrivatePassPageOnClick() throws Exception {
         EntityType passportType = TestUtils.getPassportEntityType();
 
@@ -961,11 +1089,11 @@ public class AutofillIdentityDocsFragmentTest {
 
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         Preference passportEntity =
                 ThreadUtils.runOnUiThreadBlocking(
-                        () -> mSettingsActivityTestRule.getFragment().findPreference("guid1"));
+                        () -> mSettingsTestRule.getFragment().findPreference("guid1"));
         assertNotNull(passportEntity);
 
         // Mock the intent that should be fired.
@@ -981,49 +1109,10 @@ public class AutofillIdentityDocsFragmentTest {
 
     @Test
     @MediumTest
-    @DisableFeatures(ChromeFeatureList.AUTOFILL_AI_WALLET_PRIVATE_PASSES_DEEP_LINK)
-    public void testAutofillAiEntities_opensWalletPrivatePassPageOnClick_featureDisabled()
-            throws Exception {
-        EntityType passportType = TestUtils.getPassportEntityType();
-
-        EntityInstanceWithLabels entity1 =
-                TestUtils.buildGermanyPassportWithLabels(
-                        "guid1",
-                        /* storedInWallet= */ true,
-                        /* walletEntityUrl= */ "https://wallet.com/private");
-
-        LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
-                new LinkedHashMap<>();
-        instancesMap.put(passportType, Arrays.asList(entity1));
-
-        when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
-
-        mSettingsActivityTestRule.startSettingsActivity();
-
-        Preference passportEntity =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> mSettingsActivityTestRule.getFragment().findPreference("guid1"));
-        assertNotNull(passportEntity);
-
-        // Mock the intent that should be fired.
-        Instrumentation.ActivityResult result =
-                new Instrumentation.ActivityResult(Activity.RESULT_OK, null);
-        // Since the deep link feature is disabled, it should fallback to the general passes page.
-        var intentMatcher =
-                allOf(
-                        hasAction(Intent.ACTION_VIEW),
-                        hasData(Uri.parse(GoogleWalletLauncher.GOOGLE_WALLET_PASSES_URL)));
-        intending(intentMatcher).respondWith(result);
-
-        ThreadUtils.runOnUiThreadBlocking(passportEntity::performClick);
-
-        intended(intentMatcher);
-    }
-
-    @Test
-    @MediumTest
     public void testAutofillAiEntities_addButtonNotEnabledWhenDisabledByPolicy() {
         when(mEntityDataManager.getIsAutofillAiDisabledByEnterprisePolicy()).thenReturn(true);
+        when(mEntityDataManager.getIsAutofillAiEntityTypeDisabledByEnterprisePolicy(anyInt()))
+                .thenReturn(true);
 
         LinkedHashMap<EntityType, List<EntityInstanceWithLabels>> instancesMap =
                 new LinkedHashMap<>();
@@ -1032,12 +1121,12 @@ public class AutofillIdentityDocsFragmentTest {
                 Arrays.asList(TestUtils.buildGermanyPassportWithLabels("guid1")));
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(true);
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
                     Preference passportCategory = fragment.findPreference("Passport");
                     Criteria.checkThat(
                             "Passport entity category should exist",
@@ -1072,12 +1161,12 @@ public class AutofillIdentityDocsFragmentTest {
                 Arrays.asList(TestUtils.buildGermanyPassportWithLabels("guid1")));
         when(mEntityDataManager.getInstancesToList()).thenReturn(instancesMap);
 
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
         setIdentityTogglePreference(true);
 
         CriteriaHelper.pollUiThread(
                 () -> {
-                    AutofillIdentityDocsFragment fragment = mSettingsActivityTestRule.getFragment();
+                    AutofillIdentityDocsFragment fragment = mSettingsTestRule.getFragment();
 
                     ChromeSwitchPreference toggle =
                             fragment.findPreference(
@@ -1101,7 +1190,7 @@ public class AutofillIdentityDocsFragmentTest {
     @MediumTest
     public void testClickPersonalContextLaunchesPersonalContext() {
         when(mEntityDataManager.isPersonalContextPreferenceVisible()).thenReturn(true);
-        mSettingsActivityTestRule.startSettingsActivity();
+        mSettingsTestRule.startSettingsActivity();
 
         var userActionTester = new UserActionTester();
         try {
@@ -1123,7 +1212,7 @@ public class AutofillIdentityDocsFragmentTest {
     private void setIdentityTogglePreference(boolean value) {
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
-                        UserPrefs.get(mSettingsActivityTestRule.getFragment().getProfile())
+                        UserPrefs.get(mSettingsTestRule.getFragment().getProfile())
                                 .setBoolean(Pref.AUTOFILL_AI_IDENTITY_ENTITIES_ENABLED, value));
     }
 

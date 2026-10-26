@@ -17,7 +17,6 @@
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/prefs/testing_pref_service.h"
 #include "google_apis/gaia/gaia_constants.h"
@@ -30,9 +29,7 @@ namespace {
 
 class OptimizationGuideFeaturesTest : public testing::Test {
  public:
-  void SetUp() override {
-    model_execution::prefs::RegisterProfilePrefs(prefs_.registry());
-  }
+  void SetUp() override { RegisterGenAiFeatures(prefs_.registry()); }
 
  private:
   TestingPrefServiceSimple prefs_;
@@ -321,28 +318,6 @@ TEST_F(OptimizationGuideFeaturesTest, PredictionModelVersionInKillSwitch) {
                                   testing::ElementsAre(1, 3)),
                     testing::Pair(proto::OPTIMIZATION_TARGET_MODEL_VALIDATION,
                                   testing::ElementsAre(5))));
-  }
-}
-
-TEST_F(OptimizationGuideFeaturesTest, AllowedAdaptationRanks) {
-  // Default value
-  EXPECT_THAT(features::GetOnDeviceModelAllowedAdaptationRanks(),
-              testing::ElementsAre(32));
-  {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        features::kOptimizationGuideOnDeviceModel,
-        {{"allowed_adaptation_ranks", "16,32"}});
-    EXPECT_THAT(features::GetOnDeviceModelAllowedAdaptationRanks(),
-                testing::ElementsAre(16, 32));
-  }
-  {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        features::kOptimizationGuideOnDeviceModel,
-        {{"allowed_adaptation_ranks", "16,invalid,64"}});
-    EXPECT_THAT(features::GetOnDeviceModelAllowedAdaptationRanks(),
-                testing::ElementsAre(16, 64));
   }
 }
 

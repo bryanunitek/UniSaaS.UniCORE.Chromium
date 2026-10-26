@@ -12,10 +12,12 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/child_process_id.h"
+#include "content/public/common/process_type.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_set.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 
 namespace ash::cfm {
 
@@ -55,7 +57,8 @@ void CfmMemoryDetails::OnDetailsAvailable() {
 }
 
 void CfmMemoryDetails::CollectProcessInformation() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M160);
 
   proc_data_list_.reserve(processes().size());
   for (const ProcessData& proc_data : processes()) {
@@ -115,7 +118,8 @@ void CfmMemoryDetails::CollectProcessInformation() {
 }
 
 void CfmMemoryDetails::CollectExtensionsInformation() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M160);
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   for (content::RenderProcessHost::iterator it(
@@ -141,7 +145,8 @@ void CfmMemoryDetails::CollectExtensionsInformation() {
                 ->GetEnabledExtensionByProcessID(host->GetID())) {
       proc_mem_info->extension_info.push_back(mojom::ExtensionData::New(
           extension->name(), extension->GetVersionForDisplay(), extension->id(),
-          extension->hashed_id().value(), extension->description()));
+          extension->hashed_id().value(),
+          extensions::DescriptionInfo::GetDescription(*extension)));
     }
   }
 #endif

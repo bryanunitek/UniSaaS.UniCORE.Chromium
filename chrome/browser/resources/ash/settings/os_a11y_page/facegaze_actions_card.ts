@@ -16,7 +16,6 @@ import '../os_settings_page/os_settings_animated_pages.js';
 import './facegaze_actions_add_dialog.js';
 import './facegaze_icons.html.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {FacialGesture} from 'chrome://resources/ash/common/accessibility/facial_gestures.js';
 import {MacroName} from 'chrome://resources/ash/common/accessibility/macro_names.js';
 import type {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
@@ -27,7 +26,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import {AddDialogPage} from './facegaze_actions_add_dialog.js';
@@ -99,20 +99,28 @@ export class FaceGazeActionsCardElement extends FaceGazeActionsCardElementBase {
     };
   }
 
+  constructor() {
+    super();
+    this.actionsSpokenFeedbackAlert_ = '';
+    this.commandPairs_ = [];
+    this.commandPairToConfigure_ = null;
+    this.leftClickGestures_ = [];
+  }
+
   static get observers() {
     return [`initFromPrefs_(prefs.settings.a11y.face_gaze.enabled.value)`];
   }
 
-  disabled: boolean;
-  private actionsSpokenFeedbackAlert_ = '';
-  private commandPairs_: FaceGazeCommandPair[] = [];
-  private commandPairToConfigure_: FaceGazeCommandPair|null = null;
-  private dialogPageToShow_: AddDialogPage;
-  private disableConfigureControls_: boolean;
-  private leftClickGestures_: FacialGesture[] = [];
-  private rowIdToUpdate_: number;
-  private shouldAnnounceA11yActionFeedback_: boolean;
-  private showAddActionDialog_: boolean;
+  declare disabled: boolean;
+  declare private actionsSpokenFeedbackAlert_: string;
+  declare private commandPairs_: FaceGazeCommandPair[];
+  declare private commandPairToConfigure_: FaceGazeCommandPair|null;
+  declare private dialogPageToShow_: AddDialogPage;
+  declare private disableConfigureControls_: boolean;
+  declare private leftClickGestures_: FacialGesture[];
+  private rowIdToUpdate_: number = 0;
+  declare private shouldAnnounceA11yActionFeedback_: boolean;
+  declare private showAddActionDialog_: boolean;
 
   private shouldAnnounceAlert_(): boolean {
     return this.actionsSpokenFeedbackAlert_ !== '';

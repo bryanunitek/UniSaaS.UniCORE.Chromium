@@ -12,11 +12,13 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_command_line.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/install_warning.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
+#include "extensions/common/switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using extensions::ErrorUtils;
@@ -158,12 +160,18 @@ TEST(ExtensionCSPValidator, IsLegal) {
       "default-src 'self';\rscript-src http://www.google.com"));
   EXPECT_FALSE(ContentSecurityPolicyIsLegal(
       "default-src 'self';,script-src http://www.google.com"));
-  EXPECT_TRUE(ContentSecurityPolicyIsLegal(
+  EXPECT_FALSE(ContentSecurityPolicyIsLegal(
       "default-src 'self';\vscript-src http://www.google.com"));
   EXPECT_TRUE(ContentSecurityPolicyIsLegal(
       "default-src 'self';\tscript-src http://www.google.com"));
   EXPECT_TRUE(ContentSecurityPolicyIsLegal(
       "default-src 'self';\fscript-src http://www.google.com"));
+  EXPECT_FALSE(ContentSecurityPolicyIsLegal(
+      "default-src 'self';\x7fscript-src http://www.google.com"));
+  EXPECT_FALSE(ContentSecurityPolicyIsLegal(
+      "default-src 'self';\x01script-src http://www.google.com"));
+  EXPECT_FALSE(ContentSecurityPolicyIsLegal(
+      "default-src 'self';\x80script-src http://www.google.com"));
 }
 
 TEST(ExtensionCSPValidator, IsSecure) {
@@ -503,6 +511,11 @@ TEST(ExtensionCSPValidator, IsSandboxed) {
                                                 Manifest::Type::kExtension));
   EXPECT_FALSE(ContentSecurityPolicyIsSandboxed("sandbox \fallow-same-origin\f",
                                                 Manifest::Type::kExtension));
+  EXPECT_FALSE(ContentSecurityPolicyIsSandboxed("sandbox allow-same-origin\x7f",
+                                                Manifest::Type::kExtension));
+  EXPECT_FALSE(ContentSecurityPolicyIsSandboxed(
+      "sandbox allow-scripts allow-same-origin\x7f",
+      Manifest::Type::kExtension));
 
   // Additional directives are OK.
   EXPECT_TRUE(ContentSecurityPolicyIsSandboxed(
@@ -513,6 +526,18 @@ TEST(ExtensionCSPValidator, IsSandboxed) {
                                                Manifest::Type::kExtension));
   EXPECT_FALSE(ContentSecurityPolicyIsSandboxed("sandbox allow-top-navigation",
                                                 Manifest::Type::kPlatformApp));
+  EXPECT_TRUE(ContentSecurityPolicyIsSandboxed(
+      "sandbox allow-top-navigation-by-user-activation",
+      Manifest::Type::kExtension));
+  EXPECT_FALSE(ContentSecurityPolicyIsSandboxed(
+      "sandbox allow-top-navigation-by-user-activation",
+      Manifest::Type::kPlatformApp));
+  EXPECT_TRUE(ContentSecurityPolicyIsSandboxed(
+      "sandbox allow-top-navigation-to-custom-protocols",
+      Manifest::Type::kExtension));
+  EXPECT_FALSE(ContentSecurityPolicyIsSandboxed(
+      "sandbox allow-top-navigation-to-custom-protocols",
+      Manifest::Type::kPlatformApp));
 
   // Popups are OK.
   EXPECT_TRUE(ContentSecurityPolicyIsSandboxed("sandbox allow-popups",
@@ -748,5 +773,52 @@ TEST(ExtensionCSPValidator, DoesCSPDisallowRemoteCodeChromeResources) {
       "chrome://resources", "script-src");
   EXPECT_FALSE(extensions::csp_validator::DoesCSPDisallowRemoteCode(
       extension_misc::kPdfExtensionId, location, policy, kManifestKey, &error));
+  EXPECT_EQ(base::ASCIIToUTF16(expected_error), error);
+}
+
+TEST(ExtensionCSPValidator, DoesCSPDisallowRemoteCodeChromeWebUITest) {
+  const char* kManifestKey = "mock_key";
+  const char* policy =
+      "default-src 'none'; script-src 'self' chrome://webui-test;";
+  const std::string expected_error = ErrorUtils::FormatErrorMessage(
+      extensions::manifest_errors::kInvalidCSPInsecureValueError, kManifestKey,
+      "chrome://webui-test", "script-src");
+  std::u16string error;
+
+  // Without the test-only switch, even component extensions cannot access
+  // chrome://webui-test.
+  EXPECT_FALSE(extensions::csp_validator::DoesCSPDisallowRemoteCode(
+      extension_misc::kPdfExtensionId,
+      extensions::mojom::ManifestLocation::kComponent, policy, kManifestKey,
+      &error));
+  EXPECT_EQ(base::ASCIIToUTF16(expected_error), error);
+
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitch(
+      extensions::switches::kAllowWebUITestInComponentExtensions);
+
+  // With the switch, component extensions can access chrome://webui-test.
+  error.clear();
+  EXPECT_TRUE(extensions::csp_validator::DoesCSPDisallowRemoteCode(
+      extension_misc::kPdfExtensionId,
+      extensions::mojom::ManifestLocation::kComponent, policy, kManifestKey,
+      &error));
+  EXPECT_EQ(u"", error);
+
+  // External component extensions are installed from an update URL, so they
+  // cannot access chrome://webui-test even with the switch.
+  EXPECT_FALSE(extensions::csp_validator::DoesCSPDisallowRemoteCode(
+      extension_misc::kPdfExtensionId,
+      extensions::mojom::ManifestLocation::kExternalComponent, policy,
+      kManifestKey, &error));
+  EXPECT_EQ(base::ASCIIToUTF16(expected_error), error);
+
+  // Non-component extensions cannot access chrome://webui-test even with the
+  // switch.
+  error.clear();
+  EXPECT_FALSE(extensions::csp_validator::DoesCSPDisallowRemoteCode(
+      extension_misc::kPdfExtensionId,
+      extensions::mojom::ManifestLocation::kInternal, policy, kManifestKey,
+      &error));
   EXPECT_EQ(base::ASCIIToUTF16(expected_error), error);
 }

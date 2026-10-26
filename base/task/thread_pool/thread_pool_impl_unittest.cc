@@ -12,9 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/base_switches.h"
 #include "base/cfi_buildflags.h"
-#include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/debug/stack_trace.h"
 #include "base/functional/bind.h"
@@ -414,32 +412,37 @@ class ThreadPoolImplTestBase : public testing::Test {
     did_tear_down_ = true;
   }
 
+  base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<ThreadPoolImpl> thread_pool_;
   Thread service_thread_;
 
  private:
   void SetupFeatures() {
-    std::vector<base::test::FeatureRef> features;
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
 
     if (GetUseResourceEfficientThreadGroup()) {
-      features.push_back(kUseUtilityThreadGroup);
+      enabled_features.push_back(kUseUtilityThreadGroup);
+    } else {
+      disabled_features.push_back(kUseUtilityThreadGroup);
     }
 
     if (GetUseHighPriorityThreadGroup()) {
-      features.push_back(kUseHighPriorityThreadGroup);
+      enabled_features.push_back(kUseHighPriorityThreadGroup);
+    } else {
+      disabled_features.push_back(kUseHighPriorityThreadGroup);
     }
 
     if (GetInheritTaskImportanceByDefault()) {
-      features.push_back(kInheritTaskImportanceByDefault);
+      enabled_features.push_back(kInheritTaskImportanceByDefault);
+    } else {
+      disabled_features.push_back(kInheritTaskImportanceByDefault);
     }
 
-    if (!features.empty()) {
-      feature_list_.InitWithFeatures(features, {});
-    }
+    feature_list_.InitWithFeatures(enabled_features, disabled_features);
     base::internal::JobTaskSource::InitializeFeatures();
   }
 
-  base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<WorkerThreadObserver> worker_thread_observer_;
   bool did_tear_down_ = false;
 };
@@ -711,55 +714,6 @@ TEST_P(ThreadPoolImplTest_CoverAllSchedulingOptions,
   unblock_task.Signal();
 
   flush_event.Wait();
-}
-
-// Verifies that BEST_EFFORT tasks don't run when the
-// --disable-best-effort-tasks command-line switch is specified.
-//
-// Not using the same fixture as other tests because we want to append a command
-// line switch before creating the pool.
-TEST(ThreadPoolImplTest_Switch, DisableBestEffortTasksSwitch) {
-  CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kDisableBestEffortTasks);
-
-  ThreadPoolImpl thread_pool("Test");
-  ThreadPoolInstance::InitParams init_params(
-      kMaxNumForegroundThreads, kMaxNumUtilityThreads, kMaxNumAudioThreads);
-  thread_pool.Start(init_params, nullptr);
-
-  AtomicFlag best_effort_can_run;
-  TestWaitableEvent best_effort_did_run;
-  thread_pool.PostDelayedTask(
-      FROM_HERE,
-      {TaskPriority::BEST_EFFORT, TaskShutdownBehavior::BLOCK_SHUTDOWN},
-      BindLambdaForTesting([&] {
-        EXPECT_TRUE(best_effort_can_run.IsSet());
-        best_effort_did_run.Signal();
-      }),
-      TimeDelta());
-
-  TestWaitableEvent user_blocking_did_run;
-  thread_pool.PostDelayedTask(
-      FROM_HERE, {TaskPriority::USER_BLOCKING},
-      BindLambdaForTesting([&] { user_blocking_did_run.Signal(); }),
-      TimeDelta());
-
-  // The USER_BLOCKING task should run.
-  user_blocking_did_run.Wait();
-
-  PlatformThread::Sleep(TestTimeouts::tiny_timeout());
-
-  // The BEST_EFFORT task should not run when a BEST_EFFORT fence is deleted.
-  thread_pool.BeginBestEffortFence();
-  thread_pool.EndBestEffortFence();
-
-  PlatformThread::Sleep(TestTimeouts::tiny_timeout());
-
-  // The BEST_EFFORT task should only run during shutdown.
-  best_effort_can_run.Set();
-  thread_pool.Shutdown();
-  EXPECT_TRUE(best_effort_did_run.IsSignaled());
-  thread_pool.JoinForTesting();
 }
 
 // Verifies that tasks only run when allowed by fences.

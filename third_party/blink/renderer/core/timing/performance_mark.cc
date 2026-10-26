@@ -73,8 +73,9 @@ PerformanceMark* PerformanceMark::Create(ScriptState* script_state,
       unsafe_start_for_traces = base::TimeTicks::Now();
     }
 
-    if (mark_options->hasDetail())
+    if (mark_options->hasDetail()) {
       detail = mark_options->detail();
+    }
   } else {
     start = performance->now();
     unsafe_start_for_traces = base::TimeTicks::Now();
@@ -105,7 +106,7 @@ PerformanceMark* PerformanceMark::Create(ScriptState* script_state,
   return MakeGarbageCollected<PerformanceMark>(
       mark_name, start, unsafe_start_for_traces, std::move(serialized_detail),
       exception_state, LocalDOMWindow::From(script_state),
-      performance->NavigationId());
+      performance->NavigationId().web_exposed_id);
 }
 
 const AtomicString& PerformanceMark::entryType() const {
@@ -129,14 +130,16 @@ PerformanceMark::ToMojoPerformanceMarkOrMeasure() {
 
 ScriptValue PerformanceMark::detail(ScriptState* script_state) {
   v8::Isolate* isolate = script_state->GetIsolate();
-  if (!serialized_detail_)
+  if (!serialized_detail_) {
     return ScriptValue(isolate, v8::Null(isolate));
+  }
   auto result = deserialized_detail_map_.insert(
       script_state, TraceWrapperV8Reference<v8::Value>());
   TraceWrapperV8Reference<v8::Value>& relevant_data =
       result.stored_value->value;
-  if (!result.is_new_entry)
+  if (!result.is_new_entry) {
     return ScriptValue(isolate, relevant_data.Get(isolate));
+  }
   v8::Local<v8::Value> value = serialized_detail_->Deserialize(isolate);
   relevant_data.Reset(isolate, value);
   return ScriptValue(isolate, value);

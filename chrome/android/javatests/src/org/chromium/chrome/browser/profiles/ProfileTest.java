@@ -15,13 +15,17 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.profile_metrics.BrowserProfileType;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /** This test class checks if incognito and non-incognito OTR profiles can be distinctly created. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -44,6 +48,7 @@ public class ProfileTest {
     /** Test if two calls for incognito profile return the same object. */
     @Test
     @LargeTest
+    @DisabledTest(message = "crbug.com/549119110")
     public void testIncognitoProfileConsistency() {
         Assert.assertNull(mRegularProfile.getOtrProfileId());
         // Open an new Incognito Tab page to create a new primary OTR profile.
@@ -82,6 +87,7 @@ public class ProfileTest {
     /** Test if two calls to get non-primary profile with the same id return the same object. */
     @Test
     @LargeTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/562626080
     public void testNonPrimaryProfileConsistency() {
         OtrProfileId profileId = new OtrProfileId("test::OtrProfile");
         Profile nonPrimaryOtrProfile1 =
@@ -264,13 +270,10 @@ public class ProfileTest {
     @Test
     @LargeTest
     public void testBrowserProfileTypeFromPrimaryOtrProfile() {
-        // Open an new Incognito Tab page to create a new primary OTR profile.
-        mStartingPage.openRegularTabAppMenu().openNewIncognitoTab().loadAboutBlank();
-
+        IncognitoNewTabPageStation incognitoPage = mStartingPage.openNewIncognitoTabOrWindowFast();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Profile primaryOtrProfile =
-                            mRegularProfile.getPrimaryOtrProfile(/* createIfNeeded= */ true);
+                    Profile primaryOtrProfile = incognitoPage.getTab().getProfile();
                     Assert.assertEquals(
                             BrowserProfileType.INCOGNITO,
                             Profile.getBrowserProfileTypeFromProfile(primaryOtrProfile));

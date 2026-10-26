@@ -152,11 +152,6 @@ inline constexpr char kMicrosoft365AppId[] = "onhfoihkhodaeblmangmjjgfpfehnlkm";
 inline constexpr char kMockSystemAppId[] = "maphiehpiinjgiaepbljmopkodkadcbh";
 
 // Generated as: web_app::GenerateAppId(/*manifest_id=*/std::nullopt, GURL(
-//     "https://play.geforcenow.com/mall/"))
-inline constexpr char kNvidiaGeForceNowAppId[] =
-    "egmafekfmcnknbdlbfbhafbllplmjlhn";
-
-// Generated as: web_app::GenerateAppId(/*manifest_id=*/std::nullopt, GURL(
 //     "chrome://os-feedback/"))
 inline constexpr char kOsFeedbackAppId[] = "iffgohomcomlpmkfikfffagkkoojjffm";
 
@@ -177,6 +172,18 @@ inline constexpr char kPlayBooksAppId[] = "jglfhlbohpgcbefmhdmpancnijacbbji";
 //      "chrome://print-management/"))
 inline constexpr char kPrintManagementAppId[] =
     "fglkccnmnaankjodgccmiodmlkpaiodc";
+
+// Generated as: web_app::GenerateAppId(/*manifest_id=*/std::nullopt, GURL(
+//     "chrome-untrusted://projector/"))
+// LINT.IfChange
+inline constexpr char kChromeUIUntrustedProjectorSwaAppId[] =
+    "hohmppfoilmflgicnofelkdablfahbnl";
+
+// Also update the Projector app id in the file below.
+// LINT.ThenChange(
+// src/platform/tast-tests/src/chromiumos/tast/local/apps/apps.go)
+inline constexpr char kChromeUIUntrustedProjectorPwaUrl[] =
+    "https://screencast.apps.chrome";
 
 // Generated as:web_app::GenerateAppId(/*manifest_id=*/std::nullopt, GURL(
 //      "chrome://recorder-app/"))

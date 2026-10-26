@@ -15,13 +15,13 @@ import './live_caption_section.js';
 
 import type {FontsData} from '/shared/settings/appearance_page/fonts_browser_proxy.js';
 import {FontsBrowserProxyImpl} from '/shared/settings/appearance_page/fonts_browser_proxy.js';
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import type {LanguageHelper, LanguagesModel} from '../os_languages_page/languages_types.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 
 import {getTemplate} from './captions_subpage.html.js';
 
@@ -209,15 +209,15 @@ export class SettingsCaptionsElement extends SettingsCaptionsElementBase {
     };
   }
 
-  languages: LanguagesModel;
-  languageHelper: LanguageHelper;
-  private readonly backgroundOpacityOptions_: DropdownMenuOptionList;
-  private readonly colorOptions_: DropdownMenuOptionList;
-  private textFontOptions_: DropdownMenuOptionList;
-  private readonly textOpacityOptions_: DropdownMenuOptionList;
-  private readonly textShadowOptions_: DropdownMenuOptionList;
-  private readonly textSizeOptions_: DropdownMenuOptionList;
-  private enableLiveCaption_: boolean;
+  declare languages: LanguagesModel;
+  declare languageHelper: LanguageHelper;
+  declare private readonly backgroundOpacityOptions_: DropdownMenuOptionList;
+  declare private readonly colorOptions_: DropdownMenuOptionList;
+  declare private textFontOptions_: DropdownMenuOptionList;
+  declare private readonly textOpacityOptions_: DropdownMenuOptionList;
+  declare private readonly textShadowOptions_: DropdownMenuOptionList;
+  declare private readonly textSizeOptions_: DropdownMenuOptionList;
+  declare private enableLiveCaption_: boolean;
 
   override ready(): void {
     super.ready();

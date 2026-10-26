@@ -4,24 +4,24 @@
 
 # Variables will be pulled into globals() from the ColorSync framework, and will
 # trigger undefined-variables.
-# pylint: disable=undefined-variable
 # pytype: disable=name-error
 
 
 from gpu_tests.util import host_information
 
 if host_information.IsMac():
-  # pylint: disable=import-error
   # pytype: disable=import-error
   import Foundation
   import Quartz
   import objc
+
   # pytype: enable=import-error
-  # pylint: enable=import-error
   # There is no module for the ColorSync framework, so synthesize one using
   # bridge # support.
-  color_sync_framework = '/System/Library/Frameworks/ApplicationServices.' \
-                         'framework/Versions/A/Frameworks/ColorSync.framework'
+  color_sync_framework = (
+    '/System/Library/Frameworks/ApplicationServices.'
+    'framework/Versions/A/Frameworks/ColorSync.framework'
+  )
   # This string is the output of running gen_bridge_metadata on the ColorSync
   # headers.
   color_sync_bridge_string = """<?xml version='1.0'?>
@@ -45,8 +45,9 @@ if host_information.IsMac():
         <retval type='B'/>
       </function>
     </signatures>"""
-  objc.parseBridgeSupport(color_sync_bridge_string, globals(),
-                          color_sync_framework)
+  objc.parseBridgeSupport(
+    color_sync_bridge_string, globals(), color_sync_framework
+  )
 else:
   Foundation = None
   Quartz = None
@@ -59,11 +60,14 @@ def SetDisplayCustomProfile(device_id: int, profile_url: str) -> None:
   if profile_url is None:
     profile_url = Foundation.kCFNull
   profile_info = {
-      kColorSyncDeviceDefaultProfileID: profile_url,
-      kColorSyncProfileUserScope: Foundation.kCFPreferencesCurrentUser
+    kColorSyncDeviceDefaultProfileID: profile_url,  # noqa: F821
+    kColorSyncProfileUserScope: Foundation.kCFPreferencesCurrentUser,  # noqa: F821
   }
-  result = ColorSyncDeviceSetCustomProfiles(kColorSyncDisplayDeviceClass,
-                                            device_id, profile_info)
+  result = ColorSyncDeviceSetCustomProfiles(  # noqa: F821
+    kColorSyncDisplayDeviceClass,  # noqa: F821
+    device_id,
+    profile_info,  # noqa: F821
+  )
   if not result:
     raise Exception('Failed to set display custom profile')
 
@@ -72,7 +76,8 @@ def SetDisplayCustomProfile(device_id: int, profile_url: str) -> None:
 def GetSRGBProfileURL() -> str:
   srgb_profile_path = '/System/Library/ColorSync/Profiles/sRGB Profile.icc'
   srgb_profile_url = Foundation.CFURLCreateFromFileSystemRepresentation(
-      None, srgb_profile_path.encode('utf-8'), len(srgb_profile_path), False)
+    None, srgb_profile_path.encode('utf-8'), len(srgb_profile_path), False
+  )
   return srgb_profile_url
 
 
@@ -86,9 +91,10 @@ def GetDisplaysToProfileURLMap() -> dict:
     raise Exception('Failed to get online displays from Quartz')
   online_displays = online_display_list_result[1]
   for display_id in online_displays:
-    device_info = ColorSyncDeviceCopyDeviceInfo(
-        kColorSyncDisplayDeviceClass,
-        CGDisplayCreateUUIDFromDisplayID(display_id))
+    device_info = ColorSyncDeviceCopyDeviceInfo(  # noqa: F821
+      kColorSyncDisplayDeviceClass,  # noqa: F821
+      CGDisplayCreateUUIDFromDisplayID(display_id),  # noqa: F821
+    )
     if not device_info:
       raise Exception('KVM connection on bot is broken, please file a bug')
     device_id = device_info['DeviceID']

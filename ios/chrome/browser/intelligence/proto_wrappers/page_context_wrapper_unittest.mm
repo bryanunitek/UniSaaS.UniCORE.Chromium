@@ -7,6 +7,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <UIKit/UIKit.h>
 
+#import <array>
 #import <vector>
 
 #import "base/base64.h"
@@ -18,6 +19,7 @@
 #import "base/strings/strcat.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/string_split.h"
+#import "base/strings/string_util.h"
 #import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
@@ -34,7 +36,7 @@
 #import "components/autofill/core/browser/foundations/test_autofill_client.h"
 #import "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #import "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/core/common/form_data.h"
 #import "components/autofill/core/common/form_field_data.h"
@@ -55,16 +57,15 @@
 #import "components/prefs/testing_pref_service.h"
 #import "components/safe_browsing/ios/browser/safe_browsing_url_allow_list.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/annotated_page_content_extraction_utils.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/frame_grafter.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_extractor_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_utils.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_config.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_test_java_script_feature.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_test_utils.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/snapshots/model/fake_snapshot_generator_delegate.h"
 #import "ios/chrome/browser/snapshots/model/model_swift.h"
-#import "ios/chrome/browser/snapshots/model/snapshot_source_tab_helper.h"
-#import "ios/chrome/browser/snapshots/model/snapshot_storage_util.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_tab_helper.h"
 #import "ios/chrome/test/scoped_key_window.h"
 #import "ios/testing/embedded_test_server_handlers.h"
@@ -84,6 +85,8 @@
 #import "ios/web/public/test/web_state_test_util.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "ios/web/public/test/web_view_interaction_test_util.h"
+#import "ios/web/public/ui/crw_web_view_proxy.h"
+#import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_id.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
@@ -91,6 +94,8 @@
 #import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
+#import "third_party/ocmock/OCMock/OCMock.h"
+#import "ui/base/test/ios/ui_image_test_utils.h"
 #import "url/origin.h"
 
 // TODO(crbug.com/458081684): Move away from all autofill dependencies once
@@ -98,20 +103,76 @@
 
 // TODO(crbug.com/475577435): Extend test coverage for Rich Extraction.
 
+@interface PageContextWrapper (Testing)
+- (void)encodeImageAndSetTabScreenshotForTesting:(UIImage*)image;
+- (void)setBoxesToRedactForTesting:(const std::vector<CGRect>&)boxes;
+- (const std::vector<CGRect>&)boxesToRedactForTesting;
+- (optimization_guide::proto::PageContext*)pageContextForTesting;
+- (optimization_guide::proto::AnnotatedPageContent*)rootAPCNodeForTesting;
+- (FrameGrafter&)grafterForTesting;
+- (BOOL)shouldRedactDecisionForScreenshot:
+    (optimization_guide::proto::RedactionDecision)decision;
+- (void)populateForRichExtractionWithValue:(const base::DictValue&)value
+                            securityOrigin:(const url::Origin&)securityOrigin
+                               isMainFrame:(BOOL)isMainFrame
+                           localFrameToken:
+                               (std::optional<autofill::LocalFrameToken>)
+                                   localFrameToken;
+- (CGRect)visibleWebViewportRectForTesting;
+@end
+
+// Lightweight test doubles for CRWWebViewScrollViewProxy and CRWWebViewProxy to
+// verify viewport insetting logic without full WebState realization.
+@interface FakeCRWWebViewScrollViewProxy : CRWWebViewScrollViewProxy
+@property(nonatomic, assign) UIEdgeInsets testContentInset;
+@end
+
+@implementation FakeCRWWebViewScrollViewProxy
+- (UIEdgeInsets)adjustedContentInset {
+  return _testContentInset;
+}
+@end
+
+@interface FakeCRWWebViewProxy : NSObject
+@property(nonatomic, strong) CRWWebViewScrollViewProxy* scrollViewProxy;
+@end
+
+@implementation FakeCRWWebViewProxy
+@end
+
 namespace {
 
+using ui::test::uiimage_utils::UIImageWithSizeAndSolidColor;
+
 const char kMainPagePath[] = "/main.html";
+
+// Encodes `image` as a base64 PNG string matching `PageContext.tab_screenshot`.
+std::string EncodeScreenshot(UIImage* image) {
+  return base::SysNSStringToUTF8(
+      [UIImagePNGRepresentation(image) base64EncodedStringWithOptions:0]);
+}
 
 // Corresponds to MASKED_TEXT_LENGTH in
 // resources/annotated_page_content_extraction.ts.
 constexpr size_t MASKED_TEXT_LENGTH = 7;
 
-// A fake web state that can be controlled to simulate PDF generation failures.
+// A fake web state that can be controlled to simulate PDF generation failures
+// and custom snapshots.
 class FakeWebStateForFailureTest : public web::FakeWebState {
  public:
   void CreateFullPagePdf(base::OnceCallback<void(NSData*)> callback) override {
     std::move(callback).Run(nil);
   }
+
+  void TakeSnapshot(const CGRect rect, SnapshotCallback callback) override {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), snapshot_));
+  }
+
+  void SetSnapshot(UIImage* snapshot) { snapshot_ = snapshot; }
+
+ private:
+  UIImage* snapshot_ = nil;
 };
 
 // Helper to verify geometry existence and basic validity.
@@ -152,28 +213,51 @@ testing::AssertionResult VerifyGeometry(
   return testing::AssertionSuccess();
 }
 
-}  // namespace
-
-// A fake snapshot generator delegate that can be controlled to simulate
-// failures.
-@interface ControllableFakeSnapshotGeneratorDelegate
-    : FakeSnapshotGeneratorDelegate
-// This property controls the value returned by -canTakeSnapshotForWebState:
-// method of the SnapshotGeneratorDelegate protocol.
-@property(nonatomic, assign) BOOL canTakeSnapshot;
-@end
-
-@implementation ControllableFakeSnapshotGeneratorDelegate
-- (instancetype)init {
-  if ((self = [super init])) {
-    _canTakeSnapshot = YES;
+void AppendAnnotatedText(const optimization_guide::proto::ContentNode& node,
+                         std::vector<std::string>& texts) {
+  if (node.content_attributes().attribute_type() ==
+      optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT) {
+    texts.push_back(node.content_attributes().text_data().text_content());
   }
-  return self;
+  for (const auto& child : node.children_nodes()) {
+    AppendAnnotatedText(child, texts);
+  }
 }
-- (BOOL)canTakeSnapshotWithWebStateInfo:(WebStateSnapshotInfo*)webStateInfo {
-  return self.canTakeSnapshot;
+
+void FindNodesWithCssPosition(
+    const optimization_guide::proto::ContentNode& node,
+    optimization_guide::proto::CssPosition target_position,
+    std::vector<const optimization_guide::proto::ContentNode*>*
+        matching_nodes) {
+  if (node.has_content_attributes() &&
+      node.content_attributes().has_geometry() &&
+      node.content_attributes().geometry().has_css_position() &&
+      node.content_attributes().geometry().css_position() == target_position) {
+    matching_nodes->push_back(&node);
+  }
+  for (const auto& child : node.children_nodes()) {
+    FindNodesWithCssPosition(child, target_position, matching_nodes);
+  }
 }
-@end
+
+// Returns the first node in the subtree rooted at `node` that has form control
+// data, or `nullptr` if there is none.
+const optimization_guide::proto::ContentNode* FindFirstFormControlNode(
+    const optimization_guide::proto::ContentNode& node) {
+  if (node.content_attributes().has_form_control_data()) {
+    return &node;
+  }
+  for (const optimization_guide::proto::ContentNode& child :
+       node.children_nodes()) {
+    if (const optimization_guide::proto::ContentNode* found =
+            FindFirstFormControlNode(child)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 // Version of AutofillManager that caches the FormData it receives so we can
 // examine them. The public API deals with FormStructure, the post-parsing
@@ -189,11 +273,13 @@ class TestAutofillManager : public autofill::TestBrowserAutofillManager {
     return forms_seen_waiter_.Wait(min_num_awaited_calls);
   }
 
-  void OnFormsSeen(std::vector<autofill::FormData> updated_forms,
-                   std::vector<autofill::FormGlobalId> removed_forms) override {
+  void OnFormsSeen(
+      std::vector<autofill::FormData> updated_forms,
+      std::vector<autofill::FormGlobalId> removed_forms,
+      autofill::AutofillManager::RendererEventPassKey pass_key) override {
     base::Extend(seen_forms_, updated_forms);
-    autofill::BrowserAutofillManager::OnFormsSeen(std::move(updated_forms),
-                                                  std::move(removed_forms));
+    autofill::BrowserAutofillManager::OnFormsSeen(
+        std::move(updated_forms), std::move(removed_forms), pass_key);
   }
 
   const std::vector<autofill::FormData>& seen_forms() { return seen_forms_; }
@@ -225,7 +311,6 @@ class PageContextWrapperTest : public PlatformTest,
       base::test::TaskEnvironment::TimeSource time_source)
       : task_environment_(time_source),
         web_client_(std::make_unique<web::FakeWebClient>()) {}
-  ~PageContextWrapperTest() override { [snapshot_storage_ shutdown]; }
 
   void SetUp() override {
     PlatformTest::SetUp();
@@ -235,7 +320,6 @@ class PageContextWrapperTest : public PlatformTest,
     std::vector<base::test::FeatureRef> disabled_features;
     std::vector<base::test::FeatureRef> enabled_features;
     enabled_features.push_back(kPageActionMenu);
-    enabled_features.push_back(autofill::features::kAutofillAcrossIframesIos);
     if (IsRefactored()) {
       enabled_features.push_back(kPageContextExtractorRefactored);
     } else {
@@ -256,17 +340,6 @@ class PageContextWrapperTest : public PlatformTest,
     web_state_->WasShown();
     web_state_->SetKeepRenderProcessAlive(true);
 
-    SnapshotTabHelper::CreateForWebState(web_state_.get());
-    SnapshotSourceTabHelper::CreateForWebState(web_state_.get());
-    snapshot_storage_ = CreateSnapshotStorage(temp_dir_.GetPath());
-    SnapshotTabHelper* snapshot_tab_helper =
-        SnapshotTabHelper::FromWebState(web_state_.get());
-    snapshot_tab_helper->SetSnapshotStorage(snapshot_storage_);
-    snapshot_delegate_ =
-        [[ControllableFakeSnapshotGeneratorDelegate alloc] init];
-    snapshot_delegate_.view = web_state_->GetView();
-    snapshot_tab_helper->SetDelegate(snapshot_delegate_);
-
     GetWebClient()->SetJavaScriptFeatures({
         web::FindInPageJavaScriptFeature::GetInstance(),
         extractor_feature(),
@@ -285,14 +358,15 @@ class PageContextWrapperTest : public PlatformTest,
         web_state_.get(), autofill_agent_);
 
     autofill_manager_injector_ = std::make_unique<
-        autofill::TestAutofillManagerInjector<TestAutofillManager>>(
+        autofill::TestAutofillManagerInjectorIOS<TestAutofillManager>>(
         web_state_.get());
 
-    // Set the fake env used for testing errors.
-    profile2_ = TestProfileIOS::Builder().Build();
-    web::test::OverrideJavaScriptFeatures(
-        profile2_.get(), {web::FindInPageJavaScriptFeature::GetInstance()});
+    // Set up the fake WebState used for testing failure and snapshot scenarios.
     fake_web_state_ = std::make_unique<FakeWebStateForFailureTest>();
+    fake_web_state_->SetVisibleURL(GURL("http://example.com/"));
+    fake_web_state_->SetContentsMimeType("text/html");
+    SnapshotTabHelper::CreateForWebState(fake_web_state_.get());
+    SetCachedSnapshot(nil);
 
     // Set fake web frames managers for scenarios to simulate a state where
     // no frames are available from the manager which can be used for testing
@@ -308,6 +382,41 @@ class PageContextWrapperTest : public PlatformTest,
     page_helper_ = std::make_unique<PageContext>(
         &test_server_, &xorigin_test_server_, &xorigin_test_server_b_,
         &xorigin_test_server_c_);
+  }
+
+  // Configures `fake_web_state()`'s `SnapshotTabHelper` storage to
+  // asynchronously return `cached_snapshot`.
+  void SetCachedSnapshot(UIImage* cached_snapshot) {
+    id<SnapshotStorage> storage = OCMProtocolMock(@protocol(SnapshotStorage));
+    OCMStub([storage
+        retrieveImageWithSnapshotID:[OCMArg any]
+                       snapshotKind:SnapshotKindColor
+                         completion:[OCMArg checkWithBlock:^BOOL(
+                                                void (^completion)(UIImage*)) {
+                           base::SequencedTaskRunner::GetCurrentDefault()
+                               ->PostTask(
+                                   FROM_HERE,
+                                   base::BindOnce(completion, cached_snapshot));
+                           return YES;
+                         }]]);
+    SnapshotTabHelper::FromWebState(fake_web_state())
+        ->SetSnapshotStorage(storage);
+  }
+
+  // Runs `PageContextWrapper` with `shouldGetSnapshot` enabled and the given
+  // `policy`.
+  PageContextWrapperCallbackResponse RunSnapshotWithCachePolicy(
+      web::WebState* web_state,
+      PageContextWrapperConfig::SnapshotCachePolicy policy =
+          PageContextWrapperConfig::SnapshotCachePolicy::
+              kCaptureWhenVisibleOrUncached) {
+    return RunPageContextWrapperWithConfig(web_state,
+                                           PageContextWrapperConfigBuilder()
+                                               .SetSnapshotCachePolicy(policy)
+                                               .Build(),
+                                           ^(PageContextWrapper* wrapper) {
+                                             wrapper.shouldGetSnapshot = YES;
+                                           });
   }
 
   // Calls a script on the webview of the web_state() in the right ContentWorld.
@@ -376,20 +485,17 @@ class PageContextWrapperTest : public PlatformTest,
   PageContextExtractorJavaScriptFeature* extractor_feature() {
     return PageContextExtractorJavaScriptFeature::GetInstance();
   }
-
-  // Getters for fake env.
-  TestProfileIOS* profile2() { return profile2_.get(); }
-  web::FakeWebState* fake_web_state() { return fake_web_state_.get(); }
+  FakeWebStateForFailureTest* fake_web_state() { return fake_web_state_.get(); }
 
   void TearDown() override {
     autofill_manager_injector_.reset();
     PlatformTest::TearDown();
   }
 
+  base::test::ScopedFeatureList feature_list_;
   web::WebTaskEnvironment task_environment_;
   ScopedKeyWindow scoped_window_;
   web::ScopedTestingWebClient web_client_;
-  base::test::ScopedFeatureList feature_list_;
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<web::WebState> web_state_;
@@ -397,15 +503,12 @@ class PageContextWrapperTest : public PlatformTest,
   net::EmbeddedTestServer xorigin_test_server_;
   net::EmbeddedTestServer xorigin_test_server_b_;
   net::EmbeddedTestServer xorigin_test_server_c_;
-  id<SnapshotStorage> snapshot_storage_ = nil;
-  ControllableFakeSnapshotGeneratorDelegate* snapshot_delegate_ = nil;
-  std::unique_ptr<TestProfileIOS> profile2_;
-  std::unique_ptr<web::FakeWebState> fake_web_state_;
+  std::unique_ptr<FakeWebStateForFailureTest> fake_web_state_;
   std::unique_ptr<PageContext> page_helper_;
   std::unique_ptr<PrefService> prefs_;
   std::unique_ptr<autofill::TestAutofillClientIOS> autofill_client_;
   AutofillAgent* autofill_agent_;
-  std::unique_ptr<autofill::TestAutofillManagerInjector<TestAutofillManager>>
+  std::unique_ptr<autofill::TestAutofillManagerInjectorIOS<TestAutofillManager>>
       autofill_manager_injector_;
 };
 
@@ -561,6 +664,72 @@ TEST_P(PageContextWrapperTest, PopulatePageContext) {
             "Child frame 2 text");
 }
 
+// Tests that page content extraction pierces open Shadow DOM (including nested
+// shadow roots) for both inner text and annotated page content, while leaving
+// closed shadow roots untouched. Content inside an open shadow root is not
+// reflected by light-DOM APIs (Element.innerText / TreeWalker), so extraction
+// must explicitly traverse the shadow boundary; closed shadow roots are
+// inaccessible from script and must be excluded.
+// TODO(crbug.com/545131048): fails on iOS27 builders. Fix and re-enable.
+TEST_P(PageContextWrapperTest, DISABLED_PopulatePageContextWithShadowDom) {
+  auto page_structure =
+      HtmlPage("Shadow", RawHtml("<p>light-dom text</p>"
+                                 "<div id=\"open-host\" role=\"region\">"
+                                 "open host light text</div>"
+                                 "<div id=\"closed-host\"></div>"
+                                 "<div id=\"nested-host\"></div>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  // Attach the shadow roots after the page has loaded:
+  //  * an open shadow root, whose content must be extracted,
+  //  * a closed shadow root, whose content must never be extracted, and
+  //  * a nested open shadow root (a shadow host inside another shadow tree),
+  //    which must be traversed recursively.
+  web::test::ExecuteJavaScript(
+      @"const open = document.getElementById('open-host')."
+      @"attachShadow({mode: 'open'});"
+      @"open.innerHTML = 'direct shadow text<p>open shadow text</p>';"
+      @"const closed = document.getElementById('closed-host')."
+      @"attachShadow({mode: 'closed'});"
+      @"closed.innerHTML = '<p>closed shadow text</p>';"
+      @"const outer = document.getElementById('nested-host')."
+      @"attachShadow({mode: 'open'});"
+      @"outer.innerHTML = '<p>outer shadow text</p><div id=\"inner\"></div>';"
+      @"const inner = outer.querySelector('#inner')."
+      @"attachShadow({mode: 'open'});"
+      @"inner.innerHTML = '<p>inner shadow text</p>';",
+      web_state());
+
+  PageContextWrapperCallbackResponse response =
+      RunPageContextWrapper(web_state(), ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+        wrapper.shouldGetInnerText = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+
+  ASSERT_TRUE(page_context);
+  ASSERT_TRUE(page_context->has_inner_text());
+  ASSERT_TRUE(page_context->has_annotated_page_content());
+
+  // Inner text keeps the existing light DOM text first, then appends open
+  // shadow text in traversal order.
+  const auto& inner_text = page_context->inner_text();
+  EXPECT_EQ(inner_text,
+            "light-dom text\n\n\ndirect shadow text\n"
+            "open shadow text\nouter shadow text\ninner shadow text");
+
+  const auto& root_node = page_context->annotated_page_content().root_node();
+  std::vector<std::string> annotated_texts;
+  AppendAnnotatedText(root_node, annotated_texts);
+  EXPECT_THAT(annotated_texts, testing::ElementsAre(inner_text));
+}
+
 // Tests that the completion callback is called even when no async fields are
 // requested.
 TEST_P(PageContextWrapperTest, PopulatePageContext_NoFieldsRequested) {
@@ -644,6 +813,61 @@ TEST_P(PageContextWrapperTest, PopulatePageContextWithSnapshotVerification) {
 
   // Check if the data starts with the PNG header.
   const std::string png_header = "\x89PNG\r\n\x1a\n";
+  EXPECT_TRUE(base::StartsWith(decoded_screenshot_data, png_header));
+
+  // Verify that the decoded image is valid.
+  NSData* image_data = [NSData dataWithBytes:decoded_screenshot_data.data()
+                                      length:decoded_screenshot_data.size()];
+  UIImage* screenshot_image = [UIImage imageWithData:image_data];
+  ASSERT_TRUE(screenshot_image != nil);
+  EXPECT_GT(screenshot_image.size.width, 0);
+  EXPECT_GT(screenshot_image.size.height, 0);
+}
+
+// Tests that the visible web viewport rect properly insets by
+// adjustedContentInset, falls back to view bounds when insets are excessive,
+// and handles nil or empty views gracefully.
+TEST_P(PageContextWrapperTest, VisibleWebViewportRect) {
+  PageContextWrapper* wrapper =
+      [[PageContextWrapper alloc] initWithWebState:fake_web_state()
+                                completionCallback:base::DoNothing()];
+
+  // 1. When WebState has no view, returns CGRectZero.
+  EXPECT_TRUE(CGRectEqualToRect([wrapper visibleWebViewportRectForTesting],
+                                CGRectZero));
+
+  // 2. When view has empty bounds, returns CGRectZero.
+  UIView* empty_view = [[UIView alloc] initWithFrame:CGRectZero];
+  fake_web_state()->SetView(empty_view);
+  EXPECT_TRUE(CGRectEqualToRect([wrapper visibleWebViewportRectForTesting],
+                                CGRectZero));
+
+  // 3. When view has standard bounds without a web view proxy, returns view
+  // bounds.
+  CGRect bounds = CGRectMake(0, 0, 390, 844);
+  UIView* view = [[UIView alloc] initWithFrame:bounds];
+  fake_web_state()->SetView(view);
+  fake_web_state()->SetWebViewProxy(nil);
+  EXPECT_TRUE(
+      CGRectEqualToRect([wrapper visibleWebViewportRectForTesting], bounds));
+
+  // 4. When web view proxy provides adjustedContentInset, returns inset rect.
+  FakeCRWWebViewProxy* fake_proxy = [[FakeCRWWebViewProxy alloc] init];
+  FakeCRWWebViewScrollViewProxy* fake_scroll_proxy =
+      [[FakeCRWWebViewScrollViewProxy alloc] init];
+  fake_scroll_proxy.testContentInset = UIEdgeInsetsMake(116, 0, 34, 0);
+  fake_proxy.scrollViewProxy = fake_scroll_proxy;
+  fake_web_state()->SetWebViewProxy((id<CRWWebViewProxy>)fake_proxy);
+
+  CGRect expected_inset_rect = CGRectMake(0, 116, 390, 694);
+  EXPECT_TRUE(CGRectEqualToRect([wrapper visibleWebViewportRectForTesting],
+                                expected_inset_rect));
+
+  // 5. When adjustedContentInset is excessive (resulting in height <= 0),
+  // falls back to view bounds.
+  fake_scroll_proxy.testContentInset = UIEdgeInsetsMake(500, 0, 500, 0);
+  EXPECT_TRUE(
+      CGRectEqualToRect([wrapper visibleWebViewportRectForTesting], bounds));
 }
 
 // Tests that the page context can take a snapshot of the page with specified
@@ -957,43 +1181,89 @@ TEST_P(PageContextWrapperTest, PopulatePageContextWithAriaCustomFormControls) {
   }
 }
 
-// Tests that the wrapper records a screenshot failures.
+// Tests that the wrapper records a screenshot failure as blocking.
 TEST_P(PageContextWrapperTest, PopulatePageContext_SnapshotFailure) {
   base::HistogramTester histogram_tester;
 
-  auto page_structure = HtmlPage("", Paragraph("Hello"));
-  std::string main_html = page_helper_->Build(page_structure);
-  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
-                      test_server_.GetURL(kMainPagePath), web_state());
-
-  // Set the snapshot delegate to cause a failure.
-  snapshot_delegate_.canTakeSnapshot = NO;
+  fake_web_state()->WasShown();
+  fake_web_state()->SetCanTakeSnapshot(false);
 
   PageContextWrapperCallbackResponse captured_response =
-      RunPageContextWrapper(web_state(), ^(PageContextWrapper* wrapper) {
+      RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
         wrapper.shouldGetSnapshot = YES;
       });
 
-  // Verify that the callback was called successfully even without screenshot.
-  ASSERT_TRUE(captured_response.has_value());
-  EXPECT_FALSE(captured_response.value()->has_tab_screenshot());
+  // Verify that the callback was called with a screenshot error.
+  ASSERT_FALSE(captured_response.has_value());
+  EXPECT_EQ(captured_response.error(),
+            PageContextWrapperError::kScreenshotError);
 
   // Verify that the screenshot failure metric was logged.
   histogram_tester.ExpectTotalCount(
       "IOS.PageContext.Screenshot.Failure.Latency", 1);
+  histogram_tester.ExpectTotalCount("IOS.PageContext.Overall.Failure.Latency",
+                                    1);
 }
 
-// Tests that the wrapper correctly handles a failure in one of the async tasks.
+// Tests that `SnapshotCachePolicy` (`kUseCacheWhenHidden`,
+// `kCaptureWhenVisibleOrUncached`, and `kBypassCache`) controls snapshot
+// retrieval and capture for a hidden WebState.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_SnapshotCachePolicy_HiddenWebState) {
+  using Policy = PageContextWrapperConfig::SnapshotCachePolicy;
+  UIImage* live_image = UIImageWithSizeAndSolidColor(
+      {1, 1}, [UIColor colorWithRed:0.0 green:0.0 blue:1.0 alpha:1.0]);
+  UIImage* cached_image = UIImageWithSizeAndSolidColor(
+      {1, 1}, [UIColor colorWithRed:1.0 green:0.0 blue:1.0 alpha:1.0]);
+  std::string expected_live_screenshot = EncodeScreenshot(live_image);
+  std::string expected_cached_screenshot = EncodeScreenshot(cached_image);
+  ASSERT_NE(expected_live_screenshot, expected_cached_screenshot);
+
+  fake_web_state()->WasHidden();
+  fake_web_state()->SetCanTakeSnapshot(true);
+  fake_web_state()->SetSnapshot(live_image);
+
+  // Without a cached snapshot, `kUseCacheWhenHidden` fails without capturing a
+  // live snapshot, whereas `kCaptureWhenVisibleOrUncached` falls back to live
+  // capture.
+  PageContextWrapperCallbackResponse uncached_response =
+      RunSnapshotWithCachePolicy(fake_web_state(), Policy::kUseCacheWhenHidden);
+  ASSERT_FALSE(uncached_response.has_value());
+  EXPECT_EQ(uncached_response.error(),
+            PageContextWrapperError::kScreenshotError);
+
+  PageContextWrapperCallbackResponse fallback_response =
+      RunSnapshotWithCachePolicy(fake_web_state());
+  ASSERT_TRUE(fallback_response.has_value());
+  EXPECT_EQ(fallback_response.value()->tab_screenshot(),
+            expected_live_screenshot);
+
+  // With a cached snapshot, `kUseCacheWhenHidden` and
+  // `kCaptureWhenVisibleOrUncached` return the cached snapshot, whereas
+  // `kBypassCache` captures a fresh live snapshot.
+  SetCachedSnapshot(cached_image);
+
+  PageContextWrapperCallbackResponse cached_when_hidden_response =
+      RunSnapshotWithCachePolicy(fake_web_state(), Policy::kUseCacheWhenHidden);
+  ASSERT_TRUE(cached_when_hidden_response.has_value());
+  EXPECT_EQ(cached_when_hidden_response.value()->tab_screenshot(),
+            expected_cached_screenshot);
+
+  PageContextWrapperCallbackResponse cached_default_response =
+      RunSnapshotWithCachePolicy(fake_web_state());
+  ASSERT_TRUE(cached_default_response.has_value());
+  EXPECT_EQ(cached_default_response.value()->tab_screenshot(),
+            expected_cached_screenshot);
+
+  PageContextWrapperCallbackResponse bypass_cache_response =
+      RunSnapshotWithCachePolicy(fake_web_state(), Policy::kBypassCache);
+  ASSERT_TRUE(bypass_cache_response.has_value());
+  EXPECT_EQ(bypass_cache_response.value()->tab_screenshot(),
+            expected_live_screenshot);
+}
+
+// Tests that the wrapper correctly handles a failure in inner text generation.
 TEST_P(PageContextWrapperTest, PopulatePageContext_InnerTextFailure) {
-  auto page_structure = HtmlPage("", Paragraph("Hello"));
-  std::string main_html = page_helper_->Build(page_structure);
-  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
-                      test_server_.GetURL(kMainPagePath), web_state());
-
-  // Use a fake web state to cause inner text extraction to fail.
-  fake_web_state()->SetVisibleURL(GURL("http://example.com/"));
-  fake_web_state()->SetContentsMimeType("text/html");
-
   PageContextWrapperCallbackResponse captured_response =
       RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
         wrapper.shouldGetInnerText = YES;
@@ -1003,26 +1273,6 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_InnerTextFailure) {
   ASSERT_FALSE(captured_response.has_value());
   EXPECT_EQ(captured_response.error(),
             PageContextWrapperError::kInnerTextError);
-}
-
-// Tests that the wrapper correctly handles a snapshot failure as non-blocking.
-TEST_P(PageContextWrapperTest, PopulatePageContext_SnapshotFailureNonBlocking) {
-  auto page_structure = HtmlPage("", Paragraph("Hello"));
-  std::string main_html = page_helper_->Build(page_structure);
-  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
-                      test_server_.GetURL(kMainPagePath), web_state());
-
-  // Set the snapshot delegate to cause a failure.
-  snapshot_delegate_.canTakeSnapshot = NO;
-
-  PageContextWrapperCallbackResponse captured_response =
-      RunPageContextWrapper(web_state(), ^(PageContextWrapper* wrapper) {
-        wrapper.shouldGetSnapshot = YES;
-      });
-
-  // Verify that the callback was called successfully even without screenshot.
-  ASSERT_TRUE(captured_response.has_value());
-  EXPECT_FALSE(captured_response.value()->has_tab_screenshot());
 }
 
 // Tests that the wrapper correctly handles a force detach signal from the
@@ -1076,9 +1326,6 @@ TEST_P(PageContextWrapperTest, TimeoutVerification) {
       },
       base::Milliseconds(5));
 
-  // Fast forward time past the timeout duration to trigger the timeout.
-  // task_environment_.FastForwardBy(base::Milliseconds(150));
-
   // Verify that the callback was called with a timeout error.
   ASSERT_FALSE(captured_response.has_value());
   EXPECT_EQ(captured_response.error(), PageContextWrapperError::kTimeout);
@@ -1086,9 +1333,6 @@ TEST_P(PageContextWrapperTest, TimeoutVerification) {
 
 // Tests that the wrapper correctly handles a failure in PDF generation.
 TEST_P(PageContextWrapperTest, PopulatePageContext_PDFGenerationFailure) {
-  fake_web_state()->SetVisibleURL(GURL("http://example.com/"));
-  fake_web_state()->SetContentsMimeType("text/html");
-
   PageContextWrapperCallbackResponse captured_response =
       RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
         wrapper.shouldGetFullPagePDF = YES;
@@ -1101,9 +1345,6 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_PDFGenerationFailure) {
 
 // Tests that the wrapper correctly handles a failure in APC generation.
 TEST_P(PageContextWrapperTest, PopulatePageContext_APCGenerationFailure) {
-  fake_web_state()->SetVisibleURL(GURL("http://example.com/"));
-  fake_web_state()->SetContentsMimeType("text/html");
-
   PageContextWrapperCallbackResponse captured_response =
       RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
         wrapper.shouldGetAnnotatedPageContent = YES;
@@ -1117,7 +1358,6 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_APCGenerationFailure) {
 // Tests that the wrapper correctly handles an unextractable page.
 TEST_P(PageContextWrapperTest, PopulatePageContext_NotExtractable) {
   fake_web_state()->SetVisibleURL(GURL("chrome://version"));
-  fake_web_state()->SetContentsMimeType("text/html");
 
   PageContextWrapperCallbackResponse captured_response =
       RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
@@ -1166,10 +1406,10 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_UnsafePageBlocked) {
 }
 
 // Tests that the wrapper correctly handles an unextractable page due to MIME
-// type (PDF).
-TEST_P(PageContextWrapperTest, PopulatePageContext_NotExtractable_PDF) {
-  fake_web_state()->SetVisibleURL(GURL("https://example.com/file.pdf"));
-  fake_web_state()->SetContentsMimeType("application/pdf");
+// type (zip).
+TEST_P(PageContextWrapperTest, PopulatePageContext_NotExtractable_Zip) {
+  fake_web_state()->SetVisibleURL(GURL("https://example.com/file.zip"));
+  fake_web_state()->SetContentsMimeType("application/zip");
 
   PageContextWrapperCallbackResponse captured_response =
       RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
@@ -1180,22 +1420,6 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_NotExtractable_PDF) {
   ASSERT_FALSE(captured_response.has_value());
   EXPECT_EQ(captured_response.error(),
             PageContextWrapperError::kPageNotExtractableError);
-}
-
-// Tests that the wrapper correctly handles a failure in inner text generation.
-TEST_P(PageContextWrapperTest, PopulatePageContext_InnerTextGenerationFailure) {
-  fake_web_state()->SetVisibleURL(GURL("http://example.com/"));
-  fake_web_state()->SetContentsMimeType("text/html");
-
-  PageContextWrapperCallbackResponse captured_response =
-      RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
-        wrapper.shouldGetInnerText = YES;
-      });
-
-  // Verify that the callback was called with an inner text error.
-  ASSERT_FALSE(captured_response.has_value());
-  EXPECT_EQ(captured_response.error(),
-            PageContextWrapperError::kInnerTextError);
 }
 
 // Tests that extraction works across origins.
@@ -1483,35 +1707,18 @@ TEST_P(PageContextWrapperTest,
 // snapshot update.
 TEST_P(PageContextWrapperTest,
        PopulatePageContext_WebStateDestroyedDuringForcedSnapshot) {
-  web::test::LoadHtml(@"<html></html>", GURL("http://example.com/"),
-                      web_state());
+  fake_web_state()->WasHidden();
 
-  auto* web_state_ptr = &web_state_;
-  auto* autofill_injector_ptr = &autofill_manager_injector_;
   PageContextWrapperCallbackResponse captured_response =
-      RunPageContextWrapper(web_state(), ^(PageContextWrapper* wrapper) {
+      RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
         wrapper.shouldGetSnapshot = YES;
-        wrapper.shouldForceUpdateMissingSnapshots = YES;
 
-        // Simulate a snapshot failure, which will trigger a forced update.
-        snapshot_delegate_.canTakeSnapshot = NO;
-
-        // Make the web_state hidden to trigger the async snapshot retrieval
-        // path.
-        web_state()->WasHidden();
-
-        // Destroy the web state immediately after the async work has started
-        // (by posting a task to run after the wrapper's method returns).
+        // Destroy the WebState immediately after async snapshot retrieval has
+        // started.
         base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-            FROM_HERE,
-            base::BindOnce(
-                [](std::unique_ptr<autofill::TestAutofillManagerInjector<
-                       TestAutofillManager>>* injector,
-                   std::unique_ptr<web::WebState>* web_state) {
-                  injector->reset();
-                  web_state->reset();
-                },
-                autofill_injector_ptr, web_state_ptr));
+            FROM_HERE, base::BindOnce(^{
+              fake_web_state_.reset();
+            }));
       });
 
   // Verify that the callback was called with a generic error because the
@@ -1522,17 +1729,15 @@ TEST_P(PageContextWrapperTest,
 
 // Tests that the wrapper correctly handles a destroyed WebState.
 TEST_P(PageContextWrapperTest, PopulatePageContext_WebStateDestroyed) {
-  auto* autofill_injector_ptr = &autofill_manager_injector_;
   PageContextWrapperCallbackResponse captured_response =
-      RunPageContextWrapper(web_state(), ^(PageContextWrapper* wrapper) {
+      RunPageContextWrapper(fake_web_state(), ^(PageContextWrapper* wrapper) {
         wrapper.shouldGetSnapshot = YES;
         wrapper.shouldGetAnnotatedPageContent = YES;
         wrapper.shouldGetInnerText = YES;
         wrapper.shouldGetFullPagePDF = YES;
 
         // Destroy the web state after initializing the wrapper.
-        autofill_injector_ptr->reset();
-        web_state_.reset();
+        fake_web_state_.reset();
       });
 
   // Verify that the callback was called with a generic error because the
@@ -1886,8 +2091,9 @@ TEST_P(PageContextWrapperTest,
 
   const auto& annotated_page_content = page_context->annotated_page_content();
   const auto& root_node = annotated_page_content.root_node();
-  // Expect text node, iframe_a node, and a placeholder for iframe_b.
-  ASSERT_EQ(root_node.children_nodes_size(), 3);
+  // Expect text node and iframe_a node. Orphan iframe_b is dropped to prevent
+  // duplicate node_id collisions.
+  ASSERT_EQ(root_node.children_nodes_size(), 2);
 
   const optimization_guide::proto::ContentNode* text_node = nullptr;
   const optimization_guide::proto::ContentNode* iframe_a_node = nullptr;
@@ -1908,7 +2114,7 @@ TEST_P(PageContextWrapperTest,
 
   ASSERT_TRUE(text_node);
   ASSERT_TRUE(iframe_a_node);
-  ASSERT_TRUE(iframe_b_node);
+  EXPECT_FALSE(iframe_b_node);
 
   // Verify main frame text.
   EXPECT_EQ(text_node->content_attributes().text_data().text_content(),
@@ -1927,27 +2133,11 @@ TEST_P(PageContextWrapperTest,
   const auto& iframe_a_text_node = iframe_a_root_node.children_nodes(0);
   EXPECT_EQ(iframe_a_text_node.content_attributes().text_data().text_content(),
             "Child frame cross-origin text A");
-
-  // Verify iframe B is nested inside the main frame content instead of frame A
-  // because the frame B was left orphan by the grafter.
-  EXPECT_EQ(iframe_b_node->content_attributes().attribute_type(),
-            optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME);
-  const auto& iframe_b_frame_data =
-      iframe_b_node->content_attributes().iframe_data().frame_data();
-  EXPECT_EQ(iframe_b_frame_data.title(), "Child Cross Origin B");
-  EXPECT_EQ(iframe_b_frame_data.url(), iframe_b_url.spec());
-  ASSERT_EQ(iframe_b_node->children_nodes_size(), 1);
-  const auto& iframe_b_root_node = iframe_b_node->children_nodes(0);
-  ASSERT_EQ(iframe_b_root_node.children_nodes_size(), 1);
-  const auto& iframe_b_text_node = iframe_b_root_node.children_nodes(0);
-  EXPECT_EQ(iframe_b_text_node.content_attributes().text_data().text_content(),
-            "Child frame cross-origin text B");
 }
 
 // Tests that extraction with frame grafting works across origins with a complex
 // frame structure. Remote frame registration is disabled for Iframe D to make
-// it an unregistered frame that should be directly grafted under the main
-// frame.
+// it an unregistered frame that should be dropped.
 //      +----------------------------------+
 //      | Main page (Origin M)             |  - Main frame (Origin M)
 //      |                                  |    |
@@ -2088,7 +2278,9 @@ TEST_P(PageContextWrapperTest,
 
   const auto& annotated_page_content = page_context->annotated_page_content();
   const auto& root_node = annotated_page_content.root_node();
-  ASSERT_EQ(root_node.children_nodes_size(), 4);
+  // Expect 3 children: main text node, iframe_a node, and iframe_c node.
+  // Orphan iframe_d is dropped to prevent duplicate node_id collisions.
+  ASSERT_EQ(root_node.children_nodes_size(), 3);
 
   const optimization_guide::proto::ContentNode* iframe_a_node = nullptr;
   const optimization_guide::proto::ContentNode* iframe_c_node = nullptr;
@@ -2216,11 +2408,11 @@ TEST_P(PageContextWrapperTest, PopulatePageContextWithRegistrationFailure) {
   // We expect:
   // 1. Main Text.
   // 2. Empty placeholder node (from main frame's iframe tag).
-  // 3. Child frame content node (orphan).
-  ASSERT_EQ(root_node.children_nodes_size(), 3);
+  // Orphan/unregistered child frame is dropped from the tree.
+  ASSERT_EQ(root_node.children_nodes_size(), 2);
 
-  // Verify that the content of the unregistered frame was still added despite
-  // the timeout in the default location (as a children of the root node).
+  // Verify that the content of the unregistered frame was dropped rather than
+  // appended directly to the root node.
   bool found_unregistered_frame_text = false;
   for (const auto& node : root_node.children_nodes()) {
     if (node.content_attributes().has_iframe_data()) {
@@ -2236,7 +2428,7 @@ TEST_P(PageContextWrapperTest, PopulatePageContextWithRegistrationFailure) {
       }
     }
   }
-  EXPECT_TRUE(found_unregistered_frame_text);
+  EXPECT_FALSE(found_unregistered_frame_text);
 }
 
 // Tests extraction on a complex page with Rich Extraction.
@@ -2392,6 +2584,7 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_RichExtraction) {
         p_text.content_attributes().text_data().text_style().has_emphasis());
     EXPECT_EQ(p_text.content_attributes().text_data().text_style().text_size(),
               optimization_guide::proto::TEXT_SIZE_L);
+    EXPECT_FALSE(p_text.content_attributes().has_geometry());
   }
 
   // 1.2 Image
@@ -2440,6 +2633,7 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_RichExtraction) {
       a_text.content_attributes().text_data().text_style().has_emphasis());
   EXPECT_EQ(a_text.content_attributes().text_data().text_style().text_size(),
             optimization_guide::proto::TEXT_SIZE_M_DEFAULT);
+  EXPECT_FALSE(a_text.content_attributes().has_geometry());
 
   // ---------------------------------------------------------
   // Section 2: Cross-Origin Iframe (Grafted)
@@ -2779,6 +2973,173 @@ TEST_P(PageContextWrapperTest,
   EXPECT_EQ(
       inner_p.children_nodes(0).content_attributes().text_data().text_content(),
       "Child frame 3 text");
+}
+
+// Tests that when populating for rich extraction, a valid child frame is
+// grafted into the main frame, while a child frame without a LocalFrameToken
+// (std::nullopt) is dropped and not appended to the root node.
+TEST_P(PageContextWrapperTest,
+       PopulateForRichExtraction_ChildFrameWithoutTokenDropped) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder().SetUseRichExtraction(true).Build();
+
+  PageContextWrapper* wrapper =
+      [[PageContextWrapper alloc] initWithWebState:web_state()
+                                            config:config
+                                completionCallback:base::DoNothing()];
+
+  const std::string valid_child_remote_id = std::string(32, 'a');
+  const std::string valid_child_local_id = std::string(32, 'b');
+  autofill::LocalFrameToken main_token(base::UnguessableToken::Create());
+  autofill::RemoteFrameToken valid_child_remote_token(
+      *autofill::DeserializeJavaScriptFrameId(valid_child_remote_id));
+  autofill::LocalFrameToken valid_child_local_token(
+      *autofill::DeserializeJavaScriptFrameId(valid_child_local_id));
+
+  // Main Frame: Contains a text paragraph and an iframe placeholder.
+  base::DictValue main_dict = base::test::ParseJsonDict(base::StringPrintf(
+      R"({
+        "rootNode": {
+          "contentAttributes": {
+            "domNodeId": 1,
+            "attributeType": %d
+          },
+          "childrenNodes": [
+            {
+              "contentAttributes": {
+                "domNodeId": 2,
+                "attributeType": %d
+              },
+              "childrenNodes": [{
+                "contentAttributes": {
+                  "domNodeId": 3,
+                  "attributeType": %d,
+                  "textInfo": { "textContent": "Main frame text" }
+                }
+              }]
+            },
+            {
+              "contentAttributes": {
+                "domNodeId": 4,
+                "attributeType": %d,
+                "iframeData": {
+                  "remoteFrameToken": {
+                    "value": "%s"
+                  },
+                  "url": "https://valid.example.com/"
+                }
+              }
+            }
+          ]
+        }
+      })",
+      optimization_guide::proto::CONTENT_ATTRIBUTE_ROOT,
+      optimization_guide::proto::CONTENT_ATTRIBUTE_PARAGRAPH,
+      optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT,
+      optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME,
+      valid_child_remote_id.c_str()));
+  [wrapper populateForRichExtractionWithValue:main_dict
+                               securityOrigin:url::Origin()
+                                  isMainFrame:YES
+                              localFrameToken:main_token];
+
+  // Working Child Frame (with a valid LocalFrameToken).
+  base::DictValue valid_child_dict =
+      base::test::ParseJsonDict(base::StringPrintf(
+          R"({
+    "rootNode": {
+      "contentAttributes": {
+        "domNodeId": 1,
+        "attributeType": %d
+      },
+      "childrenNodes": [{
+        "contentAttributes": {
+          "domNodeId": 2,
+          "attributeType": %d,
+          "textInfo": { "textContent": "Valid child text" }
+        }
+      }]
+    }
+  })",
+          optimization_guide::proto::CONTENT_ATTRIBUTE_ROOT,
+          optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT));
+  [wrapper populateForRichExtractionWithValue:valid_child_dict
+                               securityOrigin:url::Origin::Create(GURL(
+                                                  "https://valid.example.com/"))
+                                  isMainFrame:NO
+                              localFrameToken:valid_child_local_token];
+
+  // Null-Token Child Frame (with std::nullopt).
+  base::DictValue null_token_child_dict =
+      base::test::ParseJsonDict(base::StringPrintf(
+          R"({
+    "rootNode": {
+      "contentAttributes": {
+        "domNodeId": 1,
+        "attributeType": %d
+      },
+      "childrenNodes": [{
+        "contentAttributes": {
+          "domNodeId": 2,
+          "attributeType": %d,
+          "textInfo": { "textContent": "Null token frame text" }
+        }
+      }]
+    }
+  })",
+          optimization_guide::proto::CONTENT_ATTRIBUTE_ROOT,
+          optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT));
+  [wrapper populateForRichExtractionWithValue:null_token_child_dict
+                               securityOrigin:url::Origin::Create(GURL(
+                                                  "https://null.example.com/"))
+                                  isMainFrame:NO
+                              localFrameToken:std::nullopt];
+
+  // Resolve frame grafting.
+  autofill::ChildFrameRegistrar* registrar =
+      autofill::ChildFrameRegistrar::GetOrCreateForWebState(web_state());
+  ASSERT_TRUE(registrar);
+  registrar->RegisterMapping(valid_child_remote_token, valid_child_local_token);
+
+  optimization_guide::proto::AnnotatedPageContent* apc =
+      [wrapper rootAPCNodeForTesting];
+  ASSERT_TRUE(apc);
+
+  ResolveCrossSiteFrameContent(
+      [wrapper grafterForTesting], registrar,
+      /*include_same_site_only=*/false, apc,
+      web_state()->GetWebFramesManager(web::ContentWorld::kPageContentWorld));
+
+  // Verify the entire tree makeup:
+  // Root contains exactly 2 children: (1) Main text paragraph, (2) Grafted
+  // iframe. The null-token frame is completely dropped and does not appear in
+  // the tree.
+  const auto& root_node = apc->root_node();
+  ASSERT_EQ(root_node.children_nodes_size(), 2);
+
+  // Child 0: Main frame paragraph
+  EXPECT_EQ(root_node.children_nodes(0)
+                .children_nodes(0)
+                .content_attributes()
+                .text_data()
+                .text_content(),
+            "Main frame text");
+
+  // Child 1: Valid grafted iframe
+  const auto& iframe_node = root_node.children_nodes(1);
+  EXPECT_EQ(iframe_node.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME);
+  ASSERT_EQ(iframe_node.children_nodes_size(), 1);
+  EXPECT_EQ(iframe_node.children_nodes(0)
+                .children_nodes(0)
+                .content_attributes()
+                .text_data()
+                .text_content(),
+            "Valid child text");
 }
 
 // Tests that the ancestor mapping is correct.
@@ -4042,14 +4403,16 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_GenericContainer_TopLayer) {
   // The root node children are usually the un-flattened elements.
   for (const auto& child : root_node.children_nodes()) {
     if (child.content_attributes().attribute_type() ==
-        optimization_guide::proto::CONTENT_ATTRIBUTE_CONTAINER) {
+            optimization_guide::proto::CONTENT_ATTRIBUTE_CONTAINER ||
+        child.content_attributes().attribute_type() ==
+            optimization_guide::proto::CONTENT_ATTRIBUTE_DIALOG_MODAL) {
       target_node = &child;
       break;
     }
   }
 
   ASSERT_TRUE(target_node)
-      << "Dialog node not found as a container in APC tree";
+      << "Dialog node not found as a dialog modal/container in APC tree";
 
   ASSERT_EQ(target_node->children_nodes_size(), 1);
   const auto& text_node = target_node->children_nodes(0);
@@ -4347,6 +4710,133 @@ TEST_P(PageContextWrapperTest,
             "MY TABLE NAME");
 }
 
+// Tests that elements with CSS table display properties (display: table,
+// display: table-row, display: table-cell, display: table-header-group) are
+// extracted as TABLE, TABLE_ROW, and TABLE_CELL nodes.
+TEST_P(PageContextWrapperTest, PopulatePageContext_RichExtraction_CssTable) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  auto page_structure = HtmlPage(
+      "CssTable",
+      RawHtml("<div style=\"display: table;\">"
+              "  <div style=\"display: table-caption;\">CSS Table Caption</div>"
+              "  <div style=\"display: table-header-group;\">"
+              "    <div style=\"display: table-row;\">"
+              "      <div style=\"display: table-cell;\">Header Cell</div>"
+              "    </div>"
+              "  </div>"
+              "  <div style=\"display: table-row;\">"
+              "    <div style=\"display: table-cell;\">Body Cell</div>"
+              "  </div>"
+              "</div>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfigBuilder builder;
+  builder.SetUseRefactoredExtractor(IsRefactored());
+  builder.SetUseRichExtraction(true);
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), builder.Build(), ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  ASSERT_EQ(root_node.children_nodes_size(), 1);
+  const auto& table_node = root_node.children_nodes(0);
+  EXPECT_EQ(table_node.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE);
+  EXPECT_TRUE(table_node.content_attributes().has_table_data());
+  EXPECT_EQ(table_node.content_attributes().table_data().table_name(),
+            "CSS Table Caption");
+
+  bool found_caption_text = false;
+  bool found_header_row = false;
+  bool found_body_row = false;
+
+  for (const auto& child : table_node.children_nodes()) {
+    if (child.content_attributes().attribute_type() ==
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT &&
+        child.content_attributes().text_data().text_content() ==
+            "CSS Table Caption") {
+      found_caption_text = true;
+    } else if (child.content_attributes().attribute_type() ==
+               optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE_ROW) {
+      if (child.content_attributes().table_row_data().type() ==
+          optimization_guide::proto::TABLE_ROW_TYPE_HEADER) {
+        found_header_row = true;
+        ASSERT_GE(child.children_nodes_size(), 1);
+        EXPECT_EQ(child.children_nodes(0).content_attributes().attribute_type(),
+                  optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE_CELL);
+      } else if (child.content_attributes().table_row_data().type() ==
+                 optimization_guide::proto::TABLE_ROW_TYPE_BODY) {
+        found_body_row = true;
+        ASSERT_GE(child.children_nodes_size(), 1);
+        EXPECT_EQ(child.children_nodes(0).content_attributes().attribute_type(),
+                  optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE_CELL);
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_caption_text);
+  EXPECT_TRUE(found_header_row);
+  EXPECT_TRUE(found_body_row);
+}
+
+// Tests that elements with ARIA table roles (role="table", role="row",
+// role="cell") are extracted as TABLE structures.
+TEST_P(PageContextWrapperTest, PopulatePageContext_RichExtraction_AriaTable) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  auto page_structure =
+      HtmlPage("AriaTable", RawHtml("<div role=\"table\">"
+                                    "  <div role=\"row\">"
+                                    "    <div role=\"cell\">Aria Cell</div>"
+                                    "  </div>"
+                                    "</div>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfigBuilder builder;
+  builder.SetUseRefactoredExtractor(IsRefactored());
+  builder.SetUseRichExtraction(true);
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), builder.Build(), ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  ASSERT_EQ(root_node.children_nodes_size(), 1);
+  const auto& table_node = root_node.children_nodes(0);
+  EXPECT_EQ(table_node.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE);
+
+  ASSERT_EQ(table_node.children_nodes_size(), 1);
+  const auto& row_node = table_node.children_nodes(0);
+  EXPECT_EQ(row_node.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE_ROW);
+
+  ASSERT_EQ(row_node.children_nodes_size(), 1);
+  const auto& cell_node = row_node.children_nodes(0);
+  EXPECT_EQ(cell_node.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TABLE_CELL);
+}
+
 // Tests the extraction of form control attributes (input, textarea, select,
 // button).
 TEST_P(PageContextWrapperTest,
@@ -4600,9 +5090,10 @@ TEST_P(PageContextWrapperTest,
       input_node.content_attributes().form_control_data();
 
   // Should be identified as a password due to redaction decision
-  // REDACTED_HAS_BEEN_PASSWORD (2).
+  // REDACTED_CUSTOM_PASSWORD_CSS (6).
   EXPECT_EQ(form_control_data.redaction_decision(),
-            static_cast<optimization_guide::proto::RedactionDecision>(2));
+            optimization_guide::proto::
+                REDACTION_DECISION_REDACTED_CUSTOM_PASSWORD_CSS);
 
   // The value should be empty because it was redacted.
   EXPECT_FALSE(form_control_data.has_field_value());
@@ -4659,8 +5150,75 @@ TEST_P(PageContextWrapperTest,
 
   // Based on JS masking heuristic, this should be redacted.
   EXPECT_EQ(form_control_data.redaction_decision(),
-            static_cast<optimization_guide::proto::RedactionDecision>(2));
+            optimization_guide::proto::
+                REDACTION_DECISION_REDACTED_CUSTOM_PASSWORD_JS);
   EXPECT_EQ(form_control_data.field_value(), "");
+}
+
+// Tests that a password field with OTP attributes (e.g., name="otp",
+// autocomplete="one-time-code") is prioritized and redacted as a password
+// rather than an OTP field.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_PasswordOverOtpPriority) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kPageContextScreenshotPasswordRedaction,
+                            kPageContextAutofillOtpRedactions},
+      /*disabled_features=*/{});
+
+  auto page_structure = HtmlPage(
+      "PasswordOverOtp", RawHtml("<html><body>"
+                                 "<form>"
+                                 "<input type='password' name='otp_code' "
+                                 "autocomplete='one-time-code' value='123456'>"
+                                 "</form>"
+                                 "</body></html>"));
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetExtractAutofillOtpRedactions(true)
+          .SetExtractPasswordScreenshotRedactions(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+
+  ASSERT_TRUE(page_context);
+  ASSERT_TRUE(page_context->has_annotated_page_content());
+
+  const auto& annotated_page_content = page_context->annotated_page_content();
+  const auto& root_node = annotated_page_content.root_node();
+
+  ASSERT_EQ(root_node.children_nodes_size(), 1);
+  const auto& form_node = root_node.children_nodes(0);
+  ASSERT_EQ(form_node.children_nodes_size(), 1);
+  const auto& input_node = form_node.children_nodes(0);
+
+  EXPECT_TRUE(input_node.content_attributes().has_form_control_data());
+  const auto& form_control_data =
+      input_node.content_attributes().form_control_data();
+
+  // The field should be redacted with password priority, not OTP.
+  EXPECT_EQ(
+      form_control_data.redaction_decision(),
+      optimization_guide::proto::REDACTION_DECISION_REDACTED_HAS_BEEN_PASSWORD);
+  EXPECT_EQ(form_control_data.field_value(), "");
+  EXPECT_EQ(form_control_data.form_control_type(),
+            optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_PASSWORD);
 }
 
 // Tests that Autofill metadata is correctly identified and populated in the
@@ -5374,6 +5932,7 @@ TEST_P(PageContextWrapperTest,
               "<div tabindex='-1' id='tabindex_minus_1'>Tab Index -1</div>"
               "<div onmousedown='void(0)' id='onmousedown'>Mouse Down</div>"
               "<div onmouseover='void(0)' id='onmouseover'>Mouse Over</div>"
+              "<div onmouseenter='void(0)' id='onmouseenter'>Mouse Enter</div>"
               "<div onkeydown='void(0)' id='onkeydown'>Key Down</div>"
               "<div aria-haspopup='true' id='aria_haspopup'>Has Popup</div>"
               "<div aria-expanded='true' id='aria_expanded_true'>Expanded "
@@ -5402,7 +5961,7 @@ TEST_P(PageContextWrapperTest,
   ASSERT_TRUE(page_context);
   const auto& root = page_context->annotated_page_content().root_node();
 
-  ASSERT_EQ(15, root.children_nodes_size());
+  ASSERT_EQ(16, root.children_nodes_size());
 
   // 1. Button (CLICKABILITY_REASON_CLICKABLE_CONTROL).
   const auto& btn = root.children_nodes(0);
@@ -5489,32 +6048,48 @@ TEST_P(PageContextWrapperTest,
       testing::Contains(
           optimization_guide::proto::CLICKABILITY_REASON_MOUSE_CLICK));
 
-  // 11. Mouse Over (CLICKABILITY_REASON_MOUSE_HOVER).
+  // 11. Mouse Over (CLICKABILITY_REASON_MOUSE_OVER).
   const auto& mouse_over = root.children_nodes(10);
   EXPECT_TRUE(mouse_over.content_attributes().has_interaction_info());
   EXPECT_THAT(
       mouse_over.content_attributes().interaction_info().clickability_reasons(),
-      testing::Contains(
-          optimization_guide::proto::CLICKABILITY_REASON_MOUSE_HOVER));
+      testing::AllOf(
+          testing::Contains(
+              optimization_guide::proto::CLICKABILITY_REASON_MOUSE_OVER),
+          testing::Not(testing::Contains(
+              optimization_guide::proto::CLICKABILITY_REASON_MOUSE_HOVER))));
 
-  // 12. Key Down (CLICKABILITY_REASON_KEY_EVENTS).
-  const auto& key_down = root.children_nodes(11);
+  // 12. Mouse Enter (CLICKABILITY_REASON_MOUSE_ENTER).
+  const auto& mouse_enter = root.children_nodes(11);
+  EXPECT_TRUE(mouse_enter.content_attributes().has_interaction_info());
+  EXPECT_THAT(
+      mouse_enter.content_attributes()
+          .interaction_info()
+          .clickability_reasons(),
+      testing::AllOf(
+          testing::Contains(
+              optimization_guide::proto::CLICKABILITY_REASON_MOUSE_ENTER),
+          testing::Not(testing::Contains(
+              optimization_guide::proto::CLICKABILITY_REASON_MOUSE_HOVER))));
+
+  // 13. Key Down (CLICKABILITY_REASON_KEY_EVENTS).
+  const auto& key_down = root.children_nodes(12);
   EXPECT_TRUE(key_down.content_attributes().has_interaction_info());
   EXPECT_THAT(
       key_down.content_attributes().interaction_info().clickability_reasons(),
       testing::Contains(
           optimization_guide::proto::CLICKABILITY_REASON_KEY_EVENTS));
 
-  // 13. Aria Has Popup (CLICKABILITY_REASON_ARIA_HAS_POPUP).
-  const auto& has_popup = root.children_nodes(12);
+  // 14. Aria Has Popup (CLICKABILITY_REASON_ARIA_HAS_POPUP).
+  const auto& has_popup = root.children_nodes(13);
   EXPECT_TRUE(has_popup.content_attributes().has_interaction_info());
   EXPECT_THAT(
       has_popup.content_attributes().interaction_info().clickability_reasons(),
       testing::Contains(
           optimization_guide::proto::CLICKABILITY_REASON_ARIA_HAS_POPUP));
 
-  // 14. Aria Expanded True (CLICKABILITY_REASON_ARIA_EXPANDED_TRUE).
-  const auto& expanded_true = root.children_nodes(13);
+  // 15. Aria Expanded True (CLICKABILITY_REASON_ARIA_EXPANDED_TRUE).
+  const auto& expanded_true = root.children_nodes(14);
   EXPECT_TRUE(expanded_true.content_attributes().has_interaction_info());
   EXPECT_THAT(
       expanded_true.content_attributes()
@@ -5523,8 +6098,8 @@ TEST_P(PageContextWrapperTest,
       testing::Contains(
           optimization_guide::proto::CLICKABILITY_REASON_ARIA_EXPANDED_TRUE));
 
-  // 15. Aria Expanded False (CLICKABILITY_REASON_ARIA_EXPANDED_FALSE).
-  const auto& expanded_false = root.children_nodes(14);
+  // 16. Aria Expanded False (CLICKABILITY_REASON_ARIA_EXPANDED_FALSE).
+  const auto& expanded_false = root.children_nodes(15);
   EXPECT_TRUE(expanded_false.content_attributes().has_interaction_info());
   EXPECT_THAT(
       expanded_false.content_attributes()
@@ -6257,16 +6832,17 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_AriaRole_ActionableMode) {
   ASSERT_EQ(root_node.children_nodes_size(), 3);
 
   // Button -> AX_ROLE_BUTTON.
+  EXPECT_TRUE(root_node.children_nodes(0).content_attributes().has_aria_role());
   EXPECT_EQ(root_node.children_nodes(0).content_attributes().aria_role(),
             optimization_guide::proto::AX_ROLE_BUTTON);
 
-  // Unknown Role -> AX_ROLE_UNKNOWN. Node is preserved due to tabindex.
-  EXPECT_EQ(root_node.children_nodes(1).content_attributes().aria_role(),
-            optimization_guide::proto::AX_ROLE_UNKNOWN);
-
-  // No Role -> AX_ROLE_UNKNOWN. Node is preserved due to tabindex.
-  EXPECT_EQ(root_node.children_nodes(2).content_attributes().aria_role(),
-            optimization_guide::proto::AX_ROLE_UNKNOWN);
+  // Unknown and missing roles leave the field unset. Check presence because
+  // the proto getter returns AX_ROLE_NONE for an unset field. Both nodes are
+  // preserved due to tabindex.
+  EXPECT_FALSE(
+      root_node.children_nodes(1).content_attributes().has_aria_role());
+  EXPECT_FALSE(
+      root_node.children_nodes(2).content_attributes().has_aria_role());
 }
 
 // Tests extraction of geometry for fragmented elements (e.g. multi-line text).
@@ -6626,13 +7202,15 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_ApcV2_Geometry_Clipping) {
   // Layout:
   // Div (100x100, overflow:hidden)
   //   -> Div (Content, 200x200)
-  //      -> Target Element (positioned at 150,150 - should be clipped
-  //      out/invisible)
   //      -> Visible Element (positioned at 10,10)
+  //      -> Clipped Element (positioned at 150,150 - should be clipped
+  //         out/invisible)
+  //      -> Partially Clipped Element (positioned at 50,60 - text overflows
+  //         horizontally past the 100px clipper)
   auto page_structure = HtmlPage(
       "Clipping Test",
       RawHtml(
-          "<style>body { margin: 0; }</style>"
+          "<style>body, p { margin: 0; }</style>"
           "<div style='width: 100px; height: 100px; overflow: hidden; "
           "position: "
           "relative;' id='clipper'>"
@@ -6642,6 +7220,9 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_ApcV2_Geometry_Clipping) {
           "10px; width: 50px; height: 50px;'>Visible</p>"
           "     <p id='clipped' style='position: absolute; top: 150px; left: "
           "150px; width: 50px; height: 50px;'>Clipped</p>"
+          "     <p id='partially_clipped' style='position: absolute; top: "
+          "60px; left: 50px; white-space: nowrap; font-size: 20px;'>"
+          "Long overflowing text</p>"
           "  </div>"
           "</div>"));
 
@@ -6673,16 +7254,16 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_ApcV2_Geometry_Clipping) {
   EXPECT_EQ(clipper_div.content_attributes().attribute_type(),
             optimization_guide::proto::CONTENT_ATTRIBUTE_CONTAINER);
 
-  ASSERT_GE(clipper_div.children_nodes_size(), 2);
+  ASSERT_GE(clipper_div.children_nodes_size(), 3);
 
   const auto& visible_p = clipper_div.children_nodes(0);
   EXPECT_EQ(visible_p.content_attributes().attribute_type(),
             optimization_guide::proto::CONTENT_ATTRIBUTE_PARAGRAPH);
   ASSERT_GE(visible_p.children_nodes_size(), 1);
-  EXPECT_EQ(visible_p.children_nodes(0)
-                .content_attributes()
-                .text_data()
-                .text_content(),
+  const auto& visible_text = visible_p.children_nodes(0);
+  EXPECT_EQ(visible_text.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT);
+  EXPECT_EQ(visible_text.content_attributes().text_data().text_content(),
             "Visible");
 
   EXPECT_TRUE(VerifyGeometry(visible_p));
@@ -6690,14 +7271,25 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_ApcV2_Geometry_Clipping) {
   EXPECT_GT(vis_geo.visible_bounding_box().width(), 0);
   EXPECT_GT(vis_geo.visible_bounding_box().height(), 0);
 
+  // Verify geometry for the visible text node inside the overflow: hidden
+  // ancestor.
+  ASSERT_TRUE(VerifyGeometry(visible_text));
+  const auto& vis_text_geo = visible_text.content_attributes().geometry();
+  EXPECT_EQ(vis_text_geo.css_position(),
+            optimization_guide::proto::CSS_POSITION_STATIC_DEFAULT);
+  EXPECT_EQ(vis_text_geo.visible_bounding_box().width(),
+            vis_text_geo.outer_bounding_box().width());
+  EXPECT_EQ(vis_text_geo.visible_bounding_box().height(),
+            vis_text_geo.outer_bounding_box().height());
+
   const auto& clipped_p = clipper_div.children_nodes(1);
   EXPECT_EQ(clipped_p.content_attributes().attribute_type(),
             optimization_guide::proto::CONTENT_ATTRIBUTE_PARAGRAPH);
   ASSERT_GE(clipped_p.children_nodes_size(), 1);
-  EXPECT_EQ(clipped_p.children_nodes(0)
-                .content_attributes()
-                .text_data()
-                .text_content(),
+  const auto& clipped_text = clipped_p.children_nodes(0);
+  EXPECT_EQ(clipped_text.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT);
+  EXPECT_EQ(clipped_text.content_attributes().text_data().text_content(),
             "Clipped");
 
   // The 'clipped' paragraph is fully outside the parent's clip rect.
@@ -6720,6 +7312,37 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_ApcV2_Geometry_Clipping) {
   // boundaries.
   EXPECT_GE(clipped_geo.outer_bounding_box().x(), 100);
   EXPECT_GE(clipped_geo.outer_bounding_box().y(), 100);
+
+  // Verify geometry for the fully clipped text node outside the overflow:
+  // hidden ancestor.
+  ASSERT_TRUE(VerifyGeometry(clipped_text, /*expect_visible=*/false));
+  const auto& clipped_text_geo = clipped_text.content_attributes().geometry();
+  EXPECT_EQ(clipped_text_geo.css_position(),
+            optimization_guide::proto::CSS_POSITION_STATIC_DEFAULT);
+  EXPECT_FALSE(clipped_text_geo.has_visible_bounding_box());
+  EXPECT_GE(clipped_text_geo.outer_bounding_box().x(), 100);
+  EXPECT_GE(clipped_text_geo.outer_bounding_box().y(), 100);
+
+  // Verify geometry for the partially clipped text node overflowing the 100px
+  // overflow: hidden ancestor horizontally from x=50.
+  const auto& partially_clipped_p = clipper_div.children_nodes(2);
+  EXPECT_EQ(partially_clipped_p.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_PARAGRAPH);
+  ASSERT_TRUE(VerifyGeometry(partially_clipped_p));
+  ASSERT_GE(partially_clipped_p.children_nodes_size(), 1);
+  const auto& partially_clipped_text = partially_clipped_p.children_nodes(0);
+  EXPECT_EQ(partially_clipped_text.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT);
+  EXPECT_EQ(
+      partially_clipped_text.content_attributes().text_data().text_content(),
+      "Long overflowing text");
+  ASSERT_TRUE(VerifyGeometry(partially_clipped_text));
+  const auto& partially_clipped_text_geo =
+      partially_clipped_text.content_attributes().geometry();
+  EXPECT_EQ(partially_clipped_text_geo.css_position(),
+            optimization_guide::proto::CSS_POSITION_STATIC_DEFAULT);
+  EXPECT_GT(partially_clipped_text_geo.outer_bounding_box().width(), 50);
+  EXPECT_EQ(partially_clipped_text_geo.visible_bounding_box().width(), 50);
 }
 
 // Tests extraction of geometry for an average case with both visible and outer
@@ -7446,6 +8069,12 @@ TEST_P(PageContextWrapperTest,
     return;
   }
 
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{},
+      /*disabled_features=*/{kPageContextScreenshotSensitivePaymentRedaction,
+                             kPageContextScreenshotPasswordRedaction});
+
   auto page_structure =
       HtmlPage("Sensitive Payment Geometry Disabled Test",
                RawHtml("<form>"
@@ -7490,6 +8119,274 @@ TEST_P(PageContextWrapperTest,
       checkbox_input.content_attributes().geometry().has_outer_bounding_box());
   EXPECT_FALSE(
       password_input.content_attributes().geometry().has_outer_bounding_box());
+}
+
+// Test that the global kPageContextScreenshotSensitivePaymentRedaction feature
+// flag overrides any local config setting for redaction geometry extraction.
+// Configures a test page with a checkbox and a credit card number field with
+// actionable mode off and include_sensitive_payments_for_redaction false,
+// and verifies that enabling the feature flag forces geometry extraction.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_SensitivePaymentRedactionGeometry_FeatureFlag) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kPageContextScreenshotSensitivePaymentRedaction);
+
+  auto page_structure =
+      HtmlPage("Sensitive Payment Geometry Test",
+               RawHtml("<form>"
+                       "  <input type='checkbox' id='normal_checkbox'>"
+                       "  <input type='number' id='credit_card_field'>"
+                       "</form>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(false)
+          .SetIncludeSensitivePaymentsForRedaction(false)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+  ASSERT_TRUE(page_context);
+
+  const auto& actual_apc = page_context->annotated_page_content();
+  const auto& root = actual_apc.root_node();
+
+  ASSERT_GE(root.children_nodes_size(), 1);
+  const auto& form = root.children_nodes(0);
+  ASSERT_EQ(form.children_nodes_size(), 2);
+
+  const auto& payment_input = form.children_nodes(1);
+  EXPECT_TRUE(
+      payment_input.content_attributes().geometry().has_outer_bounding_box());
+  EXPECT_TRUE(
+      payment_input.content_attributes().geometry().has_visible_bounding_box());
+}
+
+// Test that the global kPageContextAutofillOtpRedactions feature flag enables
+// redaction geometry extraction for OTP-eligible fields even when actionable
+// mode is off. Configures a test page with a checkbox and a text input with
+// actionable mode off, and verifies that enabling the feature flag forces
+// geometry extraction for the text field while omitting geometry for the
+// checkbox.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_OtpRedactionGeometry_FeatureFlag) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kPageContextAutofillOtpRedactions);
+
+  auto page_structure =
+      HtmlPage("OTP Geometry Test",
+               RawHtml("<form>"
+                       "  <input type='checkbox' id='normal_checkbox'>"
+                       "  <input type='text' id='otp_field'>"
+                       "</form>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(false)
+          .SetIncludeSensitivePaymentsForRedaction(false)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+  ASSERT_TRUE(page_context);
+
+  const auto& actual_apc = page_context->annotated_page_content();
+  const auto& root = actual_apc.root_node();
+
+  ASSERT_GE(root.children_nodes_size(), 1);
+  const auto& form = root.children_nodes(0);
+  ASSERT_EQ(form.children_nodes_size(), 2);
+
+  // Non-sensitive form controls like checkboxes do not have bounding box
+  // geometry extracted in non-actionable mode, while OTP-eligible fields do
+  // when OTP redaction is enabled.
+  const auto& checkbox_input = form.children_nodes(0);
+  EXPECT_FALSE(
+      checkbox_input.content_attributes().geometry().has_outer_bounding_box());
+
+  const auto& otp_input = form.children_nodes(1);
+  EXPECT_TRUE(
+      otp_input.content_attributes().geometry().has_outer_bounding_box());
+  EXPECT_TRUE(
+      otp_input.content_attributes().geometry().has_visible_bounding_box());
+}
+
+// Test that the global kPageContextScreenshotPasswordRedaction feature flag
+// enables redaction geometry extraction for password fields (standard, CSS
+// masked, and JS masked) even when actionable mode is off. Configures a test
+// page with a checkbox and password inputs with actionable mode off, and
+// verifies that enabling the feature flag forces geometry extraction for the
+// password fields while omitting geometry for the checkbox.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_PasswordRedactionGeometry_FeatureFlag) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kPageContextScreenshotPasswordRedaction);
+
+  auto page_structure =
+      HtmlPage("Password Geometry Test",
+               RawHtml("<form>"
+                       "  <input type='checkbox' id='normal_checkbox'>"
+                       "  <input type='password' id='password_field'>"
+                       "  <input type='text' style='-webkit-text-security: "
+                       "disc' id='css_password'>"
+                       "  <input type='text' value='••••••••' id='js_password'>"
+                       "</form>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(false)
+          .SetIncludeSensitivePaymentsForRedaction(false)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+  ASSERT_TRUE(page_context);
+
+  const auto& actual_apc = page_context->annotated_page_content();
+  const auto& root = actual_apc.root_node();
+
+  ASSERT_GE(root.children_nodes_size(), 1);
+  const auto& form = root.children_nodes(0);
+  ASSERT_EQ(form.children_nodes_size(), 4);
+
+  // 1. Non-password checkbox has no geometry.
+  const auto& checkbox_input = form.children_nodes(0);
+  EXPECT_FALSE(
+      checkbox_input.content_attributes().geometry().has_outer_bounding_box());
+
+  // 2. Standard password input has geometry.
+  const auto& password_input = form.children_nodes(1);
+  EXPECT_TRUE(
+      password_input.content_attributes().geometry().has_outer_bounding_box());
+  EXPECT_TRUE(password_input.content_attributes()
+                  .geometry()
+                  .has_visible_bounding_box());
+
+  // 3. CSS custom password input has geometry.
+  const auto& css_password_input = form.children_nodes(2);
+  EXPECT_TRUE(css_password_input.content_attributes()
+                  .geometry()
+                  .has_outer_bounding_box());
+  EXPECT_TRUE(css_password_input.content_attributes()
+                  .geometry()
+                  .has_visible_bounding_box());
+
+  // 4. JS custom password input has geometry.
+  const auto& js_password_input = form.children_nodes(3);
+  EXPECT_TRUE(js_password_input.content_attributes()
+                  .geometry()
+                  .has_outer_bounding_box());
+  EXPECT_TRUE(js_password_input.content_attributes()
+                  .geometry()
+                  .has_visible_bounding_box());
+}
+
+// Test that when kPageContextScreenshotPasswordRedaction is disabled and
+// actionable mode is off, geometry is omitted for all password fields
+// (standard, CSS masked, and JS masked).
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_PasswordRedactionGeometry_DisabledFeatureFlag) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      kPageContextScreenshotPasswordRedaction);
+
+  auto page_structure =
+      HtmlPage("Password Geometry Disabled Test",
+               RawHtml("<form>"
+                       "  <input type='checkbox' id='normal_checkbox'>"
+                       "  <input type='password' id='password_field'>"
+                       "  <input type='text' style='-webkit-text-security: "
+                       "disc' id='css_password'>"
+                       "  <input type='text' value='••••••••' id='js_password'>"
+                       "</form>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(false)
+          .SetIncludeSensitivePaymentsForRedaction(false)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+  ASSERT_TRUE(page_context);
+
+  const auto& actual_apc = page_context->annotated_page_content();
+  const auto& root = actual_apc.root_node();
+
+  ASSERT_GE(root.children_nodes_size(), 1);
+  const auto& form = root.children_nodes(0);
+  ASSERT_EQ(form.children_nodes_size(), 4);
+
+  // All fields must have geometry omitted when both actionable mode and
+  // password screenshot redaction are off.
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_FALSE(form.children_nodes(i)
+                     .content_attributes()
+                     .geometry()
+                     .has_outer_bounding_box());
+  }
 }
 
 // Tests that the version and mode fields are correctly populated in the
@@ -7552,6 +8449,1461 @@ TEST_P(PageContextWrapperTest, PopulatePageContext_ApcVersionAndMode) {
       /*use_rich=*/false, /*use_actionable=*/false,
       optimization_guide::proto::ANNOTATED_PAGE_CONTENT_VERSION_1_0,
       optimization_guide::proto::ANNOTATED_PAGE_CONTENT_MODE_DEFAULT);
+}
+
+// Tests that when `include_same_site_only` is enabled.
+// 1. Same-site cross-origin subdomain iframes are extracted and grafted.
+// 2. Cross-site iframes are not extracted.
+// 3. Unresolved cross-site iframe placeholders are redacted in APCv2.
+TEST_P(PageContextWrapperTest, ExtractPageContext_SameSiteOnly) {
+  if (!IsRefactored()) {
+    GTEST_SKIP()
+        << "Frame grafter not supported for the non-refactored APC wrapper";
+  }
+
+  auto page_structure = HtmlPage(
+      "Main", Paragraph("Main frame text"),
+      Iframe(TestOrigin::kCrossA,
+             HtmlPage("Subdomain", Paragraph("Subdomain iframe text")),
+             "subdomain_frame"),
+      Iframe(TestOrigin::kCrossB,
+             HtmlPage("CrossSite", Paragraph("Cross-site iframe text")),
+             "cross_site_frame"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+
+  // Get the registered URLs for the subframes.
+  GURL subdomain_url = page_helper_->GetUrlForId("subdomain_frame");
+  GURL cross_site_url = page_helper_->GetUrlForId("cross_site_frame");
+
+  // Subdomain remains on 127.0.0.1 (same-site), while the cross-site iframe
+  // is resolved to "localhost" (cross-site).
+  GURL resolved_subdomain_url = subdomain_url;
+  GURL resolved_cross_site_url =
+      xorigin_test_server_b_.GetURL("localhost", cross_site_url.path());
+
+  // Replace the cross-site iframe URL in the main HTML.
+  base::ReplaceSubstringsAfterOffset(&main_html, 0, cross_site_url.spec(),
+                                     resolved_cross_site_url.spec());
+
+  // Load the main page using the standard 127.0.0.1 test server URL.
+  GURL main_url = test_server_.GetURL(kMainPagePath);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html), main_url,
+                      web_state());
+
+  PageContextWrapperConfigBuilder config_builder;
+  config_builder.SetGraftCrossOriginFrameContent(true);
+  config_builder.SetIncludeSameSiteOnly(true);
+
+  if (IsRefactored()) {
+    config_builder.SetUseRichExtraction(true);
+  }
+
+  PageContextWrapperConfig config = config_builder.Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        if (IsRefactored()) {
+          wrapper.shouldGetAnnotatedPageContent = YES;
+        } else {
+          wrapper.shouldGetInnerText = YES;
+          wrapper.shouldGetAnnotatedPageContent = YES;
+        }
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+
+  ASSERT_TRUE(page_context);
+  EXPECT_EQ(page_context->url(), main_url.spec());
+
+  if (IsRefactored()) {
+    const auto& annotated_page_content = page_context->annotated_page_content();
+    const auto& root_node = annotated_page_content.root_node();
+
+    // Root node should have:
+    // 1. Text node for main frame
+    // 2. Subdomain iframe node
+    // 3. Redacted iframe node for cross-site
+    ASSERT_EQ(root_node.children_nodes_size(), 3);
+
+    const optimization_guide::proto::ContentNode* subdomain_node =
+        &root_node.children_nodes(1);
+    const optimization_guide::proto::ContentNode* cross_site_node =
+        &root_node.children_nodes(2);
+
+    // Verify Subdomain (same-site) iframe.
+    // - It should have iframe_data with frame_data containing its URL.
+    // - It should NOT have redacted_frame_metadata.
+    // - It should have a child root node containing its extracted text.
+    EXPECT_EQ(subdomain_node->content_attributes().attribute_type(),
+              optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME);
+    EXPECT_TRUE(
+        subdomain_node->content_attributes().iframe_data().has_frame_data());
+    EXPECT_EQ(
+        subdomain_node->content_attributes().iframe_data().frame_data().url(),
+        resolved_subdomain_url.spec());
+    EXPECT_FALSE(subdomain_node->content_attributes()
+                     .iframe_data()
+                     .has_redacted_frame_metadata());
+
+    // Verify nested text content at the correct nesting level (no loss in dom
+    // structure).
+    ASSERT_EQ(subdomain_node->children_nodes_size(),
+              1);  // root PAGE node of subframe
+    const auto& subframe_page = subdomain_node->children_nodes(0);
+    ASSERT_EQ(subframe_page.children_nodes_size(), 1);  // PARAGRAPH node
+    const auto& subframe_paragraph = subframe_page.children_nodes(0);
+    ASSERT_EQ(subframe_paragraph.children_nodes_size(), 1);  // TEXT node
+    EXPECT_EQ(subframe_paragraph.children_nodes(0)
+                  .content_attributes()
+                  .text_data()
+                  .text_content(),
+              "Subdomain iframe text");
+
+    // Verify Cross-site iframe.
+    // - It should NOT have frame_data (it's cleared by redaction).
+    // - It should have redacted_frame_metadata with reason REASON_CROSS_SITE.
+    // - It should NOT have any children nodes.
+    EXPECT_EQ(cross_site_node->content_attributes().attribute_type(),
+              optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME);
+    EXPECT_FALSE(
+        cross_site_node->content_attributes().iframe_data().has_frame_data());
+    EXPECT_TRUE(cross_site_node->content_attributes()
+                    .iframe_data()
+                    .has_redacted_frame_metadata());
+    EXPECT_EQ(cross_site_node->content_attributes()
+                  .iframe_data()
+                  .redacted_frame_metadata()
+                  .reason(),
+              optimization_guide::proto::
+                  IframeData_RedactedFrameMetadata_Reason_REASON_CROSS_SITE);
+    EXPECT_EQ(cross_site_node->children_nodes_size(), 0);
+
+  } else {
+    const auto& inner_text = page_context->inner_text();
+    EXPECT_THAT(inner_text, testing::HasSubstr("Main frame text"));
+    // Subdomain (same-site) text SHOULD be extracted.
+    EXPECT_THAT(inner_text, testing::HasSubstr("Subdomain iframe text"));
+    // Cross-site text SHOULD NOT be extracted.
+    EXPECT_THAT(inner_text,
+                testing::Not(testing::HasSubstr("Cross-site iframe text")));
+
+    // Legacy APC tree should only have.
+    // 1. Text node for main frame
+    // 2. Text node for subdomain
+    const auto& annotated_page_content = page_context->annotated_page_content();
+    const auto& root_node = annotated_page_content.root_node();
+    ASSERT_EQ(root_node.children_nodes_size(), 2);
+  }
+}
+
+// Tests that when `include_same_site_only` is disabled.
+// 1. Same-site cross-origin subdomain iframes are extracted and grafted.
+// 2. Cross-site iframes are ALSO extracted and grafted (not skipped/redacted).
+TEST_P(PageContextWrapperTest, ExtractPageContext_SameSiteOnlyDisabled) {
+  if (!IsRefactored()) {
+    GTEST_SKIP()
+        << "Frame grafter not supported for the non-refactored APC wrapper";
+  }
+
+  auto page_structure = HtmlPage(
+      "Main", Paragraph("Main frame text"),
+      Iframe(TestOrigin::kCrossA,
+             HtmlPage("Subdomain", Paragraph("Subdomain iframe text")),
+             "subdomain_frame"),
+      Iframe(TestOrigin::kCrossB,
+             HtmlPage("CrossSite", Paragraph("Cross-site iframe text")),
+             "cross_site_frame"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+
+  GURL subdomain_url = page_helper_->GetUrlForId("subdomain_frame");
+  GURL cross_site_url = page_helper_->GetUrlForId("cross_site_frame");
+
+  GURL resolved_subdomain_url = subdomain_url;
+  GURL resolved_cross_site_url =
+      xorigin_test_server_b_.GetURL("localhost", cross_site_url.path());
+
+  base::ReplaceSubstringsAfterOffset(&main_html, 0, cross_site_url.spec(),
+                                     resolved_cross_site_url.spec());
+
+  GURL main_url = test_server_.GetURL(kMainPagePath);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html), main_url,
+                      web_state());
+
+  PageContextWrapperConfigBuilder config_builder;
+  config_builder.SetGraftCrossOriginFrameContent(true);
+  config_builder.SetIncludeSameSiteOnly(false);
+
+  if (IsRefactored()) {
+    config_builder.SetUseRichExtraction(true);
+  }
+
+  PageContextWrapperConfig config = config_builder.Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        if (IsRefactored()) {
+          wrapper.shouldGetAnnotatedPageContent = YES;
+        } else {
+          wrapper.shouldGetInnerText = YES;
+          wrapper.shouldGetAnnotatedPageContent = YES;
+        }
+      });
+
+  ASSERT_TRUE(response.has_value());
+  std::unique_ptr<optimization_guide::proto::PageContext> page_context =
+      std::move(response.value());
+
+  ASSERT_TRUE(page_context);
+
+  if (IsRefactored()) {
+    const auto& annotated_page_content = page_context->annotated_page_content();
+    const auto& root_node = annotated_page_content.root_node();
+
+    // Both subframes should be successfully extracted/grafted.
+    ASSERT_EQ(root_node.children_nodes_size(), 3);
+
+    const optimization_guide::proto::ContentNode* subdomain_node =
+        &root_node.children_nodes(1);
+    const optimization_guide::proto::ContentNode* cross_site_node =
+        &root_node.children_nodes(2);
+
+    // Verify Subdomain is grafted.
+    EXPECT_TRUE(
+        subdomain_node->content_attributes().iframe_data().has_frame_data());
+    EXPECT_FALSE(subdomain_node->content_attributes()
+                     .iframe_data()
+                     .has_redacted_frame_metadata());
+
+    // Verify Cross-site is ALSO grafted.
+    EXPECT_TRUE(
+        cross_site_node->content_attributes().iframe_data().has_frame_data());
+    EXPECT_FALSE(cross_site_node->content_attributes()
+                     .iframe_data()
+                     .has_redacted_frame_metadata());
+    EXPECT_EQ(
+        cross_site_node->content_attributes().iframe_data().frame_data().url(),
+        resolved_cross_site_url.spec());
+
+    // Verify cross-site nested text is extracted.
+    ASSERT_EQ(cross_site_node->children_nodes_size(), 1);
+    const auto& cross_site_page = cross_site_node->children_nodes(0);
+    ASSERT_EQ(cross_site_page.children_nodes_size(), 1);
+    const auto& cross_site_paragraph = cross_site_page.children_nodes(0);
+    ASSERT_EQ(cross_site_paragraph.children_nodes_size(), 1);
+    EXPECT_EQ(cross_site_paragraph.children_nodes(0)
+                  .content_attributes()
+                  .text_data()
+                  .text_content(),
+              "Cross-site iframe text");
+
+  } else {
+    const auto& inner_text = page_context->inner_text();
+    EXPECT_THAT(inner_text, testing::HasSubstr("Main frame text"));
+    EXPECT_THAT(inner_text, testing::HasSubstr("Subdomain iframe text"));
+    // Cross-site text SHOULD also be extracted when same-site gating is
+    // disabled.
+    EXPECT_THAT(inner_text, testing::HasSubstr("Cross-site iframe text"));
+
+    const auto& annotated_page_content = page_context->annotated_page_content();
+    const auto& root_node = annotated_page_content.root_node();
+
+    ASSERT_EQ(root_node.children_nodes_size(), 3);
+  }
+}
+
+UIImage* CreateTestImage(CGSize size, CGFloat scale) {
+  UIGraphicsImageRendererFormat* format =
+      [UIGraphicsImageRendererFormat defaultFormat];
+  format.scale = scale;
+  UIGraphicsImageRenderer* renderer =
+      [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
+  return [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+    [[UIColor whiteColor] setFill];
+    [context fillRect:CGRectMake(0, 0, size.width, size.height)];
+  }];
+}
+
+// Test that screenshot redaction masking handles empty bounding box lists
+// without error. Configures a wrapper with no redaction boxes, encodes a
+// synthetic test image, and verifies that a valid base64-encoded PNG screenshot
+// is produced.
+TEST_P(PageContextWrapperTest, ImageRedaction_EmptyArray) {
+  PageContextWrapper* wrapper = [[PageContextWrapper alloc]
+        initWithWebState:web_state()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::BindOnce(
+                             [](PageContextWrapperCallbackResponse response) {
+                             })];
+  [wrapper setBoxesToRedactForTesting:{}];
+
+  UIImage* test_image = CreateTestImage(CGSizeMake(100, 100), 2.0);
+
+  [wrapper encodeImageAndSetTabScreenshotForTesting:test_image];
+
+  EXPECT_TRUE([wrapper boxesToRedactForTesting].empty());
+
+  optimization_guide::proto::PageContext* page_context =
+      [wrapper pageContextForTesting];
+  ASSERT_TRUE(page_context->has_tab_screenshot());
+  std::string screenshot_data;
+  ASSERT_TRUE(
+      base::Base64Decode(page_context->tab_screenshot(), &screenshot_data));
+  EXPECT_GT(screenshot_data.length(), 0u);
+}
+
+// Test that redaction bounding boxes extending outside image boundaries do not
+// crash. Configures negative coordinates and boxes larger than the test image,
+// and verifies that the renderer safely clips drawing operations without error.
+TEST_P(PageContextWrapperTest, ImageRedaction_OutOfBoundsClippingSafety) {
+  PageContextWrapper* wrapper = [[PageContextWrapper alloc]
+        initWithWebState:web_state()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::BindOnce(
+                             [](PageContextWrapperCallbackResponse response) {
+                             })];
+
+  std::vector<CGRect> boxes = {CGRectMake(-10, -10, 50, 50),
+                               CGRectMake(80, 80, 100, 100)};
+  [wrapper setBoxesToRedactForTesting:boxes];
+
+  UIImage* test_image = CreateTestImage(CGSizeMake(50, 50), 1.0);
+
+  [wrapper encodeImageAndSetTabScreenshotForTesting:test_image];
+  EXPECT_TRUE([wrapper boxesToRedactForTesting].empty());
+}
+
+// Test that `shouldRedactDecisionForScreenshot:` returns YES for OTP fields and
+// NO for password fields when OTP screenshot redaction is enabled.
+TEST_P(PageContextWrapperTest, ImageRedaction_AutofillOTP) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kPageContextAutofillOtpRedactions},
+      /*disabled_features=*/{kPageContextScreenshotPasswordRedaction});
+
+  PageContextWrapper* wrapper = [[PageContextWrapper alloc]
+        initWithWebState:web_state()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::BindOnce(
+                             [](PageContextWrapperCallbackResponse response) {
+                             })];
+
+  EXPECT_TRUE([wrapper
+      shouldRedactDecisionForScreenshot:
+          optimization_guide::proto::REDACTION_DECISION_REDACTED_IS_OTP]);
+  EXPECT_FALSE([wrapper shouldRedactDecisionForScreenshot:
+                            optimization_guide::proto::
+                                REDACTION_DECISION_REDACTED_HAS_BEEN_PASSWORD]);
+}
+
+// Test that `shouldRedactDecisionForScreenshot:` returns YES for password
+// fields (including standard passwords and custom CSS/JS password heuristics)
+// and NO for OTP and sensitive payment fields when only password screenshot
+// redaction is enabled.
+TEST_P(PageContextWrapperTest, ImageRedaction_PasswordFields) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kPageContextScreenshotPasswordRedaction},
+      /*disabled_features=*/{kPageContextScreenshotSensitivePaymentRedaction,
+                             kPageContextAutofillOtpRedactions});
+
+  PageContextWrapper* wrapper = [[PageContextWrapper alloc]
+        initWithWebState:web_state()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::BindOnce(
+                             [](PageContextWrapperCallbackResponse response) {
+                             })];
+
+  EXPECT_TRUE([wrapper shouldRedactDecisionForScreenshot:
+                           optimization_guide::proto::
+                               REDACTION_DECISION_REDACTED_HAS_BEEN_PASSWORD]);
+  EXPECT_TRUE(
+      [wrapper shouldRedactDecisionForScreenshot:
+                   optimization_guide::proto::
+                       REDACTION_DECISION_REDACTED_CUSTOM_PASSWORD_CSS]);
+  EXPECT_TRUE([wrapper shouldRedactDecisionForScreenshot:
+                           optimization_guide::proto::
+                               REDACTION_DECISION_REDACTED_CUSTOM_PASSWORD_JS]);
+  EXPECT_FALSE([wrapper
+      shouldRedactDecisionForScreenshot:
+          optimization_guide::proto::REDACTION_DECISION_REDACTED_IS_OTP]);
+  EXPECT_FALSE(
+      [wrapper shouldRedactDecisionForScreenshot:
+                   optimization_guide::proto::
+                       REDACTION_DECISION_REDACTED_IS_SENSITIVE_PAYMENT_FIELD]);
+}
+
+// Tests that CSS position properties (fixed, absolute, relative, sticky)
+// are extracted into the node geometry.
+TEST_P(PageContextWrapperTest, PopulatePageContext_RichExtraction_CssPosition) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage(
+      "CssPosition",
+      RawHtml("<div id='fixed' style='position: fixed; top: 0; left: 0; "
+              "width: 100px; height: 50px;'>Fixed</div>"
+              "<p id='absolute' style='position: absolute; top: 50px; left: 0; "
+              "width: 100px; height: 50px;'>Absolute</p>"
+              "<p id='relative' style='position: relative; width: 100px; "
+              "height: 50px;'>Relative</p>"
+              "<div id='sticky' style='position: sticky; top: 0; width: 100px; "
+              "height: 50px;'>Sticky</div>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  bool found_fixed = false;
+  bool found_absolute = false;
+  bool found_relative = false;
+  bool found_sticky = false;
+
+  for (const auto& child : root_node.children_nodes()) {
+    if (child.has_content_attributes() &&
+        child.content_attributes().has_geometry() &&
+        child.content_attributes().geometry().has_css_position()) {
+      switch (child.content_attributes().geometry().css_position()) {
+        case optimization_guide::proto::CSS_POSITION_FIXED:
+          found_fixed = true;
+          break;
+        case optimization_guide::proto::CSS_POSITION_ABSOLUTE:
+          found_absolute = true;
+          break;
+        case optimization_guide::proto::CSS_POSITION_RELATIVE:
+          found_relative = true;
+          break;
+        case optimization_guide::proto::CSS_POSITION_STICKY:
+          found_sticky = true;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_fixed);
+  EXPECT_TRUE(found_absolute);
+  EXPECT_TRUE(found_relative);
+  EXPECT_TRUE(found_sticky);
+}
+
+// Tests that <dialog> elements are extracted as DIALOG_MODAL or
+// DIALOG_MODELESS.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_DialogElements) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage(
+      "DialogElements",
+      RawHtml(
+          "<dialog id='modeless' open>Modeless Dialog</dialog>"
+          "<dialog id='modal'>Modal Dialog</dialog>"
+          "<script>document.getElementById('modal').showModal();</script>"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  bool found_modeless = false;
+  bool found_modal = false;
+
+  for (const auto& child : root_node.children_nodes()) {
+    if (child.has_content_attributes()) {
+      if (child.content_attributes().attribute_type() ==
+          optimization_guide::proto::CONTENT_ATTRIBUTE_DIALOG_MODELESS) {
+        found_modeless = true;
+      } else if (child.content_attributes().attribute_type() ==
+                 optimization_guide::proto::CONTENT_ATTRIBUTE_DIALOG_MODAL) {
+        found_modal = true;
+      }
+    }
+  }
+
+  EXPECT_TRUE(found_modeless);
+  EXPECT_TRUE(found_modal);
+}
+
+// Test that fixed-position elements inside an open ShadowRoot are extracted
+// with CSS_POSITION_FIXED and valid geometry.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ShadowDomFixed) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage("ShadowDomFixed", RawHtml(R"HTML(
+        <div id="host"></div>
+        <script>
+          const host = document.getElementById("host");
+          const shadow = host.attachShadow({mode: "open"});
+          const fixedDiv = document.createElement("div");
+          fixedDiv.id = "shadow-fixed";
+          fixedDiv.style.cssText =
+              "position: fixed; top: 10px; left: 10px; " +
+              "width: 100px; height: 50px;";
+          fixedDiv.textContent = "Shadow Fixed";
+          shadow.appendChild(fixedDiv);
+        </script>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> fixed_nodes;
+  FindNodesWithCssPosition(
+      root_node, optimization_guide::proto::CSS_POSITION_FIXED, &fixed_nodes);
+
+  ASSERT_EQ(fixed_nodes.size(), 1u);
+  ASSERT_TRUE(fixed_nodes[0]->has_content_attributes());
+  ASSERT_TRUE(fixed_nodes[0]->content_attributes().has_geometry());
+  EXPECT_EQ(fixed_nodes[0]->content_attributes().geometry().css_position(),
+            optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_TRUE(VerifyGeometry(*fixed_nodes[0]));
+}
+
+// Test that fixed position elements retain their viewport-relative geometry
+// and CSS_POSITION_FIXED after the page is scrolled.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ScrollFixedBoundingBox) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage("ScrollFixed", RawHtml(R"HTML(
+        <style>
+          body { margin: 0; height: 3000px; }
+        </style>
+        <div id="fixed-header"
+            style="position: fixed; top: 0; left: 0;
+                   width: 100px; height: 50px;">Header</div>
+        <div id="scrolled-content"
+            style="position: absolute; top: 100px; left: 0;
+                   width: 100px; height: 50px;">Content</div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  // Scroll down the page by 200px before extracting page context.
+  CallJavascript("window.scrollTo(0, 200);");
+  ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForJSCompletionTimeout, ^{
+        return [CallJavascript("Math.round(window.scrollY);") isEqual:@200];
+      }));
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> fixed_nodes;
+  FindNodesWithCssPosition(
+      root_node, optimization_guide::proto::CSS_POSITION_FIXED, &fixed_nodes);
+
+  ASSERT_EQ(fixed_nodes.size(), 1u);
+  const auto* header = fixed_nodes[0];
+  ASSERT_TRUE(header->has_content_attributes());
+  ASSERT_TRUE(header->content_attributes().has_geometry());
+  const auto& geo = header->content_attributes().geometry();
+  EXPECT_EQ(geo.css_position(), optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_TRUE(VerifyGeometry(*header));
+
+  // The fixed header must remain anchored at the top of the viewport (y == 0).
+  EXPECT_EQ(geo.visible_bounding_box().y(), 0);
+  EXPECT_EQ(geo.visible_bounding_box().height(), 50);
+  EXPECT_EQ(geo.outer_bounding_box().y(), 0);
+  EXPECT_EQ(geo.outer_bounding_box().height(), 50);
+}
+
+// Test that an ancestor with a CSS transform acts as a containing block for
+// absolute-position descendants.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ContainingBlockTransformAbsolute) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure =
+      HtmlPage("TransformAbsoluteContainingBlock", RawHtml(R"HTML(
+        <style>body { margin: 0; }</style>
+        <div id="transform-container"
+            style="transform: translate(0, 0); overflow: hidden;
+                   width: 200px; height: 100px;">
+          <p id="absolute-child"
+              style="position: absolute; top: 0; left: 0; margin: 0;
+                     width: 500px; height: 500px;">Absolute Child</p>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> absolute_nodes;
+  FindNodesWithCssPosition(root_node,
+                           optimization_guide::proto::CSS_POSITION_ABSOLUTE,
+                           &absolute_nodes);
+
+  ASSERT_EQ(absolute_nodes.size(), 1u);
+  const auto* absolute_child = absolute_nodes[0];
+  ASSERT_TRUE(absolute_child->has_content_attributes());
+  ASSERT_TRUE(absolute_child->content_attributes().has_geometry());
+  const auto& geo = absolute_child->content_attributes().geometry();
+  EXPECT_EQ(geo.css_position(),
+            optimization_guide::proto::CSS_POSITION_ABSOLUTE);
+  EXPECT_EQ(geo.visible_bounding_box().width(), 200);
+  EXPECT_EQ(geo.visible_bounding_box().height(), 100);
+  EXPECT_EQ(geo.outer_bounding_box().width(), 500);
+  EXPECT_EQ(geo.outer_bounding_box().height(), 500);
+}
+
+// Test that out-of-flow containing blocks without overflow clipping properly
+// escape ancestor overflow clips so their descendants are not re-clamped.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ContainingBlockEscapesAncestorClip) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage("EscapedAncestorClip", RawHtml(R"HTML(
+        <style>body { margin: 0; }</style>
+        <div id="ancestor-clip"
+            style="overflow: hidden; width: 100px; height: 100px;">
+          <div id="fixed-container"
+              style="position: fixed; top: 0; left: 0;
+                     width: 300px; height: 300px;">
+            <p id="child"
+                style="position: absolute; top: 0; left: 0; margin: 0;
+                       width: 250px; height: 250px;">Child</p>
+          </div>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> absolute_nodes;
+  FindNodesWithCssPosition(root_node,
+                           optimization_guide::proto::CSS_POSITION_ABSOLUTE,
+                           &absolute_nodes);
+
+  ASSERT_EQ(absolute_nodes.size(), 1u);
+  const auto* child = absolute_nodes[0];
+  ASSERT_TRUE(child->has_content_attributes());
+  ASSERT_TRUE(child->content_attributes().has_geometry());
+  const auto& geo = child->content_attributes().geometry();
+  EXPECT_EQ(geo.css_position(),
+            optimization_guide::proto::CSS_POSITION_ABSOLUTE);
+  EXPECT_EQ(geo.visible_bounding_box().width(), 250);
+  EXPECT_EQ(geo.visible_bounding_box().height(), 250);
+  EXPECT_EQ(geo.outer_bounding_box().width(), 250);
+  EXPECT_EQ(geo.outer_bounding_box().height(), 250);
+}
+
+// Test that each CSS property that forms a containing block for fixed-position
+// descendants (transform, translate, rotate, scale, perspective, contain and
+// backdrop-filter) clips those descendants, and that a clipping container
+// without any of them doesn't.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ContainingBlockProperties) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  struct ContainerCase {
+    const char* description;
+    bool forms_containing_block;
+  };
+  // Cases are listed in the same order as the containers in the HTML below,
+  // which is also the order in which the fixed children are extracted.
+  constexpr auto kCases = std::to_array<ContainerCase>({
+      {"transform", true},
+      {"translate", true},
+      {"rotate", true},
+      {"scale", true},
+      {"perspective", true},
+      {"contain", true},
+      {"backdrop-filter", true},
+      {"no containing block property", false},
+  });
+
+  auto page_structure = HtmlPage("ContainingBlockProperties", RawHtml(R"HTML(
+        <style>
+          body { margin: 0; }
+          .container { overflow: hidden; width: 100px; height: 50px; }
+          .fixed-child {
+            position: fixed; top: 0; left: 0; width: 150px; height: 150px;
+          }
+        </style>
+        <div class="container" style="transform: translate(0, 0);">
+          <div class="fixed-child">Transform</div>
+        </div>
+        <div class="container" style="translate: 0px 0px;">
+          <div class="fixed-child">Translate</div>
+        </div>
+        <div class="container" style="rotate: 0deg;">
+          <div class="fixed-child">Rotate</div>
+        </div>
+        <div class="container" style="scale: 1;">
+          <div class="fixed-child">Scale</div>
+        </div>
+        <div class="container" style="perspective: 500px;">
+          <div class="fixed-child">Perspective</div>
+        </div>
+        <div class="container" style="contain: paint;">
+          <div class="fixed-child">Contain</div>
+        </div>
+        <div class="container"
+            style="backdrop-filter: blur(0px);
+                   -webkit-backdrop-filter: blur(0px);">
+          <div class="fixed-child">Backdrop filter</div>
+        </div>
+        <div class="container">
+          <div class="fixed-child">No containing block</div>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> fixed_nodes;
+  FindNodesWithCssPosition(
+      root_node, optimization_guide::proto::CSS_POSITION_FIXED, &fixed_nodes);
+
+  ASSERT_EQ(fixed_nodes.size(), kCases.size());
+  for (size_t i = 0; i < fixed_nodes.size(); ++i) {
+    SCOPED_TRACE(kCases[i].description);
+    const auto* fixed_child = fixed_nodes[i];
+    ASSERT_TRUE(fixed_child->has_content_attributes());
+    ASSERT_TRUE(fixed_child->content_attributes().has_geometry());
+    const auto& geo = fixed_child->content_attributes().geometry();
+    EXPECT_EQ(geo.css_position(),
+              optimization_guide::proto::CSS_POSITION_FIXED);
+    // A fixed child is clipped by its 100x50 containing block, and otherwise
+    // escapes the clipping container entirely.
+    if (kCases[i].forms_containing_block) {
+      EXPECT_EQ(geo.visible_bounding_box().width(), 100);
+      EXPECT_EQ(geo.visible_bounding_box().height(), 50);
+    } else {
+      EXPECT_EQ(geo.visible_bounding_box().width(), 150);
+      EXPECT_EQ(geo.visible_bounding_box().height(), 150);
+    }
+    EXPECT_EQ(geo.outer_bounding_box().width(), 150);
+    EXPECT_EQ(geo.outer_bounding_box().height(), 150);
+  }
+}
+
+// Test that fixed and absolute descendants of a clipping `filter`
+// container are clipped according to the actual layout. Pre-iOS 26 don't make
+// `filter` establish a containing block, so these descendants are laid out
+// outside of the container and must not be clipped by it.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ContainingBlockFilter) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  // On iOS 26+, WebKit makes `filter` form a containing block, so the children
+  // are clipped to the 100x50 container. Otherwise they escape the container.
+  int expected_visible_width = 150;
+  int expected_visible_height = 150;
+  if (@available(iOS 26, *)) {
+    expected_visible_width = 100;
+    expected_visible_height = 50;
+  }
+
+  // The container is offset so that it doesn't overlap the children when they
+  // are laid out outside of it. The absolute child is a <p> so that it is
+  // extracted as a content node.
+  auto page_structure = HtmlPage("FilterContainingBlock", RawHtml(R"HTML(
+        <style>body { margin: 0; }</style>
+        <div style="filter: blur(0px); overflow: hidden; margin-top: 300px;
+                    width: 100px; height: 50px;">
+          <div style="position: fixed; top: 0; left: 0;
+                      width: 150px; height: 150px;">Fixed</div>
+          <p style="position: absolute; top: 0; left: 0; margin: 0;
+                    width: 150px; height: 150px;">Absolute</p>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  constexpr optimization_guide::proto::CssPosition kPositions[] = {
+      optimization_guide::proto::CSS_POSITION_FIXED,
+      optimization_guide::proto::CSS_POSITION_ABSOLUTE,
+  };
+  for (const auto position : kPositions) {
+    SCOPED_TRACE(optimization_guide::proto::CssPosition_Name(position));
+    std::vector<const optimization_guide::proto::ContentNode*> nodes;
+    FindNodesWithCssPosition(root_node, position, &nodes);
+
+    ASSERT_EQ(nodes.size(), 1u);
+    ASSERT_TRUE(VerifyGeometry(*nodes[0]));
+    const auto& geo = nodes[0]->content_attributes().geometry();
+    EXPECT_EQ(geo.outer_bounding_box().width(), 150);
+    EXPECT_EQ(geo.outer_bounding_box().height(), 150);
+    EXPECT_EQ(geo.visible_bounding_box().width(), expected_visible_width);
+    EXPECT_EQ(geo.visible_bounding_box().height(), expected_visible_height);
+  }
+}
+
+// Test that a clipping containing block clips fixed and absolute descendants
+// that are nested under static wrappers, which don't form containing blocks and
+// must pass the containing block clip through to their descendants.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ContainingBlockNestedDescendants) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  // The wrappers are <section> elements so that they are extracted as content
+  // nodes (plain <div> wrappers are skipped and don't get a clipping context of
+  // their own). The absolute child is a <p> for the same reason.
+  auto page_structure =
+      HtmlPage("NestedContainingBlockDescendants", RawHtml(R"HTML(
+        <style>body { margin: 0; }</style>
+        <div style="transform: translateX(0); overflow: hidden;
+                    width: 100px; height: 50px;">
+          <section>
+            <section>
+              <div style="position: fixed; top: 0; left: 0;
+                          width: 150px; height: 150px;">Fixed</div>
+              <p style="position: absolute; top: 0; left: 0; margin: 0;
+                        width: 150px; height: 150px;">Absolute</p>
+            </section>
+          </section>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  // Verifies that the node with `position` has the expected visible and outer
+  // bounding box dimensions.
+  auto check_clipped_node = [&](optimization_guide::proto::CssPosition position,
+                                int visible_w, int visible_h, int outer_w,
+                                int outer_h) {
+    std::vector<const optimization_guide::proto::ContentNode*> nodes;
+    FindNodesWithCssPosition(root_node, position, &nodes);
+    ASSERT_EQ(nodes.size(), 1u);
+    ASSERT_TRUE(nodes[0]->has_content_attributes());
+    ASSERT_TRUE(nodes[0]->content_attributes().has_geometry());
+    const auto& geo = nodes[0]->content_attributes().geometry();
+    EXPECT_EQ(geo.visible_bounding_box().width(), visible_w);
+    EXPECT_EQ(geo.visible_bounding_box().height(), visible_h);
+    EXPECT_EQ(geo.outer_bounding_box().width(), outer_w);
+    EXPECT_EQ(geo.outer_bounding_box().height(), outer_h);
+  };
+
+  // Both descendants are clipped by the 100x50 containing block.
+  check_clipped_node(optimization_guide::proto::CSS_POSITION_FIXED, 100, 50,
+                     150, 150);
+  check_clipped_node(optimization_guide::proto::CSS_POSITION_ABSOLUTE, 100, 50,
+                     150, 150);
+}
+
+// Test that a containing block without overflow clipping resets the clip of
+// its nested fixed and absolute descendants to the clip applied to the
+// containing block itself, so they don't escape an ancestor overflow clip that
+// they would otherwise escape.
+TEST_P(
+    PageContextWrapperTest,
+    PopulatePageContext_RichExtraction_ContainingBlockNestedDescendantsWithoutOverflowClip) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  // The containing block and wrappers are <section> elements so that they are
+  // extracted as content nodes (plain <div> elements without overflow clipping
+  // are skipped and don't get a clipping context of their own). The absolute
+  // child is a <p> for the same reason.
+  auto page_structure =
+      HtmlPage("NestedNonClippingContainingBlock", RawHtml(R"HTML(
+        <style>body { margin: 0; }</style>
+        <div style="overflow: hidden; width: 100px; height: 100px;">
+          <section
+              style="transform: translateX(0); width: 300px; height: 300px;">
+            <section>
+              <section>
+                <div style="position: fixed; top: 0; left: 0;
+                            width: 250px; height: 250px;">Fixed</div>
+                <p style="position: absolute; top: 0; left: 0; margin: 0;
+                          width: 250px; height: 250px;">Absolute</p>
+              </section>
+            </section>
+          </section>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  // Verifies that the node with `position` has the expected visible and outer
+  // bounding box dimensions.
+  auto check_clipped_node = [&](optimization_guide::proto::CssPosition position,
+                                int visible_w, int visible_h, int outer_w,
+                                int outer_h) {
+    std::vector<const optimization_guide::proto::ContentNode*> nodes;
+    FindNodesWithCssPosition(root_node, position, &nodes);
+    ASSERT_EQ(nodes.size(), 1u);
+    ASSERT_TRUE(nodes[0]->has_content_attributes());
+    ASSERT_TRUE(nodes[0]->content_attributes().has_geometry());
+    const auto& geo = nodes[0]->content_attributes().geometry();
+    EXPECT_EQ(geo.visible_bounding_box().width(), visible_w);
+    EXPECT_EQ(geo.visible_bounding_box().height(), visible_h);
+    EXPECT_EQ(geo.outer_bounding_box().width(), outer_w);
+    EXPECT_EQ(geo.outer_bounding_box().height(), outer_h);
+  };
+
+  // Both descendants are clipped by the 100x100 ancestor overflow clip of their
+  // containing block instead of escaping it to the viewport.
+  check_clipped_node(optimization_guide::proto::CSS_POSITION_FIXED, 100, 100,
+                     250, 250);
+  check_clipped_node(optimization_guide::proto::CSS_POSITION_ABSOLUTE, 100, 100,
+                     250, 250);
+}
+
+// Test that will-change creates a containing block for fixed elements only
+// when matching containing-block properties (e.g. transform or vendor-prefixed
+// -webkit-transform) and not unrelated properties with overlapping substrings
+// (e.g. text-transform).
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_ContainingBlockWillChange) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage("WillChangeContainingBlock", RawHtml(R"HTML(
+        <style>body { margin: 0; }</style>
+        <div id="will-change-transform"
+            style="will-change: opacity, transform; overflow: hidden;
+                   width: 100px; height: 50px;">
+          <div id="fixed-child-1"
+              style="position: fixed; top: 0; left: 0;
+                     width: 150px; height: 150px;">Child 1</div>
+        </div>
+        <div id="will-change-text-transform"
+            style="will-change: text-transform; overflow: hidden;
+                   width: 100px; height: 50px;">
+          <div id="fixed-child-2"
+              style="position: fixed; top: 0; left: 0;
+                     width: 150px; height: 150px;">Child 2</div>
+        </div>
+        <div id="will-change-webkit-transform"
+            style="will-change: -webkit-transform; overflow: hidden;
+                   width: 100px; height: 50px;">
+          <div id="fixed-child-3"
+              style="position: fixed; top: 0; left: 0;
+                     width: 150px; height: 150px;">Child 3</div>
+        </div>
+        <div id="will-change-contain"
+            style="will-change: contain; overflow: hidden;
+                   width: 100px; height: 50px;">
+          <div id="fixed-child-4"
+              style="position: fixed; top: 0; left: 0;
+                     width: 150px; height: 150px;">Child 4</div>
+        </div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> fixed_nodes;
+  FindNodesWithCssPosition(
+      root_node, optimization_guide::proto::CSS_POSITION_FIXED, &fixed_nodes);
+
+  ASSERT_EQ(fixed_nodes.size(), 4u);
+
+  // fixed-child-1 should be clipped by will-change: transform container
+  // (100x50).
+  const auto* fixed_child_1 = fixed_nodes[0];
+  ASSERT_TRUE(fixed_child_1->has_content_attributes());
+  ASSERT_TRUE(fixed_child_1->content_attributes().has_geometry());
+  const auto& geo_1 = fixed_child_1->content_attributes().geometry();
+  EXPECT_EQ(geo_1.css_position(),
+            optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_EQ(geo_1.visible_bounding_box().width(), 100);
+  EXPECT_EQ(geo_1.visible_bounding_box().height(), 50);
+  EXPECT_EQ(geo_1.outer_bounding_box().width(), 150);
+  EXPECT_EQ(geo_1.outer_bounding_box().height(), 150);
+
+  // fixed-child-2 should NOT be clipped by will-change: text-transform
+  // container (150x150).
+  const auto* fixed_child_2 = fixed_nodes[1];
+  ASSERT_TRUE(fixed_child_2->has_content_attributes());
+  ASSERT_TRUE(fixed_child_2->content_attributes().has_geometry());
+  const auto& geo_2 = fixed_child_2->content_attributes().geometry();
+  EXPECT_EQ(geo_2.css_position(),
+            optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_EQ(geo_2.visible_bounding_box().width(), 150);
+  EXPECT_EQ(geo_2.visible_bounding_box().height(), 150);
+  EXPECT_EQ(geo_2.outer_bounding_box().width(), 150);
+  EXPECT_EQ(geo_2.outer_bounding_box().height(), 150);
+
+  // fixed-child-3 should be clipped by will-change: -webkit-transform container
+  // (100x50).
+  const auto* fixed_child_3 = fixed_nodes[2];
+  ASSERT_TRUE(fixed_child_3->has_content_attributes());
+  ASSERT_TRUE(fixed_child_3->content_attributes().has_geometry());
+  const auto& geo_3 = fixed_child_3->content_attributes().geometry();
+  EXPECT_EQ(geo_3.css_position(),
+            optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_EQ(geo_3.visible_bounding_box().width(), 100);
+  EXPECT_EQ(geo_3.visible_bounding_box().height(), 50);
+  EXPECT_EQ(geo_3.outer_bounding_box().width(), 150);
+  EXPECT_EQ(geo_3.outer_bounding_box().height(), 150);
+
+  // fixed-child-4 should be clipped by will-change: contain container (100x50).
+  const auto* fixed_child_4 = fixed_nodes[3];
+  ASSERT_TRUE(fixed_child_4->has_content_attributes());
+  ASSERT_TRUE(fixed_child_4->content_attributes().has_geometry());
+  const auto& geo_4 = fixed_child_4->content_attributes().geometry();
+  EXPECT_EQ(geo_4.css_position(),
+            optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_EQ(geo_4.visible_bounding_box().width(), 100);
+  EXPECT_EQ(geo_4.visible_bounding_box().height(), 50);
+  EXPECT_EQ(geo_4.outer_bounding_box().width(), 150);
+  EXPECT_EQ(geo_4.outer_bounding_box().height(), 150);
+}
+
+// Test that dynamically mutating an element's CSS position to fixed right
+// before extraction updates its geometry and CSS_POSITION_FIXED.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_RichExtraction_DynamicPositionMutation) {
+  if (!IsRefactored()) {
+    return;
+  }
+
+  auto page_structure = HtmlPage("DynamicPositionMutation", RawHtml(R"HTML(
+        <div id="banner"
+             style="position: static; width: 100px; height: 50px;">Banner</div>
+      )HTML"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  // Mutate element to position: fixed before running extraction.
+  CallJavascript("document.getElementById('banner').style.position = 'fixed';");
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const auto& page_context = *response.value();
+  const auto& root_node = page_context.annotated_page_content().root_node();
+
+  std::vector<const optimization_guide::proto::ContentNode*> fixed_nodes;
+  FindNodesWithCssPosition(
+      root_node, optimization_guide::proto::CSS_POSITION_FIXED, &fixed_nodes);
+
+  ASSERT_EQ(fixed_nodes.size(), 1u);
+  ASSERT_TRUE(fixed_nodes[0]->has_content_attributes());
+  ASSERT_TRUE(fixed_nodes[0]->content_attributes().has_geometry());
+  EXPECT_EQ(fixed_nodes[0]->content_attributes().geometry().css_position(),
+            optimization_guide::proto::CSS_POSITION_FIXED);
+  EXPECT_TRUE(VerifyGeometry(*fixed_nodes[0]));
+}
+
+// Test that in actionable Rich APC extraction, node geometries inside both
+// same-origin and cross-origin iframes are translated to top-level absolute
+// coordinates rather than remaining relative to their local iframe.
+TEST_P(
+    PageContextWrapperTest,
+    PopulatePageContext_RichExtractionActionable_IframeNodeGeometriesAreAbsolute) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  auto same_origin_child = HtmlPage(
+      "Same Origin Child",
+      RawHtml("<style>html, body { margin: 0; padding: 0; }</style>"
+              "<button style='position: absolute; left: 10px; top: 15px; "
+              "width: 80px; height: 30px; margin: 0; padding: 0; border: "
+              "none;'>Same Origin Button</button>"));
+
+  auto cross_origin_child = HtmlPage(
+      "Cross Origin Child",
+      RawHtml("<style>html, body { margin: 0; padding: 0; }</style>"
+              "<button style='position: absolute; left: 12px; top: 18px; "
+              "width: 90px; height: 35px; margin: 0; padding: 0; border: "
+              "none;'>Cross Origin Button</button>"));
+
+  auto page_structure = HtmlPage(
+      "Main Frame",
+      RawHtml("<style>"
+              "html, body { margin: 0; padding: 0; }"
+              "iframe:nth-of-type(1) { position: absolute; left: 40px; top: "
+              "60px; width: 200px; height: 150px; border: none; margin: 0; "
+              "padding: 0; }"
+              "iframe:nth-of-type(2) { position: absolute; left: 50px; top: "
+              "240px; width: 220px; height: 160px; border: none; margin: 0; "
+              "padding: 0; }"
+              "</style>"),
+      Iframe(TestOrigin::kMain, std::move(same_origin_child), "iframe_same"),
+      Iframe(TestOrigin::kCrossA, std::move(cross_origin_child),
+             "iframe_cross"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  GURL same_url = page_helper_->GetUrlForId("iframe_same");
+  GURL cross_url = page_helper_->GetUrlForId("iframe_cross");
+
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  auto* frames_manager = web_state()->GetWebFramesManager(
+      extractor_feature()->GetSupportedContentWorld());
+  ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(5), ^{
+    return frames_manager->GetAllWebFrames().size() == 3;
+  }));
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder()
+          .SetUseRichExtraction(true)
+          .SetUseRichExtractionWithActionable(true)
+          .Build();
+
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        wrapper.shouldGetAnnotatedPageContent = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const optimization_guide::proto::ContentNode& root_node =
+      response.value()->annotated_page_content().root_node();
+  ASSERT_EQ(root_node.children_nodes_size(), 2);
+
+  // 1. Same-origin iframe at (40, 60, 200, 150) with button at local (10, 15,
+  //    80, 30) -> expected top-level absolute (50, 75, 80, 30).
+  const optimization_guide::proto::ContentNode& same_iframe =
+      root_node.children_nodes(0);
+  EXPECT_EQ(same_iframe.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME);
+  EXPECT_EQ(same_iframe.content_attributes().iframe_data().frame_data().url(),
+            same_url.spec());
+  EXPECT_EQ(
+      same_iframe.content_attributes().geometry().outer_bounding_box().x(), 40);
+  EXPECT_EQ(
+      same_iframe.content_attributes().geometry().outer_bounding_box().y(), 60);
+  ASSERT_EQ(same_iframe.children_nodes_size(), 1);
+  const optimization_guide::proto::ContentNode& same_iframe_root =
+      same_iframe.children_nodes(0);
+  EXPECT_EQ(
+      same_iframe_root.content_attributes().geometry().outer_bounding_box().x(),
+      40);
+  EXPECT_EQ(
+      same_iframe_root.content_attributes().geometry().outer_bounding_box().y(),
+      60);
+  ASSERT_EQ(same_iframe_root.children_nodes_size(), 1);
+  const optimization_guide::proto::Geometry& same_button_geom =
+      same_iframe_root.children_nodes(0).content_attributes().geometry();
+  EXPECT_EQ(same_button_geom.outer_bounding_box().x(), 50);
+  EXPECT_EQ(same_button_geom.outer_bounding_box().y(), 75);
+  EXPECT_EQ(same_button_geom.outer_bounding_box().width(), 80);
+  EXPECT_EQ(same_button_geom.outer_bounding_box().height(), 30);
+  EXPECT_EQ(same_button_geom.visible_bounding_box().x(), 50);
+  EXPECT_EQ(same_button_geom.visible_bounding_box().y(), 75);
+  EXPECT_EQ(same_button_geom.visible_bounding_box().width(), 80);
+  EXPECT_EQ(same_button_geom.visible_bounding_box().height(), 30);
+
+  // 2. Cross-origin iframe at (50, 240, 220, 160) with button at local (12, 18,
+  //    90, 35) -> expected top-level absolute (62, 258, 90, 35).
+  const optimization_guide::proto::ContentNode& cross_iframe =
+      root_node.children_nodes(1);
+  EXPECT_EQ(cross_iframe.content_attributes().attribute_type(),
+            optimization_guide::proto::CONTENT_ATTRIBUTE_IFRAME);
+  EXPECT_EQ(cross_iframe.content_attributes().iframe_data().frame_data().url(),
+            cross_url.spec());
+  EXPECT_EQ(
+      cross_iframe.content_attributes().geometry().outer_bounding_box().x(),
+      50);
+  EXPECT_EQ(
+      cross_iframe.content_attributes().geometry().outer_bounding_box().y(),
+      240);
+  ASSERT_EQ(cross_iframe.children_nodes_size(), 1);
+  const optimization_guide::proto::ContentNode& cross_iframe_root =
+      cross_iframe.children_nodes(0);
+  EXPECT_EQ(cross_iframe_root.content_attributes()
+                .geometry()
+                .outer_bounding_box()
+                .x(),
+            50);
+  EXPECT_EQ(cross_iframe_root.content_attributes()
+                .geometry()
+                .outer_bounding_box()
+                .y(),
+            240);
+  ASSERT_EQ(cross_iframe_root.children_nodes_size(), 1);
+  const optimization_guide::proto::Geometry& cross_button_geom =
+      cross_iframe_root.children_nodes(0).content_attributes().geometry();
+  EXPECT_EQ(cross_button_geom.outer_bounding_box().x(), 62);
+  EXPECT_EQ(cross_button_geom.outer_bounding_box().y(), 258);
+  EXPECT_EQ(cross_button_geom.outer_bounding_box().width(), 90);
+  EXPECT_EQ(cross_button_geom.outer_bounding_box().height(), 35);
+  EXPECT_EQ(cross_button_geom.visible_bounding_box().x(), 62);
+  EXPECT_EQ(cross_button_geom.visible_bounding_box().y(), 258);
+  EXPECT_EQ(cross_button_geom.visible_bounding_box().width(), 90);
+  EXPECT_EQ(cross_button_geom.visible_bounding_box().height(), 35);
+}
+
+// Test that a password field inside a same-origin iframe gets a screenshot
+// redaction box at its main frame position, with the iframe offset applied
+// exactly once, and that the field's translated geometry in the tree matches
+// that box. This guards against translating the tree before the redaction
+// boxes are collected from it.
+TEST_P(PageContextWrapperTest,
+       PopulatePageContext_IframePasswordRedactionBoxMatchesTreeGeometry) {
+  if (!IsRefactored()) {
+    GTEST_SKIP() << "ApcV2 not supported for the non-refactored APC wrapper";
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kPageContextScreenshotPasswordRedaction);
+
+  auto child_page = HtmlPage(
+      "Password Child",
+      RawHtml("<style>html, body { margin: 0; padding: 0; }</style>"
+              "<input type='password' value='secret' style='position: "
+              "absolute; left: 5px; top: 10px; width: 40px; height: 20px; "
+              "margin: 0; padding: 0; border: none;'>"));
+  auto page_structure = HtmlPage(
+      "Main Frame",
+      RawHtml("<style>"
+              "html, body { margin: 0; padding: 0; }"
+              "iframe { position: absolute; left: 20px; top: 30px; width: "
+              "70px; height: 60px; border: none; margin: 0; padding: 0; }"
+              "</style>"),
+      Iframe(TestOrigin::kMain, std::move(child_page), "iframe_same"));
+
+  std::string main_html = page_helper_->Build(page_structure);
+  web::test::LoadHtml(base::SysUTF8ToNSString(main_html),
+                      test_server_.GetURL(kMainPagePath), web_state());
+
+  auto* frames_manager = web_state()->GetWebFramesManager(
+      extractor_feature()->GetSupportedContentWorld());
+  ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(5), ^{
+    return frames_manager->GetAllWebFrames().size() == 2;
+  }));
+
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder().SetUseRichExtraction(true).Build();
+
+  __block PageContextWrapper* captured_wrapper = nil;
+  PageContextWrapperCallbackResponse response = RunPageContextWrapperWithConfig(
+      web_state(), config, ^(PageContextWrapper* wrapper) {
+        captured_wrapper = wrapper;
+        wrapper.shouldGetAnnotatedPageContent = YES;
+        wrapper.shouldGetSnapshot = YES;
+      });
+
+  ASSERT_TRUE(response.has_value());
+  const optimization_guide::proto::ContentNode* password_node =
+      FindFirstFormControlNode(
+          response.value()->annotated_page_content().root_node());
+  ASSERT_TRUE(password_node);
+
+  // The iframe at (20, 30) offsets the field at local (5, 10) exactly once.
+  const optimization_guide::proto::BoundingRect& visible =
+      password_node->content_attributes().geometry().visible_bounding_box();
+  EXPECT_EQ(visible.x(), 25);
+  EXPECT_EQ(visible.y(), 40);
+  EXPECT_EQ(visible.width(), 40);
+  EXPECT_EQ(visible.height(), 20);
+
+  const std::vector<RedactionBoxEntry>& redaction_boxes =
+      [captured_wrapper grafterForTesting]
+          .universal_bounding_boxes_for_redaction();
+  ASSERT_EQ(redaction_boxes.size(), 1u);
+  const CGRect& redaction_box = redaction_boxes[0].visible_box;
+  EXPECT_EQ(redaction_box.origin.x, 25);
+  EXPECT_EQ(redaction_box.origin.y, 40);
+  EXPECT_EQ(redaction_box.size.width, 40);
+  EXPECT_EQ(redaction_box.size.height, 20);
 }
 
 INSTANTIATE_TEST_SUITE_P(,

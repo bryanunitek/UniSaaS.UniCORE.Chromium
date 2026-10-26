@@ -21,11 +21,12 @@
 #include "chrome/browser/supervised_user/supervised_user_extensions_metrics_recorder.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_test_delegate.h"
 #include "chrome/browser/ui/supervised_user/parent_permission_dialog.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/supervised_user/parent_permission_dialog_view.h"
 #include "chrome/common/chrome_paths.h"
@@ -203,7 +204,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionEnableFlowTestSupervised,
                                   test_extension()->id(), &delegate);
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   enable_flow.StartForWebContents(web_contents);
   delegate.Wait();
 
@@ -250,7 +251,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionEnableFlowTestSupervised,
   ExtensionEnableFlow enable_flow(browser()->GetProfile(),
                                   test_extension()->id(), &delegate);
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   enable_flow.StartForWebContents(web_contents);
   delegate.Wait();
 

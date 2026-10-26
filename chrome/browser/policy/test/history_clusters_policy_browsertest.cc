@@ -6,7 +6,6 @@
 #include "chrome/browser/history_clusters/history_clusters_service_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/history_clusters/core/config.h"
 #include "components/history_clusters/core/features.h"
 #include "components/history_clusters/core/history_clusters_prefs.h"
@@ -38,7 +37,7 @@ IN_PROC_BROWSER_TEST_F(HistoryClustersPolicyTest, HistoryClustersVisible) {
   auto* history_clusters_service =
       HistoryClustersServiceFactory::GetForBrowserContext(
           browser()->GetProfile());
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   PolicyMap policies;
 
   // Verify that history clusters are visible by default.

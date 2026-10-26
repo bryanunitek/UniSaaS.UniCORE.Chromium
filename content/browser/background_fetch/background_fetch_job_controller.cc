@@ -11,9 +11,27 @@
 #include "content/browser/background_fetch/background_fetch_cross_origin_filter.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
 #include "content/browser/background_fetch/background_fetch_request_match_params.h"
+#include "content/browser/loader/url_loader_factory_utils.h"
+#include "content/browser/service_worker/embedded_worker_instance.h"
+#include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/service_worker/service_worker_registration.h"
+#include "content/browser/service_worker/service_worker_version.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_host.h"
+#include "content/public/common/content_features.h"
+#include "mojo/public/cpp/bindings/shared_remote.h"
+#include "net/base/isolation_info.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
+#include "services/network/public/cpp/url_loader_factory_builder.h"
+#include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
+#include "services/network/public/mojom/client_security_state.mojom.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom.h"
+#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/url_loader_network_service_observer.mojom.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 
 namespace content {
@@ -69,6 +87,16 @@ bool RequiresCorsPreflight(const BackgroundFetchRequestInfo& request,
 using blink::mojom::BackgroundFetchError;
 using blink::mojom::BackgroundFetchFailureReason;
 
+BackgroundFetchJobController::ActiveRequestState::ActiveRequestState() =
+    default;
+BackgroundFetchJobController::ActiveRequestState::ActiveRequestState(
+    ActiveRequestState&&) = default;
+BackgroundFetchJobController::ActiveRequestState&
+BackgroundFetchJobController::ActiveRequestState::operator=(
+    ActiveRequestState&&) = default;
+BackgroundFetchJobController::ActiveRequestState::~ActiveRequestState() =
+    default;
+
 BackgroundFetchJobController::BackgroundFetchJobController(
     BackgroundFetchDataManager* data_manager,
     BackgroundFetchDelegateProxy* delegate_proxy,
@@ -90,7 +118,7 @@ BackgroundFetchJobController::BackgroundFetchJobController(
       upload_total_(upload_total),
       progress_callback_(std::move(progress_callback)),
       finished_callback_(std::move(finished_callback)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 }
 
 void BackgroundFetchJobController::InitializeRequestStatus(
@@ -100,11 +128,11 @@ void BackgroundFetchJobController::InitializeRequestStatus(
         active_fetch_requests,
     bool start_paused,
     std::optional<net::IsolationInfo> isolation_info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 
   // Don't allow double initialization.
-  DCHECK_GT(total_downloads, 0);
-  DCHECK_EQ(total_downloads_, 0);
+  CHECK_GT(total_downloads, 0, base::NotFatalUntil::M158);
+  CHECK_EQ(total_downloads_, 0, base::NotFatalUntil::M158);
 
   completed_downloads_ = completed_downloads;
   total_downloads_ = total_downloads;
@@ -123,15 +151,16 @@ void BackgroundFetchJobController::InitializeRequestStatus(
       upload_total_, std::move(active_guids), start_paused,
       std::move(isolation_info));
 
-  for (auto& active_request : active_fetch_requests)
-    active_request_map_[active_request->download_guid()] = active_request;
+  for (auto& active_request : active_fetch_requests) {
+    active_requests_[active_request->download_guid()].request = active_request;
+  }
 
   delegate_proxy_->CreateDownloadJob(weak_ptr_factory_.GetWeakPtr(),
                                      std::move(fetch_description));
 }
 
 BackgroundFetchJobController::~BackgroundFetchJobController() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 }
 
 bool BackgroundFetchJobController::HasMoreRequests() {
@@ -141,13 +170,13 @@ bool BackgroundFetchJobController::HasMoreRequests() {
 void BackgroundFetchJobController::StartRequest(
     scoped_refptr<BackgroundFetchRequestInfo> request,
     RequestFinishedCallback request_finished_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK_LT(completed_downloads_, total_downloads_);
-  DCHECK(request_finished_callback);
-  DCHECK(request);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
+  CHECK_LT(completed_downloads_, total_downloads_, base::NotFatalUntil::M158);
+  CHECK(request_finished_callback, base::NotFatalUntil::M158);
+  CHECK(request, base::NotFatalUntil::M158);
 
-  active_request_finished_callbacks_.emplace(
-      request->download_guid(), std::move(request_finished_callback));
+  ActiveRequestState& state = active_requests_[request->download_guid()];
+  state.finished_callback = std::move(request_finished_callback);
 
   if (IsMixedContent(*request.get()) ||
       RequiresCorsPreflight(*request.get(),
@@ -159,7 +188,7 @@ void BackgroundFetchJobController::StartRequest(
     return;
   }
 
-  active_request_map_[request->download_guid()] = request;
+  state.request = request;
   delegate_proxy_->StartRequest(registration_id().unique_id(),
                                 registration_id().storage_key().origin(),
                                 request.get());
@@ -168,11 +197,12 @@ void BackgroundFetchJobController::StartRequest(
 void BackgroundFetchJobController::DidStartRequest(
     const std::string& guid,
     std::unique_ptr<BackgroundFetchResponse> response) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 
-  DCHECK(active_request_map_.count(guid));
-  const auto& request = active_request_map_[guid];
-  DCHECK(request);
+  auto it = active_requests_.find(guid);
+  CHECK(it != active_requests_.end(), base::NotFatalUntil::M158);
+  const auto& request = it->second.request;
+  CHECK(request, base::NotFatalUntil::M158);
 
   request->PopulateWithResponse(std::move(response));
 
@@ -187,12 +217,13 @@ void BackgroundFetchJobController::DidStartRequest(
 void BackgroundFetchJobController::DidUpdateRequest(const std::string& guid,
                                                     uint64_t bytes_uploaded,
                                                     uint64_t bytes_downloaded) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 
-  DCHECK(active_request_map_.count(guid));
-  const auto& request = active_request_map_[guid];
-  DCHECK(request);
-  InProgressRequestBytes& in_progress_bytes = active_bytes_map_[guid];
+  auto it = active_requests_.find(guid);
+  CHECK(it != active_requests_.end(), base::NotFatalUntil::M158);
+  const auto& request = it->second.request;
+  CHECK(request, base::NotFatalUntil::M158);
+  InProgressRequestBytes& in_progress_bytes = it->second.in_progress_bytes;
 
   // Don't send download updates so the size is not leaked.
   // Upload updates are fine since that information is already available.
@@ -216,11 +247,12 @@ void BackgroundFetchJobController::DidUpdateRequest(const std::string& guid,
 void BackgroundFetchJobController::DidCompleteRequest(
     const std::string& guid,
     std::unique_ptr<BackgroundFetchResult> result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 
-  DCHECK(active_request_map_.count(guid));
-  const auto& request = active_request_map_[guid];
-  DCHECK(request);
+  auto it = active_requests_.find(guid);
+  CHECK(it != active_requests_.end(), base::NotFatalUntil::M158);
+  scoped_refptr<BackgroundFetchRequestInfo> request = it->second.request;
+  CHECK(request, base::NotFatalUntil::M158);
 
   request->SetResult(std::move(result));
 
@@ -228,9 +260,7 @@ void BackgroundFetchJobController::DidCompleteRequest(
     complete_requests_downloaded_bytes_cache_ += request->GetResponseSize();
   complete_requests_uploaded_bytes_cache_ += request->request_body_size();
 
-  NotifyDownloadComplete(request);
-  active_bytes_map_.erase(guid);
-  active_request_map_.erase(guid);
+  NotifyDownloadComplete(std::move(request));
 }
 
 blink::mojom::BackgroundFetchRegistrationDataPtr
@@ -244,18 +274,16 @@ BackgroundFetchJobController::NewRegistrationData() const {
 
 uint64_t BackgroundFetchJobController::GetInProgressDownloadedBytes() {
   uint64_t bytes = 0u;
-  for (const std::pair<const std::string, InProgressRequestBytes>&
-           in_progress_bytes : active_bytes_map_) {
-    bytes += in_progress_bytes.second.downloaded;
+  for (const auto& entry : active_requests_) {
+    bytes += entry.second.in_progress_bytes.downloaded;
   }
   return bytes;
 }
 
 uint64_t BackgroundFetchJobController::GetInProgressUploadedBytes() {
   uint64_t bytes = 0u;
-  for (const std::pair<const std::string, InProgressRequestBytes>&
-           in_progress_bytes : active_bytes_map_) {
-    bytes += in_progress_bytes.second.uploaded;
+  for (const auto& entry : active_requests_) {
+    bytes += entry.second.in_progress_bytes.uploaded;
   }
   return bytes;
 }
@@ -288,8 +316,9 @@ void BackgroundFetchJobController::Abort(
 void BackgroundFetchJobController::Finish(
     BackgroundFetchFailureReason reason_to_abort,
     ErrorCallback callback) {
-  DCHECK(reason_to_abort != BackgroundFetchFailureReason::NONE ||
-         !HasMoreRequests());
+  CHECK(reason_to_abort != BackgroundFetchFailureReason::NONE ||
+            !HasMoreRequests(),
+        base::NotFatalUntil::M158);
 
   // Race conditions make it possible for a controller to finish twice. This
   // should be removed when the scheduler starts owning the controllers.
@@ -305,7 +334,7 @@ void BackgroundFetchJobController::Finish(
 void BackgroundFetchJobController::PopNextRequest(
     RequestStartedCallback request_started_callback,
     RequestFinishedCallback request_finished_callback) {
-  DCHECK(HasMoreRequests());
+  CHECK(HasMoreRequests(), base::NotFatalUntil::M158);
 
   ++pending_downloads_;
   data_manager_->PopNextRequest(
@@ -325,6 +354,128 @@ void BackgroundFetchJobController::DidPopNextRequest(
     Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
           base::DoNothing());
     return;
+  }
+
+  if (url_loader_factory_ ||
+      !base::FeatureList::IsEnabled(
+          features::kBackgroundFetchLocalNetworkAccess)) {
+    if (url_loader_factory_) {
+      request_info->set_url_loader_factory(url_loader_factory_);
+    }
+    std::move(request_started_callback)
+        .Run(registration_id(), request_info.get());
+    StartRequest(std::move(request_info), std::move(request_finished_callback));
+    return;
+  }
+
+  scoped_refptr<ServiceWorkerContextWrapper> service_worker_context =
+      data_manager_->service_worker_context();
+  if (service_worker_context) {
+    service_worker_context->FindRegistrationForIdWithoutActivation(
+        registration_id_.service_worker_registration_id(),
+        registration_id_.storage_key(),
+        base::BindOnce(
+            &BackgroundFetchJobController::DidGetRegistrationForRequest,
+            weak_ptr_factory_.GetWeakPtr(), std::move(request_started_callback),
+            std::move(request_finished_callback), std::move(request_info)));
+  } else {
+    DidGetRegistrationForRequest(
+        std::move(request_started_callback),
+        std::move(request_finished_callback), std::move(request_info),
+        blink::ServiceWorkerStatusCode::kErrorAbort, nullptr);
+  }
+}
+
+void BackgroundFetchJobController::InitializeUrlLoaderFactory(
+    scoped_refptr<ServiceWorkerRegistration> registration) {
+  if (url_loader_factory_ || !registration || !registration->active_version()) {
+    return;
+  }
+
+  scoped_refptr<ServiceWorkerContextWrapper> service_worker_context =
+      data_manager_->service_worker_context();
+  if (!service_worker_context) {
+    return;
+  }
+
+  StoragePartitionImpl* storage_partition =
+      service_worker_context->storage_partition();
+  if (!storage_partition) {
+    return;
+  }
+
+  int process_id = ChildProcessHost::kInvalidUniqueID;
+  if (registration->active_version()->embedded_worker()->status() ==
+      blink::EmbeddedWorkerStatus::kRunning) {
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue once RendererProcessId
+    // adopts strong types.
+    process_id = registration->active_version()
+                     ->embedded_worker()
+                     ->process_id()
+                     .GetUnsafeValue();
+  }
+
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+      observer_remote =
+          storage_partition
+              ->CreateURLLoaderNetworkObserverForServiceOrSharedWorker(
+                  network::OriginatingProcessId::renderer(
+                      network::RendererProcessId(process_id)),
+                  registration_id_.storage_key().origin());
+
+  network::mojom::URLLoaderFactoryParamsPtr factory_params =
+      storage_partition->CreateURLLoaderFactoryParams();
+  factory_params->client_security_state =
+      registration->active_version()->BuildClientSecurityState().Clone();
+
+  if (observer_remote) {
+    factory_params->url_loader_network_observer = std::move(observer_remote);
+  }
+
+  bool bypass_redirect_checks = false;
+  CHECK(!url_loader_factory_, base::NotFatalUntil::M158);
+  url_loader_factory_ = url_loader_factory::Create(
+      ContentBrowserClient::URLLoaderFactoryType::kServiceWorkerSubResource,
+      url_loader_factory::TerminalParams::ForNetworkContext(
+          storage_partition->GetNetworkContext(), std::move(factory_params),
+          url_loader_factory::HeaderClientOption::kAllow,
+          url_loader_factory::FactoryOverrideOption::kAllow),
+      url_loader_factory::ContentClientParams(
+          storage_partition->browser_context(), nullptr /* frame_host */,
+          process_id, registration_id_.storage_key().origin(),
+          net::IsolationInfo(), ukm::kInvalidSourceIdObj,
+          &bypass_redirect_checks));
+}
+
+void BackgroundFetchJobController::DidGetRegistrationForRequest(
+    RequestStartedCallback request_started_callback,
+    RequestFinishedCallback request_finished_callback,
+    scoped_refptr<BackgroundFetchRequestInfo> request_info,
+    blink::ServiceWorkerStatusCode status,
+    scoped_refptr<ServiceWorkerRegistration> registration) {
+  // If the fetch has already failed, abort. This can happen if the fetch was
+  // cancelled while we were getting the registration.
+  if (failure_reason_ != BackgroundFetchFailureReason::NONE) {
+    Abort(failure_reason_, base::DoNothing());
+    return;
+  }
+
+  if (status != blink::ServiceWorkerStatusCode::kOk || !registration ||
+      !registration->active_version()) {
+    Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
+          base::DoNothing());
+    return;
+  }
+
+  if (base::FeatureList::IsEnabled(
+          features::kBackgroundFetchLocalNetworkAccess)) {
+    InitializeUrlLoaderFactory(registration);
+    if (!url_loader_factory_) {
+      Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
+            base::DoNothing());
+      return;
+    }
+    request_info->set_url_loader_factory(url_loader_factory_);
   }
 
   std::move(request_started_callback)
@@ -366,38 +517,102 @@ void BackgroundFetchJobController::NotifyDownloadComplete(
     scoped_refptr<BackgroundFetchRequestInfo> request) {
   --pending_downloads_;
   ++completed_downloads_;
-  auto it = active_request_finished_callbacks_.find(request->download_guid());
-  CHECK(it != active_request_finished_callbacks_.end());
-  std::move(it->second).Run(registration_id(), std::move(request));
-  active_request_finished_callbacks_.erase(it);
+  auto it = active_requests_.find(request->download_guid());
+  CHECK(it != active_requests_.end());
+  std::move(it->second.finished_callback)
+      .Run(registration_id(), std::move(request));
+  active_requests_.erase(it);
+}
+
+void BackgroundFetchJobController::DidGetRegistrationForUploadData(
+    const std::string& guid,
+    BackgroundFetchDelegate::GetUploadDataCallback callback,
+    blink::ServiceWorkerStatusCode status,
+    scoped_refptr<ServiceWorkerRegistration> registration) {
+  if (status == blink::ServiceWorkerStatusCode::kOk && registration) {
+    InitializeUrlLoaderFactory(registration);
+  }
+  if (!url_loader_factory_) {
+    Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
+          base::DoNothing());
+    std::move(callback).Run(
+        BackgroundFetchDelegate::Client::GetUploadDataResponse());
+    return;
+  }
+  GetUploadData(guid, std::move(callback));
 }
 
 void BackgroundFetchJobController::GetUploadData(
     const std::string& guid,
     BackgroundFetchDelegate::GetUploadDataCallback callback) {
-  DCHECK(active_request_map_.count(guid));
-  const auto& request = active_request_map_[guid];
-  DCHECK(request);
+  auto it = active_requests_.find(guid);
+  if (it == active_requests_.end() || !it->second.request) {
+    Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
+          base::DoNothing());
+    std::move(callback).Run(
+        BackgroundFetchDelegate::Client::GetUploadDataResponse());
+    return;
+  }
+  const scoped_refptr<BackgroundFetchRequestInfo>& request = it->second.request;
 
-  data_manager_->GetRequestBlob(
+  if (base::FeatureList::IsEnabled(
+          features::kBackgroundFetchLocalNetworkAccess) &&
+      !url_loader_factory_) {
+    // If the factory is missing (e.g. after restart), we need to recreate it
+    // before returning the upload data.
+    scoped_refptr<ServiceWorkerContextWrapper> service_worker_context =
+        data_manager_->service_worker_context();
+    if (!service_worker_context) {
+      Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
+            base::DoNothing());
+      std::move(callback).Run(
+          BackgroundFetchDelegate::Client::GetUploadDataResponse());
+      return;
+    }
+
+    service_worker_context->FindRegistrationForIdWithoutActivation(
+        registration_id_.service_worker_registration_id(),
+        registration_id_.storage_key(),
+        base::BindOnce(
+            &BackgroundFetchJobController::DidGetRegistrationForUploadData,
+            weak_ptr_factory_.GetWeakPtr(), guid, std::move(callback)));
+    return;
+  }
+
+  if (request->request_body_size() == 0) {
+    DidGetUploadData(std::move(callback), 0, BackgroundFetchError::NONE,
+                     mojo::PendingRemote<network::mojom::DataPipeGetter>());
+    return;
+  }
+
+  data_manager_->GetRequestBody(
       registration_id(), request,
       base::BindOnce(&BackgroundFetchJobController::DidGetUploadData,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+                     request->request_body_size()));
 }
 
 void BackgroundFetchJobController::DidGetUploadData(
     BackgroundFetchDelegate::GetUploadDataCallback callback,
+    uint64_t size,
     BackgroundFetchError error,
-    blink::mojom::SerializedBlobPtr blob) {
+    mojo::PendingRemote<network::mojom::DataPipeGetter> data_pipe_getter) {
   if (error != BackgroundFetchError::NONE) {
     Abort(BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE,
           base::DoNothing());
-    std::move(callback).Run(nullptr);
+    std::move(callback).Run(
+        BackgroundFetchDelegate::Client::GetUploadDataResponse());
     return;
   }
 
-  DCHECK(blob);
-  std::move(callback).Run(std::move(blob));
+  BackgroundFetchDelegate::Client::GetUploadDataResponse response;
+  if (data_pipe_getter) {
+    response.size = base::ByteSize(size);
+    response.data_pipe_getter = std::move(data_pipe_getter);
+  }
+  response.url_loader_factory = url_loader_factory_;
+
+  std::move(callback).Run(std::move(response));
 }
 
 }  // namespace content

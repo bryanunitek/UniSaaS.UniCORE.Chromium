@@ -8,11 +8,13 @@
 #include <dawn/wire/client/webgpu_cpp.h>
 #include <dawn/wire/client/webgpu_cpp_print.h>
 
+#include <map>
 #include <memory>
 
 #include "build/build_config.h"
 #include "gpu/command_buffer/client/shared_memory_limits.h"
 #include "gpu/command_buffer/common/webgpu_cmd_ids.h"
+#include "gpu/config/gpu_preferences.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace viz {
@@ -46,6 +48,12 @@ class WebGPUTest : public testing::Test {
     // By default, disable the blocklist so all adapters
     // can be tested.
     bool adapter_blocklist = false;
+
+    // Overrides the adapter selection, like --use-webgpu-adapter.
+    WebGPUAdapterName use_webgpu_adapter = WebGPUAdapterName::kDefault;
+
+    // If true, Initialize() does not expect an adapter to be found.
+    bool allow_no_adapter = false;
   };
 
  protected:
@@ -87,6 +95,8 @@ class WebGPUTest : public testing::Test {
   static std::map<std::pair<WGPUDevice, wgpu::ErrorType>, /* matched */ bool>
       s_expected_errors;
 
+  static std::map<WGPUDevice, /* matched */ bool> s_expected_devices_lost;
+
   wgpu::Instance instance_ = nullptr;
   wgpu::Adapter adapter_ = nullptr;
 
@@ -108,6 +118,18 @@ class WebGPUTest : public testing::Test {
     EXPECT_TRUE(it.first->second)                                              \
         << "Expected error (" << type << ") in `" #statement "`";              \
     s_expected_errors.erase(it.first);                                         \
+  } while (0)
+
+#define EXPECT_WEBGPU_DEVICE_LOST(device, statement)                        \
+  do {                                                                      \
+    PollUntilIdle();                                                        \
+    auto it = s_expected_devices_lost.insert({device.Get(), false});        \
+    EXPECT_TRUE(it.second) << "Only one expectation per-device supported."; \
+    statement;                                                              \
+    PollUntilIdle();                                                        \
+    EXPECT_TRUE(it.first->second)                                           \
+        << "Expected device lost in `" #statement "`";                      \
+    s_expected_devices_lost.erase(it.first);                                \
   } while (0)
 
 }  // namespace gpu

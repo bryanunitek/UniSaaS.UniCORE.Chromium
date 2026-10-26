@@ -229,6 +229,12 @@ class OmniboxClientIOS {
                                const BitmapFetchedCallback& on_bitmap_fetched) {
   }
 
+  // Starts prerendering `url` with `transition` immediately (no delay).
+  virtual void StartPrerender(const GURL& url, ui::PageTransition transition) {}
+
+  // Cancels any ongoing prerender.
+  virtual void CancelPrerender() {}
+
   // These two methods fetch favicons if the embedder supports it. Not all
   // embedders do. These methods return the favicon synchronously if possible.
   // Otherwise, they return an empty gfx::Image and `on_favicon_fetched` may or
@@ -296,7 +302,7 @@ class OmniboxClientIOS {
       TemplateURLRef::PostContent* post_content,
       WindowOpenDisposition disposition,
       ui::PageTransition transition,
-      AutocompleteMatchType::Type match_type,
+      omnibox::AutocompleteMatchType match_type,
       base::TimeTicks match_selection_timestamp,
       bool destination_url_entered_without_scheme,
       bool destination_url_entered_with_http_scheme,
@@ -322,7 +328,7 @@ class OmniboxClientIOS {
   // activations of the AI Mode page action icon.
   virtual void OpenUrl(
       GURL gurl,
-      WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB) {}
+      WindowOpenDisposition disposition = WindowOpenDisposition::kCurrentTab) {}
 
   // Even though IPH suggestions aren't selectable like normal matches, they can
   // have a 'learn more' or next-steps link. `OpenIphLink()` allows opening
@@ -345,6 +351,9 @@ class OmniboxClientIOS {
 
   // Returns whether the omnibox should skip zero suggest requests.
   virtual bool ShouldSkipZeroSuggestRequest() const;
+
+  // Returns whether the omnibox should
+  virtual bool ShouldSuppressVerbatimSuggestion() const;
 
   virtual GURL GetContextualTasksInnerFrameURL() const;
 

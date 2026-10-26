@@ -4,12 +4,11 @@
 
 #include "chrome/browser/ash/policy/handlers/lock_to_single_user_manager.h"
 
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/userdataauth/cryptohome_misc_client.h"
@@ -17,6 +16,7 @@
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
 
 using RebootOnSignOutPolicy =
@@ -46,7 +46,7 @@ LockToSingleUserManager::GetLockToSingleUserManagerInstance() {
 LockToSingleUserManager::LockToSingleUserManager() {
   user_manager::UserManager::Get()->AddSessionStateObserver(this);
 
-  DCHECK(!g_lock_to_single_user_manager_instance);
+  CHECK(!g_lock_to_single_user_manager_instance, base::NotFatalUntil::M160);
   g_lock_to_single_user_manager_instance = this;
 }
 
@@ -128,8 +128,6 @@ void LockToSingleUserManager::AddVmStartingObservers(user_manager::User* user) {
 
   crostini::CrostiniManager::GetForProfile(profile)->AddVmStartingObserver(
       this);
-  plugin_vm::PluginVmManagerFactory::GetForProfile(profile)
-      ->AddVmStartingObserver(this);
 
   GetConciergeClient()->AddVmObserver(this);
 
@@ -139,7 +137,9 @@ void LockToSingleUserManager::AddVmStartingObservers(user_manager::User* user) {
 void LockToSingleUserManager::LockToSingleUser() {
   cryptohome::AccountIdentifier account_id =
       cryptohome::CreateAccountIdentifierFromAccountId(
-          user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId());
+          CHECK_DEREF(
+              session_manager::SessionManager::Get()->GetPrimarySession())
+              .account_id());
   RebootOnSignOutRequest request;
   request.mutable_account_id()->CopyFrom(account_id);
   ash::CryptohomeMiscClient::Get()->LockToSingleUserMountUntilReboot(

@@ -1,12 +1,10 @@
 include_rules = [
   # go/keep-sorted start
-  "+components/accessibility_annotator/core",
-  "+components/accessibility_annotator/core/annotation_reducer",
   "+components/affiliations",
   "+components/browser_ui/device_lock/android",
   "+components/consent_auditor",
   "+components/content_settings/core/common",
-  "+components/device_reauth/device_authenticator.h",
+  "+components/device_reauth",
   "+components/facilitated_payments/core/features",
   "+components/feature_engagement",
   "+components/google/core/common/google_util.h",
@@ -24,13 +22,10 @@ include_rules = [
   "+components/optimization_guide/core",
   "+components/password_manager/core/browser/features/password_features.h",
   "+components/payments/core/currency_formatter.h",
-  "+components/personal_context/core",
-  "+components/personal_context/proto",
+  "+components/personal_context",
   "+components/policy",
   "+components/profile_metrics",
   "+components/resources",
-  "+components/security_interstitials/core/insecure_form_util.h",
-  "+components/security_interstitials/core/pref_names.h",
   "+components/security_state",
   "+components/sessions/core/session_id.h",
   "+components/signin/public",
@@ -38,6 +33,7 @@ include_rules = [
   "+components/strings",
   "+components/subscription_eligibility",
   "+components/sync",
+  "+components/sync_device_info",
   "+components/sync_preferences",
   "+components/translate/core/browser",
   "+components/translate/core/common",
@@ -76,7 +72,10 @@ specific_include_rules = {
     "+components/device_reauth",
     "+content/public/test",
   ],
-  "at_memory_cross_tab_copy_paste_tracker_unittest\\.cc": [
+  "cross_tab_copy_paste_tracker_unittest\\.cc": [
+    "+components/ukm",
+  ],
+  "at_memory_metrics_recorder_unittest\\.cc": [
     "+components/ukm",
   ],
   "autofill_manager_unittest\\.cc": [
@@ -103,11 +102,10 @@ specific_include_rules = {
     "+components/autofill/content/browser/content_autofill_driver.h",
     "+components/autofill/core/browser/autofill_driver_router.h",
   ],
-  "credit_card_access_manager(_unittest)?\\.cc": [
-    "+components/device_reauth",
-    "+content/public/test",
-  ],
   "credit_card_save_manager_unittest\\.cc": [
+    "+components/ukm",
+  ],
+  "otp_metrics_tracker_unittest\\.cc": [
     "+components/ukm",
   ],
   "test_autofill_client\\.h": [

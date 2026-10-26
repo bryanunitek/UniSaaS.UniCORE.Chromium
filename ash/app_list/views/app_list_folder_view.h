@@ -37,7 +37,7 @@ class AppsContainerView;
 class AppsGridView;
 class FolderHeaderView;
 class ScrollViewGradientHelper;
-class SystemShadow;
+class SystemDecoration;
 
 // Displays folder contents via an AppsGridView. App items can be dragged out
 // of the folder to the main apps grid.
@@ -133,9 +133,6 @@ class ASH_EXPORT AppListFolderView : public views::View,
   // Recalculates and updates the bounds of the folder `shadow_`  .
   void UpdateShadowBounds();
 
-  // Called when the  `shadow_` layer gets recreated.
-  void OnShadowLayerRecreated(ui::Layer* old_layer, ui::Layer* new_layer);
-
   // Returns true if this view's child views are in animation for opening or
   // closing the folder.
   bool IsAnimationRunning() const;
@@ -163,7 +160,7 @@ class ASH_EXPORT AppListFolderView : public views::View,
 
   const gfx::Rect& preferred_bounds() const { return preferred_bounds_; }
 
-  SystemShadow* shadow() { return shadow_.get(); }
+  SystemDecoration* shadow() { return shadow_.get(); }
 
   // Records the smoothness of folder show/hide animations mixed with the
   // BackgroundAnimation, FolderItemTitleAnimation, TopIconAnimation, and
@@ -246,7 +243,7 @@ class ASH_EXPORT AppListFolderView : public views::View,
   // Owned by views hierarchy.
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
 
-  std::unique_ptr<SystemShadow> shadow_;
+  std::unique_ptr<SystemDecoration> shadow_;
 
   // Adds fade in/out gradients to `scroll_view_`.
   std::unique_ptr<ScrollViewGradientHelper> gradient_helper_;

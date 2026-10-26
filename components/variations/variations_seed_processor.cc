@@ -8,6 +8,9 @@
 
 #include <map>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/command_line.h"
@@ -15,12 +18,14 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/optional_ref.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/entropy_provider.h"
+#include "components/variations/experiment_group_ids.h"
 #include "components/variations/processed_study.h"
 #include "components/variations/study_filtering.h"
 #include "components/variations/variations_associated_data.h"
@@ -35,6 +40,14 @@ const char kGoogleGroupFeatureParamName[] = "__GGIDS";
 const char kGoogleGroupFeatureParamSeparator[] = ",";
 
 }  // namespace internal
+
+bool StudyIsLowAnonymity(const Study& study) {
+  // Studies which are set based on Google group membership are potentially
+  // low anonymity (as the groups could in theory have a small number of
+  // members).
+  return study.filter().google_group_size() > 0 ||
+         study.filter().enterprise_group_size() > 0;
+}
 
 namespace {
 
@@ -92,7 +105,8 @@ void RegisterExperimentParams(const Study& study,
         SerializeGoogleGroupsFilter(study.filter());
   }
   if (!params.empty()) {
-    base::AssociateFieldTrialParams(study.name(), experiment.name(), params);
+    base::AssociateFieldTrialParams(study.name(), experiment.name(),
+                                    std::move(params));
   }
 }
 
@@ -101,7 +115,7 @@ void RegisterExperimentParams(const Study& study,
 // trigger experiment ID.
 std::optional<IDCollectionKey> GetKeyForWebExperiment(
     const Study::Experiment& experiment) {
-  if (!VariationsSeedProcessor::HasGoogleWebExperimentId(experiment)) {
+  if (!HasGoogleWebExperimentId(experiment)) {
     return std::nullopt;
   }
   bool has_web_experiment_id = experiment.has_google_web_experiment_id();
@@ -152,7 +166,7 @@ void RegisterVariationIds(base::PassKey<VariationsSeedProcessor> pass_key,
     return;
   }
 
-  CHECK(VariationsSeedProcessor::HasGoogleWebExperimentId(experiment));
+  CHECK(HasGoogleWebExperimentId(experiment));
   // An experiment cannot have both |google_web_experiment_id| and
   // |google_trigger_web_experiment_id|. See GetKeyForWebExperiment() for more
   // details.
@@ -168,9 +182,10 @@ void RegisterVariationIds(base::PassKey<VariationsSeedProcessor> pass_key,
 }
 
 // Whether the given study should be activated on startup.
-bool ShouldActivate(const Study& study,
-                    const std::string group_name,
-                    StickyActivationManager& sticky_activation_manager) {
+bool ShouldActivateOnStartup(
+    const Study& study,
+    const std::string group_name,
+    StickyActivationManager& sticky_activation_manager) {
   switch (study.activation_type()) {
     case Study::ACTIVATE_ON_STARTUP:
       return true;
@@ -178,6 +193,8 @@ bool ShouldActivate(const Study& study,
       return false;
     case Study::STICKY_AFTER_QUERY:
       return sticky_activation_manager.ShouldActivate(study.name(), group_name);
+    case Study::ACTIVATE_ON_QUERY_RUNTIME_INHERIT:
+      return false;
     case Study_ActivationType_Study_ActivationType_INT_MIN_SENTINEL_DO_NOT_USE_:
     case Study_ActivationType_Study_ActivationType_INT_MAX_SENTINEL_DO_NOT_USE_:
       // Part of the enum but won't be seen in practice. See processed_study.cc.
@@ -200,38 +217,18 @@ void ForceExperimentState(
 void AssociateDefaultFeatures(const Study& study,
                               base::FieldTrial* trial,
                               base::FeatureList* feature_list) {
-  // Note: We only compute feature associations for ACTIVATE_ON_QUERY studies,
-  // since these associations are only used to determine that the trial has
-  // been queried when the feature is queried.
-  // Note: We only compute feature associations for ACTIVATE_ON_QUERY and
-  // STICKY_AFTER_QUERY studies, since these associations are only used to
-  // ensure that the trial is activated when the feature is queried
-  switch (study.activation_type()) {
-    case Study::ACTIVATE_ON_STARTUP:
-      return;
-    case Study::ACTIVATE_ON_QUERY:
-      // fall-through:
-    case Study::STICKY_AFTER_QUERY:
-      break;
-    case Study_ActivationType_Study_ActivationType_INT_MIN_SENTINEL_DO_NOT_USE_:
-    case Study_ActivationType_Study_ActivationType_INT_MAX_SENTINEL_DO_NOT_USE_:
-      // Part of the enum but won't be seen in practice. See processed_study.cc.
-      return;
-  }
-
-  std::set<std::string> features_to_associate;
-  for (const auto& experiment : study.experiment()) {
-    const auto& features = experiment.feature_association();
-    for (const auto& feature : features.enable_feature()) {
-      features_to_associate.insert(feature);
-    }
-    for (const auto& feature : features.disable_feature()) {
-      features_to_associate.insert(feature);
-    }
-  }
-  for (const auto& feature_name : features_to_associate) {
+  // Note: We compute feature associations for all studies (including
+  // ACTIVATE_ON_STARTUP) so that:
+  // 1. For ACTIVATE_ON_QUERY, ACTIVATE_ON_QUERY_RUNTIME_INHERIT, and
+  //    STICKY_AFTER_QUERY studies, the trial is activated when any of the
+  //    study's features are queried.
+  // 2. FeatureList tracks that those features are controlled by `trial` (which
+  //    is needed, for example, for runtime mutability to know which startup
+  //    trial to override when a client started in a Default group).
+  for (std::string_view feature_name : GetStudyFeatureNames(study)) {
     feature_list->RegisterFieldTrialOverride(
-        feature_name, base::FeatureList::OVERRIDE_USE_DEFAULT, trial);
+        std::string(feature_name), base::FeatureList::OVERRIDE_USE_DEFAULT,
+        trial);
   }
 }
 
@@ -285,14 +282,6 @@ bool ShouldForceExperiment(const Study::Experiment& experiment,
   return false;
 }
 
-bool StudyIsLowAnonymity(const Study& study) {
-  // Studies which are set based on Google group membership are potentially
-  // low anonymity (as the groups could in theory have a small number of
-  // members).
-  return study.filter().google_group_size() > 0 ||
-         study.filter().enterprise_group_size() > 0;
-}
-
 // Creates a placeholder trial that indicates the feature conflict.
 //
 // This forcibly associates |trial_name| with the |kFeatureConflictGroupName|
@@ -314,11 +303,20 @@ base::FieldTrial* CreateTrialWithFeatureConflictGroup(const Study& study) {
 
 }  // namespace
 
-// static
-bool VariationsSeedProcessor::HasGoogleWebExperimentId(
-    const Study::Experiment& experiment) {
-  return experiment.has_google_web_experiment_id() ||
-         experiment.has_google_web_trigger_experiment_id();
+base::flat_set<std::string_view> GetStudyFeatureNames(const Study& study) {
+  // Collect into a vector first and construct the flat_set at once, which sorts
+  // and dedupes in O(N log N), rather than inserting into the flat_set one at a
+  // time, which is O(N^2).
+  std::vector<std::string_view> feature_names;
+  for (const auto& experiment : study.experiment()) {
+    const auto& features = experiment.feature_association();
+    feature_names.insert(feature_names.end(), features.enable_feature().begin(),
+                         features.enable_feature().end());
+    feature_names.insert(feature_names.end(),
+                         features.disable_feature().begin(),
+                         features.disable_feature().end());
+  }
+  return base::flat_set<std::string_view>(std::move(feature_names));
 }
 
 VariationsSeedProcessor::VariationsSeedProcessor(
@@ -339,22 +337,50 @@ void VariationsSeedProcessor::CreateTrialsFromSeed(
       FilterAndValidateStudies(seed, client_state, layers);
 
   for (const ProcessedStudy& study : filtered_studies) {
-    CreateTrialFromStudy(study, entropy_providers, layers, feature_list);
+    bool run_simulation = base::ShouldRecordSubsampledMetric(0.01) &&
+                          !base::FieldTrialList::Find(study.study()->name());
+
+    scoped_refptr<base::FieldTrial> actual_trial = CreateTrialFromStudyImpl(
+        study, entropy_providers, layers, feature_list, /*simulated=*/false);
+
+    if (run_simulation) {
+      scoped_refptr<base::FieldTrial> simulated_trial =
+          CreateTrialFromStudyImpl(study, entropy_providers, layers,
+                                   feature_list, /*simulated=*/true);
+
+      // Validate that the simulation returns the same result as the actual
+      // trial. Note that `CreateTrialFromStudyImpl()` (`simulated = false`) can
+      // return a trial with the group `kFeatureConflictGroupName` when a
+      // feature conflict occurs. `CreateTrialFromStudyImpl()` (`simulated =
+      // true`) skips this check (`if (!simulated)`) and simulates the group
+      // assignment from scratch. We only validate when no feature conflict
+      // occurs.
+      if (!actual_trial || actual_trial->GetGroupNameWithoutActivation() !=
+                               internal::kFeatureConflictGroupName) {
+        bool matches = (simulated_trial && actual_trial &&
+                        simulated_trial->GetGroupNameWithoutActivation() ==
+                            actual_trial->GetGroupNameWithoutActivation()) ||
+                       (!simulated_trial && !actual_trial);
+        base::UmaHistogramBoolean("Variations.CreateTrial.SimulationMatches",
+                                  matches);
+      }
+    }
   }
 }
 
-scoped_refptr<base::FieldTrial>
-VariationsSeedProcessor::CreateTrialFromStudyForTesting(
+scoped_refptr<base::FieldTrial> VariationsSeedProcessor::CreateTrialFromStudy(
+    base::PassKey<VariationsService>,
     const ProcessedStudy& processed_study,
     const EntropyProviders& entropy_providers,
     const VariationsLayers& layers,
     base::FeatureList* feature_list,
     bool simulated) {
-  return CreateTrialFromStudy(processed_study, entropy_providers, layers,
-                              feature_list, simulated);
+  return CreateTrialFromStudyImpl(processed_study, entropy_providers, layers,
+                                  feature_list, simulated);
 }
 
-scoped_refptr<base::FieldTrial> VariationsSeedProcessor::CreateTrialFromStudy(
+scoped_refptr<base::FieldTrial>
+VariationsSeedProcessor::CreateTrialFromStudyImpl(
     const ProcessedStudy& processed_study,
     const EntropyProviders& entropy_providers,
     const VariationsLayers& layers,
@@ -470,8 +496,14 @@ scoped_refptr<base::FieldTrial> VariationsSeedProcessor::CreateTrialFromStudy(
             /*entropy_value=*/0);
       }
 
-      if (ShouldActivate(study, experiment.name(),
-                         *sticky_activation_manager_)) {
+      // Note: Do not activate simulated trials. Activation is a no-op for them
+      // (they are not registered and their group choice is already finalized),
+      // but ShouldActivateOnStartup() has side effects for STICKY_AFTER_QUERY
+      // studies: it mutates StickyActivationManager's state and CHECK-fails
+      // once monitoring has started (i.e. after startup). A simulation must not
+      // affect the real activation state.
+      if (!simulated && ShouldActivateOnStartup(study, experiment.name(),
+                                                *sticky_activation_manager_)) {
         // This call must happen after all params have been registered for the
         // trial. Otherwise, since we look up params by trial and group name,
         // the params won't be registered under the correct key.
@@ -557,7 +589,9 @@ scoped_refptr<base::FieldTrial> VariationsSeedProcessor::CreateTrialFromStudy(
     }
   }
 
-  if (ShouldActivate(study, group_name, *sticky_activation_manager_)) {
+  // Note: Do not activate simulated trials. See the note above.
+  if (!simulated &&
+      ShouldActivateOnStartup(study, group_name, *sticky_activation_manager_)) {
     // This call must happen after all params have been registered for the
     // trial. Otherwise, since we look up params by trial and group name, the
     // params won't be registered under the correct key.

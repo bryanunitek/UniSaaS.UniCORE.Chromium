@@ -3,13 +3,16 @@
 // found in the LICENSE file.
 
 import type {ComposeboxFile} from 'chrome://resources/cr_components/composebox/common.js';
-import type {ComposeboxElement} from 'chrome://resources/cr_components/composebox/composebox.js';
+import type {ComposeboxInputElement} from 'chrome://resources/cr_components/composebox/composebox_input.js';
 import type {ComposeboxVoiceSearchElement, VoiceSearchError, VoiceSearchMetricType} from 'chrome://resources/cr_components/composebox/composebox_voice_search.js';
 import type {InputState} from 'chrome://resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 import {ContextUploadStatus, InputType, ModelMode, ToolMode} from 'chrome://resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 import type {UnguessableToken} from 'chrome://resources/mojo/mojo/public/mojom/base/unguessable_token.mojom-webui.js';
 import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
+
+import type {TestComposeboxMixinElement} from './test_composebox_mixin.js';
 
 // TODO(crbug.com/452983498): This is a copy of MockInputState from
 // searchbox_test_utils.ts to decouple composebox test builds from searchbox
@@ -28,6 +31,7 @@ export class MockInputState implements InputState {
       disableActiveModelSelection: false,
       aimUrlParams: [],
       menuTooltip: '',
+      icon: 0,
     },
     {
       tool: ToolMode.kImageGen,
@@ -37,6 +41,7 @@ export class MockInputState implements InputState {
       disableActiveModelSelection: false,
       aimUrlParams: [],
       menuTooltip: '',
+      icon: 0,
     },
     {
       tool: ToolMode.kCanvas,
@@ -46,6 +51,7 @@ export class MockInputState implements InputState {
       disableActiveModelSelection: false,
       aimUrlParams: [],
       menuTooltip: '',
+      icon: 0,
     },
   ];
   toolsSectionConfig: any|null = null;
@@ -168,6 +174,7 @@ export function createValidInputState(): InputState {
         disableActiveModelSelection: false,
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 0,
       },
     ],
     toolsSectionConfig: {header: ''},
@@ -178,6 +185,7 @@ export function createValidInputState(): InputState {
         hintText: 'Gemini Pro hint',
         aimUrlParams: [],
         menuTooltip: '',
+        icon: 144,
       },
     ],
     modelSectionConfig: {
@@ -189,11 +197,11 @@ export function createValidInputState(): InputState {
 import type {PageCallbackRouter as SearchboxPageCallbackRouter} from 'chrome://resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
 export type MockComposebox = Omit<
-    ComposeboxElement,
-    'transcript'|'inVoiceSearchMode'|'searchboxCallbackRouter_'>&{
+    TestComposeboxMixinElement,
+    'transcript'|'inVoiceSearchMode'|'searchboxCallbackRouter'>&{
   inVoiceSearchMode: boolean,
   transcript: string,
-  searchboxCallbackRouter_: SearchboxPageCallbackRouter,
+  searchboxCallbackRouter: SearchboxPageCallbackRouter,
 };
 
 // Chose type extension instead of just making separate mock public interface.
@@ -202,20 +210,23 @@ export type MockComposeboxVoiceSearch = Omit<
     ComposeboxVoiceSearchElement,
     'state_'|'voiceRecognition_'|'onFinalResult_'|'onCloseClick_'|'onEnd_'|
     'onTryAgainClick_'|'onLinkClick_'|'errorMessage_'|'voiceModeEndCleanup_'|
-    'detailedError_'|'onStopClick_'|'recordMetric_'>&{
+    'detailedError'|'onStopClick_'|'recordMetric_'|'onIdleTimeout_'>&{
   state_: number,
   metricSource_: string,
   voiceRecognition_: MockSpeechRecognition,
   errorMessage_: string,
-  detailedError_: VoiceSearchError | null,
+  detailedError: VoiceSearchError | null,
   voiceModeEndCleanup_: () => void,
   onFinalResult_: (result: string, forceSubmit?: boolean) => void,
   onCloseClick_: () => void,
   onEnd_: () => void,
+  onIdleTimeout_: () => void,
   onTryAgainClick_: (e: Event) => void,
   onLinkClick_: (e: Event) => void,
   onStopClick_: () => void,
-  recordMetric_: (type: VoiceSearchMetricType, metricEnumValue: number, max: number) => void,
+  recordMetric_:
+      (type: VoiceSearchMetricType, metricEnumValue: number, max: number) =>
+          void,
 };
 
 export function disableTransitionsRecursively(
@@ -273,4 +284,29 @@ export function createFile(
         supportsUnimodal: true,
       },
       override);
+}
+
+export function simulateUserTextInput(
+    inputElement: ComposeboxInputElement, value: string): Promise<void> {
+  inputElement.input = value;
+  inputElement.fire('input-input');
+  return microtasksFinished();
+}
+
+export function setSelectionOffset(input: HTMLElement, offset: number) {
+  if (input instanceof HTMLTextAreaElement) {
+    input.setSelectionRange(offset, offset);
+    return;
+  }
+  const range = document.createRange();
+  const sel = window.getSelection();
+  if (sel) {
+    const textNode = input.childNodes[0];
+    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+      range.setStart(textNode, offset);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
 }

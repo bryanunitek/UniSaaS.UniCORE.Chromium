@@ -21,7 +21,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -33,7 +32,6 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 
 /** Tests for {@link TabGroupCreationDialogManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupCreationDialogManagerUnitTest {
     private static final Token TAB_GROUP_ID = new Token(378L, 48739L);
 
@@ -55,7 +53,7 @@ public class TabGroupCreationDialogManagerUnitTest {
                         activity, mModalDialogManager, mOnTabGroupCreation);
 
         when(mTabModel.getProfile()).thenReturn(mProfile);
-        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.containsTabGroup(TAB_GROUP_ID)).thenReturn(true);
     }
 
     @Test
@@ -92,7 +90,7 @@ public class TabGroupCreationDialogManagerUnitTest {
         ModalDialogProperties.Controller controller =
                 mTabGroupCreationDialogManager.getDialogControllerForTesting();
 
-        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
+        when(mTabModel.containsTabGroup(TAB_GROUP_ID)).thenReturn(false);
         controller.onDismiss(null, DialogDismissalCause.UNKNOWN);
 
         verify(mTabModel, never()).setTabGroupColor(any(), anyInt());

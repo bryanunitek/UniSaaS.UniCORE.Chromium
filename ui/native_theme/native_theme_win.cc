@@ -23,11 +23,15 @@
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/cstring_view.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/hstring_reference.h"
 #include "base/win/scoped_gdi_object.h"
@@ -59,12 +63,16 @@
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/native_theme/caption_style_win.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/os_settings_provider.h"
 
 namespace ui {
 
 namespace {
+
+// Gates caching the system caption style in CaptionStyle::FromSystemSettings().
+BASE_FEATURE(kSystemCaptionStyleCaching, base::FEATURE_DISABLED_BY_DEFAULT);
 
 using ThemeHandles = base::flat_map<base::wcstring_view, HANDLE>;
 
@@ -1110,6 +1118,10 @@ NativeThemeWin::~NativeThemeWin() {
       caption_statics2_->remove_PropertiesChanged(
           caption_properties_changed_token_);
       caption_properties_changed_token_ = {};
+
+      // Caption setting changes are no longer observed, so releasing the
+      // runner disables caching.
+      caption_style_tracker_.RunAndReset();
     }
     caption_statics2_.Reset();
   }
@@ -1133,10 +1145,30 @@ void NativeThemeWin::RegisterClosedCaptionPropertiesChangedListener() {
   }
 
   EventRegistrationToken token;
+  scoped_refptr<base::SequencedTaskRunner> task_runner;
+  if (base::SequencedTaskRunner::HasCurrentDefault()) {
+    task_runner = base::SequencedTaskRunner::GetCurrentDefault();
+  }
+
   hr = caption_statics2_->add_PropertiesChanged(
       Microsoft::WRL::Callback<ABI::Windows::Foundation::IEventHandler<
-          IInspectable*>>([](IInspectable*, IInspectable*) -> HRESULT {
-        NativeTheme::GetInstanceForWeb()->NotifyOnCaptionStyleUpdated();
+          IInspectable*>>([task_runner](IInspectable*,
+                                        IInspectable*) -> HRESULT {
+        // Drop the cached style before notifying, so that observers (and any
+        // reader racing with the notification) recompute it from the new
+        // settings.
+        InvalidateCaptionStyleCache();
+
+        // The event may be delivered on an arbitrary thread; bounce the
+        // notification back to the sequence that registered the listener.
+        if (task_runner) {
+          task_runner->PostTask(
+              FROM_HERE, base::BindOnce([] {
+                NativeTheme::GetInstanceForWeb()->NotifyOnCaptionStyleUpdated();
+              }));
+        } else {
+          NativeTheme::GetInstanceForWeb()->NotifyOnCaptionStyleUpdated();
+        }
         return S_OK;
       }).Get(),
       &token);
@@ -1146,6 +1178,9 @@ void NativeThemeWin::RegisterClosedCaptionPropertiesChangedListener() {
   }
 
   caption_properties_changed_token_ = token;
+  if (base::FeatureList::IsEnabled(kSystemCaptionStyleCaching)) {
+    caption_style_tracker_ = EnableCaptionStyleCaching();
+  }
 }
 
 void NativeThemeWin::PaintImpl(cc::PaintCanvas* canvas,

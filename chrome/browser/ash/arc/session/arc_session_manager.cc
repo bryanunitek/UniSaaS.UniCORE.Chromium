@@ -9,6 +9,7 @@
 
 #include "ash/constants/ash_switches.h"
 #include "base/check_deref.h"
+#include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
@@ -18,6 +19,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
+#include "base/system/sys_info.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -50,6 +52,7 @@
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -76,7 +79,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 #include "components/session_manager/core/session_manager.h"
-#include "components/user_manager/user_manager.h"
+#include "components/user_manager/user.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -370,7 +373,7 @@ bool ShouldShowNetworkTests(const ArcProvisioningResult& result) {
 }
 
 ArcSessionManager::ExpansionResult ReadSaltInternal() {
-  DCHECK(arc::IsArcVmEnabled());
+  CHECK(arc::IsArcVmEnabled(), base::NotFatalUntil::M160);
 
   // For ARCVM, read |kArcSaltPath| if that exists.
   std::optional<std::string> salt =
@@ -392,15 +395,6 @@ void ReportProvisioningStartTime(const base::TimeTicks& start_time,
     metrics_service->ReportProvisioningStartTime(start_time,
                                                  account_type_suffix);
   }
-}
-
-// Returns whether ARCVM /data migration is in progress and should be resumed.
-bool ArcVmDataMigrationIsInProgress(PrefService* prefs) {
-  if (!base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
-    return false;
-  }
-  return GetArcVmDataMigrationStatus(prefs) ==
-         ArcVmDataMigrationStatus::kStarted;
 }
 
 // The result status of deferring ARC activation until user session start up
@@ -488,19 +482,19 @@ class ArcSessionManager::ScopedOptInFlowTracker {
 
   // Tracks error occurred during the OptIn flow.
   void TrackError() {
-    DCHECK(!success_ && !shutdown_);
+    CHECK(!success_ && !shutdown_, base::NotFatalUntil::M160);
     error_ = true;
   }
 
   // Tracks that OptIn finished successfully.
   void TrackSuccess() {
-    DCHECK(!success_ && !shutdown_);
+    CHECK(!success_ && !shutdown_, base::NotFatalUntil::M160);
     success_ = true;
   }
 
   // Tracks that OptIn was not completed before shutdown.
   void TrackShutdown() {
-    DCHECK(!success_ && !shutdown_);
+    CHECK(!success_ && !shutdown_, base::NotFatalUntil::M160);
     shutdown_ = true;
   }
 
@@ -513,12 +507,14 @@ class ArcSessionManager::ScopedOptInFlowTracker {
 ArcSessionManager::ArcSessionManager(
     PrefService* local_state,
     const ApplicationLocaleStorage* application_locale_storage,
+    metrics::MetricsService* metrics_service,
     std::unique_ptr<ArcSessionRunner> arc_session_runner,
     std::unique_ptr<AdbSideloadingAvailabilityDelegateImpl>
         adb_sideloading_availability_delegate,
     ArcDlcInstaller* arc_dlc_installer)
     : local_state_(CHECK_DEREF(local_state)),
       application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      metrics_service_(metrics_service),
       arc_session_runner_(std::move(arc_session_runner)),
       adb_sideloading_availability_delegate_(
           std::move(adb_sideloading_availability_delegate)),
@@ -527,8 +523,12 @@ ArcSessionManager::ArcSessionManager(
       arc_dlc_installer_(arc_dlc_installer),
       attempt_restart_callback_(base::BindRepeating(
           []() { session_manager::SessionManager::Get()->RequestRestart(); })) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!g_arc_session_manager);
+  if (!metrics_service_) {
+    CHECK_IS_TEST();
+  }
+
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!g_arc_session_manager, base::NotFatalUntil::M160);
   g_arc_session_manager = this;
   arc_session_runner_->AddObserver(this);
   arc_session_runner_->SetDemoModeDelegate(
@@ -541,7 +541,7 @@ ArcSessionManager::ArcSessionManager(
 }
 
 ArcSessionManager::~ArcSessionManager() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   ash::ConciergeClient::Get()->RemoveVmObserver(this);
 
@@ -551,16 +551,16 @@ ArcSessionManager::~ArcSessionManager() {
 
   internal_state_ = InternalState::kDestroying;
   Shutdown();
-  DCHECK(arc_session_runner_);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
   arc_session_runner_->RemoveObserver(this);
 
-  DCHECK_EQ(this, g_arc_session_manager);
+  CHECK_EQ(this, g_arc_session_manager, base::NotFatalUntil::M160);
   g_arc_session_manager = nullptr;
 }
 
 // static
 ArcSessionManager* ArcSessionManager::Get() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return g_arc_session_manager;
 }
 
@@ -585,7 +585,7 @@ void ArcSessionManager::EnableCheckAndroidManagementForTesting(bool enable) {
 void ArcSessionManager::OnSessionStopped(ArcStopReason reason,
                                          bool restarting) {
   if (restarting) {
-    DCHECK_EQ(state_, State::ACTIVE);
+    CHECK_EQ(state_, State::ACTIVE, base::NotFatalUntil::M160);
     // If ARC is being restarted, here do nothing, and just wait for its
     // next run.
     return;
@@ -613,7 +613,7 @@ void ArcSessionManager::OnSessionRestarting() {
 
 void ArcSessionManager::OnProvisioningFinished(
     const ArcProvisioningResult& result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   // If the Mojo message to notify finishing the provisioning is already sent
   // from the container, it will be processed even after requesting to stop the
@@ -635,6 +635,8 @@ void ArcSessionManager::OnProvisioningFinished(
   if (provisioning_reported_) {
     // We don't expect success ArcProvisioningResult to be reported twice
     // or reported after an error.
+    // TODO(crbug.com/569778608): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK(!provisioning_successful);
     // TODO(khmel): Consider changing LOG to NOTREACHED once we guaranty that
     // no double message can happen in production.
@@ -660,7 +662,7 @@ void ArcSessionManager::OnProvisioningFinished(
     // CHROME_SERVER_COMMUNICATION_ERROR case.
     UpdateOptInCancelUMA(OptInCancelReason::NETWORK_ERROR);
   } else if (!sign_in_start_time_.is_null()) {
-    DCHECK(profile_);
+    CHECK(profile_, base::NotFatalUntil::M160);
     arc_sign_in_timer_.Stop();
 
     UpdateProvisioningTiming(base::TimeTicks::Now() - sign_in_start_time_,
@@ -716,9 +718,11 @@ void ArcSessionManager::OnProvisioningFinished(
 
     prefs->SetBoolean(prefs::kArcSignedIn, true);
 
-    if (ShouldLaunchPlayStoreApp(
-            profile_,
-            prefs->GetBoolean(prefs::kArcProvisioningInitiatedFromOobe))) {
+    const bool was_provisioning_initiated_from_oobe =
+        prefs->GetBoolean(prefs::kArcProvisioningInitiatedFromOobe);
+
+    if (ShouldLaunchPlayStoreApp(profile_,
+                                 was_provisioning_initiated_from_oobe)) {
       playstore_launcher_ = std::make_unique<ArcAppLauncher>(
           profile_, kPlayStoreAppId,
           apps_util::MakeIntentForActivity(
@@ -732,6 +736,26 @@ void ArcSessionManager::OnProvisioningFinished(
     for (auto& observer : observer_list_) {
       observer.OnArcInitialStart();
     }
+
+    // On low-end (4GB RAM) devices, shut down ARCVM after post-OOBE
+    // provisioning for unmanaged users to free system resources. ARCVM will be
+    // re-activated on-demand when the user launches an ARC app.
+    // Managed users are excluded because post-provisioning tasks (such as
+    // installing force-installed apps) require ARCVM to stay running.
+    if (base::FeatureList::IsEnabled(arc::kShutDownArcPostOobeProvisioning) &&
+        !managed && was_provisioning_initiated_from_oobe && IsArcVmEnabled() &&
+        base::SysInfo::Is4GbDevice()) {
+      VLOG(1) << "Shutting down ARCVM post-OOBE provisioning on 4GB device.";
+      activation_is_allowed_ = false;
+      // Set is_activation_delayed_ so that even when ArcSessionManager is
+      // notified on completion of OOBE (e.g.
+      // OnUserSessionStartUpTaskCompleted), ARC won't run immediately at that
+      // time.
+      is_activation_delayed_ = true;
+      is_post_oobe_shutdown_4gb_device_ = true;
+      ShutdownSession();
+    }
+
     return;
   }
 
@@ -770,7 +794,7 @@ void ArcSessionManager::OnProvisioningFinished(
 }
 
 bool ArcSessionManager::IsAllowed() const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return profile_ != nullptr;
 }
 
@@ -783,10 +807,10 @@ void ArcSessionManager::SetProfile(Profile* profile) {
   }
   internal_state_ = InternalState::kRunning;
 
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!profile_);
-  DCHECK(IsArcAllowedForProfile(profile));
-  DCHECK(adb_sideloading_availability_delegate_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!profile_, base::NotFatalUntil::M160);
+  CHECK(IsArcAllowedForProfile(profile), base::NotFatalUntil::M160);
+  CHECK(adb_sideloading_availability_delegate_, base::NotFatalUntil::M160);
   adb_sideloading_availability_delegate_->SetProfile(profile);
   profile_ = profile;
   // RequestEnable() requires |profile_| set, therefore shouldn't have been
@@ -796,8 +820,8 @@ void ArcSessionManager::SetProfile(Profile* profile) {
 }
 
 void ArcSessionManager::SetUserInfo() {
-  DCHECK(profile_);
-  DCHECK(arc_session_runner_);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
 
   const AccountId account(multi_user_util::GetAccountIdFromProfile(profile_));
   const cryptohome::Identification cryptohome_id(account);
@@ -814,7 +838,7 @@ void ArcSessionManager::TrimVmMemory(TrimVmMemoryCallback callback,
 }
 
 std::string ArcSessionManager::GetSerialNumberForKeyMint() {
-  DCHECK(arc::IsArcVmEnabled());
+  CHECK(arc::IsArcVmEnabled(), base::NotFatalUntil::M160);
   if (!arc_salt_on_disk_.has_value()) {
     arc_salt_on_disk_ = ReadSaltOnDisk(base::FilePath(kArcSaltPath));
   }
@@ -822,8 +846,8 @@ std::string ArcSessionManager::GetSerialNumberForKeyMint() {
 }
 
 std::string ArcSessionManager::GetSerialNumber() const {
-  DCHECK(profile_);
-  DCHECK(arc_salt_on_disk_);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(arc_salt_on_disk_, base::NotFatalUntil::M160);
 
   const AccountId account(multi_user_util::GetAccountIdFromProfile(profile_));
   const std::string user_id_hash =
@@ -840,11 +864,15 @@ std::string ArcSessionManager::GetSerialNumber() const {
   return serialno;
 }
 
-void ArcSessionManager::Initialize() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
+void ArcSessionManager::Initialize(
+    consent_auditor::ConsentAuditor* consent_auditor) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  if (!consent_auditor) {
+    CHECK_IS_TEST();
+  }
 
-  DCHECK_EQ(state_, State::NOT_INITIALIZED);
+  CHECK_EQ(state_, State::NOT_INITIALIZED, base::NotFatalUntil::M160);
   state_ = State::STOPPED;
 
   // If ExpandPropertyFilesAndReadSaltInternal() takes time to finish,
@@ -860,9 +888,13 @@ void ArcSessionManager::Initialize() {
   // So, it may be better to initialize it lazily.
   // TODO(hidehiko): Revisit to think about lazy initialization.
   if (ShouldUseErrorDialog()) {
-    DCHECK(!support_host_);
+    CHECK(!support_host_, base::NotFatalUntil::M160);
+    // ArcSupportHost outlives neither `profile_` nor its keyed services:
+    // ArcServiceLauncher::Shutdown() tears this down before the profiles are
+    // destroyed.
     support_host_ = std::make_unique<ArcSupportHost>(
-        &local_state_.get(), &application_locale_storage_.get(), profile_);
+        &local_state_.get(), &application_locale_storage_.get(), profile_,
+        consent_auditor);
     support_host_->SetErrorDelegate(this);
   }
   auto* prefs = profile_->GetPrefs();
@@ -870,29 +902,36 @@ void ArcSessionManager::Initialize() {
       multi_user_util::GetAccountIdFromProfile(profile_));
   data_remover_ = std::make_unique<ArcDataRemover>(prefs, cryptohome_id);
 
-  if (ArcVmDataMigrationIsInProgress(prefs)) {
-    const int auto_resume_count =
-        prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount);
-    if (auto_resume_count <= kArcVmDataMigrationMaxAutoResumeCount) {
-      // |auto_resume_count| == kArcVmDataMigrationMaxAutoResumeCount means that
-      // this is the first ARC session in which auto-resume is disabled.
-      // Report to UMA and increment the pref value so that we can track the
-      // number of users who hit the maximum number of auto-resumes.
-      base::UmaHistogramExactLinear("Arc.VmDataMigration.AutoResumeCount",
-                                    auto_resume_count,
-                                    kArcVmDataMigrationMaxAutoResumeCount);
-      prefs->SetInteger(prefs::kArcVmDataMigrationAutoResumeCount,
-                        auto_resume_count + 1);
-      if (auto_resume_count < kArcVmDataMigrationMaxAutoResumeCount) {
-        VLOG(1) << "ARCVM /data migration is in progress. Restarting Chrome "
-                   "session to resume the migration. Auto-resume count: "
-                << auto_resume_count;
-        attempt_restart_callback_.Run();
-        return;
+  // ARCVM /data migration is deprecated. We handle state modifications here.
+  if (base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
+    const auto migration_status = GetArcVmDataMigrationStatus(prefs);
+    if (migration_status == ArcVmDataMigrationStatus::kStarted) {
+      // If a user had an incomplete migration, we abandon it and wipe their
+      // /data to force a fresh boot.
+      LOG(WARNING) << "ARCVM /data migration was in progress. "
+                   << "Wiping data and abandoning migration.";
+      SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kFinished);
+      data_remover_->Schedule();
+    } else if (migration_status != ArcVmDataMigrationStatus::kFinished &&
+               !prefs->GetBoolean(prefs::kArcSignedIn)) {
+      // If ARC has not been fully provisioned for this profile (or ARC was
+      // disabled and data removal was scheduled), we safely assume there is no
+      // valid virtio-fs /data to migrate. We mark the migration as
+      // finished so they boot entirely fresh onto virtio-blk.
+      if (migration_status == ArcVmDataMigrationStatus::kUnnotified ||
+          !prefs->GetBoolean(prefs::kArcTermsAccepted)) {
+        VLOG(1) << "ARC has not been provisioned. Forcing migration status to "
+                   "kFinished to boot with virtio-blk.";
+      } else {
+        LOG(WARNING)
+            << "ARC signed-in state is false but terms are accepted and "
+            << "migration status is " << static_cast<int>(migration_status)
+            << ". "
+            << "This is likely an anomaly. Forcing migration status to "
+               "kFinished.";
       }
+      SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kFinished);
     }
-    LOG(WARNING) << "Skipping auto-resume of ARCVM /data migration, because it "
-                    "has reached the maximum number of retries";
   }
 
   observer_list_.Notify(&ArcSessionManagerObserver::OnInitialized);
@@ -950,6 +989,7 @@ void ArcSessionManager::Shutdown() {
   fast_app_reinstall_starter_.reset();
   arc_ui_availability_reporter_.reset();
   profile_ = nullptr;
+  metrics_service_ = nullptr;
   state_ = State::NOT_INITIALIZED;
   if (scoped_opt_in_tracker_) {
     scoped_opt_in_tracker_->TrackShutdown();
@@ -1005,10 +1045,11 @@ void ArcSessionManager::ResetArcState() {
   arc_sign_in_timer_.Stop();
   playstore_launcher_.reset();
   requirement_checker_.reset();
+  activation_necessity_checker_.reset();
 }
 
 void ArcSessionManager::AddObserver(ArcSessionManagerObserver* observer) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   observer_list_.AddObserver(observer);
   if (property_files_expansion_result_) {
     observer->OnPropertyFilesExpanded(*property_files_expansion_result_);
@@ -1016,12 +1057,12 @@ void ArcSessionManager::AddObserver(ArcSessionManagerObserver* observer) {
 }
 
 void ArcSessionManager::RemoveObserver(ArcSessionManagerObserver* observer) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   observer_list_.RemoveObserver(observer);
 }
 
 void ArcSessionManager::NotifyArcPlayStoreEnabledChanged(bool enabled) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   for (auto& observer : observer_list_) {
     observer.OnArcPlayStoreEnabledChanged(enabled);
   }
@@ -1030,7 +1071,7 @@ void ArcSessionManager::NotifyArcPlayStoreEnabledChanged(bool enabled) {
 // This is the special method to support enterprise mojo API.
 // TODO(hidehiko): Remove this.
 void ArcSessionManager::StopAndEnableArc() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   reenable_arc_ = true;
   StopArc();
 }
@@ -1041,7 +1082,7 @@ void ArcSessionManager::OnArcSignInTimeout() {
 }
 
 void ArcSessionManager::CancelAuthCode() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (state_ == State::NOT_INITIALIZED) {
     NOTREACHED();
@@ -1062,8 +1103,8 @@ void ArcSessionManager::CancelAuthCode() {
 }
 
 void ArcSessionManager::RequestEnable() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
 
   if (enable_requested_) {
     VLOG(1) << "ARC is already enabled. Do nothing.";
@@ -1092,7 +1133,7 @@ void ArcSessionManager::OnUserSessionStartUpTaskCompleted() {
 }
 
 void ArcSessionManager::AllowActivation(AllowActivationReason reason) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (user_session_start_up_task_timer_.has_value() &&
       reason != AllowActivationReason::kImmediateActivation) {
@@ -1154,6 +1195,9 @@ void ArcSessionManager::AllowActivation(AllowActivationReason reason) {
   }
 
   activation_is_allowed_ = true;
+  // Cancel any pending necessity check since activation is now explicitly
+  // allowed.
+  activation_necessity_checker_.reset();
   if (state_ == State::READY) {
     StartArcForRegularBoot();
   }
@@ -1182,7 +1226,8 @@ void ArcSessionManager::OnVmStarted(
             guest_os::GuestOsServiceFactory::GetForProfile(profile())
                 ->MountProviderRegistry()
                 ->Register(std::make_unique<ArcMountProvider>(
-                    profile(), vm_signal.vm_info().cid())));
+                    &local_state_.get(), profile(),
+                    vm_signal.vm_info().cid())));
   }
 }
 
@@ -1200,9 +1245,9 @@ void ArcSessionManager::OnVmStopped(
 }
 
 void ArcSessionManager::RequestEnableImpl() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
-  DCHECK(enable_requested_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(enable_requested_, base::NotFatalUntil::M160);
   DCHECK(state_ == State::STOPPED || state_ == State::STOPPING ||
          state_ == State::REMOVING_DATA_DIR ||
          state_ == State::CHECKING_DATA_MIGRATION_NECESSITY)
@@ -1253,23 +1298,8 @@ void ArcSessionManager::RequestEnableImpl() {
     // If the next step was the ToS negotiation, show a notification instead.
     // Otherwise, be silent now. Users are notified when clicking ARC app icons.
     if (!skip_terms_of_service_negotiation && g_ui_enabled) {
-      arc::ShowArcMigrationGuideNotification(profile_);
-    }
-    return;
-  }
-
-  if (ArcVmDataMigrationIsInProgress(prefs)) {
-    VLOG(1) << "Skipping request to enable ARC because ARCVM /data migration "
-               "is in progress";
-    // Auto-resume should be disabled only when |auto_resume_enabled| is larger
-    // than kArcVmDataMigrationMaxAutoResumeCount. This is because the value is
-    // incremented in Initialize() when it is smaller than or equal to
-    // kArcVmDataMigrationMaxAutoResumeCount. See Initialize() for detail.
-    const bool auto_resume_enabled =
-        prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount) <=
-        kArcVmDataMigrationMaxAutoResumeCount;
-    for (auto& observer : observer_list_) {
-      observer.OnArcSessionBlockedByArcVmDataMigration(auto_resume_enabled);
+      arc::ShowArcMigrationGuideNotification(CHECK_DEREF(
+          ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_)));
     }
     return;
   }
@@ -1302,7 +1332,7 @@ void ArcSessionManager::RequestEnableImpl() {
     if (activation_is_allowed_) {
       StartArcForRegularBoot();
     } else {
-      DCHECK(!activation_necessity_checker_);
+      CHECK(!activation_necessity_checker_, base::NotFatalUntil::M160);
       activation_necessity_checker_ =
           std::make_unique<ArcActivationNecessityChecker>(profile_);
       activation_necessity_checker_->Check(
@@ -1316,8 +1346,8 @@ void ArcSessionManager::RequestEnableImpl() {
 }
 
 void ArcSessionManager::OnActivationNecessityChecked(bool result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(activation_necessity_checker_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(activation_necessity_checker_, base::NotFatalUntil::M160);
 
   base::UmaHistogramBoolean("Arc.ArcOnDemand.ActivationIsDelayed", !result);
 
@@ -1374,8 +1404,8 @@ void ArcSessionManager::OnActivationNecessityChecked(bool result) {
 }
 
 void ArcSessionManager::RequestDisable(bool remove_arc_data) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
   if (!enable_requested_) {
     VLOG(1) << "ARC is already disabled. "
             << "Killing an instance for login screen (if any).";
@@ -1419,7 +1449,9 @@ void ArcSessionManager::RequestArcDataRemoval() {
     base::debug::DumpWithoutCrashing();
   }
 
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  // TODO(crbug.com/569688161): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(profile_);
   DCHECK(data_remover_);
   VLOG(1) << "Scheduling ARC data removal.";
@@ -1442,11 +1474,6 @@ void ArcSessionManager::RequestArcDataRemoval() {
   prefs->SetInteger(prefs::kArcManagementTransition,
                     static_cast<int>(ArcManagementTransition::NO_TRANSITION));
 
-  if (ArcVmDataMigrationIsInProgress(prefs)) {
-    VLOG(1) << "Skipping ARC /data removal because ARCVM /data migration is "
-               "in progress";
-    return;
-  }
 
   // To support 1) case above, maybe start data removal.
   if (state_ == State::STOPPED) {
@@ -1455,17 +1482,17 @@ void ArcSessionManager::RequestArcDataRemoval() {
 }
 
 void ArcSessionManager::MaybeStartTermsOfServiceNegotiation() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
-  DCHECK(!requirement_checker_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(!requirement_checker_, base::NotFatalUntil::M160);
   // In Public Session mode, Terms of Service negotiation should be skipped.
   // See also RequestEnableImpl().
-  DCHECK(!IsRobotOrOfflineDemoAccountMode());
+  CHECK(!IsRobotOrOfflineDemoAccountMode(), base::NotFatalUntil::M160);
   // If opt-in verification is disabled, Terms of Service negotiation should
   // be skipped, too. See also RequestEnableImpl().
-  DCHECK(!IsArcOptInVerificationDisabled());
+  CHECK(!IsArcOptInVerificationDisabled(), base::NotFatalUntil::M160);
 
-  DCHECK_EQ(state_, State::STOPPED);
+  CHECK_EQ(state_, State::STOPPED, base::NotFatalUntil::M160);
   state_ = State::CHECKING_REQUIREMENTS;
 
   // TODO(hidehiko): In kArcSignedIn = true case, this method should never
@@ -1487,7 +1514,7 @@ void ArcSessionManager::MaybeStartTermsOfServiceNegotiation() {
     }
     is_terms_of_service_negotiation_needed = false;
   } else {
-    DCHECK(arc_session_runner_);
+    CHECK(arc_session_runner_, base::NotFatalUntil::M160);
     // Only set ARC signed in status here before calling StartMiniArc() since
     // we have valid profile available with cryptohome mounted.
     arc_session_runner_->set_arc_signed_in(IsArcProvisioned(profile_));
@@ -1505,7 +1532,8 @@ void ArcSessionManager::MaybeStartTermsOfServiceNegotiation() {
   skipped_terms_of_service_negotiation_ =
       !is_terms_of_service_negotiation_needed;
   requirement_checker_ = std::make_unique<ArcRequirementChecker>(
-      profile_, support_host_.get(), android_management_checker_factory_);
+      metrics_service_, profile_, support_host_.get(),
+      android_management_checker_factory_);
   requirement_checker_->AddObserver(this);
   requirement_checker_->StartRequirementChecks(
       is_terms_of_service_negotiation_needed,
@@ -1519,7 +1547,7 @@ void ArcSessionManager::StartArcForTesting() {
 }
 
 void ArcSessionManager::OnArcOptInManagementCheckStarted() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   // State::STOPPED appears here in following scenario.
   // Initial provisioning finished with state
@@ -1538,9 +1566,9 @@ void ArcSessionManager::OnArcOptInManagementCheckStarted() {
 
 void ArcSessionManager::OnRequirementChecksDone(
     ArcRequirementChecker::RequirementCheckResult result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::CHECKING_REQUIREMENTS);
-  DCHECK(requirement_checker_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::CHECKING_REQUIREMENTS, base::NotFatalUntil::M160);
+  CHECK(requirement_checker_, base::NotFatalUntil::M160);
   requirement_checker_.reset();
 
   switch (result) {
@@ -1580,9 +1608,9 @@ void ArcSessionManager::OnRequirementChecksDone(
 }
 
 void ArcSessionManager::StartBackgroundRequirementChecks() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::ACTIVE);
-  DCHECK(!requirement_checker_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::ACTIVE, base::NotFatalUntil::M160);
+  CHECK(!requirement_checker_, base::NotFatalUntil::M160);
 
   // We skip Android management check for Public Session mode, because they
   // don't use real google accounts.
@@ -1591,7 +1619,8 @@ void ArcSessionManager::StartBackgroundRequirementChecks() {
   }
 
   requirement_checker_ = std::make_unique<ArcRequirementChecker>(
-      profile_, support_host_.get(), android_management_checker_factory_);
+      metrics_service_, profile_, support_host_.get(),
+      android_management_checker_factory_);
   requirement_checker_->StartBackgroundChecks(
       base::BindOnce(&ArcSessionManager::OnBackgroundRequirementChecksDone,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -1599,8 +1628,8 @@ void ArcSessionManager::StartBackgroundRequirementChecks() {
 
 void ArcSessionManager::OnBackgroundRequirementChecksDone(
     ArcRequirementChecker::BackgroundCheckResult result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(requirement_checker_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(requirement_checker_, base::NotFatalUntil::M160);
 
   requirement_checker_.reset();
 
@@ -1617,7 +1646,7 @@ void ArcSessionManager::OnBackgroundRequirementChecksDone(
 }
 
 void ArcSessionManager::StartArc() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   DCHECK(state_ == State::STOPPED || state_ == State::CHECKING_REQUIREMENTS ||
          state_ == State::READY)
       << state_;
@@ -1626,8 +1655,9 @@ void ArcSessionManager::StartArc() {
   MaybeStartTimer();
 
   // ARC must be started only if no pending data removal request exists.
-  DCHECK(profile_);
-  DCHECK(!profile_->GetPrefs()->GetBoolean(prefs::kArcDataRemoveRequested));
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(!profile_->GetPrefs()->GetBoolean(prefs::kArcDataRemoveRequested),
+        base::NotFatalUntil::M160);
 
   for (auto& observer : observer_list_) {
     observer.OnArcStarted();
@@ -1653,7 +1683,7 @@ void ArcSessionManager::StartArc() {
                                    &locale, &preferred_languages);
   }
 
-  DCHECK(arc_session_runner_);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
   arc_session_runner_->set_default_device_scale_factor(
       exo::GetDefaultDeviceScaleFactor());
 
@@ -1662,7 +1692,8 @@ void ArcSessionManager::StartArc() {
   const auto* demo_session = ash::DemoSession::Get();
   params.is_demo_session = demo_session && demo_session->started();
   if (params.is_demo_session) {
-    DCHECK(demo_session->components()->resources_component_loaded());
+    CHECK(demo_session->components()->resources_component_loaded(),
+          base::NotFatalUntil::M160);
     params.demo_session_apps_path =
         demo_session->components()->GetDemoAndroidAppsPath();
   }
@@ -1673,11 +1704,10 @@ void ArcSessionManager::StartArc() {
   params.preferred_languages = base::SplitString(
       preferred_languages, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
-  user_manager::UserManager* user_manager = user_manager::UserManager::Get();
-  DCHECK(user_manager->GetPrimaryUser());
-  params.account_id =
-      cryptohome::Identification(user_manager->GetPrimaryUser()->GetAccountId())
-          .id();
+  const user_manager::User* user =
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_);
+  CHECK(user);
+  params.account_id = cryptohome::Identification(user->GetAccountId()).id();
 
   params.is_account_managed =
       profile_->GetProfilePolicyConnector()->IsManaged();
@@ -1687,9 +1717,9 @@ void ArcSessionManager::StartArc() {
 }
 
 void ArcSessionManager::StartArcForRegularBoot() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::READY);
-  DCHECK(activation_is_allowed_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::READY, base::NotFatalUntil::M160);
+  CHECK(activation_is_allowed_, base::NotFatalUntil::M160);
 
   VLOG(1) << "Starting ARC for a regular boot.";
   StartArc();
@@ -1729,12 +1759,12 @@ void ArcSessionManager::StopArc() {
 }
 
 void ArcSessionManager::MaybeStartArcDataRemoval() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
 
   // Data removal cannot run in parallel with ARC session.
   // LoginScreen instance does not use data directory, so removing should work.
-  DCHECK_EQ(state_, State::STOPPED);
+  CHECK_EQ(state_, State::STOPPED, base::NotFatalUntil::M160);
 
   state_ = State::REMOVING_DATA_DIR;
   data_remover_->Run(base::BindOnce(&ArcSessionManager::OnArcDataRemoved,
@@ -1742,9 +1772,9 @@ void ArcSessionManager::MaybeStartArcDataRemoval() {
 }
 
 void ArcSessionManager::OnArcDataRemoved(std::optional<bool> result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::REMOVING_DATA_DIR);
-  DCHECK(profile_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::REMOVING_DATA_DIR, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
 
   state_ = State::STOPPED;
 
@@ -1758,66 +1788,25 @@ void ArcSessionManager::OnArcDataRemoved(std::optional<bool> result) {
     // We may have to avoid it.
   }
 
-  if (!base::FeatureList::IsEnabled(kEnableArcVmDataMigration) ||
-      GetArcVmDataMigrationStatus(profile_->GetPrefs()) ==
-          ArcVmDataMigrationStatus::kFinished) {
-    // No need to check the necessity of ARCVM /data migration.
-    MaybeReenableArc();
+  // If ARCVM was shut down post-OOBE provisioning on low-end devices,
+  // transition the state to READY so that subsequent app launches
+  // (or AllowActivation calls) can re-activate ARCVM on demand.
+  if (is_post_oobe_shutdown_4gb_device_) {
+    is_post_oobe_shutdown_4gb_device_ = false;
+    if (enable_requested_ && profile_ && IsArcProvisioned(profile_)) {
+      state_ = State::READY;
+    }
     return;
   }
 
-  CheckArcVmDataMigrationNecessity(base::BindOnce(
-      &ArcSessionManager::MaybeReenableArc, weak_ptr_factory_.GetWeakPtr()));
-}
-
-void ArcSessionManager::CheckArcVmDataMigrationNecessity(
-    base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  DCHECK_EQ(state_, State::STOPPED);
-  state_ = State::CHECKING_DATA_MIGRATION_NECESSITY;
-
-  DCHECK(profile_);
-  DCHECK(!arc_vm_data_migration_necessity_checker_);
-  arc_vm_data_migration_necessity_checker_ =
-      std::make_unique<ArcVmDataMigrationNecessityChecker>(profile_);
-  arc_vm_data_migration_necessity_checker_->Check(
-      base::BindOnce(&ArcSessionManager::OnArcVmDataMigrationNecessityChecked,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void ArcSessionManager::OnArcVmDataMigrationNecessityChecked(
-    base::OnceClosure callback,
-    std::optional<bool> result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  DCHECK_EQ(state_, State::CHECKING_DATA_MIGRATION_NECESSITY);
-  state_ = State::STOPPED;
-
-  DCHECK(profile_);
-  DCHECK(arc_vm_data_migration_necessity_checker_);
-  arc_vm_data_migration_necessity_checker_.reset();
-
-  // We assume that the migration is needed when |result| has no value, i.e.,
-  // when ArcVmDataMigrationNecessityChecker could not determine the necessity.
-  if (!result.value_or(true)) {
-    VLOG(1) << "No need to perform ARCVM /data migration. Marking the migration"
-            << " as finished";
-    base::UmaHistogramEnumeration(
-        GetHistogramNameByUserType(kArcVmDataMigrationFinishReasonHistogramName,
-                                   profile_),
-        ArcVmDataMigrationFinishReason::kNoDataToMigrate);
-    SetArcVmDataMigrationStatus(profile_->GetPrefs(),
-                                ArcVmDataMigrationStatus::kFinished);
-  }
-  std::move(callback).Run();
+  MaybeReenableArc();
 }
 
 void ArcSessionManager::MaybeReenableArc() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::STOPPED);
-  DCHECK(arc_session_runner_);
-  DCHECK(profile_);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::STOPPED, base::NotFatalUntil::M160);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
+  CHECK(profile_, base::NotFatalUntil::M160);
 
   // Whether to use virtio-blk for /data depends on the status of ARCVM /data
   // migration, which can be updated between Initialize() and MaybeReenableArc()
@@ -1829,7 +1818,7 @@ void ArcSessionManager::MaybeReenableArc() {
     // Re-enabling is not triggered. Do nothing.
     return;
   }
-  DCHECK(enable_requested_);
+  CHECK(enable_requested_, base::NotFatalUntil::M160);
 
   // Restart ARC anyway. Let the enterprise reporting instance decide whether
   // the ARC user data wipe is still required or not.
@@ -1903,7 +1892,7 @@ void ArcSessionManager::StartProvisioningTimerWithTimeout(
 }
 
 void ArcSessionManager::StartMiniArc() {
-  DCHECK(arc_session_runner_);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
   pre_start_time_ = base::TimeTicks::Now();
   arc_session_runner_->set_default_device_scale_factor(
       exo::GetDefaultDeviceScaleFactor());
@@ -1915,10 +1904,11 @@ void ArcSessionManager::OnWindowClosed() {
 }
 
 void ArcSessionManager::OnRetryClicked() {
-  DCHECK(!g_ui_enabled || support_host_);
-  DCHECK(!g_ui_enabled ||
-         support_host_->ui_page() == ArcSupportHost::UIPage::ERROR);
-  DCHECK(!requirement_checker_);
+  CHECK(!g_ui_enabled || support_host_, base::NotFatalUntil::M160);
+  CHECK(!g_ui_enabled ||
+            support_host_->ui_page() == ArcSupportHost::UIPage::ERROR,
+        base::NotFatalUntil::M160);
+  CHECK(!requirement_checker_, base::NotFatalUntil::M160);
 
   UpdateOptInActionUMA(OptInActionType::RETRY);
 
@@ -1956,12 +1946,12 @@ void ArcSessionManager::OnErrorPageShown(bool network_tests_shown) {
 }
 
 void ArcSessionManager::OnSendFeedbackClicked() {
-  DCHECK(support_host_);
+  CHECK(support_host_, base::NotFatalUntil::M160);
   chrome::OpenFeedbackDialog(nullptr, feedback::kFeedbackSourceArcApp);
 }
 
 void ArcSessionManager::OnRunNetworkTestsClicked() {
-  DCHECK(support_host_);
+  CHECK(support_host_, base::NotFatalUntil::M160);
   ash::DiagnosticsDialog::ShowDialog(
       ash::DiagnosticsDialog::DiagnosticsPage::kConnectivity,
       support_host_->GetNativeWindow());
@@ -1969,8 +1959,8 @@ void ArcSessionManager::OnRunNetworkTestsClicked() {
 
 void ArcSessionManager::SetArcSessionRunnerForTesting(
     std::unique_ptr<ArcSessionRunner> arc_session_runner) {
-  DCHECK(arc_session_runner);
-  DCHECK(arc_session_runner_);
+  CHECK(arc_session_runner, base::NotFatalUntil::M160);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
   arc_session_runner_->RemoveObserver(this);
   arc_session_runner_ = std::move(arc_session_runner);
   arc_session_runner_->AddObserver(this);
@@ -1982,7 +1972,7 @@ ArcSessionRunner* ArcSessionManager::GetArcSessionRunnerForTesting() {
 
 void ArcSessionManager::SetAttemptRestartCallbackForTesting(
     const base::RepeatingClosure& callback) {
-  DCHECK(!callback.is_null());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M160);
   attempt_restart_callback_ = callback;
 }
 
@@ -2071,7 +2061,7 @@ void ArcSessionManager::OnExpandPropertyFiles(bool result) {
 void ArcSessionManager::OnExpandPropertyFilesAndReadSalt(
     ExpansionResult result) {
   // ExpandPropertyFilesAndReadSalt() should be called only once.
-  DCHECK(!property_files_expansion_result_);
+  CHECK(!property_files_expansion_result_, base::NotFatalUntil::M160);
 
   arc_salt_on_disk_ = result.first;
   property_files_expansion_result_ = result.second;
@@ -2084,7 +2074,7 @@ void ArcSessionManager::OnExpandPropertyFilesAndReadSalt(
   }
 
   if (result.second) {
-    DCHECK(arc_session_runner_);
+    CHECK(arc_session_runner_, base::NotFatalUntil::M160);
     arc_session_runner_->set_arc_signed_in(IsArcProvisioned(profile_));
     arc_session_runner_->ResumeRunner();
   }
@@ -2095,8 +2085,8 @@ void ArcSessionManager::OnExpandPropertyFilesAndReadSalt(
 
 void ArcSessionManager::StopMiniArcIfNecessary() {
   // This method should only be called before login.
-  DCHECK(!profile_);
-  DCHECK(arc_session_runner_);
+  CHECK(!profile_, base::NotFatalUntil::M160);
+  CHECK(arc_session_runner_, base::NotFatalUntil::M160);
   pre_start_time_ = base::TimeTicks();
   VLOG(1) << "Stopping mini-ARC instance (if any)";
   arc_session_runner_->RequestStop();

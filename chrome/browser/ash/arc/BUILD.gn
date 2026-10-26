@@ -27,8 +27,6 @@ static_library("arc") {
     "icon_decode_request.h",
   ]
 
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
-
   deps = [
     ":arc_util",
     "//ash",
@@ -68,14 +66,12 @@ static_library("arc") {
     "//chrome/browser/ash/login/demo_mode",
     "//chrome/browser/ash/login/session",
     "//chrome/browser/ash/platform_keys/key_permissions",
-    "//chrome/browser/ash/profiles",
     "//chrome/browser/chromeos/arc",
-    "//chrome/browser/consent_auditor",
-    "//chrome/browser/notifications",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/resources:component_extension_resources_grit",
     "//chrome/browser/signin",
     "//chrome/browser/ui/extensions",
+    "//chrome/browser/ui/webui:theme_source",
     "//chrome/browser/ui/webui/ash/diagnostics_dialog",
     "//chrome/common",
     "//chromeos/ash/components/browser_context_helper",
@@ -113,32 +109,13 @@ static_library("arc") {
 
   allow_circular_includes_from = [
     "//chrome/browser/apps/app_service/app_icon",
-    "//chrome/browser/ash/app_list",
     "//chrome/browser/ash/app_list/arc",
-    "//chrome/browser/ash/app_list/search",
-    "//chrome/browser/ash/app_restore",
-    "//chrome/browser/ash/apps",
     "//chrome/browser/ash/arc/app_shortcuts",
     "//chrome/browser/ash/arc/auth",
-    "//chrome/browser/ash/arc/boot_phase_monitor",
-    "//chrome/browser/ash/arc/enterprise",
     "//chrome/browser/ash/arc/extensions",
-    "//chrome/browser/ash/arc/fileapi",
-    "//chrome/browser/ash/arc/input_method_manager",
-    "//chrome/browser/ash/arc/input_overlay",
-    "//chrome/browser/ash/arc/intent_helper",
-    "//chrome/browser/ash/arc/instance_throttle",
-    "//chrome/browser/ash/arc/metrics",
-    "//chrome/browser/ash/arc/nearby_share",
-    "//chrome/browser/ash/arc/notification",
     "//chrome/browser/ash/arc/optin",
-    "//chrome/browser/ash/arc/print_spooler",
     "//chrome/browser/ash/arc/session",
-    "//chrome/browser/ash/exo",
-    "//chrome/browser/ash/file_manager",
-    "//chrome/browser/ash/fileapi",
     "//chrome/browser/ash/login/session",
-    "//chrome/browser/ash/platform_keys/key_permissions",
   ]
 }
 
@@ -172,11 +149,13 @@ source_set("unit_tests") {
     "//chromeos/ash/components/install_attributes",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_test_support",
+    "//components/session_manager/test:test_support",
     "//components/sync_preferences:test_support",
     "//components/user_manager",
     "//content/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//ui/message_center",
 
     # Gather unit tests from subdirectories.
     "//chrome/browser/ash/arc/accessibility:unit_tests",
@@ -201,15 +180,14 @@ source_set("unit_tests") {
     "//chrome/browser/ash/arc/optin:unit_tests",
     "//chrome/browser/ash/arc/pip:unit_tests",
     "//chrome/browser/ash/arc/policy:unit_tests",
-    "//chrome/browser/ash/arc/privacy_items:unit_tests",
     "//chrome/browser/ash/arc/session:unit_tests",
     "//chrome/browser/ash/arc/sharesheet:unit_tests",
-    "//chrome/browser/ash/arc/survey:unit_tests",
     "//chrome/browser/ash/arc/tracing:unit_tests",
     "//chrome/browser/ash/arc/tts:unit_tests",
-    "//chrome/browser/ash/arc/user_session:unit_tests",
     "//chrome/browser/ash/arc/vmm:unit_tests",
     "//chrome/browser/ash/arc/wallpaper:unit_tests",
+    "//chrome/test/base:browser_with_test_window_test",
+    "//chrome/test/base:testing_browser_process",
   ]
 }
 
@@ -237,8 +215,8 @@ if (is_chromeos_device && is_chrome_branded) {
     deps = [
       ":arc",
       "//chrome/browser/ash/login/test:test_support",
-      "//chrome/test:ash_integration_test_support",
       "//chrome/test:test_support",
+      "//chrome/test/base/chromeos/crosier:ash_test_support",
       "//chrome/test/base/chromeos/crosier:test_support",
       "//chromeos/ui/base",
       "//ui/aura",
@@ -255,9 +233,8 @@ source_set("arc_util") {
     "//storage/browser",
   ]
 }
-source_set("arc_util_impl") {
-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 
+source_set("arc_util_impl") {
   sources = [ "arc_util.cc" ]
 
   deps = [
@@ -286,6 +263,7 @@ source_set("arc_util_impl") {
     "//chromeos/components/mgs",
     "//components/embedder_support:user_agent",
     "//components/prefs",
+    "//components/session_manager/core",
     "//components/user_manager",
     "//content/public/browser",
     "//content/public/common",

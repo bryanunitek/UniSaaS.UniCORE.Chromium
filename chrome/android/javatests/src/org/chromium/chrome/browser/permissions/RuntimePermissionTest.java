@@ -8,11 +8,15 @@ import android.Manifest;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
@@ -25,21 +29,33 @@ import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.RuntimePromptResponse;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.TestAndroidPermissionDelegate;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.components.location.LocationUtils;
 import org.chromium.components.permissions.DismissalType;
 import org.chromium.content_public.common.ContentSwitches;
+import org.chromium.device.geolocation.LocationProviderOverrider;
 import org.chromium.ui.base.DeviceFormFactor;
 
 /** Testing the interaction with the runtime permission prompt (Android level prompt). */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-// TODO(crbug.com/344665249): Failing when batched, batch this again.
+@CommandLineFlags.Add({
+    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM
+})
+@Batch(Batch.PER_CLASS)
 public class RuntimePermissionTest {
-    @Rule public PermissionTestRule mPermissionTestRule = new PermissionTestRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+    public PermissionTestRule mPermissionTestRule =
+            new PermissionTestRule(mActivityTestRule.getActivityTestRule());
 
-    private static final String GEOLOCATION_TEST =
-            "/chrome/test/data/geolocation/geolocation_on_load.html";
+    @Rule
+    public RuleChain mRuleChain =
+            RuleChain.outerRule(mActivityTestRule).around(mPermissionTestRule);
+
+    private static final String GEOLOCATION_TEST = "/chrome/test/data/geolocation/geolocation.html";
     private static final String MEDIA_TEST = "/content/test/data/media/getusermedia.html";
-    private static final String DOWNLOAD_TEST = "/chrome/test/data/android/download/get.html";
 
     private static final String DISMISS_TYPE_HISTOGRAM =
             "Permissions.Prompt.GeolocationApproximateOrPrecise.ModalDialog.Dismissed.Method";
@@ -49,6 +65,22 @@ public class RuntimePermissionTest {
     @Before
     public void setUp() throws Exception {
         mPermissionTestRule.setUpActivity();
+    }
+
+    @After
+    public void tearDown() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    if (mPermissionTestRule.getActivity() != null
+                            && mPermissionTestRule.getActivity().getWindowAndroid() != null) {
+                        mPermissionTestRule
+                                .getActivity()
+                                .getWindowAndroid()
+                                .setAndroidPermissionDelegate(null);
+                    }
+                    LocationUtils.setFactory(null);
+                    LocationProviderOverrider.setLocationProviderImpl(null);
+                });
     }
 
     @Test
@@ -74,14 +106,13 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
     }
 
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisabledTest(message = "b/325085976")
     public void testAllowRuntimeCamera() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.CAMERA};
@@ -103,7 +134,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisabledTest(message = "b/325085976")
     public void testAllowRuntimeMicrophone() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.RECORD_AUDIO};
@@ -125,7 +155,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/41486136
     public void testAllowRuntimeMicrophoneOneTime() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.RECORD_AUDIO};
@@ -174,7 +203,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ true,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 R.string.message_missing_location_permission_text);
 
         histogramExpectation.assertExpected(
@@ -184,7 +213,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/41486136
     public void testDenyRuntimeCamera() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.CAMERA};
@@ -206,7 +234,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/41486136
     public void testDenyRuntimeMicrophone() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.RECORD_AUDIO};
@@ -240,7 +267,9 @@ public class RuntimePermissionTest {
         mTestAndroidPermissionDelegate =
                 new TestAndroidPermissionDelegate(
                         requestablePermission, RuntimePromptResponse.ASSERT_NEVER_ASKED);
-        RuntimePermissionTestUtils.runTest(
+
+        // TODO(crbug.com/531793849): See if we want to keep using ForgivingClickAction.
+        RuntimePermissionTestUtils.runTestForgiving(
                 mPermissionTestRule,
                 mTestAndroidPermissionDelegate,
                 GEOLOCATION_TEST,
@@ -248,14 +277,13 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.DENY,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 R.string.message_missing_location_permission_text);
     }
 
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisableIf.Device(
             DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/41486136 and crbug.com/464710913
     public void testDenyAndNeverAskMicrophone() throws Exception {
@@ -294,7 +322,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisableIf.Device(
             DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/41486136 and crbug.com/464699382
     public void testDenyAndNeverAskCamera() throws Exception {
@@ -353,7 +380,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
     }
 
@@ -362,39 +389,45 @@ public class RuntimePermissionTest {
     @Feature({"RuntimePermissions", "Location"})
     public void testAllowRuntimeLocationIncognito() throws Exception {
         RuntimePermissionTestUtils.setupGeolocationSystemMock();
-        ChromeActivity incognitoActivity;
-        if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
-            incognitoActivity = mPermissionTestRule.newIncognitoWindowFromMenu();
-        } else {
-            mPermissionTestRule.newIncognitoTabFromMenu();
-            incognitoActivity = mPermissionTestRule.getActivity();
-        }
+        ChromeActivity incognitoActivity = null;
+        try {
+            if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+                incognitoActivity = mPermissionTestRule.newIncognitoWindowFromMenu();
+            } else {
+                mPermissionTestRule.newIncognitoTabFromMenu();
+                incognitoActivity = mPermissionTestRule.getActivity();
+            }
 
-        String[] requestablePermission =
-                new String[] {
-                    Manifest.permission.ACCESS_COARSE_LOCATION,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                };
-        mTestAndroidPermissionDelegate =
-                new TestAndroidPermissionDelegate(
-                        requestablePermission, RuntimePromptResponse.GRANT);
-        RuntimePermissionTestUtils.runTest(
-                incognitoActivity,
-                mPermissionTestRule,
-                mTestAndroidPermissionDelegate,
-                GEOLOCATION_TEST,
-                /* expectPermissionAllowed= */ true,
-                /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
-                /* waitForMissingPermissionPrompt= */ false,
-                /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
-                /* missingPermissionPromptTextId= */ 0);
+            String[] requestablePermission =
+                    new String[] {
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    };
+            mTestAndroidPermissionDelegate =
+                    new TestAndroidPermissionDelegate(
+                            requestablePermission, RuntimePromptResponse.GRANT);
+            RuntimePermissionTestUtils.runTest(
+                    incognitoActivity,
+                    mPermissionTestRule,
+                    mTestAndroidPermissionDelegate,
+                    GEOLOCATION_TEST,
+                    /* expectPermissionAllowed= */ true,
+                    /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
+                    /* waitForMissingPermissionPrompt= */ false,
+                    /* waitForUpdater= */ true,
+                    "initiate_geolocation()",
+                    /* missingPermissionPromptTextId= */ 0);
+        } finally {
+            if (incognitoActivity != null
+                    && incognitoActivity != mPermissionTestRule.getActivity()) {
+                incognitoActivity.finish();
+            }
+        }
     }
 
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisabledTest(message = "crbug.com/325085976")
     public void testAllowRuntimeCameraIncognito() throws Exception {
         mPermissionTestRule.newIncognitoTabFromMenu();
@@ -418,7 +451,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisabledTest(message = "crbug.com/325085976")
     public void testAllowRuntimeMicrophoneIncognito() throws Exception {
         mPermissionTestRule.newIncognitoTabFromMenu();
@@ -441,7 +473,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481445397
     public void testRuntimeMediaPromptHistogram() throws Exception {
         String[] requestablePermission =
@@ -495,7 +526,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
         histogramWatcher.assertExpected();
     }
@@ -503,7 +534,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     @DisabledTest(message = "crbug.com/325085976")
     public void testRuntimeMediaPromptHistogramSystemDeny() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.CAMERA};
@@ -531,7 +561,6 @@ public class RuntimePermissionTest {
     @Test
     @MediumTest
     @Feature({"RuntimePermissions", "MediaPermissions"})
-    @CommandLineFlags.Add(ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM)
     public void testRuntimeMediaPromptHistogramChromeDeny() throws Exception {
         String[] requestablePermission = new String[] {Manifest.permission.CAMERA};
         mTestAndroidPermissionDelegate =

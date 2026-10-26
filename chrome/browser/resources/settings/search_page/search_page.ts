@@ -8,111 +8,129 @@
  */
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
-import 'chrome://resources/cr_elements/cr_shared_style.css.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
 import '/shared/settings/controls/cr_policy_pref_indicator.js';
 import '/shared/settings/controls/extension_controlled_indicator.js';
 import './extension_controlled_message.js';
 import './search_engine_icon.js';
 import './search_engine_list_dialog.js';
+import './search_engine_more_engines_dialog.js';
 import '../settings_page/settings_section.js';
-import '../settings_shared.css.js';
-import '../settings_vars.css.js';
 
+import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
 import type {CrToastElement} from 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
-import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
-import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
+import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
+import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 import {routes} from '../route.js';
 import {Router} from '../router.js';
-import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
+import {SettingsViewMixinLit} from '../settings_page/settings_view_mixin_lit.js';
 
-import type {CategorizedTemplateUrls, SearchEngine, SearchEnginesBrowserProxy, SearchEnginesInfo} from './search_engines_browser_proxy.js';
+import type {DefaultSearchEnginePickerData, SearchEngine, SearchEnginesBrowserProxy, SearchEnginesInfo} from './search_engines_browser_proxy.js';
 import {SearchEnginesBrowserProxyImpl, SearchEnginesInteractions} from './search_engines_browser_proxy.js';
-import {getTemplate} from './search_page.html.js';
+import {getCss} from './search_page.css.js';
+import {getHtml} from './search_page.html.js';
 
-const SettingsSearchPageElementBase =
-    SettingsViewMixin(WebUiListenerMixin(I18nMixin(PolymerElement)));
+const SettingsSearchPageElementBase = PrefServiceObserverMixinLit(
+    SettingsViewMixinLit(WebUiListenerMixinLit(I18nMixinLit(CrLitElement))));
 
 export class SettingsSearchPageElement extends SettingsSearchPageElementBase {
   static get is() {
     return 'settings-search-page';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      prefs: Object,
+      defaultSearchProviderDataPref_: {type: Object},
 
       /**
        * List of search engines available in the search engine list dialog.
        */
-      searchEngines_: Array,
+      searchEngines_: {type: Array},
 
       // The selected default search engine.
-      defaultSearchEngine_: {
-        type: Object,
-        computed: 'computeDefaultSearchEngine_(searchEngines_)',
-      },
+      defaultSearchEngine_: {type: Object},
 
       // The title of the page and the default search engine card.
-      searchPageTitle_: {
-        type: String,
-        computed: 'computeSearchPageTitle_()',
-      },
+      searchPageTitle_: {type: String},
 
       // Boolean to check whether we need to show the dialog or not.
-      showSearchEngineListDialog_: Boolean,
+      showSearchEngineListDialog_: {type: Boolean},
+
+      // Whether the more engines dialog, which replaces the search engine list
+      // dialog when requested from it, is shown.
+      showMoreEnginesDialog_: {type: Boolean},
+
+      // State of the dialogs' checkbox to save the search engine choice in
+      // guest mode, or null if the checkbox is not displayed. Shared by both
+      // dialogs, so that it is kept when switching from one to the other.
+      saveGuestChoice_: {type: Boolean},
 
       // The label of the confirmation toast that is displayed when the user
       // chooses a default search engine.
-      confirmationToastLabel_: String,
+      confirmationToastLabel_: {type: String},
 
       // With this enabled, the shortcuts settings are present on this page
       // rather than the search engines subpage.
-      searchSettingsUpdateEnabled_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('searchSettingsUpdate'),
-      },
+      searchSettingsUpdateEnabled_: {type: Boolean},
+
+      // Whether the version of the picker with the "More options" entry point
+      // is enabled by feature flags.
+      pickerWithMoreEnginesEnabled_: {type: Boolean},
     };
   }
 
-  declare prefs: Object;
-  declare private searchEngines_: SearchEngine[];
-  declare private showSearchEngineListDialog_: boolean;
-  declare private defaultSearchEngine_: SearchEngine|null;
+  protected accessor defaultSearchProviderDataPref_:
+      chrome.settingsPrivate.PrefObject|undefined;
+  protected accessor searchEngines_: SearchEngine[] = [];
+  protected accessor showSearchEngineListDialog_: boolean = false;
+  protected accessor showMoreEnginesDialog_: boolean = false;
+  protected accessor saveGuestChoice_: boolean|null = null;
+  protected accessor defaultSearchEngine_: SearchEngine|null = null;
+  protected accessor searchSettingsUpdateEnabled_: boolean =
+      loadTimeData.getBoolean('searchSettingsUpdate');
+  protected accessor pickerWithMoreEnginesEnabled_: boolean =
+      loadTimeData.getBoolean('pickerWithMoreEngines');
+  protected accessor searchPageTitle_: string = '';
+  protected accessor confirmationToastLabel_: string = '';
+
   private browserProxy_: SearchEnginesBrowserProxy =
       SearchEnginesBrowserProxyImpl.getInstance();
-
-  declare private searchSettingsUpdateEnabled_: boolean;
-
-  declare private searchPageTitle_: string;
-  declare private confirmationToastLabel_: string;
 
   override connectedCallback() {
     super.connectedCallback();
 
-    if (this.searchSettingsUpdateEnabled_) {
-      // Only regional search engines and the default engine should be visible
-      // in the search engine list dialog. No need to sort these since the
-      // `activeSiteShortcuts` are already in the expected order (sorted
-      // regional search engines first, then default engine if it is not in the
-      // list).
+    this.mirrorPref(
+        'default_search_provider_data.template_url_data',
+        'defaultSearchProviderDataPref_');
+
+    if (this.searchSettingsUpdateEnabled_ ||
+        this.pickerWithMoreEnginesEnabled_) {
       const updateSearchEngines =
-          (categorizedTemplateUrls: CategorizedTemplateUrls) => {
-            this.searchEngines_ =
-                categorizedTemplateUrls.activeSiteShortcuts.filter(
-                    engine => engine.isPrepopulated || engine.default);
+          (pickerData: DefaultSearchEnginePickerData) => {
+            this.searchEngines_ = pickerData.primary;
           };
-      this.browserProxy_.getCategorizedTemplateUrls().then(updateSearchEngines);
-      this.addWebUiListener('search-engines-changed', updateSearchEngines);
+      this.browserProxy_.getDefaultSearchEnginePickerData().then(
+          updateSearchEngines);
+      this.addWebUiListener('search-engines-changed', () => {
+        // TODO(crbug.com/567524562): Look into emitting a dedicated event that
+        // will pass the new picker data as payload.
+        this.browserProxy_.getDefaultSearchEnginePickerData().then(
+            updateSearchEngines);
+      });
       return;
     }
 
@@ -123,29 +141,37 @@ export class SettingsSearchPageElement extends SettingsSearchPageElementBase {
     this.addWebUiListener('search-engines-changed', updateSearchEngines);
   }
 
-  private onDisableExtensionClick_() {
-    this.dispatchEvent(new CustomEvent('refresh-pref', {
-      bubbles: true,
-      composed: true,
-      detail: 'default_search_provider.enabled',
-    }));
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+
+    if (changedPrivateProperties.has('searchEngines_')) {
+      this.defaultSearchEngine_ = this.computeDefaultSearchEngine_();
+    }
+
+    if (changedPrivateProperties.has('searchSettingsUpdateEnabled_')) {
+      this.searchPageTitle_ = this.computeSearchPageTitle_();
+    }
   }
 
-  private onManageSearchEnginesClick_() {
+  protected onManageSearchEnginesClick_() {
     this.browserProxy_.recordSearchEnginesPageHistogram(
         SearchEnginesInteractions.SUBPAGE_NAVIGATED);
     Router.getInstance().navigateTo(routes.SEARCH_ENGINES);
   }
 
-  private isDefaultSearchControlledByPolicy_(
-      pref: chrome.settingsPrivate.PrefObject): boolean {
-    return pref.controlledBy ===
+  protected isDefaultSearchControlledByPolicy_(): boolean {
+    return !!this.defaultSearchProviderDataPref_ &&
+        this.defaultSearchProviderDataPref_.controlledBy ===
         chrome.settingsPrivate.ControlledBy.USER_POLICY;
   }
 
-  private isDefaultSearchEngineEnforced_(
-      pref: chrome.settingsPrivate.PrefObject): boolean {
-    return pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED;
+  protected isDefaultSearchEngineEnforced_(): boolean {
+    return !!this.defaultSearchProviderDataPref_ &&
+        this.defaultSearchProviderDataPref_.enforcement ===
+        chrome.settingsPrivate.Enforcement.ENFORCED;
   }
 
   private computeSearchPageTitle_(): string {
@@ -154,28 +180,62 @@ export class SettingsSearchPageElement extends SettingsSearchPageElementBase {
                                             'searchPageTitle');
   }
 
-  private computeDefaultSearchEngine_() {
+  private computeDefaultSearchEngine_(): SearchEngine|null {
     if (!this.searchEngines_.length) {
       return null;
     }
 
-    return this.searchEngines_.find(engine => engine.default)!;
+    return this.searchEngines_.find(engine => engine.default) || null;
   }
 
-  private onOpenDialogButtonClick_() {
+  protected onOpenDialogButtonClick_() {
+    // The guest choice is fetched here rather than by each dialog, so that a
+    // change made in the list dialog carries over to the more engines dialog
+    // when switching to it.
+    this.browserProxy_.getSaveGuestChoice().then(
+        (saveGuestChoice: boolean|null) => {
+          this.saveGuestChoice_ = saveGuestChoice;
+        });
     this.showSearchEngineListDialog_ = true;
     chrome.metricsPrivate.recordUserAction('ChooseDefaultSearchEngine');
   }
 
-  private onDefaultSearchEngineChangedInDialog_(e: CustomEvent) {
-    this.confirmationToastLabel_ = this.i18n(
-        'searchEnginesConfirmationToastLabel', e.detail.searchEngine.name);
-    this.shadowRoot!.querySelector<CrToastElement>(
-                        '#confirmationToast')!.show();
+  protected onSaveGuestChoiceChanged_(e: CustomEvent<{value: boolean | null}>) {
+    this.saveGuestChoice_ = e.detail.value;
   }
 
-  private onSearchEngineListDialogClose_() {
+  protected onSearchEngineChanged_(
+      e: CustomEvent<{searchEngine: SearchEngine}>) {
+    this.confirmationToastLabel_ = this.i18n(
+        'searchEnginesConfirmationToastLabel', e.detail.searchEngine.name);
+    const confirmationToast =
+        this.shadowRoot.querySelector<CrToastElement>('#confirmationToast');
+    assert(confirmationToast);
+    confirmationToast.show();
+  }
+
+  protected onSearchEngineListDialogClose_() {
     this.showSearchEngineListDialog_ = false;
+    // This doesn't reset the choice passed to the more engines dialog when
+    // switching to it: the list dialog is then removed while open, which
+    // doesn't fire 'close'.
+    this.saveGuestChoice_ = null;
+  }
+
+  protected onMoreEnginesClick_() {
+    this.showSearchEngineListDialog_ = false;
+    this.showMoreEnginesDialog_ = true;
+  }
+
+  protected onMoreEnginesDialogClose_() {
+    this.showMoreEnginesDialog_ = false;
+    this.saveGuestChoice_ = null;
+    // The browser can't return the focus to the button, since the more engines
+    // dialog was opened from the removed list dialog, so it is done here.
+    const openDialogButton =
+        this.shadowRoot.querySelector<HTMLElement>('#openDialogButton');
+    assert(openDialogButton);
+    focusWithoutInk(openDialogButton);
   }
 
   // SettingsViewMixin implementation.
@@ -193,7 +253,7 @@ export class SettingsSearchPageElement extends SettingsSearchPageElementBase {
     assert(!this.searchSettingsUpdateEnabled_);
     assert(childViewId === 'searchEngines');
     const control =
-        this.shadowRoot!.querySelector<HTMLElement>('#enginesSubpageTrigger');
+        this.shadowRoot.querySelector<HTMLElement>('#enginesSubpageTrigger');
     assert(
         control,
         `Failed to find associated control for child '${childViewId}'`);

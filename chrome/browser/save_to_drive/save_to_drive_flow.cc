@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/strings/utf_string_conversions.h"
@@ -49,7 +49,7 @@ using extensions::api::pdf_viewer_private::SaveToDriveProgress;
 using extensions::api::pdf_viewer_private::SaveToDriveStatus;
 
 constexpr base::TimeDelta kHatsSurveyTimeout = base::Seconds(4);
-constexpr base::ByteCount kMultipartUploadThreshold = base::MiB(5);
+constexpr base::ByteSize kMultipartUploadThreshold = base::MiB(5);
 
 WebContents* GetTabWebContents(RenderFrameHost* render_frame_host) {
   auto stream = GetStreamWeakPtr(render_frame_host);
@@ -79,7 +79,7 @@ SaveToDriveFlow::SaveToDriveFlow(
       content_reader_(std::move(content_reader)),
       account_chooser_(std::move(account_chooser)),
       hats_service_(hats_service) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 SaveToDriveFlow::~SaveToDriveFlow() {
@@ -118,7 +118,7 @@ void SaveToDriveFlow::SetSkipValidateTabForTesting(bool skip_validate_tab) {
 }
 
 void SaveToDriveFlow::Run() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   SaveToDriveProgress progress;
   progress.status = SaveToDriveStatus::kInitiated;
   progress.error_type = SaveToDriveErrorType::kNoError;
@@ -142,7 +142,7 @@ void SaveToDriveFlow::OnAccountChosen(std::optional<AccountInfo> account_info) {
     return;
   }
   if (!signin::IsUsernameAllowedByPattern(
-          account_info->email,
+          account_info->GetEmail(),
           g_browser_process->local_state()->GetString(
               prefs::kRestrictPdfSaveToGoogleDriveAccountsToPattern))) {
     progress.status = SaveToDriveStatus::kUploadFailed;
@@ -153,7 +153,7 @@ void SaveToDriveFlow::OnAccountChosen(std::optional<AccountInfo> account_info) {
     return;
   }
   save_to_drive_account_info_ = {
-      .email = account_info->email,
+      .email = std::string(account_info->GetEmail()),
       .is_managed = account_info->IsManaged() == signin::Tribool::kTrue,
   };
   progress.status = SaveToDriveStatus::kAccountSelected;
@@ -180,7 +180,7 @@ void SaveToDriveFlow::OnOpenContent(AccountInfo account_info, bool success) {
   auto* profile =
       Profile::FromBrowserContext(render_frame_host().GetBrowserContext());
 
-  if (base::ByteCount(content_reader_->GetSize()) < kMultipartUploadThreshold) {
+  if (base::ByteSize(content_reader_->GetSize()) < kMultipartUploadThreshold) {
     drive_uploader_ = std::make_unique<MultipartDriveUploader>(
         std::move(upload_title_), std::move(account_info),
         std::move(upload_progress_callback), profile, content_reader_.get());
@@ -230,7 +230,7 @@ std::string SaveToDriveFlow::GetHatsSurveyTriggerId() {
 }
 
 void SaveToDriveFlow::Stop() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (base::FeatureList::IsEnabled(
           chrome_pdf::features::kPdfSaveToDriveSurvey)) {
     ShowHatsSurveyWithDelay();

@@ -14,10 +14,9 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
-#include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chromeos/ash/components/geolocation/system_location_provider.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
+#include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -25,6 +24,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
@@ -74,8 +74,9 @@ class LocationSavedNotificationDelegate
 
 DeviceCommandQueryGeolocationJob::DeviceCommandQueryGeolocationJob(
     PrefService* local_state,
-    const DeviceCloudPolicyManagerAsh* policy_manager)
-    : local_state_(CHECK_DEREF(local_state)), policy_manager_(policy_manager) {}
+    const CloudPolicyStore* device_cloud_policy_store)
+    : local_state_(CHECK_DEREF(local_state)),
+      policy_store_(device_cloud_policy_store) {}
 
 DeviceCommandQueryGeolocationJob::~DeviceCommandQueryGeolocationJob() = default;
 
@@ -104,18 +105,18 @@ void DeviceCommandQueryGeolocationJob::ShowLocationReportedNotificationIfNeeded(
   notification_data.priority = message_center::SYSTEM_PRIORITY;
   notification_data.never_timeout = true;
 
-  auto notification = ash::CreateSystemNotification(
+  auto notification = ash::CreateSystemNotificationPtr(
       message_center::NOTIFICATION_TYPE_SIMPLE, kLocationSavedNotificationId,
       l10n_util::GetStringUTF16(IDS_POLICY_DEVICE_LOCATED_TITLE),
       l10n_util::GetStringUTF16(IDS_POLICY_DEVICE_LOCATED_MESSAGE),
-      /*display_source=*/std::u16string(), /*origin_url=*/GURL(), notifier_id,
-      notification_data,
+      /*display_source=*/std::u16string(), notifier_id, notification_data,
       base::MakeRefCounted<LocationSavedNotificationDelegate>(local_state),
       features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
                                         : vector_icons::kBusinessOldIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
 
-  SystemNotificationHelper::GetInstance()->Display(notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 enterprise_management::RemoteCommand_Type
@@ -125,13 +126,12 @@ DeviceCommandQueryGeolocationJob::GetType() const {
 
 std::optional<enterprise_management::QueryGeolocationCommandResultCode>
 DeviceCommandQueryGeolocationJob::CheckIfCommandIsAllowed() const {
-  if (!policy_manager_ || !policy_manager_->core()->store()) {
+  if (!policy_store_) {
     return enterprise_management::QueryGeolocationCommandResultCode::
         DEVICE_NOT_MANAGED;
   }
 
-  const enterprise_management::PolicyData* policy =
-      policy_manager_->core()->store()->policy();
+  const enterprise_management::PolicyData* policy = policy_store_->policy();
   if (!policy || !policy->has_device_state()) {
     return enterprise_management::QueryGeolocationCommandResultCode::
         DEVICE_NOT_MANAGED;

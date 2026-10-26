@@ -5,12 +5,11 @@
 #include "ios/chrome/browser/history/model/top_sites_factory.h"
 
 #include <memory>
+#include <utility>
 
 #include "base/functional/bind.h"
-#include "base/no_destructor.h"
 #include "components/history/core/browser/history_constants.h"
 #include "components/history/core/browser/top_sites_impl.h"
-#include "components/keyed_service/core/service_access_type.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "ios/chrome/browser/history/model/history_service_factory.h"
 #include "ios/chrome/browser/history/model/history_utils.h"
@@ -19,34 +18,19 @@
 
 namespace ios {
 
-// static
-scoped_refptr<history::TopSites> TopSitesFactory::GetForProfile(
-    ProfileIOS* profile) {
-  return GetInstance()->GetServiceForProfileAs<history::TopSites>(
-      profile, /*create=*/true);
-}
-
-// static
-TopSitesFactory* TopSitesFactory::GetInstance() {
-  static base::NoDestructor<TopSitesFactory> instance;
-  return instance.get();
-}
-
-TopSitesFactory::TopSitesFactory()
-    : RefcountedProfileKeyedServiceFactoryIOS(
+TopSitesFactory::TopSitesFactory(PassKey key)
+    : TypedRefcountedProfileKeyedServiceFactoryIOS(
+          std::move(key),
           "TopSites",
           TestingCreation::kNoServiceForTests) {
   DependsOn(ios::TemplateURLServiceFactory::GetInstance());
   DependsOn(ios::HistoryServiceFactory::GetInstance());
 }
 
-TopSitesFactory::~TopSitesFactory() = default;
-
 scoped_refptr<RefcountedKeyedService> TopSitesFactory::BuildServiceInstanceFor(
     ProfileIOS* profile) const {
   history::HistoryService* history_service =
-      ios::HistoryServiceFactory::GetForProfile(
-          profile, ServiceAccessType::EXPLICIT_ACCESS);
+      ios::HistoryServiceFactory::GetForProfile(profile);
   auto top_sites = base::MakeRefCounted<history::TopSitesImpl>(
       profile->GetPrefs(), history_service,
       ios::TemplateURLServiceFactory::GetForProfile(profile),

@@ -81,6 +81,10 @@ const std::vector<GURL>& FakeDownloadItem::GetUrlChain() const {
   return url_chain_;
 }
 
+bool FakeDownloadItem::IsUrlTruncated() const {
+  return false;
+}
+
 void FakeDownloadItem::SetLastReason(
     download::DownloadInterruptReason last_reason) {
   last_reason_ = last_reason;
@@ -204,6 +208,15 @@ FakeDownloadItem::GetDownloadCreationType() const {
 
 ::network::mojom::CredentialsMode FakeDownloadItem::GetCredentialsMode() const {
   return ::network::mojom::CredentialsMode::kInclude;
+}
+
+::network::mojom::RequestMode FakeDownloadItem::GetFetchRequestMode() const {
+  return fetch_request_mode_;
+}
+
+void FakeDownloadItem::SetFetchRequestMode(
+    ::network::mojom::RequestMode fetch_request_mode) {
+  fetch_request_mode_ = fetch_request_mode;
 }
 
 const std::optional<net::IsolationInfo>& FakeDownloadItem::GetIsolationInfo()

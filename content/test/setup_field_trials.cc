@@ -11,6 +11,7 @@
 #include "cc/base/switches.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/prefs/in_memory_pref_store.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -24,7 +25,7 @@
 #include "components/variations/service/variations_service.h"
 #include "components/variations/service/variations_service_client.h"
 #include "components/variations/variations_ids_provider.h"
-#include "components/variations/variations_safe_seed_store_local_state.h"
+#include "components/variations/variations_safe_seed_store.h"
 #include "components/variations/variations_switches.h"
 #include "content/public/common/content_switch_dependent_feature_overrides.h"
 
@@ -126,8 +127,10 @@ void SetupFieldTrials() {
       &variations_service_client,
       std::make_unique<variations::VariationsSeedStore>(
           pref_service.get(), std::move(initial_seed),
-          /*signature_verification_enabled=*/true,
-          std::make_unique<variations::VariationsSafeSeedStoreLocalState>(
+          /*signature_verification_enabled_on_load=*/
+          variations_service_client.EnableSignatureVerificationOnLoad(),
+          /*signature_verification_enabled_on_receive=*/true,
+          std::make_unique<variations::VariationsSafeSeedStore>(
               pref_service.get(),
               variations_service_client.GetVariationsSeedFileDir(),
               variations_service_client.GetChannelForVariations(),

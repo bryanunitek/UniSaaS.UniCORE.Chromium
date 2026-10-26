@@ -44,16 +44,14 @@ use sequenced_task_runner::SequencedTaskRunnerHandle;
 use crate::interface::{DynMojomInterface, MojomInterface};
 use crate::marker_types::{Associated, Primary};
 use crate::message::MojomMessage;
-use crate::multiplex_router::{EndpointInfo, MultiplexRouterHandle, ResponseSender};
-use crate::remote::RouterHandle;
+use crate::multiplex_router::{EndpointInfo, MultiplexRouterHandle, ResponseSender, RouterHandle};
 
 /// This type represents either a regular mojom `Receiver`, or an
 /// `AssociatedReceiver`. See the documentation of those types for details.
 pub struct GenericReceiver<StateTy: MojomInterface, Marker> {
-    // We never actually access either field after creation, we just need to
-    // to keep them alive while the receiver is alive.
-    // TODO(crbug.com/517519181): Use an enum instead of a trait object.
-    _router: Box<dyn AsRef<MultiplexRouterHandle> + Send + Sync + 'static>,
+    router: RouterHandle,
+    // We never actually access this field after creation, we just
+    // need to keep it alive while the receiver is alive.
     _state: Arc<Mutex<StateTy>>,
     // fn() -> T acts like T, but is always `Send` and `Sync`
     _phantom: PhantomData<fn() -> Marker>,
@@ -150,7 +148,11 @@ where
         });
         let make_handle = |endpoint_info| -> RouterHandle {
             let sets_high_bit = false; // Receivers set the high bit to 0
-            Box::new(MultiplexRouterHandle::new(self.endpoint, sets_high_bit, endpoint_info))
+            RouterHandle::Primary(MultiplexRouterHandle::new(
+                self.endpoint,
+                sets_high_bit,
+                endpoint_info,
+            ))
         };
         Receiver::new(make_handle, state, runner, disconnect_handler)
     }
@@ -222,28 +224,31 @@ where
     fn bind_self_owned_internal(
         bind_func: impl FnOnce(Option<Box<dyn FnOnce() + Send + 'static>>) -> Self,
     ) -> Weak<Self> {
-        // In order to provide a convenient user interface and also be fully memory
-        // safe, the types here get a little convoluted. We begin by constructing
-        // an `Arc<Mutex<Option<SelfOwnedReceiver>>`. We then pass a strong ref to
-        // that arc into the disconnect handler, so that it will get dropped when
-        // the handler runs. We then initialize the receiver with that handler, and
+        // In order to provide a convenient user interface and also be fully
+        // memory safe, the types here get a little convoluted. We begin
+        // by constructing an `Arc<Mutex<Option<SelfOwnedReceiver>>`. We
+        // then pass a strong ref to that arc into the disconnect
+        // handler, so that it will get dropped when the handler runs.
+        // We then initialize the receiver with that handler, and
         // swap it into the `Option`.
         //
         // However, to hide the details from the user, we want to only return a
         // reference to the receiver itself. To do that, the `SelfOwnedReceiver`
-        // type _also_ has an `Arc`, so we can return a weak reference to just that
-        // part and hide the `Mutex` and `Option` from the user.
+        // type _also_ has an `Arc`, so we can return a weak reference to just
+        // that part and hide the `Mutex` and `Option` from the user.
         //
         // Note that if we ever refit this class to be `unsafe`, then we could
-        // eliminate the outer `Arc` and `Mutex`, and possible the `Option` as well.
+        // eliminate the outer `Arc` and `Mutex`, and possible the `Option` as
+        // well.
 
         let receiver_holder = Arc::new(Mutex::new(None));
         let receiver_holder_clone = Arc::clone(&receiver_holder);
 
         let disconnect_handler = move || {
             // Drop our self-reference. This will cause the receiver
-            // itself to be dropped, unless the user is holding a strong reference
-            // (which they can get by `upgrade`ing the returned `Weak`).
+            // itself to be dropped, unless the user is holding a strong
+            // reference (which they can get by `upgrade`ing the
+            // returned `Weak`).
             drop(receiver_holder_clone);
         };
 
@@ -253,18 +258,19 @@ where
         *receiver_holder.lock().expect("Mutex should never be poisoned") = Some(receiver_strong);
 
         // At this point, the references are:
-        // - receiver_holder: The ref we just wrote to is about to be dropped, but
-        //   there's another strong ref in the disconnect handler, which is the only
-        //   other reference to the holder.
+        // - receiver_holder: The ref we just wrote to is about to be dropped,
+        //   but there's another strong ref in the disconnect handler, which is
+        //   the only other reference to the holder.
         // - receiver: There's a strong reference inside the holder, and a weak
         //   reference which we return here.
 
         return receiver_weak;
     }
+
     /// Create a new Receiver from a raw pipe endpoint, bound to the
     /// provided sequence.
-    // This function isn't `pub` because users should always get their `Receiver`s
-    // by `bind`ing a `PendingReceiver`.
+    // This function isn't `pub` because users should always get their
+    // `Receiver`s by `bind`ing a `PendingReceiver`.
     fn new(
         make_handle: impl FnOnce(EndpointInfo) -> RouterHandle,
         state: StateTy,
@@ -284,7 +290,7 @@ where
             runner,
         });
 
-        Self { _router: router, _state: state, _phantom: PhantomData }
+        Self { router, _state: state, _phantom: PhantomData }
     }
 
     /// This is the function which is called by the endpoint watcher
@@ -296,44 +302,34 @@ where
         state_weak: &Weak<Mutex<StateTy>>,
         sender: ResponseSender,
     ) {
-        let expects_response = message
-            .header
-            .flags
-            .contains(crate::message_header::MessageHeaderFlags::EXPECTS_RESPONSE);
-
         let Some(state) = state_weak.upgrade() else {
             // If we can't get the state, then the receiver must have just been
             // unbound, so there's nothing more for us to do.
             return;
         };
 
-        // Call our internal state object's message handler, and provide a
-        // callback that either sends the response or panics because no response
-        // was expected.
-        // We might be able to make this more readable by moving the state calls
-        // out of the if statement using a type like itertools::Either, if we
-        // get that approved for use in chromium.
-        if expects_response {
-            // Make sure the request ID in the response header matches the request.
-            let request_id = message.header.request_id;
-            state.lock().expect("Mutex should never be poisoned").handle_incoming_message(
-                message,
-                sender.clone(),
-                move |mut response: MojomMessage| {
-                    response.header.request_id = request_id;
-                    sender.send_message(response);
-                },
-            );
-        } else {
-            state.lock().expect("Mutex should never be poisoned").handle_incoming_message(
-                message,
-                sender,
-                |_| panic!("Tried to send a response to a message that didn't expect one!"),
-            )
-        };
+        state
+            .lock()
+            .expect("Mutex should never be poisoned")
+            .handle_incoming_message(message, sender);
     }
 
     // We deliberately do not implement `From` and `Into` for
     // `Receiver/PendingReceiver` pairs, because binding and unbinding are
     // stateful operations that should be done explicitly.
+}
+
+impl<StateTy> AssociatedReceiver<StateTy>
+where
+    StateTy: MojomInterface + Sized + Send + 'static,
+{
+    /// Checks if the endpoint has been associated with a specific pipe yet,
+    /// and is therefore ready to receive any messages that are sent to it.
+    ///
+    /// This only happens when the _other_ endpoint is sent via a Mojo message.
+    /// If this returns false, trying to use the endpoint (e.g. sending
+    /// messages) will panic.
+    pub fn ready_for_messages(&self) -> bool {
+        self.router.ready_for_messages()
+    }
 }

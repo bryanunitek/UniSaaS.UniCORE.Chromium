@@ -37,10 +37,6 @@
 using base::test::RunClosure;
 using ::testing::_;
 
-#if BUILDFLAG(IS_LINUX)
-using testing::InvokeWithoutArgs;
-#endif  // BUILDFLAG(IS_LINUX)
-
 namespace media {
 
 namespace {
@@ -244,8 +240,7 @@ class V4L2CaptureDelegateTest : public ::testing::Test {
 #if BUILDFLAG(IS_LINUX)
 class MockV4l2GpuClient : public VideoCaptureDevice::Client {
  public:
-  void OnIncomingCapturedData(const uint8_t* data,
-                              int length,
+  void OnIncomingCapturedData(base::span<const uint8_t> data,
                               const VideoCaptureFormat& frame_format,
                               const gfx::ColorSpace& color_space,
                               int clockwise_rotation,
@@ -278,21 +273,14 @@ class MockV4l2GpuClient : public VideoCaptureDevice::Client {
 
   void OnCaptureConfigurationChanged() override {}
 
-  MOCK_METHOD6(ReserveOutputBuffer,
+  MOCK_METHOD7(ReserveOutputBuffer,
                ReserveResult(const gfx::Size&,
                              VideoPixelFormat,
                              int,
                              Buffer*,
                              int*,
-                             int*));
-
-  void OnIncomingCapturedBuffer(
-      Buffer buffer,
-      const VideoCaptureFormat& format,
-      base::TimeTicks reference_,
-      base::TimeDelta timestamp,
-      std::optional<base::TimeTicks> capture_begin_time,
-      const std::optional<media::VideoFrameMetadata>&) override {}
+                             int*,
+                             const gfx::ColorSpace&));
 
   MOCK_METHOD8(OnIncomingCapturedBufferExt,
                void(Buffer,
@@ -310,6 +298,7 @@ class MockV4l2GpuClient : public VideoCaptureDevice::Client {
                     const std::string&));
 
   MOCK_METHOD1(OnFrameDropped, void(VideoCaptureFrameDropReason));
+  MOCK_METHOD0(InvalidateBuffers, void());
 
   double GetBufferPoolUtilization() const override { return 0.0; }
 
@@ -458,7 +447,8 @@ TEST_P(V4l2CaptureDelegateGPUMemoryBufferTest, CameraCaptureOneCopy) {
       .WillRepeatedly(
           [](const gfx::Size& size, VideoPixelFormat format, int feedback_id,
              VideoCaptureDevice::Client::Buffer* capture_buffer,
-             int* require_new_buffer_id, int* retire_old_buffer_id) {
+             int* require_new_buffer_id, int* retire_old_buffer_id,
+             const gfx::ColorSpace& color_space) {
             EXPECT_EQ(format, PIXEL_FORMAT_NV12);
             capture_buffer->handle_provider =
                 std::make_unique<MockCaptureHandleProvider>(
@@ -468,12 +458,12 @@ TEST_P(V4l2CaptureDelegateGPUMemoryBufferTest, CameraCaptureOneCopy) {
 
   base::RunLoop wait_loop;
   EXPECT_CALL(*client_ptr, OnIncomingCapturedBufferExt)
-      .WillRepeatedly(InvokeWithoutArgs([&wait_loop, this]() {
+      .WillRepeatedly([&wait_loop, this]() {
         this->received_frame_count_++;
         if (this->received_frame_count_ == kFrameToReceive) {
           wait_loop.Quit();
         }
-      }));
+      });
 
   VideoCaptureParams arbitrary_params;
   arbitrary_params.requested_format.frame_size = gfx::Size(1280, 720);

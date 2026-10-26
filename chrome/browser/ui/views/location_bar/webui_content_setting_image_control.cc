@@ -14,6 +14,7 @@
 #include "chrome/browser/ui/content_settings/content_setting_image_view_delegate.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/grit/generated_resources.h"
@@ -34,8 +35,10 @@ using Error = mojo_base::mojom::Error;
 
 toolbar_ui_api::mojom::ContentSettingImageStatePtr GetImageStateForModel(
     ContentSettingImageModel* model,
+    ContentSettingImageViewDelegate* delegate,
     content::WebContents* web_contents) {
-  model->Update(web_contents);
+  model->Update(delegate->ShouldHideContentSettingImage() ? nullptr
+                                                          : web_contents);
 
   if (!model->is_visible()) {
     return nullptr;
@@ -54,6 +57,9 @@ toolbar_ui_api::mojom::ContentSettingImageStatePtr GetImageStateForModel(
         l10n_util::GetStringUTF16(model->AccessibilityAnnouncementStringId());
   }
   state->should_run_animation = model->ShouldRunAnimation(web_contents);
+  state->identifier = tracked_element::mojom::TrackedElementIdentifier::New(
+      model->GetElementIdentifier().GetName(),
+      /*secondary_identifier=*/std::string());
 
   return state;
 }
@@ -79,6 +85,40 @@ void WebUIContentSettingImageControl::InitForTesting(
   webui_delegate_ = webui_delegate;
 }
 
+bool WebUIContentSettingImageControl::UpdatePermissionDashboard(
+    PermissionDashboardController* permission_dashboard_controller) {
+  if (!permission_dashboard_controller) {
+    return false;
+  }
+
+  bool permission_dashboard_changed = false;
+  bool dashboard_updated = false;
+
+  // Prioritize Media Stream (kMediaStream) over Sensors (kSensors) by selecting
+  // the first visible model, matching `LocationBarView`.
+  if (ContentSettingImageModel::IsLeftHandSideIndicatorEnabled(
+          ImageType::kMediaStream)) {
+    if (ContentSettingImageModel* media_stream_model =
+            GetModel(ImageType::kMediaStream)) {
+      permission_dashboard_changed |=
+          permission_dashboard_controller->Update(media_stream_model);
+      dashboard_updated = media_stream_model->is_visible();
+    }
+  }
+
+  if (!dashboard_updated &&
+      ContentSettingImageModel::IsLeftHandSideIndicatorEnabled(
+          ImageType::kSensors)) {
+    if (ContentSettingImageModel* sensors_model =
+            GetModel(ImageType::kSensors)) {
+      permission_dashboard_changed |=
+          permission_dashboard_controller->Update(sensors_model);
+    }
+  }
+
+  return permission_dashboard_changed;
+}
+
 std::vector<toolbar_ui_api::mojom::ContentSettingImageStatePtr>
 WebUIContentSettingImageControl::ProcessContentSettingState(
     content::WebContents* web_contents) {
@@ -88,17 +128,22 @@ WebUIContentSettingImageControl::ProcessContentSettingState(
   }
 
   for (auto& model : models_) {
-    // The activity indicators (camera, mic) are drawn on the left side of the
-    // location bar, managed by the Permissions Dashboard, so we don't include
-    // them in the right hand side content setting images here.
-    if (model->image_type() == ImageType::kMediaStream) {
+    // Activity indicators (camera, mic and sensors) are drawn on the left side
+    // of the location bar by the Permissions Dashboard while the corresponding
+    // feature is enabled, so they must not also appear as right-hand-side
+    // content setting images. The model is still updated, because the dashboard
+    // reads it.
+    if (ContentSettingImageModel::IsLeftHandSideIndicatorEnabled(
+            model->image_type())) {
+      model->Update(setting_view_delegate_->ShouldHideContentSettingImage()
+                        ? nullptr
+                        : web_contents);
       continue;
     }
 
-    auto image_state = GetImageStateForModel(model.get(), web_contents);
+    auto image_state = GetImageStateForModel(
+        model.get(), setting_view_delegate_.get(), web_contents);
     if (image_state) {
-      state.push_back(std::move(image_state));
-
       // After gathering the state, we need to notify the model that it's been
       // shown / notified so it doesn't repeat itself in the next update.
       if (model->ShouldNotifyAccessibility(web_contents)) {
@@ -119,14 +164,29 @@ WebUIContentSettingImageControl::ProcessContentSettingState(
         model->SetBubbleWasAutoOpened(web_contents);
       }
       if (model->ShouldRunAnimation(web_contents)) {
-        // TODO: crbug.com/489109708 - Investigate why the animation sometimes
-        // re-runs when typing in the location bar post-animation.
         int string_id = model->explanatory_string_id();
         if (string_id && webui_delegate_) {
+          // Mimics IconLabelBubbleView::AnimateIn(), which announces the text
+          // it's animating in addition to standard accessibility announcements.
           webui_delegate_->AnnounceAlert(l10n_util::GetStringUTF16(string_id));
         }
+        // We set the animation as "ran" immediately upon generating the initial
+        // update payload for the WebUI, matching ContentSettingImageView. WebUI
+        // handles its own collapse timer locally, so C++ does not need to wait
+        // for a completion callback. Marking it here prevents the icon from
+        // reanimating when switching tabs (where the WebUI DOM element and its
+        // local state get destroyed and recreated) and prevents subsequent C++
+        // updates from triggering duplicate screen reader alerts.
+        //
+        // Note: Because WebUI renders visible icons via `repeat()`, switching
+        // to a tab without the icon destroys the DOM element and terminates the
+        // animation (upon switching back, only the static icon is shown). If
+        // switching to a tab that also has the same icon, the DOM element is
+        // reused and the animation continues on the new tab (same as Views).
         model->SetAnimationHasRun(web_contents);
       }
+
+      state.push_back(std::move(image_state));
     }
   }
 
@@ -140,11 +200,33 @@ ContentSettingImageModel* WebUIContentSettingImageControl::GetModel(
   return it != models_.end() ? it->get() : nullptr;
 }
 
+void WebUIContentSettingImageControl::OnContentSettingImagePointerDown(
+    ImageType type) {
+  // Only suppress the click if the mouse press occurred on the exact same chip
+  // that corresponds to the observed bubble. Clicking a different chip should
+  // legitimately open a new bubble, even if another one just closed.
+  if (last_tracked_bubble_type_ == type) {
+    bubble_reopen_suppressor_.OnMousePressed();
+  }
+}
+
 void WebUIContentSettingImageControl::ShowContentSettingsBubble(
     ImageType type,
+    bool is_pointer_interaction,
     toolbar_ui_api::mojom::ToolbarUIService::ShowContentSettingsBubbleCallback
         callback) {
+  bool should_suppress = bubble_reopen_suppressor_.ShouldSuppressBubbleShow(
+      is_pointer_interaction);
+
+  if (should_suppress) {
+    std::move(callback).Run(std::monostate());
+    return;
+  }
   std::move(callback).Run(ShowContentSettingsBubbleImpl(type));
+}
+
+bool WebUIContentSettingImageControl::IsBubbleShowing() const {
+  return bubble_reopen_suppressor_.IsShowing();
 }
 
 base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
@@ -188,8 +270,49 @@ WebUIContentSettingImageControl::ShowContentSettingsBubbleImpl(ImageType type) {
       views::BubbleBorder::TOP_RIGHT);
   bubble_contents->SetHighlightedElement(model->GetElementIdentifier());
 
-  views::BubbleDialogDelegateView::CreateBubble(std::move(bubble_contents))
-      ->Show();
+  ContentSettingBubbleContents* bubble_contents_ptr = bubble_contents.get();
+  views::Widget* bubble_widget =
+      views::BubbleDialogDelegateView::CreateBubble(std::move(bubble_contents));
+  if (bubble_widget) {
+    if (views::BubbleFrameView* const frame_view =
+            bubble_contents_ptr->GetBubbleFrameView()) {
+      if (views::Label* title_label = frame_view->default_title()) {
+        title_label->SetTextStyle(views::style::STYLE_HEADLINE_4);
+        title_label->SetEnabledColor(kColorActivityIndicatorForeground);
+      }
+    }
+    bubble_reopen_suppressor_.Observe(bubble_widget);
+    last_tracked_bubble_type_ = type;
+    bubble_widget->Show();
+  }
 
   return std::monostate();
+}
+
+bool WebUIContentSettingImageControl::TestPressed(size_t index) {
+  if (!IsContentSettingImageVisible(index)) {
+    return false;
+  }
+  auto result = ShowContentSettingsBubbleImpl(models_[index]->image_type());
+  return result.has_value();
+}
+
+bool WebUIContentSettingImageControl::IsBubbleShowing(size_t index) const {
+  if (index >= models_.size()) {
+    return false;
+  }
+  return IsBubbleShowing() &&
+         last_tracked_bubble_type_ == models_[index]->image_type();
+}
+
+bool WebUIContentSettingImageControl::IsContentSettingImageVisible(
+    size_t index) const {
+  return index < models_.size() && models_[index]->is_visible();
+}
+
+views::Widget* WebUIContentSettingImageControl::GetBubbleWidget(size_t index) {
+  if (!IsBubbleShowing(index)) {
+    return nullptr;
+  }
+  return bubble_reopen_suppressor_.GetWidget();
 }

@@ -6,6 +6,7 @@
 
 #include "ash/constants/ash_login_pref_names.h"
 #include "base/callback_list.h"
+#include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/uuid.h"
@@ -73,9 +74,19 @@ void RecordIdReset(IdResetType id_type) {
   base::UmaHistogramEnumeration("UMA.CrosPerUser.IdReset", id_type);
 }
 
+// The daemon-store directory and /home/chronos are shared with other system
+// components. Use WriteFileNoFollow() so a compromised co-tenant cannot
+// redirect this chronos-uid write via a planted symlink.
+bool WriteFileNoFollow(const base::FilePath& path, std::string_view data) {
+  base::File file(path, base::File::FLAG_CREATE_ALWAYS |
+                            base::File::FLAG_WRITE |
+                            base::File::FLAG_NO_FOLLOW);
+  return file.IsValid() && file.WriteAndCheck(0, base::as_byte_span(data));
+}
+
 void WriteDaemonStore(base::FilePath path, bool user_choice) {
   const std::string file_contents = user_choice ? "1" : "0";
-  if (!base::WriteFile(path, file_contents)) {
+  if (!WriteFileNoFollow(path, file_contents)) {
     LOG(ERROR) << "Failed to persist consent change " << file_contents
                << " to daemon-store. State on disk will be inaccurate!";
     base::UmaHistogramEnumeration(kWriteFileFailMetric,
@@ -83,8 +94,8 @@ void WriteDaemonStore(base::FilePath path, bool user_choice) {
                                       ? DaemonStoreFailType::kFailedEnabling
                                       : DaemonStoreFailType::kFailedDisabling);
   }
-  if (!base::WriteFile(base::FilePath(kOutOfCryptohomeConsent),
-                       file_contents)) {
+  if (!WriteFileNoFollow(base::FilePath(kOutOfCryptohomeConsent),
+                         file_contents)) {
     LOG(ERROR) << "Failed to write out-of-cryptohome consent change: "
                << file_contents;
     base::UmaHistogramEnumeration(kWriteFileFailMetric,
@@ -144,7 +155,7 @@ PerUserStateManagerChromeOS::PerUserStateManagerChromeOS(
           metrics_service_client->GetStorageLimits(),
           metrics_service_client->GetUploadSigningKey()) {
   // Ensure that user_manager has been initialized.
-  DCHECK(user_manager::UserManager::IsInitialized());
+  CHECK(user_manager::UserManager::IsInitialized(), base::NotFatalUntil::M161);
 }
 
 PerUserStateManagerChromeOS::~PerUserStateManagerChromeOS() = default;
@@ -191,9 +202,9 @@ PerUserStateManagerChromeOS::GetCurrentUserReportingChoiceIfApplicable() const {
 
 void PerUserStateManagerChromeOS::SetCurrentUserMetricsChoice(
     bool user_choice) {
-  DCHECK_EQ(state_, State::USER_LOG_STORE_HANDLED);
+  CHECK_EQ(state_, State::USER_LOG_STORE_HANDLED, base::NotFatalUntil::M161);
 
-  DCHECK(current_user_);
+  CHECK(current_user_, base::NotFatalUntil::M161);
 
   // No-op if user should not be able to change metrics choice.
   if (!IsUserAllowedToChoose(current_user_)) {
@@ -271,14 +282,14 @@ void PerUserStateManagerChromeOS::ResetStateForTesting() {
 
 void PerUserStateManagerChromeOS::SetUserLogStore(
     std::unique_ptr<UnsentLogStore> log_store) {
-  DCHECK(state_ == State::USER_PROFILE_READY);
+  CHECK(state_ == State::USER_PROFILE_READY, base::NotFatalUntil::M161);
 
   metrics_service_client_->GetMetricsService()->SetUserLogStore(
       std::move(log_store));
 }
 
 void PerUserStateManagerChromeOS::UnsetUserLogStore() {
-  DCHECK_EQ(state_, State::USER_LOG_STORE_HANDLED);
+  CHECK_EQ(state_, State::USER_LOG_STORE_HANDLED, base::NotFatalUntil::M161);
   metrics_service_client_->GetMetricsService()->UnsetUserLogStore();
 }
 
@@ -287,12 +298,12 @@ void PerUserStateManagerChromeOS::ForceClientIdReset() {
 }
 
 void PerUserStateManagerChromeOS::SetReportingState(bool user_choice) {
-  DCHECK_EQ(state_, State::USER_LOG_STORE_HANDLED);
-  DCHECK(IsUserAllowedToChoose(current_user_));
+  CHECK_EQ(state_, State::USER_LOG_STORE_HANDLED, base::NotFatalUntil::M161);
+  CHECK(IsUserAllowedToChoose(current_user_), base::NotFatalUntil::M161);
 
   GetCurrentUserPrefs()->SetBoolean(prefs::kMetricsUserConsent, user_choice);
 
-  std::string hash = user_manager_->GetActiveUser()->username_hash();
+  std::string hash = current_user_->username_hash();
   base::FilePath daemon_store_consent = base::FilePath(kDaemonStorePath)
                                             .Append(hash)
                                             .Append(kDaemonStoreFileName);
@@ -316,7 +327,7 @@ bool PerUserStateManagerChromeOS::HasUserLogStore() const {
 }
 
 bool PerUserStateManagerChromeOS::IsDeviceOwned() const {
-  DCHECK(IsDeviceStatusKnown());
+  CHECK(IsDeviceStatusKnown(), base::NotFatalUntil::M161);
 
   return ash::DeviceSettingsService::Get()->GetOwnershipStatus() ==
          ash::DeviceSettingsService::OwnershipStatus::kOwnershipTaken;
@@ -360,7 +371,7 @@ void PerUserStateManagerChromeOS::OnSessionWillBeTerminated() {
 }
 
 void PerUserStateManagerChromeOS::WaitForOwnershipStatus() {
-  DCHECK_EQ(state_, State::USER_LOGIN);
+  CHECK_EQ(state_, State::USER_LOGIN, base::NotFatalUntil::M161);
 
   // Device ownership determination happens asynchronously in parallel with
   // profile loading, so there is a chance that status is not known yet.
@@ -377,9 +388,10 @@ bool PerUserStateManagerChromeOS::ShouldUseUserLogStore() const {
 
 void PerUserStateManagerChromeOS::InitializeProfileMetricsState(
     ash::DeviceSettingsService::OwnershipStatus status) {
-  DCHECK_NE(status,
-            ash::DeviceSettingsService::OwnershipStatus::kOwnershipUnknown);
-  DCHECK_EQ(state_, State::USER_LOGIN);
+  CHECK_NE(status,
+           ash::DeviceSettingsService::OwnershipStatus::kOwnershipUnknown,
+           base::NotFatalUntil::M161);
+  CHECK_EQ(state_, State::USER_LOGIN, base::NotFatalUntil::M161);
 
   state_ = State::USER_PROFILE_READY;
 
@@ -454,7 +466,7 @@ void PerUserStateManagerChromeOS::InitializeProfileMetricsState(
 
 void PerUserStateManagerChromeOS::UpdateCurrentUserId(
     const std::string& new_user_id) {
-  DCHECK_EQ(state_, State::USER_LOG_STORE_HANDLED);
+  CHECK_EQ(state_, State::USER_LOG_STORE_HANDLED, base::NotFatalUntil::M161);
 
   // Updates both the user profile as well as the user ID stored in local
   // state to handle crashes appropriately.
@@ -471,7 +483,7 @@ void PerUserStateManagerChromeOS::ResetState() {
 }
 
 PrefService* PerUserStateManagerChromeOS::GetCurrentUserPrefs() const {
-  DCHECK(state_ >= State::USER_PROFILE_READY);
+  CHECK(state_ >= State::USER_PROFILE_READY, base::NotFatalUntil::M161);
   return ash::ProfileHelper::Get()->GetProfileByUser(current_user_)->GetPrefs();
 }
 

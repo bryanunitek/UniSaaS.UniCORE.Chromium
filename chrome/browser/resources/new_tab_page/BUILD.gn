@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/chrome_build.gni")
 import("//chrome/common/features.gni")
 import("//ui/webui/resources/tools/build_webui.gni")
 import("//ui/webui/webui_features.gni")
@@ -10,6 +11,7 @@ import("./new_tab_page.gni")
 assert(enable_webui_ntp)
 
 grd_prefix = "new_tab_page"
+
 build_webui("build") {
   icons_html_files = [
     "modules/icons.html",
@@ -43,7 +45,6 @@ build_webui("build") {
 
   mojo_files_deps = [
     "//chrome/browser/new_tab_page/modules/file_suggestion:mojo_bindings_ts__generator",
-    "//chrome/browser/new_tab_page/modules/v2/authentication:mojo_bindings_ts__generator",
     "//chrome/browser/new_tab_page/modules/v2/calendar:mojo_bindings_ts__generator",
     "//chrome/browser/new_tab_page/modules/v2/most_relevant_tab_resumption:mojo_bindings_ts__generator",
     "//chrome/browser/new_tab_page/modules/v2/tab_groups:mojo_bindings_ts__generator",
@@ -62,7 +63,6 @@ build_webui("build") {
     "$root_gen_dir/chrome/browser/new_tab_page/modules/file_suggestion/drive_suggestion.mojom-webui.ts",
     "$root_gen_dir/chrome/browser/new_tab_page/modules/file_suggestion/file_suggestion.mojom-webui.ts",
     "$root_gen_dir/chrome/browser/new_tab_page/modules/file_suggestion/microsoft_files.mojom-webui.ts",
-    "$root_gen_dir/chrome/browser/new_tab_page/modules/v2/authentication/microsoft_auth.mojom-webui.ts",
     "$root_gen_dir/chrome/browser/new_tab_page/modules/v2/calendar/calendar_data.mojom-webui.ts",
     "$root_gen_dir/chrome/browser/new_tab_page/modules/v2/calendar/google_calendar.mojom-webui.ts",
     "$root_gen_dir/chrome/browser/new_tab_page/modules/v2/calendar/outlook_calendar.mojom-webui.ts",

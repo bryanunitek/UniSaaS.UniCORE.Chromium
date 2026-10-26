@@ -1,14 +1,14 @@
-use crate::api::LLGuidanceOptions;
+use crate::api::{LLGuidanceOptions, SkipSpec};
 use crate::grammar_builder::GrammarResult;
 use crate::json::schema::{NumberSchema, StringSchema};
 use crate::{regex_to_lark, HashMap};
 use anyhow::{anyhow, bail, Context, Result};
-use derivre::{JsonQuoteOptions, RegexAst};
+use derivre::{ExprRef, JsonQuoteOptions, RegexAst};
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::numeric::{check_number_bounds, rx_float_range, rx_int_range};
+use super::numeric::{check_number_bounds, normalize_integer_bounds, rx_float_range, rx_int_range};
 use super::schema::{build_schema, ArraySchema, ObjectSchema, OptSchemaExt, Schema};
 use super::shared_context::PatternPropertyCache;
 use super::RetrieveWrapper;
@@ -32,6 +32,9 @@ pub struct JsonCompileOptions {
     /// Defaults to full JSON set: nrbtf"u\
     /// For example, set to nrbtf"\ to disallow \uXXXX escapes.
     pub json_allowed_escapes: Option<String>,
+    /// Allow printable Unicode escapes in strings and object keys without regex constraints.
+    /// Paired surrogate escapes count as one character for string length limits.
+    pub json_allow_general_unicode_escapes: bool,
     #[serde(skip)]
     pub retriever: Option<RetrieveWrapper>,
 }
@@ -51,7 +54,17 @@ impl std::fmt::Display for UnsatisfiableSchemaError {
     }
 }
 
-const CHAR_REGEX: &str = r#"(\\([\"\\\/bfnrt]|u[a-fA-F0-9]{4})|[^\"\\\x00-\x1F\x7F])"#;
+// Keep both JSON string paths aligned with Derivre's regular escape policy.
+const DEFAULT_JSON_ALLOWED_ESCAPES: &str = "nrbtf\\\"u";
+
+// Match one Unicode scalar: a non-surrogate BMP escape or a high surrogate
+// immediately followed by a low surrogate. Keeping each pair in one alternative
+// makes string length limits count supplementary-plane characters correctly.
+const UNICODE_SCALAR_ESCAPE_REGEX: &str = concat!(
+    r"\\u(?:[0-9a-ce-fA-CE-F][0-9a-fA-F]{3}",
+    r"|[dD][0-7][0-9a-fA-F]{2}",
+    r"|[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})"
+);
 
 struct Compiler {
     builder: GrammarBuilder,
@@ -62,17 +75,12 @@ struct Compiler {
 
     any_cache: Option<NodeRef>,
     string_cache: Option<NodeRef>,
+    /// Reuse the decoded Unicode-scalar expression across all string length bounds.
+    general_unicode_scalar_cache: Option<ExprRef>,
+    /// Reuse compiled Unicode-string expressions for identical decoded length bounds.
+    general_unicode_string_cache: HashMap<(usize, Option<usize>), ExprRef>,
     item_separator_cache: Option<NodeRef>,
     key_separator_cache: Option<NodeRef>,
-}
-
-macro_rules! cache {
-    ($field:expr, $gen:expr) => {{
-        if $field.is_none() {
-            $field = Some($gen);
-        };
-        return ($field).unwrap();
-    }};
 }
 
 impl Default for JsonCompileOptions {
@@ -85,6 +93,7 @@ impl Default for JsonCompileOptions {
             coerce_one_of: false,
             lenient: false,
             json_allowed_escapes: None,
+            json_allow_general_unicode_escapes: false,
             retriever: None,
         }
     }
@@ -143,6 +152,8 @@ impl Compiler {
             pending_definitions: vec![],
             any_cache: None,
             string_cache: None,
+            general_unicode_scalar_cache: None,
+            general_unicode_string_cache: HashMap::default(),
             item_separator_cache: None,
             key_separator_cache: None,
             pattern_cache: PatternPropertyCache::default(),
@@ -159,7 +170,7 @@ impl Compiler {
         };
         let id = self
             .builder
-            .add_grammar(LLGuidanceOptions::default(), skip)?;
+            .add_grammar_with_skip(LLGuidanceOptions::default(), SkipSpec::once(skip))?;
 
         let built = build_schema(schema, &self.options)?;
         self.pattern_cache = built.pattern_cache;
@@ -191,7 +202,7 @@ impl Compiler {
             return self.ast_lexeme(ast);
         }
         match json_schema {
-            Schema::Any => Ok(self.gen_json_any()),
+            Schema::Any => self.gen_json_any(),
             Schema::Unsatisfiable(reason) => Err(anyhow!(UnsatisfiableSchemaError {
                 message: reason.to_string(),
             })),
@@ -273,36 +284,13 @@ impl Compiler {
                 message: e.to_string(),
             })
         })?;
-        let minimum = match num.get_minimum() {
-            (Some(min_val), true) => {
-                if min_val.fract() != 0.0 {
-                    Some(min_val.ceil())
-                } else {
-                    Some(min_val + 1.0)
-                }
-            }
-            (Some(min_val), false) => Some(min_val.ceil()),
-            _ => None,
-        }
-        .map(|val| val as i64);
-        let maximum = match num.get_maximum() {
-            (Some(max_val), true) => {
-                if max_val.fract() != 0.0 {
-                    Some(max_val.floor())
-                } else {
-                    Some(max_val - 1.0)
-                }
-            }
-            (Some(max_val), false) => Some(max_val.floor()),
-            _ => None,
-        }
-        .map(|val| val as i64);
+        let (minimum, maximum) = normalize_integer_bounds(num);
         let rx = rx_int_range(minimum, maximum).with_context(|| {
             format!("Failed to generate regex for integer range: min={minimum:?}, max={maximum:?}")
         })?;
         let mut ast = RegexAst::Regex(rx);
         if let Some(d) = num.multiple_of.as_ref() {
-            ast = RegexAst::And(vec![ast, RegexAst::MultipleOf(d.coef, d.exp)]);
+            ast = RegexAst::And(vec![ast, signed_multiple_of_ast(d.coef, d.exp)]);
         }
         Ok(ast)
     }
@@ -323,7 +311,7 @@ impl Compiler {
             })?;
         let mut ast = RegexAst::Regex(rx);
         if let Some(d) = num.multiple_of.as_ref() {
-            ast = RegexAst::And(vec![ast, RegexAst::MultipleOf(d.coef, d.exp)]);
+            ast = RegexAst::And(vec![ast, signed_multiple_of_ast(d.coef, d.exp)]);
         }
         Ok(ast)
     }
@@ -333,11 +321,19 @@ impl Compiler {
         Ok(self.builder.lexeme(id))
     }
 
-    fn json_simple_string(&mut self) -> NodeRef {
-        cache!(self.string_cache, {
-            let ast = self.json_quote(RegexAst::Regex("(?s:.*)".to_string()));
-            self.ast_lexeme(ast).unwrap()
-        })
+    fn json_simple_string(&mut self) -> Result<NodeRef> {
+        if let Some(node) = self.string_cache {
+            return Ok(node);
+        }
+
+        let ast = if self.options.json_allow_general_unicode_escapes {
+            self.json_general_unicode_string(0, None)?
+        } else {
+            self.json_quote(RegexAst::Regex("(?s:.*)".to_string()))
+        };
+        let node = self.ast_lexeme(ast)?;
+        self.string_cache = Some(node);
+        Ok(node)
     }
 
     fn item_separator(&mut self) -> Result<NodeRef> {
@@ -370,38 +366,38 @@ impl Compiler {
         Ok(r)
     }
 
-    fn gen_json_any(&mut self) -> NodeRef {
-        cache!(self.any_cache, {
-            let json_any = self.builder.new_node("json_any");
-            self.any_cache = Some(json_any); // avoid infinite recursion
-            let num = self.json_number(&NumberSchema::default()).unwrap();
-            let tf = self.builder.regex.regex("true|false").unwrap();
-            let options = vec![
-                self.builder.string("null"),
-                self.builder.lexeme(tf),
-                self.ast_lexeme(num).unwrap(),
-                self.json_simple_string(),
-                self.gen_json_array(&ArraySchema {
-                    min_items: 0,
-                    max_items: None,
-                    prefix_items: vec![],
-                    items: Schema::any_box(),
-                })
-                .unwrap(),
-                self.gen_json_object(&ObjectSchema {
-                    properties: IndexMap::new(),
-                    additional_properties: Schema::any_box(),
-                    required: IndexSet::new(),
-                    pattern_properties: IndexMap::new(),
-                    min_properties: 0,
-                    max_properties: None,
-                })
-                .unwrap(),
-            ];
-            let inner = self.builder.select(&options);
-            self.builder.set_placeholder(json_any, inner);
-            json_any
-        })
+    fn gen_json_any(&mut self) -> Result<NodeRef> {
+        if let Some(json_any) = self.any_cache {
+            return Ok(json_any);
+        }
+
+        let json_any = self.builder.new_node("json_any");
+        self.any_cache = Some(json_any); // avoid infinite recursion
+        let num = self.json_number(&NumberSchema::default())?;
+        let tf = self.builder.regex.regex("true|false")?;
+        let options = vec![
+            self.builder.string("null"),
+            self.builder.lexeme(tf),
+            self.ast_lexeme(num)?,
+            self.json_simple_string()?,
+            self.gen_json_array(&ArraySchema {
+                min_items: 0,
+                max_items: None,
+                prefix_items: vec![],
+                items: Schema::any_box(),
+            })?,
+            self.gen_json_object(&ObjectSchema {
+                properties: IndexMap::new(),
+                additional_properties: Schema::any_box(),
+                required: IndexSet::new(),
+                pattern_properties: IndexMap::new(),
+                min_properties: 0,
+                max_properties: None,
+            })?,
+        ];
+        let inner = self.builder.select(&options);
+        self.builder.set_placeholder(json_any, inner);
+        Ok(json_any)
     }
 
     fn gen_json_object(&mut self, obj: &ObjectSchema) -> Result<NodeRef> {
@@ -581,11 +577,12 @@ impl Compiler {
             }
             Ok(property) => {
                 let name = if taken_name_ids.is_empty() {
-                    self.json_simple_string()
+                    self.json_simple_string()?
                 } else {
                     let taken = self.builder.regex.select(taken_name_ids);
                     let not_taken = self.builder.regex.not(taken);
-                    let valid = self.builder.regex.regex(&format!("\"({CHAR_REGEX})*\""))?;
+                    let valid_ast = self.json_general_unicode_string(0, None)?;
+                    let valid = self.builder.regex.add_ast(valid_ast)?;
                     let valid_and_not_taken = self.builder.regex.and(vec![valid, not_taken]);
                     self.builder.lexeme(valid_and_not_taken)
                 };
@@ -694,7 +691,7 @@ impl Compiler {
             .options
             .json_allowed_escapes
             .clone()
-            .unwrap_or_else(|| "nrbtf\\\"u".to_string());
+            .unwrap_or_else(|| DEFAULT_JSON_ALLOWED_ESCAPES.to_string());
         RegexAst::JsonQuote(
             Box::new(ast),
             JsonQuoteOptions {
@@ -735,7 +732,7 @@ impl Compiler {
         Ok(r)
     }
 
-    fn gen_json_string(&self, opts: StringSchema) -> Result<RegexAst> {
+    fn gen_json_string(&mut self, opts: StringSchema) -> Result<RegexAst> {
         let min_length = opts.min_length;
         let max_length = opts.max_length;
         if let Some(max_length) = max_length {
@@ -746,6 +743,9 @@ impl Compiler {
                     ),
                 }));
             }
+        }
+        if opts.regex.is_none() && self.options.json_allow_general_unicode_escapes {
+            return self.json_general_unicode_string(min_length, max_length);
         }
         if min_length == 0 && max_length.is_none() && opts.regex.is_none() {
             return Ok(self.json_quote(RegexAst::Regex("(?s:.*)".to_string())));
@@ -823,6 +823,75 @@ impl Compiler {
         }
     }
 
+    /// Builds a JSON-string regex whose repetitions count decoded Unicode scalars.
+    ///
+    /// This is only valid for strings without regex constraints: printable escapes
+    /// are not decoded before matching a schema pattern. Complete surrogate pairs
+    /// are one repetition, while unpaired surrogates are rejected. The scalar
+    /// expression is compiled once and reused across all string length bounds.
+    fn json_general_unicode_string(
+        &mut self,
+        min_length: usize,
+        max_length: Option<usize>,
+    ) -> Result<RegexAst> {
+        let cache_key = (min_length, max_length);
+        if let Some(expr) = self.general_unicode_string_cache.get(&cache_key) {
+            return Ok(RegexAst::ExprRef(*expr));
+        }
+
+        let scalar = if let Some(expr) = self.general_unicode_scalar_cache {
+            expr
+        } else {
+            let allowed_escapes = self
+                .options
+                .json_allowed_escapes
+                .as_deref()
+                .unwrap_or(DEFAULT_JSON_ALLOWED_ESCAPES);
+            let mut short_escapes = String::new();
+            let mut allow_unicode_escapes = false;
+
+            for escape in allowed_escapes.chars() {
+                match escape {
+                    'u' => allow_unicode_escapes = true,
+                    '\\' => short_escapes.push_str(r"\\"),
+                    '"' | 'b' | 'f' | 'n' | 'r' | 't' => short_escapes.push(escape),
+                    _ => bail!("invalid escape character in allowed_escapes: {escape}"),
+                }
+            }
+
+            let mut character_regex = r#"[^"\\\x00-\x1F\x7F]"#.to_string();
+            if !short_escapes.is_empty() {
+                character_regex.push_str(&format!(r"|\\[{short_escapes}]"));
+            }
+            if allow_unicode_escapes {
+                character_regex.push('|');
+                character_regex.push_str(UNICODE_SCALAR_ESCAPE_REGEX);
+            }
+
+            let expr = self.builder.regex.regex(&character_regex)?;
+            self.general_unicode_scalar_cache = Some(expr);
+            expr
+        };
+
+        let min = u32::try_from(min_length)
+            .with_context(|| format!("minLength ({min_length}) exceeds the supported range"))?;
+        let max = max_length
+            .map(|max| {
+                u32::try_from(max)
+                    .with_context(|| format!("maxLength ({max}) exceeds the supported range"))
+            })
+            .transpose()?
+            .unwrap_or(u32::MAX);
+        let ast = RegexAst::Concat(vec![
+            RegexAst::Literal("\"".to_string()),
+            RegexAst::Repeat(Box::new(RegexAst::ExprRef(scalar)), min, max),
+            RegexAst::Literal("\"".to_string()),
+        ]);
+        let expr = self.builder.regex.add_ast(ast)?;
+        self.general_unicode_string_cache.insert(cache_key, expr);
+        Ok(RegexAst::ExprRef(expr))
+    }
+
     fn gen_json_array(&mut self, arr: &ArraySchema) -> Result<NodeRef> {
         let mut max_items = arr.max_items;
         let min_items = arr.min_items;
@@ -856,36 +925,32 @@ impl Compiler {
         let mut required_items = vec![];
         let mut optional_items = vec![];
 
-        // If max_items is None, we can add an infinite tail of items later
-        let n_to_add = max_items.map_or(arr.prefix_items.len().max(min_items), |max| max);
+        // Consider at most maxItems prefix items.
+        let prefix_count = max_items.map_or(arr.prefix_items.len(), |max| {
+            max.min(arr.prefix_items.len())
+        });
 
-        for i in 0..n_to_add {
-            let item = if i < arr.prefix_items.len() {
-                match self.gen_json(&arr.prefix_items[i]) {
-                    Ok(node) => node,
-                    Err(e) => match e.downcast_ref::<UnsatisfiableSchemaError>() {
-                        // If it's not an UnsatisfiableSchemaError, just propagate it normally
-                        None => return Err(e),
-                        // Item is optional; don't raise UnsatisfiableSchemaError.
-                        // Set max_items to the current index, as we can't satisfy any more items.
-                        Some(_) if i >= min_items => {
-                            max_items = Some(i);
-                            break;
-                        }
-                        // Item is required; add context and propagate UnsatisfiableSchemaError
-                        Some(_) => {
-                            return Err(e.context(UnsatisfiableSchemaError {
-                                message: format!(
-                                    "prefixItems[{i}] is unsatisfiable but minItems is {min_items}"
-                                ),
-                            }));
-                        }
-                    },
-                }
-            } else if let Some(compiled) = &additional_item_grm {
-                *compiled
-            } else {
-                break;
+        for i in 0..prefix_count {
+            let item = match self.gen_json(&arr.prefix_items[i]) {
+                Ok(node) => node,
+                Err(e) => match e.downcast_ref::<UnsatisfiableSchemaError>() {
+                    // If it's not an UnsatisfiableSchemaError, just propagate it normally
+                    None => return Err(e),
+                    // Item is optional; don't raise UnsatisfiableSchemaError.
+                    // Set max_items to the current index, as we can't satisfy any more items.
+                    Some(_) if i >= min_items => {
+                        max_items = Some(i);
+                        break;
+                    }
+                    // Item is required; add context and propagate UnsatisfiableSchemaError
+                    Some(_) => {
+                        return Err(e.context(UnsatisfiableSchemaError {
+                            message: format!(
+                                "prefixItems[{i}] is unsatisfiable but minItems is {min_items}"
+                            ),
+                        }));
+                    }
+                },
             };
 
             if i < min_items {
@@ -895,10 +960,26 @@ impl Compiler {
             }
         }
 
-        if max_items.is_none() {
-            if let Some(additional_item) = additional_item_grm {
-                // Add an infinite tail of items
-                optional_items.push(self.sequence(additional_item)?);
+        // Compile the homogeneous tail compactly instead of expanding every item.
+        if let Some(additional_item) = additional_item_grm {
+            // Array bounds include the prefix items that were already compiled.
+            let explicit_items = required_items.len() + optional_items.len();
+            let remaining_min = min_items.saturating_sub(explicit_items);
+            let remaining_max = max_items.map(|max| max.saturating_sub(explicit_items));
+
+            if remaining_max != Some(0) {
+                let tail = if remaining_min == 0 && remaining_max.is_none() {
+                    self.sequence(additional_item)?
+                } else {
+                    // The tail contains at least one item; its entirety may be optional below.
+                    self.bounded_sequence(additional_item, remaining_min.max(1), remaining_max)?
+                };
+
+                if remaining_min == 0 {
+                    optional_items.push(tail);
+                } else {
+                    required_items.push(tail);
+                }
             }
         }
 
@@ -939,6 +1020,21 @@ impl Compiler {
     }
 }
 
+/// Build the `multipleOf` regex constraint with sign handling.
+///
+/// derivre's `RegexAst::MultipleOf` matches only the unsigned numeric literal
+/// (the digits, plus a decimal point for non-integer `multipleOf`); it has no
+/// transition for a leading `-`. Allow an optional sign here, otherwise
+/// negative multiples (e.g. `-6` for `multipleOf 3`) would be rejected.
+/// Divisibility is independent of sign.
+/// https://github.com/guidance-ai/llguidance/issues/222
+fn signed_multiple_of_ast(coef: u32, exp: u32) -> RegexAst {
+    RegexAst::Concat(vec![
+        RegexAst::Regex("-?".to_string()),
+        RegexAst::MultipleOf(coef, exp),
+    ])
+}
+
 fn always_non_empty(ast: &RegexAst) -> bool {
     match ast {
         RegexAst::Or(asts) => asts.iter().any(always_non_empty),
@@ -966,8 +1062,185 @@ fn always_non_empty(ast: &RegexAst) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::ParserLimits;
+    use crate::api::{GrammarInit, GrammarWithLexer, ParserLimits, TopLevelGrammar};
     use serde_json::json;
+
+    fn compile_schema(schema: Value) -> Result<GrammarResult> {
+        JsonCompileOptions::default()
+            .json_to_llg(GrammarBuilder::new(None, ParserLimits::default()), schema)
+    }
+
+    #[test]
+    fn large_bounded_array_stays_compact() {
+        let result = compile_schema(json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 30_000
+        }))
+        .expect("large bounded array should compile");
+
+        assert!(
+            result.builder.num_nodes() < 256,
+            "bounded array expanded into {} grammar symbols",
+            result.builder.num_nodes()
+        );
+    }
+
+    #[test]
+    fn large_bounded_array_with_prefix_items_stays_compact() {
+        let result = compile_schema(json!({
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"type": "integer"}],
+            "items": {"type": "boolean"},
+            "minItems": 1,
+            "maxItems": 30_000
+        }))
+        .expect("large bounded array with prefix items should compile");
+
+        assert!(result.builder.num_nodes() < 256);
+    }
+
+    #[test]
+    fn large_minimum_array_stays_compact() {
+        let result = compile_schema(json!({
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 29_999,
+            "maxItems": 30_000
+        }))
+        .expect("large required array should compile");
+
+        assert!(result.builder.num_nodes() < 256);
+    }
+
+    #[test]
+    fn multiple_large_bounded_array_schemas_stay_compact() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "values": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 30_000
+                }
+            },
+            "required": ["values"],
+            "additionalProperties": false
+        });
+        let variants: Vec<Value> = ["first", "second"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let mut payload = schema.clone();
+                payload
+                    .as_object_mut()
+                    .expect("payload schema should be an object")
+                    .insert("$id".to_string(), json!(format!("urn:example:{index}")));
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"const": name},
+                        "payload": payload
+                    },
+                    "required": ["name", "payload"],
+                    "additionalProperties": false
+                })
+            })
+            .collect();
+        let combined_schema = json!({
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"anyOf": variants}
+                }
+            },
+            "required": ["entries"],
+            "additionalProperties": false
+        });
+
+        let grammar = GrammarInit::Serialized(TopLevelGrammar {
+            grammars: vec![
+                GrammarWithLexer {
+                    lark_grammar: Some("start: @first | @second | @combined".to_string()),
+                    ..Default::default()
+                },
+                GrammarWithLexer {
+                    name: Some("first".to_string()),
+                    json_schema: Some(schema.clone()),
+                    ..Default::default()
+                },
+                GrammarWithLexer {
+                    name: Some("second".to_string()),
+                    json_schema: Some(schema),
+                    ..Default::default()
+                },
+                GrammarWithLexer {
+                    name: Some("combined".to_string()),
+                    json_schema: Some(combined_schema),
+                    ..Default::default()
+                },
+            ],
+            max_tokens: None,
+        });
+
+        let (compiled, _) = grammar
+            .clone()
+            .to_internal(None, ParserLimits::default())
+            .expect("multiple bounded-array schemas should compile");
+        grammar
+            .to_cgrammar(
+                None,
+                &mut crate::Logger::new(0, 0),
+                ParserLimits::default(),
+                vec![],
+            )
+            .expect("bounded-array grammars should fit the compact symbol representation");
+        assert!(
+            compiled.num_symbols() < 512,
+            "bounded-array grammars expanded into {} symbols",
+            compiled.num_symbols()
+        );
+    }
+
+    #[test]
+    fn zero_maximum_array_compiles() {
+        compile_schema(json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 0
+        }))
+        .expect("empty bounded array should compile");
+    }
+
+    #[test]
+    fn optional_unsatisfiable_prefix_preserves_empty_array() {
+        compile_schema(json!({
+            "type": "array",
+            "prefixItems": [false],
+            "items": {"type": "string"},
+            "maxItems": 30_000
+        }))
+        .expect("unsatisfiable optional prefix should still allow an empty array");
+    }
+
+    #[test]
+    fn unsatisfiable_array_bounds_are_rejected() {
+        let error = compile_schema(json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 2,
+            "maxItems": 1
+        }))
+        .err()
+        .expect("inverted array bounds should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("minItems (2) is greater than maxItems (1)"));
+    }
 
     #[test]
     fn json_quote_default_allows_u_escape() {
@@ -977,9 +1250,15 @@ mod tests {
         );
         let quoted = compiler.json_quote(RegexAst::EmptyString);
         match quoted {
-            RegexAst::JsonQuote(_, opts) => assert_eq!(opts.allowed_escapes, "nrbtf\\\"u"),
+            RegexAst::JsonQuote(_, opts) => {
+                assert_eq!(opts.allowed_escapes, DEFAULT_JSON_ALLOWED_ESCAPES)
+            }
             _ => panic!("expected JsonQuote AST"),
         }
+        assert_eq!(
+            DEFAULT_JSON_ALLOWED_ESCAPES,
+            JsonQuoteOptions::regular().allowed_escapes
+        );
     }
 
     #[test]
@@ -995,6 +1274,59 @@ mod tests {
         match quoted {
             RegexAst::JsonQuote(_, opts) => assert_eq!(opts.allowed_escapes, "nrbtf\\\""),
             _ => panic!("expected JsonQuote AST"),
+        }
+    }
+
+    /// Reuses one Unicode-scalar expression while keeping different string bounds distinct.
+    #[test]
+    fn general_unicode_strings_reuse_compiled_regex() {
+        let mut compiler = Compiler::new(
+            JsonCompileOptions::default(),
+            GrammarBuilder::new(None, ParserLimits::default()),
+        );
+
+        let unbounded = compiler.json_general_unicode_string(0, None).unwrap();
+        let scalar = compiler.general_unicode_scalar_cache.unwrap();
+        let repeated = compiler.json_general_unicode_string(0, None).unwrap();
+        let bounded = compiler.json_general_unicode_string(1, Some(1)).unwrap();
+
+        match (unbounded, repeated, bounded) {
+            (RegexAst::ExprRef(first), RegexAst::ExprRef(second), RegexAst::ExprRef(third)) => {
+                assert_eq!(first, second);
+                assert_ne!(first, third);
+            }
+            _ => panic!("expected cached regex expression references"),
+        }
+        assert_eq!(compiler.general_unicode_scalar_cache, Some(scalar));
+        assert_eq!(compiler.general_unicode_string_cache.len(), 2);
+    }
+
+    /// Returns invalid escape-policy errors for every schema shape instead of panicking.
+    #[test]
+    fn invalid_json_allowed_escapes_propagate_for_all_schema_shapes() {
+        for allow_general_unicode_escapes in [false, true] {
+            let options = JsonCompileOptions {
+                json_allowed_escapes: Some("x".to_string()),
+                json_allow_general_unicode_escapes: allow_general_unicode_escapes,
+                ..JsonCompileOptions::default()
+            };
+
+            for schema in [
+                json!({ "type": "string" }),
+                json!({ "type": "object" }),
+                json!({}),
+            ] {
+                let error = options
+                    .json_to_llg(GrammarBuilder::new(None, ParserLimits::default()), schema)
+                    .err()
+                    .expect("invalid JSON escape settings should return an error");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("invalid escape character in allowed_escapes: x"),
+                    "unexpected error: {error}"
+                );
+            }
         }
     }
 

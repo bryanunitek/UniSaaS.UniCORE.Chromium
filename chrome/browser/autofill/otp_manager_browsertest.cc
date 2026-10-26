@@ -1,4 +1,4 @@
-// Copyright 2025 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,18 +13,16 @@
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_manager.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/test_autofill_external_delegate.h"
 #include "components/autofill/core/common/signatures.h"
-#include "components/one_time_tokens/core/browser/gmail_otp_backend.h"
+#include "components/one_time_tokens/core/browser/fake_sms_otp_service.h"
 #include "components/one_time_tokens/core/browser/one_time_token.h"
 #include "components/one_time_tokens/core/browser/one_time_token_backend_notification.h"
-#include "components/one_time_tokens/core/browser/one_time_token_retrieval_error.h"
-#include "components/one_time_tokens/core/browser/one_time_token_service_impl.h"
-#include "components/one_time_tokens/core/browser/sms_otp_backend.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -32,85 +30,6 @@
 namespace autofill {
 
 namespace {
-
-// This implementation is for testing. It lets us manually control and simulate
-// the moment an SMS is received for one-time passwords (OTP).
-class FakeSmsOtpBackend : public one_time_tokens::SmsOtpBackend {
- public:
-  using CallbackType = base::OnceCallback<void(
-      base::expected<one_time_tokens::OneTimeToken,
-                     one_time_tokens::OneTimeTokenRetrievalError>)>;
-
-  FakeSmsOtpBackend() = default;
-  ~FakeSmsOtpBackend() override = default;
-
-  // one_time_tokens::SmsOtpBackend:
-  void RetrieveSmsOtp(CallbackType callback) override;
-
-  // Simulates the reception of an SMS.
-  void NotifyCallbacks(
-      base::expected<one_time_tokens::OneTimeToken,
-                     one_time_tokens::OneTimeTokenRetrievalError> reply);
-
-  size_t num_callbacks() const { return callbacks_.size(); }
-
- private:
-  std::vector<CallbackType> callbacks_;
-};
-
-void FakeSmsOtpBackend::RetrieveSmsOtp(
-    FakeSmsOtpBackend::CallbackType callback) {
-  callbacks_.push_back(std::move(callback));
-}
-
-void FakeSmsOtpBackend::NotifyCallbacks(
-    base::expected<one_time_tokens::OneTimeToken,
-                   one_time_tokens::OneTimeTokenRetrievalError> reply) {
-  for (auto& callback : callbacks_) {
-    std::move(callback).Run(reply);
-  }
-  callbacks_.clear();
-}
-
-// This implementation is for testing. It lets us manually control and simulate
-// the moment a Gmail OTP is received for one-time passwords (OTP).
-class FakeGmailOtpBackend : public one_time_tokens::GmailOtpBackend {
- public:
-  using CallbackType = base::RepeatingCallback<void(
-      base::expected<one_time_tokens::OneTimeToken,
-                     one_time_tokens::OneTimeTokenRetrievalError>)>;
-
-  FakeGmailOtpBackend() = default;
-  ~FakeGmailOtpBackend() override = default;
-
-  // one_time_tokens::GmailOtpBackend:
-  one_time_tokens::ExpiringSubscription Subscribe(
-      base::Time expiration,
-      CallbackType callback) override {
-    callbacks_.push_back(callback);
-    return one_time_tokens::ExpiringSubscription();
-  }
-
-  // one_time_tokens::GmailOtpBackend:
-  void OnIncomingOneTimeTokenBackendNotification(
-      const one_time_tokens::OneTimeTokenBackendNotification& notification)
-      override {}
-
-  // Simulates the reception of a Gmail OTP.
-  void ProcessCallbacks(
-      base::expected<one_time_tokens::OneTimeToken,
-                     one_time_tokens::OneTimeTokenRetrievalError> reply) {
-    for (auto& callback : callbacks_) {
-      callback.Run(reply);
-    }
-    callbacks_.clear();
-  }
-
-  size_t num_callbacks() const { return callbacks_.size(); }
-
- private:
-  std::vector<CallbackType> callbacks_;
-};
 
 // AutofillCrowdsourcingManager that classifies every field as a ONE_TIME_CODE.
 class FakeAutofillCrowdsourcingManager : public AutofillCrowdsourcingManager {
@@ -208,31 +127,14 @@ class OtpTestAutofillClient : public TestContentAutofillClient {
     set_crowdsourcing_manager(
         std::make_unique<FakeAutofillCrowdsourcingManager>(
             this, version_info::Channel::STABLE));
-    set_sms_otp_backend(std::make_unique<FakeSmsOtpBackend>());
-    gmail_otp_backend_ = std::make_unique<FakeGmailOtpBackend>();
-    one_time_token_service_ =
-        std::make_unique<one_time_tokens::OneTimeTokenServiceImpl>(
-            GetSmsOtpBackend(), gmail_otp_backend_.get());
+    set_sms_otp_service(std::make_unique<one_time_tokens::FakeSmsOtpService>());
   }
   ~OtpTestAutofillClient() override = default;
 
-  one_time_tokens::OneTimeTokenService* GetOneTimeTokenService()
-      const override {
-    return one_time_token_service_.get();
+  one_time_tokens::FakeSmsOtpService& sms_otp_service() {
+    return static_cast<one_time_tokens::FakeSmsOtpService&>(
+        *GetSmsOtpService());
   }
-
-  FakeSmsOtpBackend& sms_otp_backend() {
-    return *static_cast<FakeSmsOtpBackend*>(GetSmsOtpBackend());
-  }
-
-  FakeGmailOtpBackend& gmail_otp_backend() {
-    return *static_cast<FakeGmailOtpBackend*>(gmail_otp_backend_.get());
-  }
-
- private:
-  std::unique_ptr<one_time_tokens::GmailOtpBackend> gmail_otp_backend_;
-  std::unique_ptr<one_time_tokens::OneTimeTokenServiceImpl>
-      one_time_token_service_;
 };
 
 }  // namespace
@@ -294,8 +196,8 @@ IN_PROC_BROWSER_TEST_P(OtpManagerWithWebOtpApiBrowserTest,
   ASSERT_TRUE(autofill_manager().WaitForFormsSeen(1));
 
   // Immediately when a form field is classified as an OTP field, a subscription
-  // for OTPs should be started if an SMS OTP backend exists.
-  ASSERT_EQ(autofill_client().sms_otp_backend().num_callbacks(), 1u);
+  // for SMS OTPs should be started.
+  ASSERT_EQ(autofill_client().sms_otp_service().num_subscribers(), 1u);
 
   // Using the WebOTP API should block the Autofill OTP feature.
   if (is_webotp_api_used()) {
@@ -315,7 +217,7 @@ IN_PROC_BROWSER_TEST_P(OtpManagerWithWebOtpApiBrowserTest,
   }
 
   // Simulate an OTP arriving.
-  autofill_client().sms_otp_backend().NotifyCallbacks(
+  autofill_client().sms_otp_service().SimulateOtpArrived(
       one_time_tokens::OneTimeToken(one_time_tokens::OneTimeTokenType::kSmsOtp,
                                     "123456", base::TimeTicks::Now()));
 
@@ -328,7 +230,8 @@ IN_PROC_BROWSER_TEST_P(OtpManagerWithWebOtpApiBrowserTest,
   autofill_manager().OnAskForValuesToFill(
       form.ToFormData(), first_field.global_id(), gfx::Rect(),
       AutofillSuggestionTriggerSource::kFormControlElementClicked,
-      /*password_request=*/std::nullopt);
+      /*password_request=*/std::nullopt,
+      autofill::AutofillManagerTestApi::pass_key());
   ASSERT_TRUE(autofill_manager().WaitForSuggestionsShown(1));
 
   // Verify expectations: The OTP should be suggested by autofill unless the

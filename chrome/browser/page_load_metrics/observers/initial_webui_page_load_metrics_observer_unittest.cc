@@ -8,8 +8,13 @@
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/page_load_metrics/browser/observers/page_load_metrics_observer_tester.h"
@@ -18,6 +23,7 @@
 #include "components/page_load_metrics/common/test/page_load_metrics_test_util.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "components/ukm/gmock_matchers.h"
+#include "components/variations/scoped_variations_ids_provider.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/mock_navigation_handle.h"
@@ -27,11 +33,24 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
+#include "ui/views/test/test_layout_provider.h"
 
 using content::NavigationSimulator;
 using page_load_metrics::PageLoadMetricsObserverTester;
 
 namespace {
+
+class TestBrowserElements : public BrowserElements {
+ public:
+  DECLARE_SAFE_CAST_TARGET()
+
+  explicit TestBrowserElements(BrowserWindowInterface& browser)
+      : BrowserElements(browser) {}
+  ui::ElementContext GetContext() override { return ui::ElementContext(); }
+};
+
+DEFINE_SAFE_CAST_TARGET(TestBrowserElements)
 
 using ::testing::AllOf;
 using ::testing::Contains;
@@ -56,12 +75,11 @@ class InitialWebUIPageLoadMetricsObserverTest
  public:
   InitialWebUIPageLoadMetricsObserverTest() {
     scoped_feature_list_.InitWithFeatures(
-        {features::kInitialWebUI, features::kInitialWebUIMetrics,
-         features::kWebUIReloadButton},
-        {});
+        {features::kInitialWebUI, features::kWebUIReloadButton}, {});
   }
 
   void SetUp() override {
+    InitialWebUIWindowMetricsManager::ResetForTesting();
     ChromeRenderViewHostTestHarness::SetUp();
     SetContents(CreateTestWebContents());
     ukm::InitializeSourceUrlRecorderForWebContents(web_contents());
@@ -88,7 +106,10 @@ class InitialWebUIPageLoadMetricsObserverTest
   ukm::TestAutoSetUkmRecorder test_ukm_recorder_;
 
  private:
+  views::test::TestLayoutProvider layout_provider_;
   base::test::ScopedFeatureList scoped_feature_list_;
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+      variations::VariationsIdsProvider::Mode::kUseSignedInState};
   std::unique_ptr<PageLoadMetricsObserverTester> tester_;
 };
 
@@ -248,8 +269,6 @@ TEST_F(InitialWebUIPageLoadMetricsObserverTest, WasCached) {
   EXPECT_THAT(entries, Contains(HasMetricWithValue("WasCached", 1)));
 }
 
-
-
 TEST_F(InitialWebUIPageLoadMetricsObserverTest,
        NavigationTiming_StartEarlierThanRequest) {
   NavigateAndCommit(GURL(kTestWebUIUrl));
@@ -346,6 +365,92 @@ TEST_F(InitialWebUIPageLoadMetricsObserverTest,
   auto entries =
       test_ukm_recorder_.GetEntriesByName("InitialWebUINavigationTiming");
   EXPECT_THAT(entries, IsEmpty());
+}
+
+// Verifies that when a WebContents is already associated with a
+// BrowserWindowInterface prior to navigation and first paint, FCP is forwarded
+// immediately to the InitialWebUIWindowMetricsManager.
+TEST_F(InitialWebUIPageLoadMetricsObserverTest,
+       ForwardMonotonicFCPWithBrowserWindowInterface) {
+  base::HistogramTester histograms;
+  MockBrowserWindowInterface mock_browser;
+  ui::UnownedUserDataHost user_data_host;
+  EXPECT_CALL(mock_browser, GetProfile())
+      .WillRepeatedly(testing::Return(profile()));
+  EXPECT_CALL(mock_browser, GetUnownedUserDataHost())
+      .WillRepeatedly(testing::ReturnRef(user_data_host));
+  TestBrowserElements browser_elements(mock_browser);
+
+  InitialWebUIWindowMetricsManager manager(&mock_browser);
+  manager.SkipStartupForTesting();
+  webui::SetBrowserWindowInterface(web_contents(), &mock_browser);
+  manager.SetWindowCreationInfo(waap::NewWindowCreationSource::kNewEmptyWindow,
+                                base::TimeTicks::Now());
+
+  NavigateAndCommit(GURL(kTestWebUIUrl));
+
+  page_load_metrics::mojom::PageLoadTiming timing;
+  page_load_metrics::InitPageLoadTimingForTest(&timing);
+  timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  base::TimeTicks nav_start =
+      tester()->GetDelegateForCommittedLoad().GetNavigationStart();
+  timing.monotonic_paint_timing =
+      page_load_metrics::mojom::MonotonicPaintTiming::New();
+  timing.monotonic_paint_timing->first_contentful_paint =
+      nav_start + base::Seconds(2);
+  PopulateRequiredTimingFields(&timing);
+
+  tester()->SimulateTimingUpdate(timing);
+
+  histograms.ExpectTotalCount(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow."
+      "ReloadButton.FirstContentfulPaint.FromConstructor2",
+      1);
+}
+
+// Verifies that when a WebContents is prewarmed and commits without an
+// associated BrowserWindowInterface, attaching BrowserWindowInterface before
+// first paint forwards FCP to the InitialWebUIWindowMetricsManager.
+TEST_F(InitialWebUIPageLoadMetricsObserverTest,
+       MonotonicFCPForPrewarmedWebContents) {
+  base::HistogramTester histograms;
+  MockBrowserWindowInterface mock_browser;
+  ui::UnownedUserDataHost user_data_host;
+  EXPECT_CALL(mock_browser, GetProfile())
+      .WillRepeatedly(testing::Return(profile()));
+  EXPECT_CALL(mock_browser, GetUnownedUserDataHost())
+      .WillRepeatedly(testing::ReturnRef(user_data_host));
+  TestBrowserElements browser_elements(mock_browser);
+
+  InitialWebUIWindowMetricsManager manager(&mock_browser);
+  manager.SkipStartupForTesting();
+
+  // Navigate and commit while prewarmed (no BrowserWindowInterface yet).
+  NavigateAndCommit(GURL(kTestWebUIUrl));
+
+  // Simulate window creation consuming the prewarmed WebContents prior to show
+  // and first paint.
+  webui::SetBrowserWindowInterface(web_contents(), &mock_browser);
+  manager.SetWindowCreationInfo(waap::NewWindowCreationSource::kNewEmptyWindow,
+                                base::TimeTicks::Now());
+
+  page_load_metrics::mojom::PageLoadTiming timing;
+  page_load_metrics::InitPageLoadTimingForTest(&timing);
+  timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  base::TimeTicks nav_start_deferred =
+      tester()->GetDelegateForCommittedLoad().GetNavigationStart();
+  timing.monotonic_paint_timing =
+      page_load_metrics::mojom::MonotonicPaintTiming::New();
+  timing.monotonic_paint_timing->first_contentful_paint =
+      nav_start_deferred + base::Seconds(2);
+  PopulateRequiredTimingFields(&timing);
+
+  tester()->SimulateTimingUpdate(timing);
+
+  histograms.ExpectTotalCount(
+      "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow."
+      "ReloadButton.FirstContentfulPaint.FromConstructor2",
+      1);
 }
 
 }  // namespace

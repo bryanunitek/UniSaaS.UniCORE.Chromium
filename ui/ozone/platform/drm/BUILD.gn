@@ -166,7 +166,7 @@ source_set("gbm") {
     "//ui/base/ime/ash",
   ]
 
-  if (!use_static_angle) {
+  if (!use_static_angle || is_chromeos) {
     data_deps = [
       "//third_party/angle:libEGL",
       "//third_party/angle:libGLESv2",
@@ -187,10 +187,6 @@ source_set("gbm") {
     # Enable VLOG(1) so that they are included in field feedbacks.
     "ENABLED_VLOG_LEVEL=1",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("gbm_unittests") {
@@ -209,6 +205,7 @@ source_set("gbm_unittests") {
     "gpu/fake_drm_device.h",
     "gpu/fake_drm_device_generator.cc",
     "gpu/fake_drm_device_generator.h",
+    "gpu/gbm_surface_factory_unittest.cc",
     "gpu/hardware_display_controller_unittest.cc",
     "gpu/hardware_display_plane_manager_unittest.cc",
     "gpu/mock_drm_device.cc",
@@ -239,10 +236,6 @@ source_set("gbm_unittests") {
     "//ui/ozone:platform",
     "//ui/ozone/common",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("drm_integration_tests") {

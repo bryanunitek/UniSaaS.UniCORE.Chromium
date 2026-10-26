@@ -19,16 +19,16 @@
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/notimplemented.h"
+#include "base/notreached.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/analysis/content_analysis_dialog_controller.h"
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_dialog_controller_base.h"
 #include "chrome/browser/enterprise/connectors/analysis/files_request_handler.h"
-#include "chrome/browser/enterprise/connectors/analysis/page_print_analysis_request.h"
-#include "chrome/browser/enterprise/connectors/analysis/page_print_request_handler.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/enterprise/connectors/referrer_cache_utils.h"
@@ -66,15 +66,27 @@
 #include "components/url_matcher/url_matcher.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/web_contents_user_data.h"
 #include "crypto/secure_hash.h"
 #include "crypto/sha2.h"
 #include "net/base/mime_util.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#include "ui/base/clipboard/clipboard_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_types.h"
 
 #if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 #include "chrome/browser/enterprise/connectors/analysis/content_analysis_sdk_manager.h"  // nogncheck
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/enterprise/connectors/analysis/copy_warning_delegate_tracker.h"
+#include "chrome/browser/enterprise/connectors/analysis/page_print_analysis_request.h"
+#include "chrome/browser/enterprise/connectors/analysis/page_print_request_handler.h"
+#include "chrome/browser/enterprise/data_protection/clipboard_toast_tracker.h"
+#include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
+#include "chrome/browser/ui/toasts/toast_features.h"
 #endif
 
 namespace enterprise_connectors {
@@ -160,9 +172,16 @@ void ContentAnalysisDelegate::Data::AddClipboardData(
   if (!clipboard_paste_data.rtf.empty()) {
     text.push_back(clipboard_paste_data.rtf);
   }
+  // `png` (populated on paste) and `bitmap` (populated on copy) are mutually
+  // exclusive and do not coexist in `clipboard_paste_data`.
   if (!clipboard_paste_data.png.empty()) {
-      image = std::string(clipboard_paste_data.png.begin(),
-                          clipboard_paste_data.png.end());
+    image.assign(clipboard_paste_data.png.begin(),
+                 clipboard_paste_data.png.end());
+  } else if (!clipboard_paste_data.bitmap.empty()) {
+    std::vector<uint8_t> png_bytes =
+        ui::clipboard_util::EncodeBitmapToPngAcceptJank(
+            clipboard_paste_data.bitmap);
+    image.assign(png_bytes.begin(), png_bytes.end());
   }
   if (!clipboard_paste_data.custom_data.empty()) {
     for (const auto& entry : clipboard_paste_data.custom_data) {
@@ -175,7 +194,13 @@ ContentAnalysisDelegate::Result::Result() = default;
 ContentAnalysisDelegate::Result::Result(Result&& other) = default;
 ContentAnalysisDelegate::Result::~Result() = default;
 
-ContentAnalysisDelegate::~ContentAnalysisDelegate() = default;
+ContentAnalysisDelegate::~ContentAnalysisDelegate() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (web_contents_) {
+    CopyWarningDelegateTracker::ClearIfMatches(web_contents_.get(), this);
+  }
+#endif
+}
 
 void ContentAnalysisDelegate::BypassWarnings(
     std::optional<std::u16string> user_justification) {
@@ -207,11 +232,13 @@ void ContentAnalysisDelegate::BypassWarnings(
     }
   }
 
+#if !BUILDFLAG(IS_ANDROID)
   // Mark the printed page as complying and report a warning bypass.
   if (page_warning_) {
     result_.page_result = true;
     page_print_request_handler_->ReportWarningBypass(user_justification);
   }
+#endif
 
   RunCallback();
 }
@@ -246,9 +273,29 @@ void ContentAnalysisDelegate::Cancel(bool warning) {
                        upload_service->AsWeakPtr(), std::move(cancel)));
   }
 
+  // Cancelling the network requests above does not stop the files that are
+  // still being opened and hashed in the background. Without this, that work
+  // only stops once `files_request_handler_` is destroyed, which happens on
+  // the UI thread and blocks it inside base::JobHandle::Cancel() until the
+  // in-progress reads finish. Signalling here instead lets those workers
+  // unwind on their own before teardown reaches them.
+  if (files_request_handler_ &&
+      base::FeatureList::IsEnabled(
+          enterprise_connectors::kNonBlockingFileOpeningJobCancel)) {
+    files_request_handler_->StopFileWork();
+  }
+
   // Make sure to reject everything.
   FillAllResultsWith(false);
   RunCallback();
+}
+
+void ContentAnalysisDelegate::Delete() {
+  // This is only called for COPY trigger operations.
+  CHECK(access_point_ == DeepScanAccessPoint::COPY);
+  // Make sure the callbacks are run before the delegate is deleted.
+  RunCallback();
+  delete this;
 }
 
 std::optional<std::u16string> ContentAnalysisDelegate::GetCustomMessage()
@@ -325,9 +372,8 @@ std::u16string ContentAnalysisDelegate::GetBypassJustificationLabel() const {
     case DeepScanAccessPoint::PRINT:
       id = IDS_DEEP_SCANNING_DIALOG_PRINT_BYPASS_JUSTIFICATION_LABEL;
       break;
-    // TODO(b/325455508): Add specific copy bypass justification label.
     case DeepScanAccessPoint::COPY:
-      id = IDS_DEEP_SCANNING_DIALOG_PASTE_BYPASS_JUSTIFICATION_LABEL;
+      id = IDS_DEEP_SCANNING_DIALOG_COPY_BYPASS_JUSTIFICATION_LABEL;
       break;
     case DeepScanAccessPoint::NETWORK_REQUEST:
       NOTREACHED();
@@ -342,6 +388,10 @@ ContentAnalysisDelegate::OverrideCancelButtonText() const {
 
 std::optional<std::u16string> ContentAnalysisDelegate::GetFilename() const {
   return std::nullopt;
+}
+
+base::WeakPtr<ContentAnalysisDelegate> ContentAnalysisDelegate::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 // static
@@ -399,10 +449,11 @@ void ContentAnalysisDelegate::CreateForWebContents(
   // 1. work is ongoing in the background and that the user must wait for a
   // verdict.
   // 2. work is done and fail-closed conditions are met.
-  // For COPY trigger operations, we don't show a dialog. Instead, we communicate
-  // with the user via the content of the clipboard and using toasts. UI toast
-  // elements are handled separately since the copy trigger is the only DLP rule
-  // showing toasts in the context of Chrome Enterprise Premium (CEP).
+  // For COPY trigger operations, we don't show a dialog. Instead, we
+  // communicate with the user via the content of the clipboard and using
+  // toasts. UI toast elements are handled separately since the copy trigger is
+  // the only DLP rule showing toasts in the context of Chrome Enterprise
+  // Premium (CEP).
   bool show_in_progress_ui =
       upload_data_status == UploadDataStatus::kInProgress && wait_for_verdict &&
       (*UIEnabledStorage()) && access_point != DeepScanAccessPoint::COPY;
@@ -414,6 +465,12 @@ void ContentAnalysisDelegate::CreateForWebContents(
 
   // If the UI is enabled, create the modal dialog.
   if (show_in_progress_ui || show_fail_closed_ui) {
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/428696170): Implement ContentAnalysisDialogControllerBase
+    // and its Create() for Android, then remove this branch. Until then, the
+    // analysis continues without UI.
+    NOTIMPLEMENTED();
+#else
     ContentAnalysisDelegate* delegate_ptr = delegate.get();
     int files_count = delegate_ptr->data_.paths.size();
 
@@ -427,12 +484,13 @@ void ContentAnalysisDelegate::CreateForWebContents(
     content::WebContents* top_web_contents =
         guest_view::GuestViewBase::GetTopLevelWebContents(
             web_contents->GetResponsibleWebContents());
-    delegate_ptr->dialog_ = new ContentAnalysisDialogController(
+    delegate_ptr->dialog_ = ContentAnalysisDialogControllerBase::Create(
         std::move(delegate),
         delegate_ptr->data_.settings.cloud_or_local_settings
             .is_cloud_analysis(),
         top_web_contents, access_point, files_count, result);
     return;
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   // If local client cannot be found, fail open on all the OS except on Windows
@@ -453,7 +511,8 @@ void ContentAnalysisDelegate::CreateForWebContents(
     //
     // Supporting "wait for verdict" while not showing a UI makes writing
     // tests for callers of this code easier.
-    DCHECK(delegate->final_result_ != FinalContentAnalysisResult::FAIL_CLOSED);
+    CHECK(delegate->final_result_ != FinalContentAnalysisResult::FAIL_CLOSED,
+          base::NotFatalUntil::M161);
     delegate->FillAllResultsWith(true);
     delegate->RunCallback();
   }
@@ -476,9 +535,9 @@ void ContentAnalysisDelegate::CreateForFilesInWebContents(
     Data data,
     ForFilesCompletionCallback callback,
     DeepScanAccessPoint access_point) {
-  DCHECK(data.text.empty());
-  DCHECK(data.image.empty());
-  DCHECK(!data.page.IsValid());
+  CHECK(data.text.empty(), base::NotFatalUntil::M161);
+  CHECK(data.image.empty(), base::NotFatalUntil::M161);
+  CHECK(!data.page.IsValid(), base::NotFatalUntil::M161);
 
   auto files_scan_data = std::make_unique<FilesScanData>(std::move(data.paths));
   auto* files_scan_data_ptr = files_scan_data.get();
@@ -532,7 +591,9 @@ ContentAnalysisDelegate::ContentAnalysisDelegate(
   CHECK(web_contents);
   profile_ = Profile::FromBrowserContext(web_contents->GetBrowserContext());
   url_ = web_contents->GetLastCommittedURL();
-  frame_url_chain_ = CollectFrameUrls(web_contents, access_point_);
+  frame_url_chain_ =
+      CollectFrameUrls(web_contents, access_point_, data_.initiating_frame_id);
+  referrer_chain_ = GetReferrerChain(url_, *web_contents);
   title_ = base::UTF16ToUTF8(web_contents->GetTitle());
   user_action_id_ = base::HexEncode(base::RandBytesAsVector(128));
   page_content_type_ = web_contents->GetContentsMimeType();
@@ -548,7 +609,7 @@ ContentAnalysisDelegate::ContentAnalysisDelegate(
 }
 
 void ContentAnalysisDelegate::TextRequestCallback(RequestHandlerResult result) {
-  DCHECK(text_request_handler_);
+  CHECK(text_request_handler_, base::NotFatalUntil::M161);
 
   text_request_result_ = std::move(result);
 
@@ -557,6 +618,10 @@ void ContentAnalysisDelegate::TextRequestCallback(RequestHandlerResult result) {
   DVLOG(1) << __func__ << ": string result=" << text_request_result_.complies;
   std::fill(result_.text_results.begin(), result_.text_results.end(),
             text_request_result_.complies);
+
+  result_.is_kept_in_managed_chrome |=
+      text_request_result_.final_result ==
+      FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME;
 
   UpdateFinalResult(text_request_result_.final_result, text_request_result_.tag,
                     text_request_result_.custom_rule_message);
@@ -568,7 +633,7 @@ void ContentAnalysisDelegate::TextRequestCallback(RequestHandlerResult result) {
 
 void ContentAnalysisDelegate::ImageRequestCallback(
     RequestHandlerResult result) {
-  DCHECK(image_request_handler_);
+  CHECK(image_request_handler_, base::NotFatalUntil::M161);
 
   image_request_result_ = std::move(result);
 
@@ -576,6 +641,10 @@ void ContentAnalysisDelegate::ImageRequestCallback(
 
   DVLOG(1) << __func__ << ": image result=" << image_request_result_.complies;
   result_.image_result = image_request_result_.complies;
+
+  result_.is_kept_in_managed_chrome |=
+      image_request_result_.final_result ==
+      FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME;
 
   UpdateFinalResult(image_request_result_.final_result,
                     image_request_result_.tag,
@@ -592,7 +661,8 @@ void ContentAnalysisDelegate::FilesRequestCallback(
   files_request_handler_->AppendFinalActionsTo(&final_actions_);
 
   // No reporting here, because the FilesRequestHandler does that.
-  DCHECK_EQ(results.size(), result_.paths_results.size());
+  CHECK_EQ(results.size(), result_.paths_results.size(),
+           base::NotFatalUntil::M161);
   for (size_t index = 0; index < results.size(); ++index) {
     FinalContentAnalysisResult result = results[index].final_result;
     result_.paths_results[index] = results[index].complies;
@@ -616,11 +686,15 @@ ContentAnalysisDelegate::GetFilesRequestHandlerForTesting() {
 }
 
 bool ContentAnalysisDelegate::ShowFinalResultInDialog() {
+  // The COPY access point never opens a dialog, see ShowFinalResultInToast().
+  CHECK(access_point_ != DeepScanAccessPoint::COPY);
+
   if (!dialog_) {
     return false;
   }
 
   if (access_point_ == DeepScanAccessPoint::ACTOR && web_contents_ &&
+      !web_contents_->IsBeingDestroyed() &&
       final_result_ != FinalContentAnalysisResult::SUCCESS) {
     // TODO(crbug.com/473047343): Add browsertests to validate surfacing works.
     if (web_contents_->GetDelegate()) {
@@ -632,6 +706,84 @@ bool ContentAnalysisDelegate::ShowFinalResultInDialog() {
   return true;
 }
 
+bool ContentAnalysisDelegate::ShowFinalResultInToast() {
+  CHECK(access_point_ == DeepScanAccessPoint::COPY);
+#if BUILDFLAG(IS_ANDROID)
+  // Clipboard copy scanning isn't supported on Android: it is only wired up
+  // behind BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS), so no COPY delegate is
+  // ever created there.
+  NOTREACHED();
+#else
+  bool wait_for_verdict =
+      data_.settings.block_until_verdict == BlockUntilVerdict::kBlock;
+  auto* tracker =
+      enterprise_data_protection::ClipboardToastTracker::GetForProfile(
+          profile_);
+  bool is_new_copy = creation_time_ > tracker->last_toast_time();
+  // Shows `toast_id`, unless it's already showing for the same copy.
+  auto maybe_show_toast = [&](ToastId toast_id) {
+    auto* toast_controller =
+        ToastController::MaybeGetForWebContents(web_contents_.get());
+    if (toast_controller && wait_for_verdict &&
+        (is_new_copy || toast_controller->GetCurrentToastId() != toast_id) &&
+        toast_controller->MaybeShowToast(ToastParams(toast_id))) {
+      tracker->set_last_toast_time(base::TimeTicks::Now());
+    }
+  };
+  switch (final_result_) {
+    case FinalContentAnalysisResult::WARNING:
+      if (web_contents_) {
+        // Set the delegate in the tracker so it can be found by the toast
+        // controller later to bypass the copy warning.
+        CopyWarningDelegateTracker::SetDelegate(web_contents_.get(), this);
+        maybe_show_toast(ToastId::kEnterpriseCopyWarning);
+        // Delay deleting the content analysis delegate until the toast is
+        // clicked.
+        return true;
+      }
+      return false;
+    case FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME:
+      if (web_contents_) {
+        enterprise_data_protection::MaybeShowCopyToast(
+            profile_, web_contents_.get(),
+            enterprise_data_protection::CopyToastType::kKeptInManagedChrome);
+      }
+      return false;
+    case FinalContentAnalysisResult::SUCCESS:
+      if (web_contents_) {
+        if (enterprise_data_protection::MaybeShowCopyToast(
+                profile_, web_contents_.get(),
+                enterprise_data_protection::CopyToastType::kAudit)) {
+          tracker->set_last_toast_time(base::TimeTicks::Now());
+        } else if (is_new_copy && !data_.image.empty() &&
+                   toast_features::IsEnabled(
+                       toast_features::kImageCopiedToast)) {
+          // The image is only copied now that the scan allowed it.
+          maybe_show_toast(ToastId::kImageCopied);
+        }
+      }
+      return false;
+    case FinalContentAnalysisResult::FAIL_CLOSED:
+      // The scan couldn't complete and the policy fails closed, so tell the
+      // user the scan failed rather than that the content itself was blocked.
+      if (web_contents_) {
+        maybe_show_toast(ToastId::kEnterpriseCopyFailClosed);
+      }
+      return false;
+    case FinalContentAnalysisResult::FAILURE:
+      if (web_contents_) {
+        maybe_show_toast(ToastId::kEnterpriseCopyBlocked);
+      }
+      return false;
+    case FinalContentAnalysisResult::CANCELLED:
+    case FinalContentAnalysisResult::LARGE_FILES:
+    case FinalContentAnalysisResult::ENCRYPTED_FILES:
+    case FinalContentAnalysisResult::FORCE_SAVE_TO_CLOUD:
+      NOTREACHED();
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
 bool ContentAnalysisDelegate::CancelDialog() {
   if (!dialog_) {
     return false;
@@ -641,8 +793,9 @@ bool ContentAnalysisDelegate::CancelDialog() {
   return true;
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 void ContentAnalysisDelegate::PageRequestCallback(RequestHandlerResult result) {
-  DCHECK(page_print_request_handler_);
+  CHECK(page_print_request_handler_, base::NotFatalUntil::M161);
 
   page_print_request_result_ = std::move(result);
 
@@ -661,6 +814,7 @@ void ContentAnalysisDelegate::PageRequestCallback(RequestHandlerResult result) {
 
   MaybeCompleteScanRequest();
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 ContentAnalysisDelegate::UploadDataStatus
 ContentAnalysisDelegate::UploadData() {
@@ -742,19 +896,26 @@ void ContentAnalysisDelegate::PrepareTextRequest() {
   }
 
   text_request_complete_ = !text_request_required();
-
   if (!full_text.empty()) {
-    base::UmaHistogramCustomCounts("Enterprise.OnBulkDataEntry.DataSize",
-                                   full_text.size(),
-                                   /*min=*/1,
-                                   /*max=*/51 * 1024 * 1024,
-                                   /*buckets=*/50);
-    if (access_point_ == DeepScanAccessPoint::ACTOR) {
-      base::UmaHistogramCustomCounts(
-          "Enterprise.OnBulkDataEntry.Actor.DataSize", full_text.size(),
-          /*min=*/1,
-          /*max=*/51 * 1024 * 1024,
-          /*buckets=*/50);
+    if (access_point_ == DeepScanAccessPoint::COPY) {
+      base::UmaHistogramCustomCounts("Enterprise.DataCopied.DataSize",
+                                     full_text.size(),
+                                     /*min=*/1,
+                                     /*exclusive_max=*/51 * 1024 * 1024,
+                                     /*buckets=*/50);
+    } else {
+      base::UmaHistogramCustomCounts("Enterprise.OnBulkDataEntry.DataSize",
+                                     full_text.size(),
+                                     /*min=*/1,
+                                     /*exclusive_max=*/51 * 1024 * 1024,
+                                     /*buckets=*/50);
+      if (access_point_ == DeepScanAccessPoint::ACTOR) {
+        base::UmaHistogramCustomCounts(
+            "Enterprise.OnBulkDataEntry.Actor.DataSize", full_text.size(),
+            /*min=*/1,
+            /*exclusive_max=*/51 * 1024 * 1024,
+            /*buckets=*/50);
+      }
     }
   }
 
@@ -789,17 +950,25 @@ void ContentAnalysisDelegate::PrepareImageRequest() {
   image_request_complete_ = !image_request_required();
 
   if (!data_.image.empty()) {
-    base::UmaHistogramCustomCounts("Enterprise.OnBulkDataEntry.DataSize",
-                                   data_.image.size(),
-                                   /*min=*/1,
-                                   /*max=*/51 * 1024 * 1024,
-                                   /*buckets=*/50);
-    if (access_point_ == DeepScanAccessPoint::ACTOR) {
-      base::UmaHistogramCustomCounts(
-          "Enterprise.OnBulkDataEntry.Actor.DataSize", data_.image.size(),
-          /*min=*/1,
-          /*max=*/51 * 1024 * 1024,
-          /*buckets=*/50);
+    if (access_point_ == DeepScanAccessPoint::COPY) {
+      base::UmaHistogramCustomCounts("Enterprise.DataCopied.DataSize",
+                                     data_.image.size(),
+                                     /*min=*/1,
+                                     /*exclusive_max=*/51 * 1024 * 1024,
+                                     /*buckets=*/50);
+    } else {
+      base::UmaHistogramCustomCounts("Enterprise.OnBulkDataEntry.DataSize",
+                                     data_.image.size(),
+                                     /*min=*/1,
+                                     /*exclusive_max=*/51 * 1024 * 1024,
+                                     /*buckets=*/50);
+      if (access_point_ == DeepScanAccessPoint::ACTOR) {
+        base::UmaHistogramCustomCounts(
+            "Enterprise.OnBulkDataEntry.Actor.DataSize", data_.image.size(),
+            /*min=*/1,
+            /*exclusive_max=*/51 * 1024 * 1024,
+            /*buckets=*/50);
+      }
     }
   }
 
@@ -834,12 +1003,17 @@ void ContentAnalysisDelegate::PreparePageRequest() {
     // caller code doesn't interpret the print action as being blocked.
     result_.page_result = true;
   } else {
+#if BUILDFLAG(IS_ANDROID)
+    // Print scanning isn't supported on Android.
+    NOTREACHED();
+#else
     page_print_request_handler_ = PagePrintRequestHandler::Create(
         this, GetBinaryUploadService(), profile_, url_, data_.printer_name,
         page_content_type_, std::move(data_.page),
         base::BindOnce(&ContentAnalysisDelegate::PageRequestCallback,
                        weak_ptr_factory_.GetWeakPtr()));
     page_print_request_handler_->UploadData();
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 }
 
@@ -860,13 +1034,19 @@ ContentAnalysisDelegate::GetNavigationObserverManager() const {
       GetForBrowserContext(profile_);
 }
 
-bool ContentAnalysisDelegate::UpdateDialog() {
+bool ContentAnalysisDelegate::UpdateUI() {
   // In the case of fail-closed, show the final result UI regardless of cloud or
   // local analysis. Otherwise, only show the result for cloud analysis.
   bool show_ui = final_result_ == FinalContentAnalysisResult::FAIL_CLOSED ||
                  data_.settings.cloud_or_local_settings.is_cloud_analysis();
 
   DVLOG(1) << __func__ << ": show_ui=" << show_ui;
+  if (access_point_ == DeepScanAccessPoint::COPY) {
+    // Copies never open a dialog: the verdict reaches the user through the
+    // clipboard content and non-blocking toasts, so there is nothing to cancel
+    // when no UI should be shown either.
+    return show_ui && ShowFinalResultInToast();
+  }
   return show_ui ? ShowFinalResultInDialog() : CancelDialog();
 }
 
@@ -888,11 +1068,21 @@ void ContentAnalysisDelegate::MaybeCompleteScanRequest() {
       base::TimeTicks::Now() - creation_time_, base::Milliseconds(1),
       base::Minutes(30), 50);
 
+  base::WeakPtr<ContentAnalysisDelegate> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
+
   // If showing the warning message, wait before running the callback. The
   // callback will be called either in BypassWarnings or Cancel.
   if (final_result_ != FinalContentAnalysisResult::WARNING) {
     DVLOG(1) << __func__ << ": calling RunCallback()";
     RunCallback();
+  }
+
+  // The callback can synchronously tear down the WebContents acting as the
+  // context for this analysis, which deletes `this`. Check if we were
+  // destroyed.
+  if (!weak_this) {
+    return;
   }
 
   AckAllRequests();
@@ -906,7 +1096,7 @@ void ContentAnalysisDelegate::MaybeCompleteScanRequest() {
     return;
   }
 
-  if (!UpdateDialog() && data_uploaded_) {
+  if (!UpdateUI() && data_uploaded_) {
     // No UI was shown.  Delete |this| to cleanup, unless UploadData isn't done
     // yet.
     DVLOG(1) << __func__ << ": about to delete `this` to clean up.";
@@ -915,13 +1105,23 @@ void ContentAnalysisDelegate::MaybeCompleteScanRequest() {
 }
 
 void ContentAnalysisDelegate::RunCallback() {
-  DCHECK(!callback_running_);
+  CHECK(!callback_running_, base::NotFatalUntil::M161);
   if (callback_.is_null()) {
     return;
   }
 
   callback_running_ = true;
+  base::WeakPtr<ContentAnalysisDelegate> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
   std::move(callback_).Run(data_, result_);
+
+  // The callback can synchronously tear down the WebContents acting as the
+  // context for this analysis, which deletes `this`. Check if we were destroyed
+  // to avoid executing the remainder of this function.
+  if (!weak_this) {
+    return;
+  }
+
   callback_running_ = false;
 
   // Since `result_` might have been tweaked by `callback_`, `final_actions_`
@@ -1085,10 +1285,7 @@ ContentAnalysisRequest::Reason ContentAnalysisDelegate::reason() const {
 
 google::protobuf::RepeatedPtrField<safe_browsing::ReferrerChainEntry>
 ContentAnalysisDelegate::referrer_chain() const {
-  if (!web_contents_) {
-    return {};
-  }
-  return GetReferrerChain(url_, *web_contents_);
+  return referrer_chain_;
 }
 
 google::protobuf::RepeatedPtrField<std::string>

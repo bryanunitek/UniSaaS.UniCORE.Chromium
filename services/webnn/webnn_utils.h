@@ -5,15 +5,23 @@
 #ifndef SERVICES_WEBNN_WEBNN_UTILS_H_
 #define SERVICES_WEBNN_WEBNN_UTILS_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <string>
 
 #include "base/component_export.h"
+#include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "services/webnn/public/cpp/graph_validation_utils.h"
 #include "services/webnn/public/cpp/operand_descriptor.h"
 #include "services/webnn/public/mojom/webnn_graph.mojom.h"
 
 namespace webnn {
+
+struct Float16 {
+  uint16_t data;
+};
 
 std::string COMPONENT_EXPORT(WEBNN_SERVICE)
     OpTagToString(mojom::Operation::Tag tag);
@@ -31,19 +39,11 @@ std::string COMPONENT_EXPORT(WEBNN_SERVICE)
     NotSupportedOperatorError(const mojom::Operation& op);
 std::string COMPONENT_EXPORT(WEBNN_SERVICE)
     NotSupportedOperatorError(const mojom::ElementWiseUnary& op);
-// TODO: crbug.com/345271830 - remove these after all data type error reports
+// TODO: crbug.com/345271830 - remove this after all data type error reports
 // are moved to blink.
-std::string COMPONENT_EXPORT(WEBNN_SERVICE)
-    NotSupportedArgumentTypeError(std::string_view op_name,
-                                  std::string_view argument_name,
-                                  OperandDataType type);
 std::string COMPONENT_EXPORT(WEBNN_SERVICE)
     NotSupportedInputArgumentTypeError(std::string_view op_name,
                                        OperandDataType type);
-std::string COMPONENT_EXPORT(WEBNN_SERVICE)
-    NotSupportedOptionTypeError(std::string_view op_name,
-                                std::string_view option_name,
-                                OperandDataType type);
 
 // The length of `permutation` must be the same as `array`. The values in
 // `permutation` must be within the range [0, N-1] where N is the length of
@@ -63,6 +63,22 @@ bool COMPONENT_EXPORT(WEBNN_SERVICE)
 
 std::vector<uint32_t> COMPONENT_EXPORT(WEBNN_SERVICE)
     CalculateStrides(base::span<const uint32_t> dimensions);
+
+// Permutes the axes of a constant tensor's raw bytes.
+//
+// `data` holds `shape`'s elements in row-major order, each `element_size` bytes
+// wide; `permutation` maps each axis of the result to the axis of `shape` it
+// comes from. `shape` and `permutation` must be the same length, and
+// `element_size` must be a whole number of bytes -- sub-byte element types are
+// not supported (crbug.com/428232161).
+//
+// Accelerated with XNNPACK where it is available and the rank is within its
+// limit, otherwise copied element by element.
+base::HeapArray<uint8_t> COMPONENT_EXPORT(WEBNN_SERVICE)
+    TransposeConstantData(base::span<const uint8_t> data,
+                          base::span<const uint32_t> shape,
+                          base::span<const uint32_t> permutation,
+                          size_t element_size);
 
 webnn::Pool2dKind COMPONENT_EXPORT(WEBNN_SERVICE)
     FromMojoPool2dType(mojom::Pool2d::Kind kind);

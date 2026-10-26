@@ -9,11 +9,10 @@
 #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/loading_attribute.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
-#include "third_party/blink/renderer/core/paint/timing/image_element_timing.h"
+#include "third_party/blink/renderer/core/paint/timing/element_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/image_paint_timing_detector.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
@@ -21,12 +20,11 @@
 #include "third_party/blink/renderer/core/paint/timing/text_paint_timing_detector.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
-#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 
 namespace blink {
 
-BASE_FEATURE(kSoftNavigationTraceEvents, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kLcpEntropyGatedOnCors, base::FEATURE_ENABLED_BY_DEFAULT);
 
 namespace {
 
@@ -43,8 +41,6 @@ void PopulateFrameTraceData(TracedValue& value, const LocalFrame& frame) {
   value.SetBoolean("isEmbeddedFrame", !frame.LocalFrameRoot().IsMainFrame() ||
                                           frame.IsInFencedFrameTree());
 }
-
-}  // namespace
 
 LargestContentfulPaintType GetLargestContentfulPaintTypeFromString(
     const AtomicString& type_string) {
@@ -72,6 +68,47 @@ LargestContentfulPaintType GetLargestContentfulPaintTypeFromString(
   return LargestContentfulPaintType::kNone;
 }
 
+LargestContentfulPaintType ComputeImageLargestContentfulPaintType(
+    const MediaTiming& timing,
+    const LocalDOMWindow* window) {
+  LargestContentfulPaintType type = blink::LargestContentfulPaintType::kImage;
+
+  // TODO(yoav): Once we'd enable the kLCPAnimatedImagesReporting flag by
+  // default, we'd be able to use the value of the first animated frame time
+  // directly.
+  if (!timing.GetFirstVideoFrameTime().is_null()) {
+    // Set the video flag.
+    type |= blink::LargestContentfulPaintType::kVideo;
+  } else if (timing.IsPaintedFirstFrame()) {
+    // Set the animated image flag.
+    type |= blink::LargestContentfulPaintType::kAnimatedImage;
+  }
+
+  // Set specific type of the image.
+  type |= GetLargestContentfulPaintTypeFromString(timing.MediaType());
+
+  // Set DataURI type.
+  if (timing.IsDataUrl()) {
+    type |= blink::LargestContentfulPaintType::kDataURI;
+  }
+
+  // Set cross-origin flag of the image.
+  if (window) {
+    auto image_url = timing.Url();
+    if (!image_url.IsEmpty() && image_url.ProtocolIsInHttpFamily() &&
+        window->GetFrame()->IsOutermostMainFrame()) {
+      auto image_origin = SecurityOrigin::Create(image_url);
+      if (!image_origin->IsSameOriginWith(window->GetSecurityOrigin())) {
+        type |= blink::LargestContentfulPaintType::kCrossOrigin;
+      }
+    }
+  }
+
+  return type;
+}
+
+}  // namespace
+
 LargestContentfulPaintCalculator::LargestContentfulPaintCalculator(
     WindowPerformance* window_performance,
     Delegate* delegate)
@@ -86,8 +123,12 @@ void LargestContentfulPaintCalculator::ProcessLcpCandidates(
   // ICP processes its own candidates so it can group by context.
   CHECK(delegate_->IsHardNavigation());
 
-  PaintTimingRecord* largest_removed_record = nullptr;
   for (const auto& record : records) {
+    // Filter out anything that wasn't a valid candidate for LCP but might have
+    // been valid for other PaintTiming clients.
+    if (!record->IsNeededForLargestContentfulPaint()) {
+      continue;
+    }
     // Hard navigation LCP does not consider records whose node has been removed
     // from the DOM.
     //
@@ -95,20 +136,9 @@ void LargestContentfulPaintCalculator::ProcessLcpCandidates(
     // candidates since they would have been shown to the user, and since it
     // better matches the LCP spec.
     if (record->WasNodeRemoved()) {
-      if (record->IsEffectiveSizeLargerThan(largest_removed_record)) {
-        largest_removed_record = record.Get();
-      }
       continue;
     }
     candidates->MaybeUpdateCandidate(record.Get());
-  }
-  if (largest_removed_record) {
-    // Only record the UseCounter if the removed record was also larger than the
-    // candidate for this frame.
-    if (largest_removed_record->IsEffectiveSizeLargerThan(
-            candidates->Candidate<T>())) {
-      MaybeRecordRemovedCandidateUseCounter(*largest_removed_record);
-    }
   }
 }
 
@@ -125,12 +155,13 @@ void LargestContentfulPaintCalculator::OnFramePresented(
     LcpCandidates* candidates) {
   if (auto* candidate = candidates->Candidate<ImageRecord>();
       candidate &&
-      candidate->IsEffectiveSizeLargerThan(largest_painted_image_)) {
-    largest_painted_image_ = candidate;
+      candidate->IsEffectiveSizeLargerThan(largest_presented_image_)) {
+    largest_presented_image_ = candidate;
   }
   if (auto* candidate = candidates->Candidate<TextRecord>();
-      candidate && candidate->IsEffectiveSizeLargerThan(largest_text_)) {
-    largest_text_ = candidate;
+      candidate &&
+      candidate->IsEffectiveSizeLargerThan(largest_presented_text_)) {
+    largest_presented_text_ = candidate;
   }
   MaybeFlushCandidates();
 }
@@ -147,24 +178,21 @@ void LargestContentfulPaintCalculator::MaybeFlushCandidates() {
 
 void LargestContentfulPaintCalculator::
     UpdateWebExposedLargestContentfulPaintIfNeeded() {
-  // If UseLargestPaintedImageForLCPCandidate is enabled, use
-  // `largest_painted_image_` rather than `LargestPaintedOrPendingImage()` for
-  // the web-exposed entry, which matches the spec and ensures the entry is
-  // emitted if the `largest_pending_image_` gets removed.
-  ImageRecord* largest_image =
-      RuntimeEnabledFeatures::UseLargestPaintedImageForLCPCandidateEnabled()
-          ? largest_painted_image_.Get()
-          : LargestPaintedOrPendingImage();
-
-  uint64_t text_size = largest_text_ ? largest_text_->RecordedSize() : 0u;
-  uint64_t image_size = largest_image ? largest_image->RecordedSize() : 0u;
+  uint64_t text_size = largest_presented_text_
+                           ? largest_presented_text_->EffectiveVisualSize()
+                           : 0u;
+  uint64_t image_size = largest_presented_image_
+                            ? largest_presented_image_->EffectiveVisualSize()
+                            : 0u;
   if (image_size > text_size) {
-    if (image_size > largest_reported_size_ && largest_image->HasPaintTime()) {
-      UpdateWebExposedLargestContentfulImage(*largest_image);
+    if (image_size > largest_reported_size_) {
+      CHECK(largest_presented_image_->HasPaintTime());
+      UpdateWebExposedLargestContentfulImage(*largest_presented_image_);
     }
   } else {
-    if (text_size > largest_reported_size_ && largest_text_->HasPaintTime()) {
-      UpdateWebExposedLargestContentfulText(*largest_text_.Get());
+    if (text_size > largest_reported_size_) {
+      CHECK(largest_presented_text_->HasPaintTime());
+      UpdateWebExposedLargestContentfulText(*largest_presented_text_.Get());
     }
   }
 }
@@ -186,12 +214,12 @@ void LargestContentfulPaintCalculator::UpdateWebExposedLargestContentfulImage(
     return;
   }
 
-  largest_reported_size_ = largest_image.RecordedSize();
+  largest_reported_size_ = largest_image.EffectiveVisualSize();
   const KURL& url = media_timing->Url();
   const String& image_string = url.GetString();
   const String& image_url =
       url.ProtocolIsData()
-          ? image_string.substr(0, ImageElementTiming::kInlineImageMaxChars)
+          ? image_string.substr(0, ElementTiming::kInlineImageMaxChars)
           : image_string;
   // Do not expose element attribution from shadow trees.
   Element* image_element =
@@ -201,22 +229,19 @@ void LargestContentfulPaintCalculator::UpdateWebExposedLargestContentfulImage(
 
   delegate_->EmitLcpPerformanceEntry(
       largest_image.PaintTimingInfo(),
-      /*paint_size=*/largest_image.RecordedSize(),
+      /*paint_size=*/largest_image.EffectiveVisualSize(),
       /*load_time=*/largest_image.LoadTime(),
       /*id=*/image_id, /*url=*/image_url,
       /*element=*/image_element);
 
   if (LocalDOMWindow* window = window_performance_->DomWindow()) {
-    if (delegate_->IsHardNavigation() ||
-        base::FeatureList::IsEnabled(kSoftNavigationTraceEvents)) {
-      TRACE_EVENT_MARK_WITH_TIMESTAMP2(
-          kTraceCategories,
-          delegate_->IsHardNavigation() ? kLCPCandidate
-                                        : kLCPCandidateForSoftNavs,
-          largest_image.PaintTime(), "data",
-          CreateWebExposedCandidateTraceData(largest_image), "frame",
-          GetFrameIdForTracing(window->GetFrame()));
-    }
+    TRACE_EVENT_MARK_WITH_TIMESTAMP2(
+        kTraceCategories,
+        delegate_->IsHardNavigation() ? kLCPCandidate
+                                      : kLCPCandidateForSoftNavs,
+        largest_image.PaintTime(), "data",
+        CreateWebExposedCandidateTraceData(largest_image), "frame",
+        GetFrameIdForTracing(window->GetFrame()));
   }
 }
 
@@ -230,7 +255,7 @@ void LargestContentfulPaintCalculator::UpdateWebExposedLargestContentfulText(
   if (!text_node) {
     return;
   }
-  largest_reported_size_ = largest_text.RecordedSize();
+  largest_reported_size_ = largest_text.EffectiveVisualSize();
   // Do not expose element attribution from shadow trees. Also note that @page
   // margin boxes do not create Element nodes.
   Element* text_element =
@@ -239,12 +264,13 @@ void LargestContentfulPaintCalculator::UpdateWebExposedLargestContentfulText(
       text_element ? text_element->GetIdAttribute() : AtomicString();
 
   // Always use paint time as start time for text LCP candidate.
-  delegate_->EmitLcpPerformanceEntry(largest_text.PaintTimingInfo(),
-                                     /*paint_size=*/largest_text.RecordedSize(),
-                                     /*load_time=*/base::TimeTicks(),
-                                     /*id=*/text_id,
-                                     /*url=*/g_empty_string,
-                                     /*element=*/text_element);
+  delegate_->EmitLcpPerformanceEntry(
+      largest_text.PaintTimingInfo(),
+      /*paint_size=*/largest_text.EffectiveVisualSize(),
+      /*load_time=*/base::TimeTicks(),
+      /*id=*/text_id,
+      /*url=*/g_empty_string,
+      /*element=*/text_element);
 
   if (LocalDOMWindow* window = window_performance_->DomWindow()) {
     TRACE_EVENT_MARK_WITH_TIMESTAMP2(
@@ -261,22 +287,22 @@ bool LargestContentfulPaintCalculator::HasLargestImagePaintChangedForMetrics(
     base::TimeTicks largest_image_paint_time,
     uint64_t largest_image_paint_size) const {
   return largest_image_paint_time !=
-             latest_lcp_details_.largest_image_paint_time ||
+             latest_lcp_details_.largest_image.presentation_time ||
          largest_image_paint_size !=
-             latest_lcp_details_.largest_image_paint_size;
+             latest_lcp_details_.largest_image.paint_size;
 }
 
 bool LargestContentfulPaintCalculator::HasLargestTextPaintChangedForMetrics(
     base::TimeTicks largest_text_paint_time,
     uint64_t largest_text_paint_size) const {
   return largest_text_paint_time !=
-             latest_lcp_details_.largest_text_paint_time ||
-         largest_text_paint_size != latest_lcp_details_.largest_text_paint_size;
+             latest_lcp_details_.largest_text.presentation_time ||
+         largest_text_paint_size != latest_lcp_details_.largest_text.paint_size;
 }
 
 bool LargestContentfulPaintCalculator::
     UpdateMetricsIfLargestImagePaintChanged() {
-  ImageRecord* largest_image = LargestPaintedOrPendingImage();
+  ImageRecord* largest_image = LargestPresentedOrPendingImage();
   if (!largest_image) {
     return false;
   }
@@ -295,77 +321,35 @@ bool LargestContentfulPaintCalculator::
     return false;
   }
 
-  if (!HasLargestImagePaintChangedForMetrics(image_paint_time,
-                                             image_record.RecordedSize())) {
+  if (!HasLargestImagePaintChangedForMetrics(
+          image_paint_time, image_record.EffectiveVisualSize())) {
     return false;
   }
 
-  latest_lcp_details_.largest_contentful_paint_type =
-      blink::LargestContentfulPaintType::kNone;
-  // TODO(yoav): Once we'd enable the kLCPAnimatedImagesReporting flag by
-  // default, we'd be able to use the value of
-  // largest_image_record->first_animated_frame_time directly.
+  LargestImagePaintDetails& image_details = latest_lcp_details_.largest_image;
+  image_details = LargestImagePaintDetails();
   if (const MediaTiming* timing = image_record.GetMediaTiming()) {
-    if (!timing->GetFirstVideoFrameTime().is_null()) {
-      // Set the video flag.
-      latest_lcp_details_.largest_contentful_paint_type |=
-          blink::LargestContentfulPaintType::kVideo;
-    } else if (timing->IsPaintedFirstFrame()) {
-      // Set the animated image flag.
-      latest_lcp_details_.largest_contentful_paint_type |=
-          blink::LargestContentfulPaintType::kAnimatedImage;
-    }
-
-    // Set image type flag.
-    latest_lcp_details_.largest_contentful_paint_type |=
-        blink::LargestContentfulPaintType::kImage;
-
-    // Set specific type of the image.
-    latest_lcp_details_.largest_contentful_paint_type |=
-        GetLargestContentfulPaintTypeFromString(timing->MediaType());
-
-    // Set DataURI type.
-    if (timing->IsDataUrl()) {
-      latest_lcp_details_.largest_contentful_paint_type |=
-          blink::LargestContentfulPaintType::kDataURI;
-    }
-
-    // Set cross-origin flag of the image.
-    if (auto* window = window_performance_->DomWindow()) {
-      auto image_url = timing->Url();
-      if (!image_url.IsEmpty() && image_url.ProtocolIsInHttpFamily() &&
-          window->GetFrame()->IsOutermostMainFrame()) {
-        auto image_origin = SecurityOrigin::Create(image_url);
-        if (!image_origin->IsSameOriginWith(window->GetSecurityOrigin())) {
-          latest_lcp_details_.largest_contentful_paint_type |=
-              blink::LargestContentfulPaintType::kCrossOrigin;
-        }
-      }
-    }
-
-    latest_lcp_details_.resource_load_timings.discovery_time =
+    image_details.type = ComputeImageLargestContentfulPaintType(
+        *timing, window_performance_->DomWindow());
+    image_details.resource_load_timings.discovery_time =
         timing->DiscoveryTime();
-    latest_lcp_details_.resource_load_timings.load_start = timing->LoadStart();
-    latest_lcp_details_.resource_load_timings.load_end = timing->LoadEnd();
+    image_details.resource_load_timings.load_start = timing->LoadStart();
+    image_details.resource_load_timings.load_end = timing->LoadEnd();
   }
-  latest_lcp_details_.largest_image_paint_time = image_paint_time;
-  latest_lcp_details_.largest_image_paint_size = image_record.RecordedSize();
-  latest_lcp_details_.largest_contentful_paint_image_bpp =
-      image_record.EntropyForLCP();
-  latest_lcp_details_.largest_contentful_paint_image_request_priority =
-      image_record.RequestPriority();
-  UpdateLatestLcpDetailsTypeIfNeeded();
+  image_details.presentation_time = image_paint_time;
+  image_details.paint_size = image_record.EffectiveVisualSize();
+  image_details.bpp = image_record.EntropyForLCP();
+  image_details.request_priority = image_record.RequestPriority();
 
-  // TODO(crbug.com/449779010): Consider removing this IsLoaded(), since we
-  // having presentation time is the only thing that matters for metrics.  When
-  // ReportFirstFrameTimeAsRenderTime ships, we will emit some performance
+  // TODO(crbug.com/449779010): Presentation time is the only thing that matters
+  // for metrics, so consider removing this IsSufficientlyLoadedForReporting().
+  // When ReportFirstFrameTimeAsRenderTime ships, we will emit some performance
   // entries before they are considered fully loaded, so this should probably be
   // removed along with shipping that feature.
   if (delegate_->IsHardNavigation() && PaintTimingDetector::IsTracing()) {
-    if (!image_paint_time.is_null() && image_record.IsLoaded()) {
+    if (!image_paint_time.is_null() &&
+        image_record.IsSufficientlyLoadedForReporting()) {
       ReportMetricsCandidateToTrace(image_record, image_paint_time);
-    } else {
-      ReportNoMetricsImageCandidateToTrace();
     }
   }
 
@@ -374,28 +358,20 @@ bool LargestContentfulPaintCalculator::
 
 bool LargestContentfulPaintCalculator::
     UpdateMetricsIfLargestTextPaintChanged() {
-  if (!largest_text_) {
-    return false;
-  }
-  // For hard navs, `largest_text_` is updated during the presentation callback,
-  // so we always have paint time. But soft navs updates this during paint, so
-  // we may not.
-  // TODO(crbug.com/449779010): Unify soft and hard nav behavior.
-  if (!largest_text_->HasPaintTime()) {
-    CHECK(!delegate_->IsHardNavigation());
+  if (!largest_presented_text_) {
     return false;
   }
 
-  const TextRecord& text_record = *largest_text_.Get();
-  if (!HasLargestTextPaintChangedForMetrics(text_record.PaintTime(),
-                                            text_record.RecordedSize())) {
+  const TextRecord& text_record = *largest_presented_text_.Get();
+  CHECK(text_record.HasPaintTime());
+  if (!HasLargestTextPaintChangedForMetrics(
+          text_record.PaintTime(), text_record.EffectiveVisualSize())) {
     return false;
   }
 
-  DCHECK(text_record.HasPaintTime());
-  latest_lcp_details_.largest_text_paint_time = text_record.PaintTime();
-  latest_lcp_details_.largest_text_paint_size = text_record.RecordedSize();
-  UpdateLatestLcpDetailsTypeIfNeeded();
+  latest_lcp_details_.largest_text.presentation_time = text_record.PaintTime();
+  latest_lcp_details_.largest_text.paint_size =
+      text_record.EffectiveVisualSize();
 
   if (delegate_->IsHardNavigation() && PaintTimingDetector::IsTracing()) {
     ReportMetricsCandidateToTrace(text_record);
@@ -404,33 +380,11 @@ bool LargestContentfulPaintCalculator::
   return true;
 }
 
-void LargestContentfulPaintCalculator::UpdateLatestLcpDetailsTypeIfNeeded() {
-  if (latest_lcp_details_.largest_text_paint_size <
-          latest_lcp_details_.largest_image_paint_size ||
-      (latest_lcp_details_.largest_text_paint_size ==
-           latest_lcp_details_.largest_image_paint_size &&
-       latest_lcp_details_.largest_text_paint_time >=
-           latest_lcp_details_.largest_image_paint_time)) {
-    return;
-  }
-  // We set latest_lcp_details_.largest_contentful_paint_type_ only here
-  // because we use latest_lcp_details_.largest_contentful_paint_type_ to
-  // track the LCP type of the largest image only. When the largest image gets
-  // updated, the latest_lcp_details_.largest_contentful_paint_type_ gets
-  // reset and updated accordingly in the
-  // UpdateMetricsIfLargestImagePaintChanged() method. If the LCP element
-  // turns out to be the largest text, we simply set the
-  // latest_lcp_details_.largest_contentful_paint_type_ to be kText here. This
-  // is possible because currently text elements have only 1 LCP type kText.
-  latest_lcp_details_.largest_contentful_paint_type =
-      LargestContentfulPaintType::kText;
-}
-
 void LargestContentfulPaintCalculator::Trace(Visitor* visitor) const {
   visitor->Trace(window_performance_);
   visitor->Trace(delegate_);
-  visitor->Trace(largest_text_);
-  visitor->Trace(largest_painted_image_);
+  visitor->Trace(largest_presented_text_);
+  visitor->Trace(largest_presented_image_);
   visitor->Trace(largest_pending_image_);
 }
 
@@ -474,7 +428,7 @@ LargestContentfulPaintCalculator::CreateWebExposedCandidateTraceDataCommon(
     const PaintTimingRecord& record) {
   auto value = std::make_unique<TracedValue>();
   value->SetInteger("nodeId", record.NodeIdForTracing());
-  value->SetInteger("size", static_cast<int>(record.RecordedSize()));
+  value->SetInteger("size", static_cast<int>(record.EffectiveVisualSize()));
   value->SetInteger("candidateIndex", ++web_exposed_candidate_count_);
   auto* window = window_performance_->DomWindow();
   value->SetBoolean("isOutermostMainFrame",
@@ -484,8 +438,9 @@ LargestContentfulPaintCalculator::CreateWebExposedCandidateTraceDataCommon(
     value->SetString("navigationId", IdentifiersFactory::LoaderId(
                                          window->document()->Loader()));
   }
-  value->SetInteger("performanceTimelineNavigationId",
-                    static_cast<int>(window_performance_->NavigationId()));
+  value->SetInteger(
+      "performanceTimelineNavigationId",
+      static_cast<int>(window_performance_->NavigationId().web_exposed_id));
   if (Node* node = record.GetNode()) {
     value->SetString("nodeName", node->DebugName());
   }
@@ -526,80 +481,41 @@ void LargestContentfulPaintCalculator::ReportMetricsCandidateToTrace(
                                    "frame", GetFrameIdForTracing(frame));
 }
 
-void LargestContentfulPaintCalculator::ReportNoMetricsImageCandidateToTrace() {
-  auto value = std::make_unique<TracedValue>();
-  value->SetInteger("candidateIndex", ++ukm_largest_image_candidate_count_);
-
-  LocalFrame* frame = window_performance_->DomWindow()->GetFrame();
-  CHECK(frame);
-  PopulateFrameTraceData(*value, *frame);
-
-  TRACE_EVENT2("loading", "LargestImagePaint::NoCandidate", "data",
-               std::move(value), "frame", GetFrameIdForTracing(frame));
-}
-
-bool LargestContentfulPaintCalculator::IsImageNeededForLcp(
-    uint64_t size) const {
-  // TODO(crbug.com/454067883): The `largest_painted_image_` isn't updated until
-  // presentation time for hard navs, so we end up getting more timings than
-  // needed. This probably isn't a big deal, but it's some extra work. Instead,
-  // we may want to track the size of the current largest candidate, and work
-  // off that. We may need that anyway when emitting candidates more frequently.
-  return !largest_painted_image_ ||
-         largest_painted_image_->RecordedSize() < size;
-}
-
 void LargestContentfulPaintCalculator::OnImageFirstPaint(ImageRecord* record) {
   if (record->IsEffectiveSizeLargerThan(largest_pending_image_)) {
     largest_pending_image_ = record;
   }
 }
 
-void LargestContentfulPaintCalculator::OnPendingImageRemoved(
-    ImageRecord* record) {
+void LargestContentfulPaintCalculator::OnImageRemoved(
+    const LayoutObject& object,
+    const MediaTiming* timing) {
   // TODO(crbug.com/457794552): This causes metrics to fall back to the
-  // `largest_painted_image_`, but there are a couple problems with this:
+  // `largest_presented_image_`, but there are a couple problems with this:
   //  - What if there's a larger pending image and the page unloads? We might
   //    want to iterate through the list of pending image records to get the
   //    next largest pending image.
   //  - Metrics won't be updated until something else triggers calling
   //    `NotifyMetricsIfLargestImagePaintChanged()`, e.g. a new largest text
   //    or image paint. We should probably metrics sooner and not rely on this.
-  if (largest_pending_image_ == record) {
+  if (!largest_pending_image_) {
+    return;
+  }
+  if (largest_pending_image_->GetMediaTiming() == timing &&
+      largest_pending_image_->ImageGeneratingLayoutObject() == &object) {
     largest_pending_image_ = nullptr;
   }
 }
 
-ImageRecord* LargestContentfulPaintCalculator::LargestPaintedOrPendingImage()
+ImageRecord* LargestContentfulPaintCalculator::LargestPresentedOrPendingImage()
     const {
-  if (!largest_painted_image_ ||
-      (largest_pending_image_ && (largest_painted_image_->RecordedSize() <
-                                  largest_pending_image_->RecordedSize()))) {
+  if (!largest_presented_image_ ||
+      (largest_pending_image_ &&
+       (largest_presented_image_->EffectiveVisualSize() <
+        largest_pending_image_->EffectiveVisualSize()))) {
     return largest_pending_image_.Get();
   }
-  return largest_painted_image_.Get();
-}
-
-void LargestContentfulPaintCalculator::MaybeRecordRemovedCandidateUseCounter(
-    const PaintTimingRecord& record) {
-  if (record.IsTextRecord()) {
-    // This might not end up affecting metrics, but it could, and it could be
-    // emitted to performance timeline (depending on the largest image).
-    if (record.IsEffectiveSizeLargerThan(largest_text_)) {
-      UseCounter::Count(window_performance_->DomWindow(),
-                        WebFeature::kLcpCandidateRemovedWhilePaintTimePending);
-    }
-  } else {
-    // Use `LargestPaintedOrPendingImage()` instead of `largest_painted_image_`
-    // since it's what's used to determine the largest image candidate for
-    // metrics. This might not end up affecting metrics, but it could, and it
-    // could be emitted to performance timeline (depending on the largest text).
-    ImageRecord* largest_image = LargestPaintedOrPendingImage();
-    if (record.IsEffectiveSizeLargerThan(largest_image)) {
-      UseCounter::Count(window_performance_->DomWindow(),
-                        WebFeature::kLcpCandidateRemovedWhilePaintTimePending);
-    }
-  }
+  return largest_presented_image_.Get();
 }
 
 LargestContentfulPaintCalculator::LcpCandidates::LcpCandidates() = default;
@@ -622,6 +538,132 @@ void LargestContentfulPaintCalculator::LcpCandidates::Trace(
     Visitor* visitor) const {
   visitor->Trace(image_candidate_);
   visitor->Trace(text_candidate_);
+}
+
+bool LargestContentfulPaintCalculator::IsEligibleForLcp(
+    const ImageRecord& record) const {
+  // Unlike text records, image records are only created if there is non-zero
+  // size.
+  CHECK_GT(record.EffectiveVisualSize(), 0u);
+
+  if (record.GetEffectiveVisualSizeResult().is_viewport_covered) {
+    return false;
+  }
+
+  // First video frame records are queued outside of paint, so the associated
+  // `Node` or `MediaTiming` can be removed and GCed before the next paint.
+  // Ignore these records.
+  //
+  // TODO(crbug.com/562498378): We should keep a strong reference to the
+  // `VideoTiming` rather than ignoring these records since the behavior depends
+  // on garbage collection.
+  if (!record.GetMediaTiming() || record.WasNodeRemoved()) {
+    return false;
+  }
+
+  // Only apply the minimum entropy check to CORS-same-origin resources to
+  // prevent cross-origin size leaks (crbug.com/502288792).
+  if (base::FeatureList::IsEnabled(kLcpEntropyGatedOnCors) &&
+      !record.IsCorsSameOrigin()) {
+    return true;
+  }
+
+  // The first video frame often fails to meet the entropy check, e.g. due to
+  // being a solid color or blank frame. This is problematic for ICP, so we
+  // ignore the entropy check in that case.
+  if (!record.GetMediaTiming()->GetFirstVideoFrameTime().is_null() &&
+      (!delegate_->IsHardNavigation() ||
+       RuntimeEnabledFeatures::EntropyIgnoredForFirstVideoFrameLCPEnabled())) {
+    return true;
+  }
+
+  return record.GetEffectiveVisualSizeResult().is_min_entropy_met;
+}
+
+bool LargestContentfulPaintCalculator::IsEligibleForLcp(
+    const TextRecord& record) const {
+  return record.EffectiveVisualSize() > 0;
+}
+
+// static
+EffectiveVisualSizeResult
+LargestContentfulPaintCalculator::ComputeEffectiveVisualSize(
+    const LayoutObject& object,
+    const MediaTiming& media_timing,
+    const gfx::Rect& image_border,
+    const gfx::RectF& mapped_visual_rect,
+    const gfx::Size& intrinsic_size,
+    uint64_t viewport_area,
+    const PaintTimingDetector& detector) {
+  EffectiveVisualSizeResult result;
+
+  // "1. Let width be intersectionRect’s width, rounded up to the nearest
+  //     integer."
+  // "2. Let height be intersectionRect’s height, rounded up to the nearest
+  //    integer."
+  // "3. Let size be width * height."
+  uint64_t size = mapped_visual_rect.size().GetArea();
+
+  // If the rect occupies the whole viewport, disregard this candidate by saying
+  // the size is 0.
+  //
+  // "4. Let root be document’s browsing context’s top-level browsing context’s
+  //     active document."
+  // "5. Let rootWidth be root’s visual viewport’s width, excluding any
+  //     scrollbars."
+  // "6. Let rootHeight be root’s visual viewport’s height, excluding any
+  //     scrollbars."
+  // "7. If size is equal to rootWidth times rootHeight, return null."
+  //
+  // Note: An SVG image size is computed with respect to the virtual viewport of
+  // the SVG, so `size` can be larger than `viewport_area` in edge cases.
+  if (size >= viewport_area) {
+    // Rather than returning null, return the actual size to differentiate from
+    // the 0-size case, which downstream processing handles differently.
+    result.size = size;
+    result.is_viewport_covered = true;
+    return result;
+  }
+
+  // "8. If imageRequest is not null, run the following steps to adjust for
+  //     image position and upscaling:"
+  //
+  // ...
+  //
+  // "8.9  Let naturalArea be imageRequest’s natural width * imageRequest’s
+  //       natural height."
+  const uint64_t natural_area = intrinsic_size.Area64();
+
+  // "8.10 If naturalArea is 0, then return null."
+  if (natural_area == 0) {
+    return result;
+  }
+
+  // "8.11 Let boundingClientArea be clientContentRect’s width *
+  //       clientContentRect’s height."
+  //
+  // Transform visual rect to window before downscaling.
+  gfx::RectF bounding_client_rect =
+      detector.BlinkSpaceToDIPs(gfx::RectF(image_border));
+  const uint64_t bounding_client_area = bounding_client_rect.size().GetArea();
+
+  // "8.12 Let scaleFactor be boundingClientArea / naturalArea."
+  // "8.13 If scaleFactor is greater than 1, then divide size by scaleFactor."
+  if (bounding_client_area > natural_area) {
+    size = static_cast<double>(size) * natural_area / bounding_client_area;
+  }
+
+  // "8.1 If imageRequest’s response’s content length in bytes is less than
+  //      size * 0.004, then return null.
+  //
+  // TODO(crbug.com/534835237): This constant differs from the spec, which uses
+  // 0.032 in the equivalent formulation.
+  constexpr double kMinimumEntropyForLCP = 0.05;
+  result.entropy = media_timing.ContentSizeForEntropy() * 8.0 / size;
+  result.is_min_entropy_met = result.entropy >= kMinimumEntropyForLCP;
+
+  result.size = size;
+  return result;
 }
 
 }  // namespace blink

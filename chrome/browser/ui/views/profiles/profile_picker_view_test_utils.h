@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_VIEW_TEST_UTILS_H_
 
 #include <optional>
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -143,8 +144,10 @@ class MockProfilePickerWebContentsHost : public ProfilePickerWebContentsHost {
   MOCK_METHOD(bool, AreEffectsEnabled, (), (const));
   MOCK_METHOD(content::WebContents*, GetPickerContents, (), (const));
   MOCK_METHOD(void, SetNativeToolbarSigninButtonsVisible, (bool visible));
-  MOCK_METHOD(void, SetNativeToolbarDontSignInButtonVisible, (bool visible));
   MOCK_METHOD(void, SetNativeToolbarStartBrowsingButtonVisible, (bool visible));
+  MOCK_METHOD(void,
+              SetNativeToolbarEffectsControlButtonVisible,
+              (bool visible));
   MOCK_METHOD(SkColor, GetPreferredBackgroundColor, (), (const));
   MOCK_METHOD(content::WebContentsDelegate*, GetWebContentsDelegate, ());
   MOCK_METHOD(web_modal::WebContentsModalDialogHost*,
@@ -156,5 +159,15 @@ class MockProfilePickerWebContentsHost : public ProfilePickerWebContentsHost {
               ((const std::variant<ForceSigninUIError, SigninUIError>& error),
                bool success));
 };
+
+namespace profiles::testing {
+
+// Returns the JavaScript to reject the history sync optin screen.
+std::string GetRejectHistoryOptinScript();
+
+// Returns the JavaScript to accept the history sync optin screen.
+std::string GetAcceptHistoryOptinScript();
+
+}  // namespace profiles::testing
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_VIEW_TEST_UTILS_H_

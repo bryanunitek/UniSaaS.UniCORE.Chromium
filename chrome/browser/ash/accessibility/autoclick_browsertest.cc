@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "ash/accessibility/autoclick/autoclick_controller.h"
 #include "ash/accessibility/ui/accessibility_focus_ring_controller_impl.h"
 #include "ash/accessibility/ui/accessibility_focus_ring_layer.h"
@@ -9,13 +11,12 @@
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/shell.h"
 #include "base/test/bind.h"
-#include "chrome/app/chrome_command_ids.h"
+#include "base/timer/elapsed_timer.h"
 #include "chrome/browser/ash/accessibility/accessibility_feature_browsertest.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/accessibility_test_utils.h"
 #include "chrome/browser/ash/accessibility/autoclick_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"

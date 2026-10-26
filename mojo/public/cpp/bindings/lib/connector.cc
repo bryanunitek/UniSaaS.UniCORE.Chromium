@@ -291,27 +291,6 @@ void Connector::ResumeIncomingMethodCallProcessing() {
   WaitToReadMore();
 }
 
-bool Connector::PrefersSerializedMessages() {
-  if (outgoing_serialization_mode_ != OutgoingSerializationMode::kLazy) {
-    return true;
-  }
-
-  // In lazy serialization mode (the default) we prefer to send unserialized
-  // messages. Note that most interfaces don't support lazy serialization
-  // though, so they'll still only send serialized messages. As such, in most
-  // cases this return value is ignored.
-  if (!peer_remoteness_tracker_) {
-    return false;
-  }
-
-  // If we have set up a remoteness tracker however, that means we've actually
-  // seen at least one unserialized message (see Accept()). In that case we
-  // consult the tracker. The point of this is to avoid the redundant work of
-  // deferred serialization if we're reasonably certain the message is going to
-  // end up serialized anyway.
-  return peer_remoteness_tracker_->last_known_state().peer_remote();
-}
-
 bool Connector::Accept(Message* message) {
   MojoResult result = AcceptAndGetResult(message);
   return result == MOJO_RESULT_OK;
@@ -554,10 +533,7 @@ bool Connector::DispatchMessage(ScopedMessageHandle handle) {
         ctx.event()->set_chrome_mojo_event_info()->set_mojo_interface_tag(
             interface_name_);
 
-        static const uint8_t* flow_enabled =
-            TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(
-                "toplevel.flow,mojom.flow");
-        if (!*flow_enabled) {
+        if (!TRACE_EVENT_CATEGORY_ENABLED("toplevel.flow,mojom.flow")) {
           return;
         }
 

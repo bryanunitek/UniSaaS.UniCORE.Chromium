@@ -18,7 +18,6 @@
 #include "base/rand_util.h"
 #include "build/blink_buildflags.h"
 #include "build/build_config.h"
-#include "mojo/core/embedder/embedder.h"
 #include "mojo/core/ipcz_driver/mojo_message.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
@@ -26,20 +25,10 @@
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 
-#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
-#include "mojo/core/user_message_impl.h"
-#endif
-
 namespace mojo::core {
 namespace {
 
 using MessageTest = test::MojoTestBase;
-
-#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
-constexpr uint32_t kLegacyMinimumPayloadBufferSize = kMinimumPayloadBufferSize;
-#else
-constexpr uint32_t kLegacyMinimumPayloadBufferSize = 0;
-#endif
 
 // Helper class which provides a base implementation for an unserialized user
 // message context and helpers to go between these objects and opaque message
@@ -314,7 +303,7 @@ TEST_F(MessageTest, MAYBE_SerializeDynamicallySizedMessage) {
 DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ReceiveMessageOneHandle, MessageTest, h) {
   MojoTestBase::WaitForSignals(h, MOJO_HANDLE_SIGNAL_READABLE);
   MojoHandle h1;
-  auto m = MojoTestBase::ReadMessageWithHandles(h, &h1, 1);
+  auto m = MojoTestBase::ReadMessageWithHandle(h, &h1);
   EXPECT_EQ(kTestMessageWithContext1, m);
   MojoTestBase::WriteMessage(h1, kTestMessageWithContext2);
   EXPECT_EQ(kTestQuitMessage, MojoTestBase::ReadMessage(h));
@@ -345,8 +334,8 @@ TEST_F(MessageTest, MAYBE_SerializeSimpleMessageOneHandleWithContext) {
 
 DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ReceiveMessageWithHandles, MessageTest, h) {
   MojoTestBase::WaitForSignals(h, MOJO_HANDLE_SIGNAL_READABLE);
-  MojoHandle handles[4];
-  auto m = MojoTestBase::ReadMessageWithHandles(h, handles, 4);
+  std::array<MojoHandle, 4> handles = {};
+  auto m = MojoTestBase::ReadMessageWithHandles(h, handles);
   EXPECT_EQ(kTestMessageWithContext1, m);
   MojoTestBase::WriteMessage(handles[0], kTestMessageWithContext1);
   MojoTestBase::WriteMessage(handles[1], kTestMessageWithContext2);
@@ -720,9 +709,7 @@ TEST_F(MessageTest, PreallocateEnoughMemoryForMessage) {
   // because if we use a total payload size smaller than that, the buffer may
   // not be reallocated when we expect it to (since at least
   // `kMinimumBufferSize` bytes of capacity will be allocated).
-  const size_t kMinimumBufferSize =
-      IsMojoIpczEnabled() ? ipcz_driver::MojoMessage::kMinBufferSize
-                          : kLegacyMinimumPayloadBufferSize;
+  const size_t kMinimumBufferSize = ipcz_driver::MojoMessage::kMinBufferSize;
   const std::string kMsgPart1(kMinimumBufferSize / 2, 'x');
   const std::string kMsgPart2(kMinimumBufferSize, 'y');
   const std::string kCombined = kMsgPart1 + kMsgPart2;
@@ -789,9 +776,7 @@ TEST_F(MessageTest, PreallocateNotEnoughMemoryForMessage) {
   // because if we use a total payload size smaller than that, the buffer may
   // not be reallocated when we expect it to (since at least
   // `kMinimumBufferSize` bytes of capacity will be allocated).
-  const size_t kMinimumBufferSize =
-      IsMojoIpczEnabled() ? ipcz_driver::MojoMessage::kMinBufferSize
-                          : kLegacyMinimumPayloadBufferSize;
+  const size_t kMinimumBufferSize = ipcz_driver::MojoMessage::kMinBufferSize;
   const std::string kMsgPart1(kMinimumBufferSize / 2, 'x');
   const std::string kMsgPart2(kMinimumBufferSize, 'y');
   const std::string kCombined = kMsgPart1 + kMsgPart2;
@@ -1005,31 +990,6 @@ TEST_F(MessageTest, CorrectPayloadBufferBoundaries) {
   EXPECT_EQ(MOJO_RESULT_OK, MojoDestroyMessage(message));
 }
 
-#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
-TEST_F(MessageTest, CommitInvalidMessageContents) {
-  // Regression test for https://crbug.com/755127. Ensures that we don't crash
-  // if we attempt to commit the contents of an unserialized message.
-  MojoMessageHandle message;
-  EXPECT_EQ(MOJO_RESULT_OK, MojoCreateMessage(nullptr, &message));
-  EXPECT_EQ(MOJO_RESULT_OK, MojoAppendMessageData(message, 0, nullptr, 0,
-                                                  nullptr, nullptr, nullptr));
-  MojoHandle a, b;
-  CreateMessagePipe(&a, &b);
-  EXPECT_EQ(MOJO_RESULT_OK, MojoAppendMessageData(message, 0, &a, 1, nullptr,
-                                                  nullptr, nullptr));
-
-  UserMessageImpl::FailHandleSerializationForTesting(true);
-  MojoAppendMessageDataOptions options;
-  options.struct_size = sizeof(options);
-  options.flags = MOJO_APPEND_MESSAGE_DATA_FLAG_COMMIT_SIZE;
-  EXPECT_EQ(MOJO_RESULT_OK, MojoAppendMessageData(message, 0, nullptr, 0,
-                                                  nullptr, nullptr, nullptr));
-  UserMessageImpl::FailHandleSerializationForTesting(false);
-  EXPECT_EQ(MOJO_RESULT_OK, MojoDestroyMessage(message));
-  EXPECT_EQ(MOJO_RESULT_OK, MojoClose(b));
-}
-#endif  // BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
-
 #if BUILDFLAG(USE_BLINK)
 
 #if BUILDFLAG(IS_IOS)
@@ -1090,10 +1050,10 @@ TEST_F(MessageTest, MAYBE_ExtendPayloadWithHandlesAttached) {
 DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ReadAndIgnoreMessage, MessageTest, h) {
   MojoTestBase::WaitForSignals(h, MOJO_HANDLE_SIGNAL_READABLE);
 
-  MojoHandle handles[5];
-  MojoTestBase::ReadMessageWithHandles(h, handles, 5);
-  for (size_t i = 0; i < 5; ++i) {
-    EXPECT_EQ(MOJO_RESULT_OK, MojoClose(UNSAFE_TODO(handles[i])));
+  std::array<MojoHandle, 5> handles = {};
+  MojoTestBase::ReadMessageWithHandles(h, handles);
+  for (MojoHandle& handle : handles) {
+    EXPECT_EQ(MOJO_RESULT_OK, MojoClose(handle));
   }
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h));
 }
@@ -1158,13 +1118,13 @@ DEFINE_TEST_CLIENT_TEST_WITH_PIPE(ReadMessageAndCheckPipe, MessageTest, h) {
   MojoTestBase::WaitForSignals(h, MOJO_HANDLE_SIGNAL_READABLE);
 
   const std::string kTestMessage("hey pipe");
-  MojoHandle handles[5];
-  MojoTestBase::ReadMessageWithHandles(h, handles, 5);
+  std::array<MojoHandle, 5> handles = {};
+  MojoTestBase::ReadMessageWithHandles(h, handles);
   MojoTestBase::WriteMessage(handles[0], kTestMessage);
   MojoTestBase::WaitForSignals(handles[4], MOJO_HANDLE_SIGNAL_READABLE);
   EXPECT_EQ(kTestMessage, MojoTestBase::ReadMessage(handles[4]));
-  for (size_t i = 0; i < 5; ++i) {
-    EXPECT_EQ(MOJO_RESULT_OK, MojoClose(UNSAFE_TODO(handles[i])));
+  for (MojoHandle& handle : handles) {
+    EXPECT_EQ(MOJO_RESULT_OK, MojoClose(handle));
   }
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(h));
 }

@@ -15,8 +15,6 @@ export const STUB_USER_ACCOUNT_INFO: chrome.autofillPrivate.AccountInfo = {
   email: 'stub-user@example.com',
   isSyncEnabledForAutofillProfiles: false,
   isEligibleForAddressAccountStorage: false,
-  isAutofillSyncToggleAvailable: false,
-  isAutofillSyncToggleEnabled: false,
 };
 
 /**
@@ -104,7 +102,7 @@ export function createCreditCardEntry(
     imageSrc: 'chrome://theme/IDR_AUTOFILL_CC_GENERIC',
     metadata: {
       isLocal: true,
-      summaryLabel: hasIdentifier ? `My Credit Card` : networkAndLastFour,
+      summaryLabel: hasIdentifier ? 'My Credit Card' : networkAndLastFour,
       summarySublabel: isNewFopDisplay ?
           (hasIdentifier ? networkAndLastFour : '') :
           'Jane Doe',
@@ -207,7 +205,7 @@ function ibanPatternMaker(ibanValue: string): string {
     if (i < 4 || i >= strippedValue.length - 4) {
       output += strippedValue.charAt(i);
     } else {
-      output += `*`;
+      output += '*';
     }
   }
   return output;
@@ -218,6 +216,7 @@ export class AutofillManagerExpectations {
   requestedAddresses: number = 0;
   listeningAddresses: number = 0;
   removeAddress: number = 0;
+  fetchedUserDataProcessingConsent: number = 0;
 }
 
 /**
@@ -228,6 +227,8 @@ export class TestAutofillManager extends TestBrowserProxy implements
   data: {
     addresses: chrome.autofillPrivate.AddressEntry[],
     accountInfo?: chrome.autofillPrivate.AccountInfo,
+    userDataProcessingConsent?: chrome.autofillPrivate
+                                 .UserDataProcessingConsentStates,
   };
 
   lastCallback:
@@ -235,12 +236,12 @@ export class TestAutofillManager extends TestBrowserProxy implements
 
   constructor() {
     super([
+      'fetchUserDataProcessingConsent',
       'getAccountInfo',
       'getAddressList',
       'removeAddress',
       'removePersonalDataManagerListener',
       'setPersonalDataManagerListener',
-      'setAutofillSyncToggleEnabled',
     ]);
 
     // Set these to have non-empty data.
@@ -250,8 +251,12 @@ export class TestAutofillManager extends TestBrowserProxy implements
         email: 'stub-user@example.com',
         isSyncEnabledForAutofillProfiles: true,
         isEligibleForAddressAccountStorage: false,
-        isAutofillSyncToggleAvailable: false,
-        isAutofillSyncToggleEnabled: false,
+      },
+      userDataProcessingConsent: {
+        commsApps:
+            chrome.autofillPrivate.UserDataProcessingConsentState.ENABLED,
+        googleApps:
+            chrome.autofillPrivate.UserDataProcessingConsentState.ENABLED,
       },
     };
 
@@ -286,8 +291,17 @@ export class TestAutofillManager extends TestBrowserProxy implements
     this.methodCalled('removeAddress');
   }
 
-  setAutofillSyncToggleEnabled(_enabled: boolean) {
-    this.methodCalled('setAutofillSyncToggleEnabled');
+  fetchUserDataProcessingConsent() {
+    this.methodCalled('fetchUserDataProcessingConsent');
+    return Promise.resolve(this.data.userDataProcessingConsent || {
+      commsApps: chrome.autofillPrivate.UserDataProcessingConsentState.UNKNOWN,
+      googleApps: chrome.autofillPrivate.UserDataProcessingConsentState.UNKNOWN,
+    });
+  }
+
+  setUserDataProcessingConsent(
+      consent: chrome.autofillPrivate.UserDataProcessingConsentStates) {
+    this.data.userDataProcessingConsent = consent;
   }
 
   /**
@@ -301,6 +315,9 @@ export class TestAutofillManager extends TestBrowserProxy implements
         this.getCallCount('setPersonalDataManagerListener') -
             this.getCallCount('removePersonalDataManagerListener'));
     assertEquals(expected.removeAddress, this.getCallCount('removeAddress'));
+    assertEquals(
+        expected.fetchedUserDataProcessingConsent,
+        this.getCallCount('fetchUserDataProcessingConsent'));
   }
 }
 

@@ -43,19 +43,19 @@
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_util.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_import/addresses/address_form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
-#include "components/autofill/core/browser/form_import/form_data_importer_test_utils.h"
+#include "components/autofill/core/browser/form_import/form_data_importer_test_util.h"
 #include "components/autofill/core/browser/form_import/payments/payments_form_data_importer.h"
 #include "components/autofill/core/browser/form_import/payments/payments_form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_parsing/determine_regex_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/form_structure_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
-#include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics_util.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/test/mock_mandatory_reauth_manager.h"
 #include "components/autofill/core/browser/payments/test/mock_multiple_request_payments_network_interface.h"
@@ -65,15 +65,15 @@
 #include "components/autofill/core/browser/payments/test_virtual_card_enrollment_manager.h"
 #include "components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autocomplete_parsing_util.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/autofill/core/common/form_data.h"
@@ -201,12 +201,11 @@ class FormDataImporterTest : public testing::Test {
                               const FormStructure& form,
                               bool allow_save_prompts = true) {
     std::vector<FormDataImporterTestApi::ExtractedAddressProfile>
-        extracted_address_profiles;
+        extracted_address_profiles =
+            test_api(form_data_importer().GetAddressFormDataImporter())
+                .ExtractAddressProfiles(form);
 
-    EXPECT_EQ(
-        extraction_successful,
-        test_api(form_data_importer().GetAddressFormDataImporter())
-                .ExtractAddressProfiles(form, &extracted_address_profiles) > 0);
+    EXPECT_EQ(extraction_successful, !extracted_address_profiles.empty());
 
     if (!extraction_successful) {
       EXPECT_FALSE(test_api(form_data_importer().GetAddressFormDataImporter())

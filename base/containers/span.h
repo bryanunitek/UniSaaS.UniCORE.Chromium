@@ -530,10 +530,8 @@ class GSL_POINTER span {
       : span(unchecked, first, count) {
 #if PA_BUILDFLAG(CHECKED_SPAN)
     if (!std::is_constant_evaluated()) {
-      if (data() || size()) {
-        CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
-                                                    sizeof(element_type)));
-      }
+      CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
+                                                  sizeof(element_type)));
     }
 #endif  // PA_BUILDFLAG(CHECKED_SPAN)
   }
@@ -566,10 +564,8 @@ class GSL_POINTER span {
       : UNSAFE_BUFFERS(span(unchecked, first, last)) {
 #if PA_BUILDFLAG(CHECKED_SPAN)
     if (!std::is_constant_evaluated()) {
-      if (data() || size()) {
-        CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
-                                                    sizeof(element_type)));
-      }
+      CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
+                                                  sizeof(element_type)));
     }
 #endif  // PA_BUILDFLAG(CHECKED_SPAN)
   }
@@ -1079,10 +1075,8 @@ class GSL_POINTER span<ElementType, dynamic_extent, InternalPtrType> {
       : span(unchecked, first, count) {
 #if PA_BUILDFLAG(CHECKED_SPAN)
     if (!std::is_constant_evaluated()) {
-      if (data() || size()) {
-        CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
-                                                    sizeof(element_type)));
-      }
+      CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
+                                                  sizeof(element_type)));
     }
 #endif  // PA_BUILDFLAG(CHECKED_SPAN)
   }
@@ -1113,10 +1107,8 @@ class GSL_POINTER span<ElementType, dynamic_extent, InternalPtrType> {
       : UNSAFE_BUFFERS(span(unchecked, first, last)) {
 #if PA_BUILDFLAG(CHECKED_SPAN)
     if (!std::is_constant_evaluated()) {
-      if (data() || size()) {
-        CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
-                                                    sizeof(element_type)));
-      }
+      CHECK(!partition_alloc::IsExtentOutOfBounds(data(), size_bytes(),
+                                                  sizeof(element_type)));
     }
 #endif  // PA_BUILDFLAG(CHECKED_SPAN)
   }
@@ -1883,7 +1875,7 @@ template <typename ElementType,
   // [intro.object]: https://eel.is/c++draft/intro.object
   // [obj.lifetime] https://eel.is/c++draft/obj.lifetime
   //
-  // TODO(arthursonzogni): use std::start_lifetime_as_array.
+  // TODO(crbug.com/570737624): use std::start_lifetime_as_array.
   //
   // std::start_lifetime_as_array is part of C++23, but not yet implemented by
   // CLang as of January 2026. `std::launder` helps with pointer provenance

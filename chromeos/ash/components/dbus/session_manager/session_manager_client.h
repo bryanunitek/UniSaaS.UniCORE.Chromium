@@ -132,18 +132,6 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
     ~Observer() override = default;
   };
 
-  // Interface for performing actions on behalf of the stub implementation.
-  class StubDelegate {
-   public:
-    virtual ~StubDelegate() {}
-
-    // Locks the screen. Invoked by the stub when RequestLockScreen() is called.
-    // In the real implementation of SessionManagerClient::RequestLockScreen(),
-    // a lock request is forwarded to the session manager; in the stub, this is
-    // short-circuited and the screen is locked immediately.
-    virtual void LockScreenForStub() = 0;
-  };
-
   // Creates and initializes the global instance. |bus| must not be null.
   static void Initialize(dbus::Bus* bus);
 
@@ -161,10 +149,6 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
 
   SessionManagerClient(const SessionManagerClient&) = delete;
   SessionManagerClient& operator=(const SessionManagerClient&) = delete;
-
-  // Sets the delegate used by the stub implementation. Ownership of |delegate|
-  // remains with the caller.
-  virtual void SetStubDelegate(StubDelegate* delegate) = 0;
 
   // Adds or removes an observer.
   virtual void AddObserver(Observer* observer) = 0;
@@ -386,19 +370,35 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
       const std::vector<std::string>& feature_flags,
       const std::map<std::string, std::string>& origin_list_flags) = 0;
 
-  using StateKeysCallback = base::OnceCallback<void(
-      const base::expected<std::vector<std::string>, StateKeyErrorType>&
-          state_keys)>;
+  // Container for computed state keys and the corresponding time quantum index.
+  struct StateKeysData {
+    StateKeysData();
+    StateKeysData(std::vector<std::string> keys, int64_t index);
+    StateKeysData(StateKeysData&& other);
+    StateKeysData& operator=(StateKeysData&& other);
+    StateKeysData(const StateKeysData&) = delete;
+    StateKeysData& operator=(const StateKeysData&) = delete;
+    ~StateKeysData();
 
-  // Get the currently valid server-backed state keys for the device.
-  // Server-backed state keys are opaque, device-unique, time-dependent,
-  // client-determined identifiers that are used for keying state in the cloud
-  // for the device to retrieve after a device factory reset.
+    bool operator==(const StateKeysData& other) const = default;
+
+    std::vector<std::string> state_keys;
+    int64_t current_time_quantum_index = 0;
+  };
+
+  using StateKeysCallback = base::OnceCallback<void(
+      base::expected<StateKeysData, StateKeyErrorType> state_keys)>;
+
+  // Get the currently valid state keys for the device along with the current
+  // time quantum index (seconds since epoch / 2^23).
+  // State keys are opaque, device-unique, time-dependent, client-determined
+  // identifiers that are used for keying state in the cloud for the device to
+  // retrieve after a device factory reset.
   //
-  // The state keys are returned asynchronously via |callback|. The callback
-  // is invoked with an empty state key vector in case of errors. If the time
-  // sync fails or there's no network, the callback is never invoked.
-  virtual void GetServerBackedStateKeys(StateKeysCallback callback) = 0;
+  // The state keys and time quantum index are returned asynchronously via
+  // |callback|. If the time sync fails or there's no network, the callback is
+  // never invoked.
+  virtual void GetStateKeysWithTimeQuantumIndex(StateKeysCallback callback) = 0;
 
   using PsmDeviceActiveSecretCallback =
       base::OnceCallback<void(const std::string& psm_device_active_secret)>;

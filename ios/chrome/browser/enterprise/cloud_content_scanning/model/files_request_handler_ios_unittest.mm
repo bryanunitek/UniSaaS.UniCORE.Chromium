@@ -19,16 +19,17 @@
 #import "components/sync_preferences/testing_pref_service_syncable.h"
 #import "ios/chrome/browser/enterprise/cloud_content_scanning/model/download_protection_metrics.h"
 #import "ios/chrome/browser/enterprise/common/test/mock_reporting_event_router.h"
+#import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/reporting/ios_reporting_event_router_factory.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
-#import "ios/components/enterprise/analysis/features.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
+#import "url/gurl.h"
 
 namespace enterprise_connectors {
 
@@ -65,6 +66,12 @@ class MockContentAnalysisInfoBase : public ContentAnalysisInfoBase {
               (),
               (const, override));
   MOCK_METHOD(std::string, GetContentAreaAccountEmail, (), (const, override));
+  MOCK_METHOD(
+      std::optional<
+          ::safe_browsing::ExtensionTelemetryReportRequest::ExtensionInfo>,
+      extension_initiator,
+      (),
+      (const, override));
 };
 
 // Mock implementation of BinaryUploadService to verify that upload requests
@@ -118,8 +125,19 @@ class FilesRequestHandlerIOSTest : public PlatformTest {
     profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
     reporting_router_ = static_cast<MockReportingEventRouter*>(
         IOSReportingEventRouterFactory::GetForProfile(profile_.get()));
+    connectors_service_ =
+        ConnectorsServiceFactory::GetForProfile(profile_.get());
 
-    scoped_feature_list_.InitAndEnableFeature(kEnableFileDownloadConnectorIOS);
+    // `FilesRequestHandlerBase`'s destructor reports a cancellation when
+    // `kEnableCancelUploadOnContentAnalysis` is enabled, which reads these
+    // getters. They return references, so without a default action gmock
+    // aborts the test process instead of failing the test.
+    ON_CALL(content_analysis_info_, url())
+        .WillByDefault(testing::ReturnRef(url_));
+    ON_CALL(content_analysis_info_, tab_url())
+        .WillByDefault(testing::ReturnRef(url_));
+    ON_CALL(content_analysis_info_, settings())
+        .WillByDefault(testing::ReturnRef(settings_));
   }
 
   // Enables the file download connector by setting the appropriate pref.
@@ -134,10 +152,12 @@ class FilesRequestHandlerIOSTest : public PlatformTest {
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   TestProfileManagerIOS profile_manager_;
   raw_ptr<TestProfileIOS> profile_;
+  raw_ptr<ConnectorsService> connectors_service_;
   raw_ptr<MockReportingEventRouter> reporting_router_;
   MockContentAnalysisInfoBase content_analysis_info_;
   MockBinaryUploadService upload_service_;
   AnalysisSettings settings_;
+  GURL url_{"https://example.com"};
   base::HistogramTester histogram_tester_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -147,12 +167,26 @@ class FilesRequestHandlerIOSTest : public PlatformTest {
 TEST_F(FilesRequestHandlerIOSTest, UploadDataImpl_NoPath) {
   base::test::TestFuture<RequestHandlerResult> future;
   auto delegate = std::make_unique<FilesRequestHandlerIOS>(
-      profile_.get(), base::FilePath(), future.GetCallback());
+      connectors_service_, reporting_router_, base::FilePath(),
+      future.GetCallback());
 
   EXPECT_FALSE(delegate->UploadDataImpl());
 
   RequestHandlerResult result = future.Take();
   EXPECT_EQ(result.final_result, FinalContentAnalysisResult::SUCCESS);
+}
+
+// Tests that StopFileWork is a safe no-op: iOS only scans one file at a time,
+// so there is no FileOpeningJob to signal.
+TEST_F(FilesRequestHandlerIOSTest, StopFileWorkIsNoOp) {
+  base::test::TestFuture<RequestHandlerResult> future;
+  auto delegate = std::make_unique<FilesRequestHandlerIOS>(
+      connectors_service_, reporting_router_, base::FilePath(),
+      future.GetCallback());
+
+  delegate->StopFileWork();
+
+  EXPECT_FALSE(future.IsReady());
 }
 
 // Tests that UploadDataImpl returns false and calls the callback when the
@@ -165,7 +199,7 @@ TEST_F(FilesRequestHandlerIOSTest, UploadDataImpl_ConnectorDisabled) {
 
   base::test::TestFuture<RequestHandlerResult> future;
   auto delegate = std::make_unique<FilesRequestHandlerIOS>(
-      profile_.get(), path, future.GetCallback());
+      connectors_service_, reporting_router_, path, future.GetCallback());
 
   EXPECT_FALSE(delegate->UploadDataImpl());
 
@@ -185,7 +219,7 @@ TEST_F(FilesRequestHandlerIOSTest, UploadDataImpl_Success) {
 
   base::test::TestFuture<RequestHandlerResult> future;
   auto delegate_ptr = std::make_unique<FilesRequestHandlerIOS>(
-      profile_.get(), path, future.GetCallback());
+      connectors_service_, reporting_router_, path, future.GetCallback());
   auto* delegate = delegate_ptr.get();
 
   FilesRequestHandlerBase handler(
@@ -202,8 +236,8 @@ TEST_F(FilesRequestHandlerIOSTest, UploadDataImpl_Success) {
 // and that file information (hash, size, mime type) can be updated.
 TEST_F(FilesRequestHandlerIOSTest, GettersAndSetters) {
   base::FilePath path(FILE_PATH_LITERAL("/path/to/test.txt"));
-  auto delegate = std::make_unique<FilesRequestHandlerIOS>(profile_.get(), path,
-                                                           base::DoNothing());
+  auto delegate = std::make_unique<FilesRequestHandlerIOS>(
+      connectors_service_, reporting_router_, path, base::DoNothing());
 
   EXPECT_EQ(delegate->GetPath(0), path);
   EXPECT_EQ(delegate->GetSource(), "");
@@ -227,7 +261,8 @@ TEST_F(FilesRequestHandlerIOSTest, GettersAndSetters) {
 TEST_F(FilesRequestHandlerIOSTest, UpdateRequestHandlerResult) {
   base::test::TestFuture<RequestHandlerResult> future;
   auto delegate = std::make_unique<FilesRequestHandlerIOS>(
-      profile_.get(), base::FilePath(), future.GetCallback());
+      connectors_service_, reporting_router_, base::FilePath(),
+      future.GetCallback());
 
   RequestHandlerResult result;
   result.complies = true;
@@ -252,7 +287,8 @@ TEST_F(FilesRequestHandlerIOSTest, UpdateRequestHandlerResult) {
 TEST_F(FilesRequestHandlerIOSTest, ReportWarningBypass) {
   base::test::TestFuture<RequestHandlerResult> future;
   auto delegate_ptr = std::make_unique<FilesRequestHandlerIOS>(
-      profile_.get(), base::FilePath(), future.GetCallback());
+      connectors_service_, reporting_router_, base::FilePath(),
+      future.GetCallback());
   auto* delegate = delegate_ptr.get();
 
   FilesRequestHandlerBase handler(

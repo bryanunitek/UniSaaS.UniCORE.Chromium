@@ -10,7 +10,6 @@
 import '../settings_shared.css.js';
 import '../controls/settings_toggle_button.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/ash/common/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {getHotspotConfig} from 'chrome://resources/ash/common/hotspot/cros_hotspot_config.js';
@@ -22,7 +21,8 @@ import {castExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {routes} from '../router.js';
 
 import {getTemplate} from './hotspot_subpage.html.js';
@@ -72,7 +72,7 @@ export class SettingsHotspotSubpageElement extends
     };
   }
 
-  hotspotInfo: HotspotInfo|undefined;
+  declare hotspotInfo: HotspotInfo|undefined;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -80,8 +80,9 @@ export class SettingsHotspotSubpageElement extends
     Setting.kHotspotAutoDisabled,
   ]);
 
-  private isHotspotToggleOn_: boolean;
-  private autoDisableVirtualPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private isHotspotToggleOn_: boolean;
+  declare private autoDisableVirtualPref_:
+      chrome.settingsPrivate.PrefObject<boolean>;
 
   override currentRouteChanged(route: Route, _oldRoute?: Route): void {
     // Does not apply to this page.

@@ -14,7 +14,6 @@
 #include "chrome/browser/apps/app_service/app_install/app_install_types.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
@@ -112,12 +111,13 @@ class WebAppInstallerBrowserTest : public InProcessBrowserTest {
   void SetManifestResponse(std::string manifest) { manifest_ = manifest; }
   void SetManifest2Response(std::string manifest) { manifest2_ = manifest; }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   net::EmbeddedTestServer* https_server() { return &https_server_; }
 
   AppRegistryCache& app_registry_cache() {
-    auto* proxy = AppServiceProxyFactory::GetForProfile(browser()->profile());
+    auto* proxy =
+        AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
     return proxy->AppRegistryCache();
   }
 

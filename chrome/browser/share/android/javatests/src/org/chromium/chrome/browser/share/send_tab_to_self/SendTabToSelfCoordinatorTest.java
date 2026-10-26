@@ -22,26 +22,35 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
+import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 import static org.chromium.url.JUnitTestGURLs.HTTP_URL;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
 import android.widget.TextView;
 
 import androidx.annotation.IdRes;
 import androidx.annotation.Nullable;
+import androidx.test.espresso.contrib.RecyclerViewActions;
 import androidx.test.espresso.intent.Intents;
 import androidx.test.filters.LargeTest;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -59,10 +68,11 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
@@ -75,9 +85,19 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.Shee
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
+import org.chromium.components.browser_ui.widget.textbubble.TextBubble;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.feature_engagement.EventConstants;
+import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.signin.SigninFeatures;
+import org.chromium.components.signin.test.util.TestAccounts;
+import org.chromium.components.sync_device_info.RemoteDeviceInfo;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.test.util.BlankUiTestActivity;
+import org.chromium.ui.test.util.DeviceRestriction;
+
+import java.util.stream.IntStream;
 
 /** Tests for SendTabToSelfCoordinator */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -87,11 +107,13 @@ public class SendTabToSelfCoordinatorTest {
     @Rule public SyncTestRule mSyncTestRule = new SyncTestRule();
 
     @Mock private DeviceLockActivityLauncher mDeviceLockActivityLauncher;
+    @Mock private Tracker mTracker;
 
     private long mSetUpTimeMs;
 
     @Before
     public void setUp() {
+        TrackerFactory.setTrackerForTests(mTracker);
 
         // Skip device lock UI on automotive.
         doAnswer(
@@ -112,13 +134,67 @@ public class SendTabToSelfCoordinatorTest {
                 .injectDeviceInfoEntity("CacheGuid", "Device", mSetUpTimeMs, mSetUpTimeMs);
     }
 
+    @After
+    public void tearDown() {
+        // Reset static mocks to avoid leaking test state across batch runs.
+        TrackerFactory.setTrackerForTests(null);
+        SendTabToSelfAndroidBridgeJni.setInstanceForTesting(null);
+        // Dismiss any active IPH text bubbles shown during the test.
+        ThreadUtils.runOnUiThreadBlocking(TextBubble::dismissBubbles);
+        // Reset screen orientation to avoid leaking state across tests.
+        if (mSyncTestRule.getActivity() != null) {
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        mSyncTestRule
+                                .getActivity()
+                                .setRequestedOrientation(
+                                        ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                    });
+        }
+    }
+
+    private void signInAndShowDevicePicker() {
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+        CriteriaHelper.pollUiThread(
+                () ->
+                        SendTabToSelfAndroidBridge.getEntryPointDisplayReason(
+                                        ProfileManager.getLastUsedRegularProfile(),
+                                        HTTP_URL.getSpec())
+                                .equals(EntryPointDisplayReason.OFFER_FEATURE));
+        buildAndShowCoordinator();
+    }
+
+    private void expandBottomSheetToFullState() {
+        BottomSheetController controller =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                BottomSheetControllerProvider.from(
+                                        mSyncTestRule.getActivity().getWindowAndroid()));
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> new BottomSheetTestSupport(controller).setSheetState(SheetState.FULL, false));
+        BottomSheetTestSupport.waitForState(controller, SheetState.FULL);
+    }
+
+    /**
+     * Injects {@code count} fake target devices into the fake sync server with descending
+     * timestamps.
+     */
+    private void injectFakeDevices(int count) {
+        IntStream.rangeClosed(1, count)
+                .forEach(
+                        i -> {
+                            long olderTime = mSetUpTimeMs - i * 1000;
+                            mSyncTestRule
+                                    .getFakeServerHelper()
+                                    .injectDeviceInfoEntity(
+                                            "Guid" + i, "Device " + i, olderTime, olderTime);
+                        });
+    }
+
     @Test
     @LargeTest
     @DisabledTest(message = "https://crbug.com/40215923")
-    @DisableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
-    })
+    @DisableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
     // TODO(crbug.com/448227402): Remove this test once the migration to the activity-less sign-in
     // flow is complete.
     public void testShowDeviceListIfSignedIn() {
@@ -133,18 +209,12 @@ public class SendTabToSelfCoordinatorTest {
 
         buildAndShowCoordinator();
 
-        waitForViewShown(R.id.device_picker_list);
+        waitForViewShown(R.id.sheet_item_list);
     }
 
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
-    })
-    // This test asserts the old bottom sheet UI and must run with the enhanced
-    // bottom sheet feature disabled.
-    @DisableFeatures({ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET})
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
     public void testShowDeviceListIfSignedIn_activitylessSignin() {
         // Sign in and wait for the device list to be downloaded.
         mSyncTestRule.setUpAccountAndSignInForTesting();
@@ -163,7 +233,7 @@ public class SendTabToSelfCoordinatorTest {
 
         buildAndShowCoordinator();
 
-        onView(withId(R.id.device_picker_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
         histogramWatcher.assertExpected();
     }
 
@@ -171,18 +241,13 @@ public class SendTabToSelfCoordinatorTest {
     @LargeTest
     // TODO(crbug.com/40825119): Flaky on Nexus 5x (bullhead).
     @DisableIf.Build(hardware_is = "bullhead")
-    // This test asserts the old bottom sheet UI and must run with the enhanced
-    // bottom sheet feature disabled.
-    @DisableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET
-    })
+    @DisableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
     // TODO(crbug.com/448227402): Remove this test once the migration to the activity-less sign-in
     // flow is complete.
+    @Restriction(DeviceFormFactor.PHONE)
     public void testShowSigninPromoIfSignedOut() {
         // An account must be added to the device so the promo is offered.
-        mSyncTestRule.addTestAccount();
+        mSyncTestRule.addAccount(TestAccounts.ACCOUNT1);
         buildAndShowCoordinator();
 
         // Check the promo is displayed, in particular the sign-in button.
@@ -195,21 +260,16 @@ public class SendTabToSelfCoordinatorTest {
                             .performClick();
                 });
 
-        waitForViewShown(R.id.device_picker_list);
+        waitForViewShown(R.id.sheet_item_list);
     }
 
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT
-    })
-    // This test asserts the old bottom sheet UI and must run with the enhanced
-    // bottom sheet feature disabled.
-    @DisableFeatures({ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET})
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
     public void testShowSigninPromoIfSignedOut_activitylessSignin() {
         // An account must be added to the device so the promo is offered.
-        mSyncTestRule.addTestAccount();
+        mSyncTestRule.addAccount(TestAccounts.ACCOUNT1);
         // Two samples are expected because:
         // 1. Initial invocation while signed out records 0 (kNoTargetDevicesBecauseSignedOut).
         // 2. Sign-in completion automatically triggers a second show() invocation, which
@@ -231,17 +291,14 @@ public class SendTabToSelfCoordinatorTest {
                                 withParent(withId(R.id.account_picker_state_collapsed))))
                 .perform(click());
 
-        onView(withId(R.id.device_picker_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
         histogramWatcher.assertExpected();
     }
 
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET
-    })
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
     public void testShowEnhancedDeviceListIfSignedIn_activitylessSignin() {
         // Sign in and wait for the device list to be downloaded.
         mSyncTestRule.setUpAccountAndSignInForTesting();
@@ -268,11 +325,8 @@ public class SendTabToSelfCoordinatorTest {
 
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET
-    })
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
     public void testEnhancedDevicePicker_multipleDevicesSelection() {
         // Inject two more devices (in addition to the one in setUp) with an older timestamp,
         // so that the default device ("Device") is sorted first and auto-selected.
@@ -330,17 +384,92 @@ public class SendTabToSelfCoordinatorTest {
         histogramWatcher.assertExpected();
     }
 
+    /**
+     * Tests that when many devices are present in HALF state, the bottom sheet overflows and the
+     * Send button remains pinned and visible at the bottom without device list truncation.
+     */
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET
-    })
-    public void testEnhancedDevicePicker_manyDevicesTruncated() {
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
+    public void testEnhancedDevicePicker_halfStateOverflowWithManyDevices() {
         // Inject 6 more devices (in addition to the one in setUp) with an older timestamp,
         // so there are 7 devices total - more than will fit on a regular screen.
         for (int i = 1; i <= 6; i++) {
+            long olderTime = mSetUpTimeMs - i * 1000;
+            mSyncTestRule
+                    .getFakeServerHelper()
+                    .injectDeviceInfoEntity("Guid" + i, "Device " + i, olderTime, olderTime);
+        }
+
+        signInAndShowDevicePicker();
+
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list))
+                .check(
+                        (view, noViewFoundException) -> {
+                            assertTrue(
+                                    "Vertical fading edge should be enabled",
+                                    view.isVerticalFadingEdgeEnabled());
+                        });
+
+        // Verify the newest device and (at least) the next 2 older devices are displayed.
+        onView(withText("Device")).check(matches(isDisplayed()));
+        onView(withText("Device 1")).check(matches(isDisplayed()));
+        onView(withText("Device 2")).check(matches(isDisplayed()));
+
+        // Verify that in SheetState.HALF, the Send button inside the bottom actions block
+        // remains pinned, visible, and enabled without requiring expansion to SheetState.FULL.
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+    }
+
+    /**
+     * Tests that with exactly four target devices in the enhanced bottom sheet half state, the list
+     * overflow threshold triggers and the Send action button remains pinned, visible, and enabled.
+     */
+    @Test
+    @LargeTest
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
+    public void testEnhancedDevicePicker_exactlyFourDevicesOverflowBoundary() {
+        for (int i = 1; i <= 3; i++) {
+            long olderTime = mSetUpTimeMs - i * 1000;
+            mSyncTestRule
+                    .getFakeServerHelper()
+                    .injectDeviceInfoEntity("Guid" + i, "Device " + i, olderTime, olderTime);
+        }
+
+        signInAndShowDevicePicker();
+
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list))
+                .check(
+                        (view, noViewFoundException) -> {
+                            assertTrue(
+                                    "Vertical fading edge should be enabled",
+                                    view.isVerticalFadingEdgeEnabled());
+                        });
+        onView(withText("Device")).check(matches(isDisplayed()));
+        onView(withText("Device 1")).check(matches(isDisplayed()));
+        onView(withText("Device 2")).check(matches(isDisplayed()));
+
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(not(isDisplayed())));
+    }
+
+    /**
+     * Tests that transitioning an overflowing target device list from half state to full state
+     * unsuppresses the list height to wrap content, displays all devices and the manage devices
+     * link, and keeps the Send action button pinned, visible, and enabled.
+     */
+    @Test
+    @LargeTest
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
+    public void testEnhancedDevicePicker_overflowTransitionToFullState() {
+        for (int i = 1; i <= 5; i++) {
             long olderTime = mSetUpTimeMs - i * 1000;
             mSyncTestRule
                     .getFakeServerHelper()
@@ -358,24 +487,29 @@ public class SendTabToSelfCoordinatorTest {
         buildAndShowCoordinator();
 
         onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
-
-        // Verify the newest device and (at least) the next 2 older devices are displayed.
-        onView(withText("Device")).check(matches(isDisplayed()));
-        onView(withText("Device 1")).check(matches(isDisplayed()));
-        onView(withText("Device 2")).check(matches(isDisplayed()));
-
-        // Verify the Send button is displayed and enabled.
         onView(withId(R.id.send_button)).check(matches(isDisplayed()));
         onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(not(isDisplayed())));
+
+        expandBottomSheetToFullState();
+
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+        onView(withId(R.id.manage_devices_divider)).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list)).perform(RecyclerViewActions.scrollToPosition(4));
+        onView(withText("Device 4")).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list)).perform(RecyclerViewActions.scrollToPosition(5));
+        onView(withText("Device 5")).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+
+        onView(withId(R.id.send_button)).perform(click());
+        waitForViewHidden(R.id.sheet_item_list);
     }
 
+    /** Tests fallback to manage account devices link when zero target devices are available. */
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET
-    })
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
     public void testEnhancedDevicePicker_emptyListFallback() {
         mSyncTestRule.setUpAccountAndSignInForTesting();
         SendTabToSelfAndroidBridge.Natives nativeMock =
@@ -385,7 +519,7 @@ public class SendTabToSelfCoordinatorTest {
             doReturn(EntryPointDisplayReason.INFORM_NO_TARGET_DEVICE)
                     .when(nativeMock)
                     .getEntryPointDisplayReason(any(), any());
-            doReturn(new java.util.ArrayList<TargetDeviceInfo>())
+            doReturn(new java.util.ArrayList<RemoteDeviceInfo>())
                     .when(nativeMock)
                     .getAllTargetDeviceInfos(any());
 
@@ -399,11 +533,8 @@ public class SendTabToSelfCoordinatorTest {
 
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET
-    })
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
     public void testEnhancedDevicePicker_manageDevicesClick() {
         mSyncTestRule.setUpAccountAndSignInForTesting();
         CriteriaHelper.pollUiThread(
@@ -510,14 +641,12 @@ public class SendTabToSelfCoordinatorTest {
                 hasDescendant(allOf(withId(R.id.device_name), withText(deviceName))));
     }
 
+    // Verifies that sending a tab from the device picker bottom sheet displays the post-send
+    // snackbar and records the snackbar shown histogram.
     @Test
     @LargeTest
-    @EnableFeatures({
-        SigninFeatures.ENABLE_SEAMLESS_SIGNIN,
-        SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT,
-        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET,
-        ChromeFeatureList.SEND_TAB_TO_SELF_POST_SEND_TOAST
-    })
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    @DisabledTest(message = "crbug.com/555079457")
     public void testSnackbarShownAfterSend() {
         // Sign in and wait for the device list to be downloaded.
         mSyncTestRule.setUpAccountAndSignInForTesting();
@@ -558,14 +687,136 @@ public class SendTabToSelfCoordinatorTest {
                     Criteria.checkThat(snackbarMessage, Matchers.notNullValue());
                     Criteria.checkThat(
                             snackbarMessage.getText().toString(),
-                            Matchers.is("Sent to Chrome on your Device."));
+                            Matchers.is("Sent to Chrome on your Device • test@gmail.com"));
                 });
 
         histogramWatcher.assertExpected();
     }
 
-    // Verify that show() returns early without crashing when getEntryPointDisplayReason returns
-    // null.
+    // Verifies that sending a tab when `WebContents` is null displays the post-send snackbar on the
+    // focused activity.
+    @Test
+    @LargeTest
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testSnackbarShownAfterSend_WebContentsNull() {
+        // Sign in and wait for the device list to be downloaded.
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+        CriteriaHelper.pollUiThread(
+                () ->
+                        SendTabToSelfAndroidBridge.getEntryPointDisplayReason(
+                                        ProfileManager.getLastUsedRegularProfile(),
+                                        HTTP_URL.getSpec())
+                                .equals(EntryPointDisplayReason.OFFER_FEATURE));
+
+        // Trigger sendTabToDevice directly with null WebContents. This simulates the case where the
+        // send is triggered from the system Share Sheet.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SendTabToSelfAndroidBridge.sendTabToDevice(
+                            ProfileManager.getLastUsedRegularProfile(),
+                            null,
+                            "CacheGuid",
+                            "Device",
+                            HTTP_URL.getSpec(),
+                            "Title",
+                            ShareEntryPoint.SHARE_SHEET);
+                });
+
+        // Verify that the snackbar is shown on the activity.
+        ChromeTabbedActivity activity = mSyncTestRule.getActivity();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    SnackbarManager snackbarManager = activity.getSnackbarManager();
+                    Snackbar snackbar = snackbarManager.getCurrentSnackbarForTesting();
+                    Criteria.checkThat(snackbar, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            snackbar.getIdentifierForTesting(),
+                            Matchers.is(Snackbar.UMA_SEND_TAB_TO_SELF));
+
+                    TextView snackbarMessage = activity.findViewById(R.id.snackbar_message);
+                    Criteria.checkThat(snackbarMessage, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            snackbarMessage.getText().toString(),
+                            Matchers.is("Sent to Chrome on your Device • test@gmail.com"));
+                });
+    }
+
+    // Verifies that a fallback `Toast` is displayed when no `SnackbarManager` is available.
+    @Test
+    @LargeTest
+    // On Automotive, the way this test detects the Toast (via a11y APIs) doesn't work.
+    @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testToastShownAfterSend_SnackbarManagerUnavailable() {
+        // Sign in and wait for the device list to be downloaded.
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+        CriteriaHelper.pollUiThread(
+                () ->
+                        SendTabToSelfAndroidBridge.getEntryPointDisplayReason(
+                                        ProfileManager.getLastUsedRegularProfile(),
+                                        HTTP_URL.getSpec())
+                                .equals(EntryPointDisplayReason.OFFER_FEATURE));
+
+        // Start BlankUiTestActivity to take focus. It does not implement SnackbarManageable. This
+        // simulates the case where the system Share Sheet is triggered from another app, and there
+        // is no visible Chrome activity.
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        Intent intent = new Intent(context, BlankUiTestActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        BlankUiTestActivity blankActivity =
+                (BlankUiTestActivity)
+                        InstrumentationRegistry.getInstrumentation().startActivitySync(intent);
+
+        // Register accessibility listener to capture the Toast.
+        var automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        java.util.concurrent.atomic.AtomicBoolean toastDisplayed =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        automation.setOnAccessibilityEventListener(
+                event -> {
+                    if (event.getEventType()
+                            == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+                        String className =
+                                event.getClassName() != null ? event.getClassName().toString() : "";
+                        String eventText = event.getText().toString();
+                        if (className.contains("android.widget.Toast")
+                                && eventText.contains(
+                                        "Sent to Chrome on your Device • test@gmail.com")) {
+                            toastDisplayed.set(true);
+                        }
+                    }
+                });
+
+        // Trigger sendTabToDevice directly with null WebContents. This simulates the send being
+        // triggered from the system Share Sheet. It should check the focused activity
+        // (BlankUiTestActivity), find that it doesn't implement SnackbarManageable, and fallback to
+        // Toast.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SendTabToSelfAndroidBridge.sendTabToDevice(
+                            ProfileManager.getLastUsedRegularProfile(),
+                            null,
+                            "CacheGuid",
+                            "Device",
+                            HTTP_URL.getSpec(),
+                            "Title",
+                            ShareEntryPoint.SHARE_SHEET);
+                });
+
+        // Wait for the toast to be displayed.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(toastDisplayed.get(), Matchers.is(true));
+                });
+
+        // Clean up.
+        automation.setOnAccessibilityEventListener(null);
+        blankActivity.finish();
+    }
+
+    /**
+     * Tests that show() returns early without crashing when getEntryPointDisplayReason returns
+     * null.
+     */
     @Test
     @LargeTest
     public void testShow_nullDisplayReasonDoesNotCrash() {
@@ -594,5 +845,273 @@ public class SendTabToSelfCoordinatorTest {
                                     ShareEntryPoint.SHARE_SHEET);
                     coordinator.show();
                 });
+    }
+
+    /**
+     * Tests that when there are too many target devices to fit in the full state, the list view
+     * overflows and both the Send button and manage devices link remain displayed and visible.
+     */
+    @Test
+    @LargeTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/543459081
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_fullStateOverflowWithManyDevices() {
+        for (int i = 1; i <= 20; i++) {
+            long olderTime = mSetUpTimeMs - i * 1000;
+            mSyncTestRule
+                    .getFakeServerHelper()
+                    .injectDeviceInfoEntity("Guid" + i, "Device " + i, olderTime, olderTime);
+        }
+
+        signInAndShowDevicePicker();
+
+        expandBottomSheetToFullState();
+
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.sheet_item_list)).perform(RecyclerViewActions.scrollToPosition(20));
+        onView(withText("Device 20")).check(matches(isDisplayed()));
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+    }
+
+    /**
+     * Tests that the enhanced target device picker displays correctly on phones in landscape mode
+     * with all target devices, the `send_button`, and the `manage_devices_link` visible and
+     * accessible.
+     *
+     * <p>In landscape orientation on phones, `BottomSheet.isSmallScreen()` evaluates to `true`
+     * because the vertical screen clearance between half and full states is less than 160dp (`(1 -
+     * HALF_HEIGHT_RATIO) * mContainerHeight < 160dp`). This disables `SheetState.HALF` and forces
+     * the sheet to open directly in `SheetState.FULL`.
+     */
+    @Test
+    @LargeTest
+    @Restriction(DeviceFormFactor.PHONE)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_landscapeMode() {
+        mSyncTestRule
+                .getFakeServerHelper()
+                .injectDeviceInfoEntity("Guid1", "My Phone", mSetUpTimeMs, mSetUpTimeMs);
+        mSyncTestRule
+                .getFakeServerHelper()
+                .injectDeviceInfoEntity("Guid2", "My Laptop", mSetUpTimeMs, mSetUpTimeMs);
+
+        Activity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                });
+
+        signInAndShowDevicePicker();
+
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+    }
+
+    /**
+     * Tests that when many devices exist on phones in landscape mode, the list height is clamped to
+     * allow scrolling while keeping the `send_button` and `manage_devices_link` visible and
+     * accessible.
+     *
+     * <p>In landscape orientation on phones, `BottomSheet.isSmallScreen()` evaluates to `true`
+     * because vertical clearance between half and full states is less than 160dp. This disables
+     * `SheetState.HALF` and forces the sheet to open directly in `SheetState.FULL`.
+     */
+    @Test
+    @LargeTest
+    @Restriction(DeviceFormFactor.PHONE)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_landscapeModeOverflowWithManyDevices() {
+        injectFakeDevices(20);
+
+        Activity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                });
+
+        signInAndShowDevicePicker();
+
+        // In landscape mode on phones, the sheet opens directly in full state.
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+
+        // Scroll to the end of the list and verify actions remain visible.
+        onView(withId(R.id.sheet_item_list)).perform(RecyclerViewActions.scrollToPosition(20));
+        onView(withText("Device 20")).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+    }
+
+    /**
+     * Tests that rotating a phone from portrait to landscape while the enhanced device picker is
+     * shown keeps the `send_button` and `manage_devices_link` visible and accessible.
+     *
+     * <p>When rotating a phone to landscape, `BottomSheet.isSmallScreen()` evaluates to `true`
+     * because vertical clearance between half and full states is less than 160dp. This disables
+     * `SheetState.HALF` and forces the sheet into `SheetState.FULL`.
+     */
+    @Test
+    @LargeTest
+    @Restriction(DeviceFormFactor.PHONE)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_rotationMaintainsControlsVisibility() {
+        injectFakeDevices(20);
+
+        signInAndShowDevicePicker();
+
+        // Rotate to landscape while the sheet is currently displayed in portrait.
+        Activity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                });
+
+        // In landscape mode on phones, the sheet transitions to full state and clamps list height.
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+    }
+
+    /**
+     * Tests that the enhanced target device picker on tablets in landscape mode opens in half-state
+     * where the manage devices link is hidden, and reveals the manage devices link when expanded to
+     * full state.
+     *
+     * <p>In landscape orientation on tablets, `BottomSheet.isSmallScreen()` evaluates to `false`
+     * because the vertical screen clearance is large (distance between half and full states exceeds
+     * 160dp). Consequently, `SheetState.HALF` remains enabled and the sheet opens in half-state.
+     */
+    @Test
+    @LargeTest
+    @Restriction(DeviceFormFactor.ONLY_TABLET)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_tabletLandscapeMode() {
+        mSyncTestRule
+                .getFakeServerHelper()
+                .injectDeviceInfoEntity("Guid1", "My Phone", mSetUpTimeMs, mSetUpTimeMs);
+        mSyncTestRule
+                .getFakeServerHelper()
+                .injectDeviceInfoEntity("Guid2", "My Laptop", mSetUpTimeMs, mSetUpTimeMs);
+
+        Activity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                });
+
+        signInAndShowDevicePicker();
+
+        // On tablets in landscape, the sheet opens in half-state where manage devices is hidden.
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(not(isDisplayed())));
+
+        // Expanding to full state reveals the manage devices link and divider.
+        expandBottomSheetToFullState();
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+        onView(withId(R.id.manage_devices_divider)).check(matches(isDisplayed()));
+    }
+
+    /**
+     * Tests that when many devices exist on tablets in landscape mode, the sheet opens in
+     * half-state and can be expanded to full state with list scrolling and visible action controls.
+     */
+    @Test
+    @LargeTest
+    @Restriction(DeviceFormFactor.ONLY_TABLET)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_tabletLandscapeModeOverflowWithManyDevices() {
+        injectFakeDevices(20);
+
+        Activity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                });
+
+        signInAndShowDevicePicker();
+
+        // Sheet opens in half-state where manage devices is hidden.
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(not(isDisplayed())));
+
+        // Expand to full state and verify all action controls become visible.
+        expandBottomSheetToFullState();
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+
+        // Scroll to the end of the list and verify actions remain visible.
+        onView(withId(R.id.sheet_item_list)).perform(RecyclerViewActions.scrollToPosition(20));
+        onView(withText("Device 20")).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+    }
+
+    /**
+     * Tests that rotating a tablet from portrait to landscape maintains sheet stability and allows
+     * expanding to full state with all action controls visible.
+     */
+    @Test
+    @LargeTest
+    @Restriction(DeviceFormFactor.ONLY_TABLET)
+    @EnableFeatures({SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT})
+    public void testEnhancedDevicePicker_tabletRotationMaintainsControlsVisibility() {
+        injectFakeDevices(20);
+
+        signInAndShowDevicePicker();
+
+        // Rotate to landscape while the sheet is currently displayed in portrait.
+        Activity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                });
+
+        // On tablets, the sheet remains in half-state after rotating to landscape.
+        onView(withId(R.id.sheet_item_list)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isEnabled()));
+
+        // Expanding to full state reveals the manage devices link.
+        expandBottomSheetToFullState();
+        onView(withId(R.id.manage_devices_link)).check(matches(isDisplayed()));
+        onView(withId(R.id.send_button)).check(matches(isDisplayed()));
+    }
+
+    @Test
+    @LargeTest
+    public void testSendTabToSelfOmniboxUsedEventRecorded() {
+        mSyncTestRule.setUpAccountAndSignInForTesting();
+
+        SendTabToSelfAndroidBridge.Natives bridgeMock =
+                mock(SendTabToSelfAndroidBridge.Natives.class);
+        SendTabToSelfAndroidBridgeJni.setInstanceForTesting(bridgeMock);
+        doReturn(EntryPointDisplayReason.OFFER_FEATURE)
+                .when(bridgeMock)
+                .getEntryPointDisplayReason(any(), any());
+
+        ChromeTabbedActivity activity = mSyncTestRule.getActivity();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> activity.findViewById(R.id.url_bar).performLongClick());
+        onViewWaiting(withText(R.string.menu_send_to_devices)).perform(click());
+
+        CriteriaHelper.pollUiThread(
+                () -> verify(mTracker).notifyEvent(EventConstants.SEND_TAB_TO_SELF_OMNIBOX_USED));
     }
 }

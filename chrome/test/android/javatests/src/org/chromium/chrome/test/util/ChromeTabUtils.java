@@ -17,40 +17,38 @@ import org.junit.Assert;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.test.transit.Triggers;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton;
-import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelper;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabClosingSource;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabWebContentsObserver;
+import org.chromium.chrome.browser.tabmodel.TabClosingSource;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorSupplier;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
+import org.chromium.chrome.test.transit.page.PageHitTestDataCondition;
+import org.chromium.chrome.test.transit.page.PageInteractableOrHiddenCondition;
 import org.chromium.chrome.test.util.browser.TabTitleObserver;
 import org.chromium.content_public.browser.LoadUrlParams;
-import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.RenderWidgetHostView;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.util.TestTouchUtils;
-import org.chromium.content_public.common.ContentUrlConstants;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -69,38 +67,35 @@ public class ChromeTabUtils {
     /**
      * An observer that waits for a Tab to load a page.
      *
-     * The observer can be configured to either wait for the Tab to load a specific page
-     * (if expectedUrl is non-null) or any page (otherwise). On seeing the tab finish
-     * a page load or crash, the observer will notify the provided callback and stop
-     * watching the tab. On load stop, the observer will decrement the provided latch
-     * and continue watching the page in case the tab subsequently crashes or finishes
-     * a page load.
+     * <p>The observer can be configured to either wait for the Tab to load a specific page (if
+     * expectedUrl is non-null) or any page (otherwise). On seeing the tab finish a page load or
+     * crash, the observer will notify the provided callback and stop watching the tab. On load
+     * stop, the observer will decrement the provided latch and continue watching the page in case
+     * the tab subsequently crashes or finishes a page load.
      *
-     * This may seem complicated, but it's intended to handle three distinct cases:
-     *  1) Successful page load + observer starts watching before onPageLoadFinished fires.
-     *     This is the most normal case: onPageLoadFinished fires, then onLoadStopped fires,
-     *     and we see both.
-     *  2) Crash on page load. onLoadStopped fires, then onCrash fires, and we see both.
-     *  3) Successful page load + observer starts watching after onPageLoadFinished fires.
-     *     We miss the onPageLoadFinished and *only* see onLoadStopped.
+     * <p>This may seem complicated, but it's intended to handle three distinct cases:
      *
-     * Receiving onPageLoadFinished is sufficient to know that we're dealing with scenario #1.
-     * Receiving onCrash is sufficient to know that we're dealing with scenario #2.
-     * Receiving onLoadStopped without a preceding onPageLoadFinished indicates that we're dealing
-     * with either scenario #2 *or* #3, so we have to keep watching for a call to onCrash.
+     * <ol>
+     *   <li>Successful page load + observer starts watching before onPageLoadFinished fires. This
+     *       is the most normal case: onPageLoadFinished fires, then onLoadStopped fires, and we see
+     *       both.
+     *   <li>Crash on page load. onLoadStopped fires, then onCrash fires, and we see both.
+     *   <li>Successful page load + observer starts watching after onPageLoadFinished fires. We miss
+     *       the onPageLoadFinished and *only* see onLoadStopped.
+     * </ol>
+     *
+     * <p>Receiving onPageLoadFinished is sufficient to know that we're dealing with scenario #1.
+     * Receiving onCrash is sufficient to know that we're dealing with scenario #2. Receiving
+     * onLoadStopped without a preceding onPageLoadFinished indicates that we're dealing with either
+     * scenario #2 *or* #3, so we have to keep watching for a call to onCrash.
      */
-    private static class TabPageLoadedObserver extends EmptyTabObserver {
+    private static class TabPageLoadedObserver implements TabObserver {
         private final CallbackHelper mCallback;
         private final String mExpectedUrl;
-        private final CountDownLatch mLoadStoppedLatch;
 
-        public TabPageLoadedObserver(
-                CallbackHelper loadCompleteCallback,
-                String expectedUrl,
-                CountDownLatch loadStoppedLatch) {
+        public TabPageLoadedObserver(CallbackHelper loadCompleteCallback, String expectedUrl) {
             mCallback = loadCompleteCallback;
             mExpectedUrl = expectedUrl;
-            mLoadStoppedLatch = loadStoppedLatch;
         }
 
         @Override
@@ -111,12 +106,7 @@ public class ChromeTabUtils {
 
         @Override
         public void onLoadStopped(Tab tab, boolean toDifferentDocument) {
-            mLoadStoppedLatch.countDown();
-        }
-
-        @Override
-        public void onPageLoadFinished(Tab tab, GURL url) {
-            if (mExpectedUrl == null || TextUtils.equals(url.getSpec(), mExpectedUrl)) {
+            if (mExpectedUrl == null || TextUtils.equals(tab.getUrl().getSpec(), mExpectedUrl)) {
                 mCallback.notifyCalled();
                 tab.removeObserver(this);
             }
@@ -210,15 +200,15 @@ public class ChromeTabUtils {
     }
 
     /**
-     * Waits for the given tab to load the given URL, or, if the given URL is null, waits
-     * for the triggered load to complete.
+     * Waits for the given tab to load the given URL, or, if the given URL is null, waits for the
+     * triggered load to complete.
      *
      * @param tab The tab to wait for the page loading to be complete.
-     * @param url The expected url of the loaded page.  Pass in null if loading the
-     *            current page is sufficient.
-     * @param loadTrigger The trigger action that will result in a page load finished event
-     *                    to be fired (not run on the UI thread by default).  Pass in null if the
-     *                    load is triggered externally.
+     * @param url The expected url of the loaded page. Pass in null if loading the current page is
+     *     sufficient.
+     * @param loadTrigger The trigger action that will result in a page load finished event to be
+     *     fired (not run on the UI thread by default). Pass in null if the load is triggered
+     *     externally.
      * @param secondsToWait The number of seconds to wait for the page to be loaded.
      */
     public static void waitForTabPageLoaded(
@@ -228,7 +218,6 @@ public class ChromeTabUtils {
             long secondsToWait) {
         Assert.assertFalse(ThreadUtils.runningOnUiThread());
 
-        final CountDownLatch loadStoppedLatch = new CountDownLatch(1);
         final CallbackHelper loadedCallback = new CallbackHelper();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -237,8 +226,7 @@ public class ChromeTabUtils {
                         loadedCallback.notifyCalled();
                         return;
                     }
-                    tab.addObserver(
-                            new TabPageLoadedObserver(loadedCallback, url, loadStoppedLatch));
+                    tab.addObserver(new TabPageLoadedObserver(loadedCallback, url));
                 });
         if (loadTrigger != null) {
             loadTrigger.run();
@@ -246,24 +234,7 @@ public class ChromeTabUtils {
         try {
             loadedCallback.waitForCallback(0, 1, secondsToWait, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            // In the event that:
-            //  1) the tab is on the correct page
-            //  2) we weren't notified that the page load finished
-            //  3) we *were* notified that the tab stopped loading
-            //  4) the tab didn't crash
-            //
-            // then it's likely the case that we started observing the tab after
-            // onPageLoadFinished but before onLoadStopped. (The latter sets tab.mIsLoading to
-            // false.) Try to carry on with the test.
-            if (loadStoppedLatch.getCount() == 0
-                    && ThreadUtils.runOnUiThreadBlocking(() -> loadComplete(tab, url))) {
-                Log.w(
-                        TAG,
-                        "onPageLoadFinished was never called, but loading stopped "
-                                + "on the expected page. Tentatively continuing.");
-            } else {
-                Assert.fail("Page did not load. " + tabDebugInfo(tab, url));
-            }
+            throw new AssertionError("Page did not load. " + tabDebugInfo(tab, url), e);
         }
 
         boolean complete = ThreadUtils.runOnUiThreadBlocking(() -> loadComplete(tab, url));
@@ -330,7 +301,7 @@ public class ChromeTabUtils {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     tab.addObserver(
-                            new EmptyTabObserver() {
+                            new TabObserver() {
                                 @Override
                                 public void onPageLoadStarted(Tab tab, GURL url) {
                                     if (expectedUrl == null
@@ -366,39 +337,11 @@ public class ChromeTabUtils {
     public static void waitForInteractable(final Tab tab) {
         Assert.assertFalse(ThreadUtils.runningOnUiThread());
 
-        CriteriaHelper.pollUiThread(
-                () -> {
-                    if (tab.isHidden()) return true;
-                    if (!tab.isUserInteractable()) return false;
-
-                    // There are many cases where we don't expect hit test data to be present for
-                    // the WebContents, so treat those as interactable.
-                    if (tab.getUrl().isEmpty()
-                            || tab.getUrl().getSpec().equals(ContentUrlConstants.ABOUT_BLANK_URL)) {
-                        return true;
-                    }
-                    if (tab.isNativePage()) return true;
-                    if (tab.getWebContents() == null) return true;
-                    NavigationController controller =
-                            tab.getWebContents().getNavigationController();
-                    // HTTP 204/205 No Content/Download pages will not get committed and won't have
-                    // hit test data. I don't know why http status codes likes 204/205 aren't
-                    // propagated to the NavigationEntry and I'm scared to ask. I also don't know
-                    // why we update the committed index even through the page does not commit.
-                    // However, since the page hasn't *actually* committed, the lastCommittedUrl is
-                    // blank and the NavigationController still thinks it's on the initial
-                    // navigation (which is supposed to become false when there's a committed
-                    // entry). WebContents#hasUncommittedNavigationInPrimaryMainFrame also for some
-                    // reason returns false...
-                    if (controller.isInitialNavigation()
-                            && controller.getLastCommittedEntryIndex() != -1) {
-                        return true;
-                    }
-                    return tab.getWebContents().getMainFrame().hasHitTestDataForTesting();
-                },
-                "Page never became interactable.",
-                10000,
-                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
+        Triggers.noopTo()
+                .withTimeout(10000L)
+                .waitFor(
+                        new PageInteractableOrHiddenCondition(() -> tab),
+                        new PageHitTestDataCondition(() -> tab));
     }
 
     /** Switch to the given TabIndex in the current tabModel. */
@@ -411,52 +354,9 @@ public class ChromeTabUtils {
     }
 
     /**
-     * Simulates a click to the normal (not incognito) new tab button.
-     * <p>
-     * Does not wait for the tab to be loaded.
-     */
-    public static void clickNewTabButton(
-            Instrumentation instrumentation, ChromeTabbedActivity activity) {
-        final TabModel normalTabModel = activity.getTabModelSelector().getModel(false);
-        final CallbackHelper createdCallback = new CallbackHelper();
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    normalTabModel.addObserver(
-                            new TabModelObserver() {
-                                @Override
-                                public void didAddTab(
-                                        Tab tab,
-                                        @TabLaunchType int type,
-                                        @TabCreationState int creationState,
-                                        boolean markedForSelection) {
-                                    createdCallback.notifyCalled();
-                                    normalTabModel.removeObserver(this);
-                                }
-                            });
-                });
-        // Tablet has a new tab button. Phones should fall back to the menu.
-        if (activity.isTablet()) {
-            StripLayoutHelper strip =
-                    TabStripUtils.getStripLayoutHelper(activity, /* incognito= */ false);
-            CompositorButton newTabButton = strip.getNewTabButton();
-            TabStripUtils.clickCompositorButton(newTabButton, instrumentation, activity);
-            instrumentation.waitForIdleSync();
-        } else {
-            newTabFromMenu(
-                    instrumentation, activity, /* incognito= */ false, /* waitForNtpLoad= */ false);
-        }
-
-        try {
-            createdCallback.waitForCallback(null, 0, 1, 10, TimeUnit.SECONDS);
-        } catch (TimeoutException e) {
-            throw new AssertionError("Never received tab creation event", e);
-        }
-    }
-
-    /**
      * Creates a new tab by invoking the 'New Tab' menu item.
-     * <p>
-     * Returns when the tab has been created and has finished navigating.
+     *
+     * <p>Returns when the tab has been created and has finished navigating.
      */
     public static void newTabFromMenu(
             Instrumentation instrumentation, final ChromeActivity activity) {
@@ -588,11 +488,23 @@ public class ChromeTabUtils {
 
     /**
      * Closes the current tab through TabModelSelector.
-     * <p>
-     * Returns after the tab has been closed.
+     *
+     * <p>Returns after the tab has been closed.
      */
     public static void closeCurrentTab(
             final Instrumentation instrumentation, final ChromeActivity activity) {
+        closeCurrentTab(instrumentation, activity, TabClosingSource.UNKNOWN);
+    }
+
+    /**
+     * Closes the current tab through TabModelSelector with an explicit closing source.
+     *
+     * <p>Returns after the tab has been closed.
+     */
+    public static void closeCurrentTab(
+            final Instrumentation instrumentation,
+            final ChromeActivity activity,
+            @TabClosingSource int source) {
         closeTabWithAction(
                 instrumentation,
                 activity,
@@ -610,6 +522,7 @@ public class ChromeTabUtils {
                                                 .closeTabs(
                                                         TabClosureParams.closeTab(tab)
                                                                 .allowUndo(false)
+                                                                .tabClosingSource(source)
                                                                 .build(),
                                                         /* allowDialog= */ false);
                                     }
@@ -626,6 +539,12 @@ public class ChromeTabUtils {
                 new TabModelObserver() {
                     @Override
                     public void willCloseTab(Tab tab, boolean didCloseAlone) {
+                        closeCallback.notifyCalled();
+                    }
+
+                    @Override
+                    public void willCloseTabs(
+                            List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
                         closeCallback.notifyCalled();
                     }
                 };
@@ -690,7 +609,10 @@ public class ChromeTabUtils {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     TabClosureParams params =
-                            TabClosureParams.closeAllTabs().uponExit(false).build();
+                            TabClosureParams.closeAllTabs()
+                                    .uponExit(false)
+                                    .tabClosingSource(TabClosingSource.GRID_TAB_SWITCHER)
+                                    .build();
                     TabModelSelector selector = tabModelSelectorSupplier.get();
                     selector.getModel(false)
                             .getTabRemover()
@@ -858,68 +780,6 @@ public class ChromeTabUtils {
             Assert.assertTrue(activity.getTabModelSelector().isIncognitoSelected());
         } else {
             Assert.assertFalse(activity.getTabModelSelector().isIncognitoSelected());
-        }
-    }
-
-    /**
-     * Long presses the view, selects an item from the context menu, and
-     * asserts that a new tab is opened and is incognito if expectIncognito is true.
-     * For use in testing long-press context menu options that open new tabs in a different
-     * ChromeTabbedActivity instance.
-     *
-     * @param foregroundActivity The {@link ChromeTabbedActivity} currently in the foreground.
-     * @param backgroundActivity The {@link ChromeTabbedActivity} currently in the background. The
-     *                           new tab is expected to open in this activity.
-     * @param view The {@link View} in the {@code foregroundActivity} to long press.
-     * @param contextMenuItemId The context menu item to select on the view.
-     * @param expectIncognito Whether the opened tab is expected to be incognito.
-     * @param expectedUrl The expected url for the new tab.
-     */
-    public static void invokeContextMenuAndOpenInOtherWindow(
-            ChromeTabbedActivity foregroundActivity,
-            ChromeTabbedActivity backgroundActivity,
-            View view,
-            int contextMenuItemId,
-            boolean expectIncognito,
-            final String expectedUrl)
-            throws ExecutionException {
-        final CallbackHelper createdCallback = new CallbackHelper();
-        final TabModel tabModel =
-                backgroundActivity.getTabModelSelector().getModel(expectIncognito);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    tabModel.addObserver(
-                            new TabModelObserver() {
-                                @Override
-                                public void didAddTab(
-                                        Tab tab,
-                                        @TabLaunchType int type,
-                                        @TabCreationState int creationState,
-                                        boolean markedForSelection) {
-                                    if (TextUtils.equals(expectedUrl, tab.getUrl().getSpec())) {
-                                        createdCallback.notifyCalled();
-                                        tabModel.removeObserver(this);
-                                    }
-                                }
-                            });
-                });
-
-        TestTouchUtils.performLongClickOnMainSync(
-                InstrumentationRegistry.getInstrumentation(), view);
-        Assert.assertTrue(
-                InstrumentationRegistry.getInstrumentation()
-                        .invokeContextMenuAction(foregroundActivity, contextMenuItemId, 0));
-
-        try {
-            createdCallback.waitForCallback(0);
-        } catch (TimeoutException e) {
-            throw new AssertionError("Never received tab creation event", e);
-        }
-
-        if (expectIncognito) {
-            Assert.assertTrue(backgroundActivity.getTabModelSelector().isIncognitoSelected());
-        } else {
-            Assert.assertFalse(backgroundActivity.getTabModelSelector().isIncognitoSelected());
         }
     }
 

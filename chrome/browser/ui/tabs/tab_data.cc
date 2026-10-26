@@ -57,9 +57,8 @@ TabData TabData::FromTabInterface(tabs::TabInterface* tab_interface) {
   tab_data.pinned = tab_interface->IsPinned();
   tab_data.blocked = tab_interface->IsBlocked();
 
-  content::WebContents* const web_contents = tab_interface->GetContents();
   ThumbnailTabHelper* const thumbnail_tab_helper =
-      ThumbnailTabHelper::FromWebContents(web_contents);
+      ThumbnailTabHelper::From(tab_interface);
   tab_data.thumbnail =
       thumbnail_tab_helper ? thumbnail_tab_helper->thumbnail() : nullptr;
 
@@ -128,6 +127,12 @@ TabDataObserver::TabDataObserver(TabInterface* tab_interface)
   tab_detached_subscription_ =
       tab_interface_->RegisterWillDetach(base::BindRepeating(
           &TabDataObserver::OnTabDetached, base::Unretained(this)));
+  TabResourceUsageTabHelper* const tab_resource_usage_tab_helper =
+      TabResourceUsageTabHelper::From(tab_interface_);
+  tab_resource_usage_subscription_ =
+      tab_resource_usage_tab_helper->AddResourceUsageChangeCallback(
+          base::BindRepeating(&TabDataObserver::OnResourceUsageChanged,
+                              base::Unretained(this)));
 
   // Initialize the tab data.
   OnTabUIChange();
@@ -175,7 +180,7 @@ void TabDataObserver::OnBlockedStateChanged(tabs::TabInterface* tab_interface,
                                             bool new_blocked_state) {
   if (tab_data_.blocked != new_blocked_state) {
     tab_data_.blocked = new_blocked_state;
-    NotifyTabDataChanged(TabChangeType::kBlockedOnly);
+    NotifyTabDataChanged(TabChangeType::kAll);
   }
 }
 
@@ -183,9 +188,10 @@ void TabDataObserver::OnTabDiscarded(tabs::TabInterface* tab_interface,
                                      content::WebContents* old_web_contents,
                                      content::WebContents* new_web_contents) {
   // Update the thumbnail because the thumbnail's delegate has changed after a
-  // discard.
+  // discard. TabFeatures has already recreated the helper for the new
+  // contents: it subscribed to the discard callback list first.
   ThumbnailTabHelper* const thumbnail_tab_helper =
-      ThumbnailTabHelper::FromWebContents(new_web_contents);
+      ThumbnailTabHelper::From(tab_interface);
   scoped_refptr<ThumbnailImage> updated_thumbnail =
       thumbnail_tab_helper ? thumbnail_tab_helper->thumbnail() : nullptr;
   if (tab_data_.thumbnail != updated_thumbnail) {
@@ -202,8 +208,15 @@ void TabDataObserver::OnTabDetached(tabs::TabInterface* tab_interface,
     pinned_state_change_subscription_ = base::CallbackListSubscription();
     blocked_state_change_subscription_ = base::CallbackListSubscription();
     tab_detached_subscription_ = base::CallbackListSubscription();
+    tab_resource_usage_subscription_ = base::CallbackListSubscription();
     tab_interface_ = nullptr;
   }
+}
+
+void TabDataObserver::OnResourceUsageChanged(
+    scoped_refptr<const ::TabResourceUsage> usage) {
+  tab_data_.tab_resource_usage = usage;
+  NotifyTabDataChanged(TabChangeType::kResourceUsageOnly);
 }
 
 }  // namespace tabs

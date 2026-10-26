@@ -145,8 +145,6 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
           constant_operands,
-      base::flat_map<OperandId, scoped_refptr<WebNNTensorImpl>>
-          constant_tensor_operands,
       CreateGraphImplCallback callback) = 0;
 
   // Get context properties with op support limits that are intersection
@@ -163,8 +161,6 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
           constant_operands,
-      base::flat_map<OperandId, scoped_refptr<WebNNTensorImpl>>
-          constant_tensor_operands,
       BuildGraphCallback callback) override;
 
   // Closes the `receiver_` pipe with the renderer process, then self destructs
@@ -230,7 +226,7 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   // alive for the duration of the task.
   void RunOrScheduleTask(
       base::OnceClosure task,
-      const gpu::SyncToken& fence = gpu::SyncToken(),
+      std::vector<gpu::SyncToken> fences = {},
       const gpu::SyncToken& release_token = gpu::SyncToken());
 
   int tracing_id() const { return tracing_id_; }
@@ -245,6 +241,13 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   virtual std::vector<mojom::WebNNExecutionProviderDetailsPtr>
   GetExecutionProvidersInfo() const = 0;
 
+  // Opens a writable tempfile in the browser and returns a per-file session
+  // pipe for capacity accounting and finalization.
+  void OpenWeightsFile(
+      base::OnceCallback<void(base::File,
+                              mojo::PendingRemote<mojom::WeightsFileSession>)>
+          callback);
+
  protected:
   friend struct OnTaskRunnerDeleter;
 
@@ -254,11 +257,10 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   void CreateGraphBuilder(
       mojo::PendingReceiver<mojom::WebNNGraphBuilder> receiver) override;
   void CreateTensor(mojom::TensorInfoPtr tensor_info,
-                    mojo_base::BigBuffer tensor_data,
                     CreateTensorCallback callback) override;
   void CreateTensorFromMailbox(mojom::TensorInfoPtr tensor_info,
                                const gpu::Mailbox& mailbox,
-                               const gpu::SyncToken& fence,
+                               const std::vector<gpu::SyncToken>& fences,
                                CreateTensorCallback callback) override;
   void Dispatch(
       const blink::WebNNGraphToken& graph_token,
@@ -361,7 +363,7 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   using RunOrScheduleTaskCallback = base::OnceCallback<void(WebNNContextImpl&)>;
   void RunOrScheduleTaskWithThisContext(
       RunOrScheduleTaskCallback task,
-      const gpu::SyncToken& fence = gpu::SyncToken());
+      std::vector<gpu::SyncToken> fences = {});
 
   // GraphImpls owned by the context. Graphs use a WeakPtr to safely access the
   // context during build operations.
@@ -402,6 +404,10 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   // Whether `xnn_initialize()` succeeded. Other XNNPACK APIs (including
   // `xnn_deinitialize()`) must not be called when initialization failed.
   bool is_xnnpack_initialized_ = false;
+
+  // Makes OnDisconnect() idempotent so racing disconnect paths post the removal
+  // task only once.
+  bool is_lost_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
 };
 
 }  // namespace webnn

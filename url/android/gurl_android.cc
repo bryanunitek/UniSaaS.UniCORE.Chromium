@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "url/android/parsed_android.h"
 #include "url/third_party/mozilla/url_parse.h"
@@ -52,8 +53,10 @@ size_t SafeGetArrayLength(JNIEnv* env, const JavaRef<JavaArrayType>& jarray) {
 }  // namespace
 
 // static
-GURL GURLAndroid::ToNativeGURL(JNIEnv* env,
-                               const base::android::JavaRef<jobject>& j_gurl) {
+GURL GURLAndroid::ToNativeGURL(JNIEnv* env, const JavaRef<jobject>& j_gurl) {
+  if (!j_gurl) {
+    return GURL();
+  }
   GURL ret;
   Parsed parsed;
   j_gurl.As<JGURL>()->toNativeGURL(env, reinterpret_cast<int64_t>(&ret),
@@ -64,6 +67,9 @@ GURL GURLAndroid::ToNativeGURL(JNIEnv* env,
 // static
 ScopedJavaLocalRef<JGURL> GURLAndroid::FromNativeGURL(JNIEnv* env,
                                                       const GURL& gurl) {
+  if (gurl.is_empty()) {
+    return EmptyGURL(env);
+  }
   ScopedJavaLocalRef<JGURL> j_gurl = GURLJni::New(env);
   InitFromGURL(env, gurl, j_gurl);
   return j_gurl;
@@ -71,7 +77,9 @@ ScopedJavaLocalRef<JGURL> GURLAndroid::FromNativeGURL(JNIEnv* env,
 
 // static
 ScopedJavaLocalRef<JGURL> GURLAndroid::EmptyGURL(JNIEnv* env) {
-  return GURLJni::emptyGURL(env);
+  static base::NoDestructor<jni_zero::ScopedJavaGlobalRef<JGURL>> instance(
+      env, GURLJni::emptyGURL(env));
+  return instance->AsLocalRef(env);
 }
 
 static void JNI_GURL_GetOrigin(JNIEnv* env,

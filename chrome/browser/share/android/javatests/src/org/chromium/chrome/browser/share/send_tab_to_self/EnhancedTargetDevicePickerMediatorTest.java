@@ -22,12 +22,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.components.sync_device_info.FormFactor;
+import org.chromium.components.sync_device_info.OsType;
+import org.chromium.components.sync_device_info.RemoteDeviceInfo;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -37,7 +38,6 @@ import java.util.List;
 
 /** Unit tests for {@link EnhancedTargetDevicePickerMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class EnhancedTargetDevicePickerMediatorTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -51,14 +51,16 @@ public class EnhancedTargetDevicePickerMediatorTest {
     private static final String SHARING_URL = "https://example.com";
     private static final String SHARING_TITLE = "Example Page";
 
-    private final TargetDeviceInfo mDevice1 =
-            new TargetDeviceInfo("Device 1", "guid_1", FormFactor.PHONE, "1 day ago");
-    private final TargetDeviceInfo mDevice2 =
-            new TargetDeviceInfo("Device 2", "guid_2", FormFactor.DESKTOP, "2 days ago");
+    private final RemoteDeviceInfo mDevice1 =
+            new RemoteDeviceInfo(
+                    "Device 1", "guid_1", FormFactor.PHONE, OsType.ANDROID, "1 day ago");
+    private final RemoteDeviceInfo mDevice2 =
+            new RemoteDeviceInfo(
+                    "Device 2", "guid_2", FormFactor.DESKTOP, OsType.WINDOWS, "2 days ago");
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
         SendTabToSelfAndroidBridgeJni.setInstanceForTesting(mNativeMock);
 
         mModel =
@@ -67,7 +69,7 @@ public class EnhancedTargetDevicePickerMediatorTest {
                         .build();
     }
 
-    private void createMediator(List<TargetDeviceInfo> devices) {
+    private void createMediator(List<RemoteDeviceInfo> devices) {
         new EnhancedTargetDevicePickerMediator(
                 SHARING_URL,
                 SHARING_TITLE,
@@ -87,14 +89,14 @@ public class EnhancedTargetDevicePickerMediatorTest {
 
         // Verify mapping of device info
         ListItem item1 = deviceList.get(0);
-        TargetDeviceInfo info1 =
+        RemoteDeviceInfo info1 =
                 item1.model.get(
                         EnhancedTargetDevicePickerProperties.DeviceItemProperties.DEVICE_INFO);
         assertEquals(mDevice1.deviceName, info1.deviceName);
         assertEquals(mDevice1.cacheGuid, info1.cacheGuid);
 
         ListItem item2 = deviceList.get(1);
-        TargetDeviceInfo info2 =
+        RemoteDeviceInfo info2 =
                 item2.model.get(
                         EnhancedTargetDevicePickerProperties.DeviceItemProperties.DEVICE_INFO);
         assertEquals(mDevice2.deviceName, info2.deviceName);
@@ -109,6 +111,54 @@ public class EnhancedTargetDevicePickerMediatorTest {
         assertFalse(
                 item2.model.get(
                         EnhancedTargetDevicePickerProperties.DeviceItemProperties.IS_SELECTED));
+    }
+
+    /**
+     * Tests that populating more than 4 devices retains all devices in the property model for full
+     * sheet expansion.
+     */
+    @Test
+    public void testPopulateModelWithoutTruncation() {
+        RemoteDeviceInfo device3 =
+                new RemoteDeviceInfo(
+                        "Device 3", "guid_3", FormFactor.TABLET, OsType.ANDROID, "3 days ago");
+        RemoteDeviceInfo device4 =
+                new RemoteDeviceInfo(
+                        "Device 4", "guid_4", FormFactor.PHONE, OsType.ANDROID, "4 days ago");
+        RemoteDeviceInfo device5 =
+                new RemoteDeviceInfo(
+                        "Device 5", "guid_5", FormFactor.DESKTOP, OsType.WINDOWS, "5 days ago");
+        RemoteDeviceInfo device6 =
+                new RemoteDeviceInfo(
+                        "Device 6", "guid_6", FormFactor.TABLET, OsType.ANDROID, "6 days ago");
+        createMediator(Arrays.asList(mDevice1, mDevice2, device3, device4, device5, device6));
+
+        ModelList deviceList = mModel.get(EnhancedTargetDevicePickerProperties.DEVICE_LIST);
+        assertEquals(6, deviceList.size());
+
+        ListItem item5 = deviceList.get(4);
+        RemoteDeviceInfo info5 =
+                item5.model.get(
+                        EnhancedTargetDevicePickerProperties.DeviceItemProperties.DEVICE_INFO);
+        assertEquals("Device 5", info5.deviceName);
+        assertEquals("guid_5", info5.cacheGuid);
+
+        ListItem item6 = deviceList.get(5);
+        RemoteDeviceInfo info6 =
+                item6.model.get(
+                        EnhancedTargetDevicePickerProperties.DeviceItemProperties.DEVICE_INFO);
+        assertEquals("Device 6", info6.deviceName);
+        assertEquals("guid_6", info6.cacheGuid);
+        assertEquals(
+                mDevice1.cacheGuid,
+                mModel.get(EnhancedTargetDevicePickerProperties.SELECTED_DEVICE_ID));
+        assertTrue(
+                deviceList
+                        .get(0)
+                        .model
+                        .get(
+                                EnhancedTargetDevicePickerProperties.DeviceItemProperties
+                                        .IS_SELECTED));
     }
 
     @Test
@@ -160,5 +210,95 @@ public class EnhancedTargetDevicePickerMediatorTest {
                         any(),
                         eq(ShareEntryPoint.SHARE_SHEET));
         assertFalse(mModel.get(EnhancedTargetDevicePickerProperties.VISIBLE));
+    }
+
+    /**
+     * Tests that populating with a large list of devices handles auto-selection without
+     * NullPointerException or out-of-bounds indexing.
+     */
+    @Test
+    public void testPopulateModelWithManyDevices_autoSelectsFirstDevice() {
+        RemoteDeviceInfo device1 =
+                new RemoteDeviceInfo(
+                        "Device 1", "guid_1", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device2 =
+                new RemoteDeviceInfo(
+                        "Device 2", "guid_2", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device3 =
+                new RemoteDeviceInfo(
+                        "Device 3", "guid_3", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device4 =
+                new RemoteDeviceInfo(
+                        "Device 4", "guid_4", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device5 =
+                new RemoteDeviceInfo(
+                        "Device 5", "guid_5", FormFactor.PHONE, OsType.ANDROID, "Just now");
+
+        // Simulate passing 5 devices.
+        createMediator(Arrays.asList(device1, device2, device3, device4, device5));
+
+        ModelList deviceList = mModel.get(EnhancedTargetDevicePickerProperties.DEVICE_LIST);
+        assertEquals(5, deviceList.size());
+
+        // Verify the first device is safely auto-selected without NPE or indexing errors.
+        assertEquals("guid_1", mModel.get(EnhancedTargetDevicePickerProperties.SELECTED_DEVICE_ID));
+        assertTrue(
+                deviceList
+                        .get(0)
+                        .model
+                        .get(
+                                EnhancedTargetDevicePickerProperties.DeviceItemProperties
+                                        .IS_SELECTED));
+    }
+
+    /**
+     * Tests that populating with a mix of active and inactive/older devices retains all items and
+     * safely auto-selects the first active device.
+     */
+    @Test
+    public void testPopulateModelWithManyDevicesMixedActivity() {
+        RemoteDeviceInfo device3 =
+                new RemoteDeviceInfo(
+                        "Device 3", "guid_3", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device4 =
+                new RemoteDeviceInfo(
+                        "Device 4", "guid_4", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device5 =
+                new RemoteDeviceInfo(
+                        "Device 5", "guid_5", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device6 =
+                new RemoteDeviceInfo(
+                        "Device 6", "guid_6", FormFactor.PHONE, OsType.ANDROID, "Just now");
+        RemoteDeviceInfo device7 =
+                new RemoteDeviceInfo(
+                        "Device 7", "guid_7", FormFactor.PHONE, OsType.ANDROID, "Just now");
+
+        // Simulate passing 2 active devices (from setUp) + 5 extra devices.
+        createMediator(
+                Arrays.asList(mDevice1, mDevice2, device3, device4, device5, device6, device7));
+
+        ModelList deviceList = mModel.get(EnhancedTargetDevicePickerProperties.DEVICE_LIST);
+        assertEquals(7, deviceList.size());
+
+        // Verify the first active device (mDevice1) is auto-selected.
+        assertEquals(
+                mDevice1.cacheGuid,
+                mModel.get(EnhancedTargetDevicePickerProperties.SELECTED_DEVICE_ID));
+        assertTrue(
+                deviceList
+                        .get(0)
+                        .model
+                        .get(
+                                EnhancedTargetDevicePickerProperties.DeviceItemProperties
+                                        .IS_SELECTED));
+        for (int i = 1; i < deviceList.size(); i++) {
+            assertFalse(
+                    deviceList
+                            .get(i)
+                            .model
+                            .get(
+                                    EnhancedTargetDevicePickerProperties.DeviceItemProperties
+                                            .IS_SELECTED));
+        }
     }
 }

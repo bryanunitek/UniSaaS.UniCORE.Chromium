@@ -620,11 +620,9 @@ public class MapForProto2Test {
     return mapEntry.getField(field);
   }
 
-  private static Message.Builder setFieldValue(
-      Message.Builder mapEntry, String name, Object value) {
+  private static void setFieldValue(Message.Builder mapEntry, String name, Object value) {
     FieldDescriptor field = mapEntry.getDescriptorForType().findFieldByName(name);
     mapEntry.setField(field, value);
-    return mapEntry;
   }
 
   private static void assertHasMapValues(Message message, String name, Map<?, ?> values) {
@@ -633,7 +631,7 @@ public class MapForProto2Test {
       Message mapEntry = (Message) entry;
       Object key = getFieldValue(mapEntry, "key");
       Object value = getFieldValue(mapEntry, "value");
-      assertThat(values.containsKey(key)).isTrue();
+      assertThat(values).containsKey(key);
       assertThat(values.get(key)).isEqualTo(value);
     }
     assertThat(message.getRepeatedFieldCount(field)).isEqualTo(values.size());
@@ -641,7 +639,7 @@ public class MapForProto2Test {
       Message mapEntry = (Message) message.getRepeatedField(field, i);
       Object key = getFieldValue(mapEntry, "key");
       Object value = getFieldValue(mapEntry, "value");
-      assertThat(values.containsKey(key)).isTrue();
+      assertThat(values).containsKey(key);
       assertThat(values.get(key)).isEqualTo(value);
     }
   }

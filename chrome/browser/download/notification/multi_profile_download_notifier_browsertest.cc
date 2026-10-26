@@ -9,7 +9,6 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/download/content/public/all_download_item_notifier.h"
 #include "components/download/public/common/mock_download_item.h"
@@ -128,7 +127,7 @@ IN_PROC_BROWSER_TEST_F(MultiProfileDownloadNotifierBrowserTest,
                        ProfileObservation) {
   // Make sure that profiles are not observed when they are filtered by
   // `ShouldObserveProfile()`.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ON_CALL(client(), ShouldObserveProfile(profile))
       .WillByDefault(testing::Return(false));
   // Since `manager()`'s `IsManagerInitialized()` is mocked to return true,
@@ -180,7 +179,7 @@ INSTANTIATE_TEST_SUITE_P(
 IN_PROC_BROWSER_TEST_P(
     MultiProfileDownloadNotifierManagerInitializationBrowserTest,
     ClientCalls) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ON_CALL(client(), ShouldObserveProfile(profile))
       .WillByDefault(testing::Return(true));
   notifier()->AddProfile(profile);
@@ -217,7 +216,7 @@ IN_PROC_BROWSER_TEST_P(
 IN_PROC_BROWSER_TEST_P(
     MultiProfileDownloadNotifierManagerInitializationBrowserTest,
     DownloadRetrieval) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   ON_CALL(client(), ShouldObserveProfile(profile))
       .WillByDefault(testing::Return(true));
   notifier()->AddProfile(profile);

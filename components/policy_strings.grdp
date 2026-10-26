@@ -228,6 +228,9 @@
   <message name="IDS_POLICY_CLOUD_SOURCE_ONLY_ERROR" desc="The text displayed in the status column when a policy that should only be set in the cloud is set from another source.">
     Ignored because the policy is not set by a cloud source.
   </message>
+  <message name="IDS_POLICY_CLOUD_MANAGEMENT_DISABLED_ERROR" desc="The text displayed in the status column when a cloud policy is ignored because Chrome Browser Cloud Management is disabled.">
+    Ignored because Chrome Browser Cloud Management is disabled.
+  </message>
   <message name="IDS_POLICY_CLOUD_USER_ONLY_ERROR" desc="The text displayed in the status column when a policy should only be set from cloud user is set from another source.">
     Ignored because the policy can only be set as a cloud user policy.
   </message>
@@ -260,6 +263,9 @@
   </message>
   <message name="IDS_POLICY_URL_NOT_HTTPS_ERROR" desc="The text displayed in the status column when the URL given isn't using the https scheme, but needs to be.">
     URL must be https.
+  </message>
+  <message name="IDS_POLICY_GEMINI_ENTERPRISE_URL_HOST_NOT_ALLOWED_ERROR" desc="The text displayed in the status column of the GeminiEnterpriseUrl policy when the configured URL doesn't point to a Gemini Enterprise domain.">
+    URL must point to a <ph name="GEMINI_ENTERPRISE_PRODUCT_NAME">Gemini Enterprise<ex>Gemini Enterprise</ex></ph> domain.
   </message>
   <message name="IDS_POLICY_INVALID_SEARCH_URL_ERROR" desc="The text displayed in the status column when a the URL given for DefaultSearchProviderSearchURL is invalid.">
     Invalid search URL.
@@ -683,9 +689,6 @@ Additional details:
   <message name="IDS_POLICY_SCOPE_USER" desc="Text displayed in the Applies to column when a policy applies to the current user only.">
     Current user
   </message>
-  <message name="IDS_POLICY_SCOPE_ALL_USERS" desc="Text displayed in the Applies to column when a policy applies to all the users in the current session.">
-    All users
-  </message>
   <if expr="not is_android and not is_chromeos">
     <message name="IDS_POLICY_SCOPE_DEVICE" desc="Text displayed in the Applies to column when a policy applies to everyone on the machine.">
       Machine
@@ -889,6 +892,9 @@ Additional details:
   </message>
   <message name="IDS_POLICY_BANNER_PROMOTION_BTN" desc="Button for Chrome Enterprise Core (CEC) promotion banner">
     Try Chrome Enterprise Core
+  </message>
+  <message name="IDS_POLICY_COMMAND_LINE_FLAGS_WARNING" desc="Warning shown on chrome://policy when custom command line flags are explicitly specified by the user upon launching Chrome.">
+    This instance of Chrome is running with command line flags manually set. Note that command line flags may change at any time and are not supported.
   </message>
   <message name="IDS_DEVTOOLS_BLOCKED_BY_POLICY" desc="Message shown when DevTools is blocked by policy.">
     Your organization has blocked the use of DevTools on this page

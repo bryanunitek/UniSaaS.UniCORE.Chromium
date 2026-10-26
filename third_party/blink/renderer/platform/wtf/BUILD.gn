@@ -13,13 +13,13 @@ import("//third_party/blink/public/public_features.gni")
 import("//third_party/blink/renderer/config.gni")
 
 declare_args() {
-  # Enable active iterator counting in blink::HeapVector to detect
-  # use-after-free.
-  enable_heap_vector_active_iterator_checks = false
+  # Enable modification checks in blink::HeapVector to detect
+  # modifications during iteration.
+  enable_heap_vector_modification_checks = false
 
-  # Enable active iterator counting in non-garbage-collected blink::Vector
-  # (i.e. PartitionAllocator-backed) to detect use-after-free.
-  enable_vector_active_iterator_checks = false
+  # Enable modification checks in non-garbage-collected blink::Vector
+  # (i.e. PartitionAllocator-backed) to detect modifications during iteration.
+  enable_vector_modification_checks = true
 }
 
 buildflag_header("wtf_buildflags") {
@@ -27,8 +27,8 @@ buildflag_header("wtf_buildflags") {
   header_dir = "third_party/blink/renderer/platform/wtf"
 
   flags = [
-    "ENABLE_HEAP_VECTOR_ACTIVE_ITERATOR_CHECKS=$enable_heap_vector_active_iterator_checks",
-    "ENABLE_VECTOR_ACTIVE_ITERATOR_CHECKS=$enable_vector_active_iterator_checks",
+    "ENABLE_HEAP_VECTOR_MODIFICATION_CHECKS=$enable_heap_vector_modification_checks",
+    "ENABLE_VECTOR_MODIFICATION_CHECKS=$enable_vector_modification_checks",
   ]
 }
 
@@ -69,6 +69,7 @@ component("wtf") {
     "assertions.h",
     "atomic_operations.cc",
     "atomic_operations.h",
+    "base_hash_traits.h",
     "bind_post_task.h",
     "bit_field.h",
     "bloom_filter.h",
@@ -103,6 +104,7 @@ component("wtf") {
     "get_ptr.h",
     "hash_counted_set.h",
     "hash_functions.h",
+    "hash_functions_memory.h",
     "hash_map.h",
     "hash_set.h",
     "hash_table.cc",
@@ -151,6 +153,8 @@ component("wtf") {
     "text/copy_lchars_from_uchar_source.h",
     "text/encoding_tables.cc",
     "text/encoding_tables.h",
+    "text/format.cc",
+    "text/format.h",
     "text/ignoring_ascii_case_hash.h",
     "text/integer_to_string_conversion.h",
     "text/line_ending.cc",
@@ -221,12 +225,9 @@ component("wtf") {
     "thread_specific.h",
     "threading.cc",
     "threading.h",
-    "threading_primitives.cc",
-    "threading_primitives.h",
     "type_traits.h",
     "uuid.cc",
     "uuid.h",
-    "vector.cc",
     "vector.h",
     "vector_backed_linked_list.h",
     "vector_traits.h",
@@ -253,6 +254,7 @@ component("wtf") {
   deps = [
     "//base/allocator:buildflags",
     "//third_party/blink/public/common",
+    "//third_party/highway:libhwy",
     "//third_party/modp_b64",
     "//third_party/rapidhash",
     "//third_party/simdutf",
@@ -264,9 +266,9 @@ component("wtf") {
   public_deps = [
     ":wtf_buildflags",
     "//base",
+    "//base:i18n",
     "//base/third_party/double_conversion",
     "//components/crash/core/common:crash_key",
-    "//third_party/highway:libhwy",
     "//third_party/icu",
   ]
 
@@ -317,6 +319,10 @@ component("wtf") {
 
 test("wtf_unittests") {
   deps = [ ":wtf_unittests_sources" ]
+  fuzztests = [
+    "TextCodecUtf8FuzzTest.DecodeFastPathMatchesLegacy",
+    "TextCodecUtf8FuzzTest.DecodeStreamingFastPathMatchesLegacy",
+  ]
 }
 
 test("wtf_perf_tests") {
@@ -350,6 +356,7 @@ source_set("wtf_unittests_sources") {
     "allocator/partitions_test.cc",
     "assertions_test.cc",
     "atomic_operations_test.cc",
+    "base_hash_traits_test.cc",
     "bind_post_task_test.cc",
     "bit_field_test.cc",
     "bloom_filter_test.cc",
@@ -360,6 +367,7 @@ source_set("wtf_unittests_sources") {
     "doubly_linked_list_test.cc",
     "dtoa_test.cc",
     "functional_test.cc",
+    "hash_functions_memory_test.cc",
     "hash_map_test.cc",
     "hash_set_test.cc",
     "linked_hash_set_test.cc",
@@ -381,6 +389,7 @@ source_set("wtf_unittests_sources") {
     "text/case_map_test.cc",
     "text/code_point_iterator_test.cc",
     "text/encoding_tables_test.cc",
+    "text/format_test.cc",
     "text/ignoring_ascii_case_hash_test.cc",
     "text/integer_to_string_conversion_test.cc",
     "text/line_ending_test.cc",
@@ -405,7 +414,6 @@ source_set("wtf_unittests_sources") {
     "text/utf16_test.cc",
     "text/utf8_test.cc",
     "text/wtf_string_test.cc",
-    "threading_primitives_test.cc",
     "type_traits_test.cc",
     "uuid_test.cc",
     "vector_backed_linked_list_test.cc",
@@ -430,6 +438,7 @@ source_set("wtf_unittests_sources") {
     "//base/test:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/fuzztest",
   ]
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and

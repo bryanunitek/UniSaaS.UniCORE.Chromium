@@ -4,6 +4,8 @@
 
 package org.chromium.content.browser.accessibility;
 
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SET_EXTENDED_SELECTION;
+
 import static org.chromium.base.test.util.CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL;
 import static org.chromium.content.browser.accessibility.AccessibilityContentShellTestUtils.ANP_ERROR;
 import static org.chromium.content.browser.accessibility.AccessibilityContentShellTestUtils.END_OF_TEST_ERROR;
@@ -37,7 +39,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer;
 import org.chromium.content_shell_apk.ContentShellActivityTestRule;
 import org.chromium.net.test.EmbeddedTestServerRule;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -122,7 +124,11 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
     /* @Before */
     protected void setupTestFromFile(String file) {
         // Default behavior: ignore trivial TYPE_WINDOW_CONTENT_CHANGED events.
-        setupTestFromFile(file, /* shouldFilterTrivialEvents= */ true, /* testServer= */ false);
+        setupTestFromFile(
+                file,
+                /* shouldFilterTrivialEvents= */ true,
+                /* testServer= */ false,
+                /* sendReadyForTestSignal= */ true);
     }
 
     /**
@@ -134,10 +140,15 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
      * @param file Test file URL, including path and name
      * @param shouldFilterTrivialEvents Flag to filter out TYPE_WINDOW_CONTENT_CHANGED event
      * @param testServer Whether to use a test server to load the file
+     * @param sendReadyForTestSignal Flag to indicate that once the environment is loaded, a ready
+     *     for test signal should be fired.
      */
     /* @Before */
     protected void setupTestFromFile(
-            String file, boolean shouldFilterTrivialEvents, boolean testServer) {
+            String file,
+            boolean shouldFilterTrivialEvents,
+            boolean testServer,
+            boolean sendReadyForTestSignal) {
         // Verify file exists before beginning the test.
         verifyInputFile(file);
 
@@ -169,7 +180,9 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
         // Wait for the new page's native BrowserAccessibilityManager to be connected!
         mNodeProvider = getAccessibilityNodeProvider();
 
-        sendReadyForTestSignal();
+        if (sendReadyForTestSignal) {
+            sendReadyForTestSignal();
+        }
     }
 
     /**
@@ -196,9 +209,10 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(true);
-                    AccessibilityState.setIsKnownScreenReaderEnabledForTesting(true);
-                    AccessibilityState.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            true);
+                    AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
                 });
 
         mWcax = getWebContentsAccessibility();
@@ -217,9 +231,10 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            true);
                     if (includeEventMaskByDefault) {
-                        AccessibilityState.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
+                        AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
                     }
                 });
 
@@ -235,10 +250,11 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(true);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            true);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(true);
                     if (includeEventMaskByDefault) {
-                        AccessibilityState.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
+                        AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
                     }
                 });
 
@@ -254,10 +270,12 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(true);
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            true);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
                     if (includeEventMaskByDefault) {
-                        AccessibilityState.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
+                        AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_ALL);
                     }
                 });
 
@@ -302,6 +320,7 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
         }
 
         AccessibilityContentShellTestData.resetData();
+        ThreadUtils.runOnUiThreadBlocking(AccessibilityStateTestHelper::uninitializeForTesting);
     }
 
     /**
@@ -353,7 +372,9 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
             AccessibilityContentShellTestUtils.AccessibilityNodeInfoMatcher<T> matcher,
             T element) {
         AccessibilityNodeInfoCompat node = mNodeProvider.createAccessibilityNodeInfo(virtualViewId);
-        Assert.assertNotEquals(node, null);
+        // The node may not be available yet, e.g. before the frame info is initialized. Returning
+        // View.NO_ID allows callers that poll (such as waitForNodeMatching()) to retry.
+        if (node == null) return View.NO_ID;
         if (matcher.matches(node, element)) return virtualViewId;
 
         for (int i = 0; i < node.getChildCount(); i++) {
@@ -416,7 +437,7 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
      * @return boolean return value of performAction
      * @throws ExecutionException Error
      */
-    public boolean performActionOnUiThread(int viewId, int action, Bundle args)
+    public boolean performActionOnUiThread(int viewId, int action, @Nullable Bundle args)
             throws ExecutionException {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> mNodeProvider.performAction(viewId, action, args));
@@ -495,12 +516,25 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
     }
 
     /**
+     * Helper method to set extended selection with given arguments.
+     *
+     * @param viewId int virtualViewId of the node to which selection is assigned.
+     * @param args Bundle arguments for setting selection.
+     * @return boolean return value of setting selection.
+     */
+    public boolean setSelectionOnUiThread(int viewId, @Nullable Bundle args)
+            throws ExecutionException {
+        return performActionOnUiThread(viewId, ACTION_SET_EXTENDED_SELECTION.getId(), args);
+    }
+
+    /**
      * Helper method to clear extended selection.
      *
      * @param viewId int virtualViewId of the node from which selection is cleared.
+     * @return boolean whether the action was accepted.
      */
-    public void clearSelectionOnUiThread(int viewId) throws ExecutionException {
-        ThreadUtils.runOnUiThreadBlocking(
+    public boolean clearSelectionOnUiThread(int viewId) throws ExecutionException {
+        return ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         WebContentsAccessibilityImplJni.get()
                                 .clearExtendedSelection(mWcax.mNativeObj, viewId));
@@ -597,15 +631,15 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
     }
 
     /**
-     * {@return the WebView's full AccessibilityNodeInfo tree as a String, excluding screen size
-     * dependent attributes}
+     * Returns the WebView's full AccessibilityNodeInfo tree as a String, excluding screen size
+     * dependent attributes.
      */
     public String generateAccessibilityNodeInfoTree() {
         return generateAccessibilityNodeInfoTree(false);
     }
 
     /**
-     * {@return the WebView's full AccessibilityNodeInfo tree as a String}
+     * Returns the WebView's full AccessibilityNodeInfo tree as a String.
      *
      * @param includeScreenSizeDependentAttributes whether to include attributes that depend on
      *     screen size (e.g. bounds).
@@ -715,7 +749,7 @@ public class AccessibilityContentShellActivityTestRule extends ContentShellActiv
     }
 
     /**
-     * {@return the AccessibilityNodeInfoCompat object for the given virtual view ID}
+     * Returns the AccessibilityNodeInfoCompat object for the given virtual view ID.
      *
      * @param virtualViewId the virtual view ID of the node to create.
      */

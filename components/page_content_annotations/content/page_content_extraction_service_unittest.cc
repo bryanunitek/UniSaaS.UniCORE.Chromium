@@ -7,11 +7,11 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
-#include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/test/mock_tracker.h"
+#include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/os_crypt/async/browser/test_utils.h"
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
+#include "content/public/test/test_renderer_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -20,20 +20,26 @@ namespace page_content_annotations {
 using testing::_;
 using testing::Return;
 
-class PageContentExtractionServiceTest : public testing::Test {
+class PageContentExtractionServiceTest
+    : public content::RenderViewHostTestHarness {
  public:
   PageContentExtractionServiceTest() = default;
   ~PageContentExtractionServiceTest() override = default;
 
   void SetUp() override {
+    content::RenderViewHostTestHarness::SetUp();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     os_crypt_async_ = os_crypt_async::GetTestOSCryptAsyncForTesting();
+  }
+
+  void TearDown() override {
+    os_crypt_async_.reset();
+    content::RenderViewHostTestHarness::TearDown();
   }
 
  protected:
   base::test::ScopedFeatureList scoped_feature_list_;
   base::ScopedTempDir temp_dir_;
-  base::test::TaskEnvironment task_environment_;
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
   feature_engagement::test::MockTracker mock_tracker_;
 };
@@ -110,7 +116,8 @@ TEST_F(PageContentExtractionServiceTest, OnNewNavigation_Metrics) {
     scoped_feature_list_.InitAndDisableFeature(
         features::kAnnotatedPageContentExtraction);
 
-    service.OnNewNavigation(std::nullopt, nullptr, /*is_same_document=*/false);
+    service.OnNewNavigation(std::nullopt, web_contents(),
+                            /*is_same_document=*/false);
 
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PageContentExtraction.EnablementSourcePerNavigation",
@@ -127,7 +134,8 @@ TEST_F(PageContentExtractionServiceTest, OnNewNavigation_Metrics) {
     feature_list.InitAndEnableFeature(
         features::kAnnotatedPageContentExtraction);
 
-    service.OnNewNavigation(std::nullopt, nullptr, /*is_same_document=*/false);
+    service.OnNewNavigation(std::nullopt, web_contents(),
+                            /*is_same_document=*/false);
 
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PageContentExtraction.EnablementSourcePerNavigation",
@@ -147,7 +155,8 @@ TEST_F(PageContentExtractionServiceTest, OnNewNavigation_Metrics) {
     TestObserver observer;
     service.AddObserver(&observer);
 
-    service.OnNewNavigation(std::nullopt, nullptr, /*is_same_document=*/false);
+    service.OnNewNavigation(std::nullopt, web_contents(),
+                            /*is_same_document=*/false);
 
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PageContentExtraction.EnablementSourcePerNavigation",
@@ -169,7 +178,8 @@ TEST_F(PageContentExtractionServiceTest, OnNewNavigation_Metrics) {
     TestObserver observer;
     service.AddObserver(&observer);
 
-    service.OnNewNavigation(std::nullopt, nullptr, /*is_same_document=*/false);
+    service.OnNewNavigation(std::nullopt, web_contents(),
+                            /*is_same_document=*/false);
 
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PageContentExtraction.EnablementSourcePerNavigation",
@@ -188,7 +198,8 @@ TEST_F(PageContentExtractionServiceTest, OnNewNavigation_Metrics) {
     feature_list.InitAndEnableFeature(
         features::kAnnotatedPageContentExtraction);
 
-    service.OnNewNavigation(std::nullopt, nullptr, /*is_same_document=*/true);
+    service.OnNewNavigation(std::nullopt, web_contents(),
+                            /*is_same_document=*/true);
 
     histogram_tester.ExpectTotalCount(
         "OptimizationGuide.PageContentExtraction.EnablementSourcePerNavigation",
@@ -212,7 +223,8 @@ TEST_F(PageContentExtractionServiceTest, OnNewNavigation_Metrics) {
     service.AddObserver(&observer2);
     service.AddObserver(&observer3);
 
-    service.OnNewNavigation(std::nullopt, nullptr, /*is_same_document=*/false);
+    service.OnNewNavigation(std::nullopt, web_contents(),
+                            /*is_same_document=*/false);
 
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PageContentExtraction.EnablementSourcePerNavigation",

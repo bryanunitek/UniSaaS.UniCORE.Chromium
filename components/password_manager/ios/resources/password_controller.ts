@@ -5,7 +5,7 @@
 import * as fillConstants from '//components/autofill/ios/form_util/resources/fill_constants.js';
 import * as fillUtil from '//components/autofill/ios/form_util/resources/fill_util.js';
 import {unownedFormElementsAndFieldSetsToFormData, webFormElementToFormData} from '//components/autofill/ios/form_util/resources/fill_web_form.js';
-import {getFormControlElements, getFormElementFromRendererId} from '//components/autofill/ios/form_util/resources/form_utils.js';
+import {clipRect, getFormControlElements, getFormElementFromRendererId, getVisibleRectRespectingClips} from '//components/autofill/ios/form_util/resources/form_utils.js';
 import {getElementByUniqueID} from '//components/autofill/ios/form_util/resources/renderer_id.js';
 import {CrWebApi, gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 import {isTextField, sendWebKitMessage} from '//ios/web/public/js_messaging/resources/utils.js';
@@ -640,25 +640,78 @@ function fillPasswordFormAndSubmit(
   return result;
 }
 
+
 /**
  * Checks if the view area of the field is visible.
  * @param fieldIdentifier The unique ID of the field.
  * @return Whether the field is visible in the viewport.
  */
 function scrollAndCheckViewAreaVisible(fieldIdentifier: number): boolean {
+  // Checks the existence of element.
   const element = getElementByUniqueID(fieldIdentifier) as HTMLElement;
   if (!element) {
     return false;
   }
 
-  if ((element as any).scrollIntoViewIfNeeded) {
-    (element as any).scrollIntoViewIfNeeded();
-  } else {
-    element.scrollIntoView();
+  // Perform a virtual scroll check first to verify if it is scrollable into
+  // view.
+  let visibleRect = getVisibleRectRespectingClips(
+      element, /*shouldAdjustRectForScroll=*/ true);
+  if (!visibleRect) {
+    return false;
   }
-  // TODO(crbug.com/472291829): Fully match the implementation in Blink's
-  // `VisibleBoundsInWidget` by taking into accoung clipping on parent elements.
-  return true;
+
+  const viewportWidth =
+      window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+  const viewportBox = {
+    left: 0,
+    top: 0,
+    right: viewportWidth,
+    bottom: viewportHeight,
+  };
+  visibleRect = clipRect(visibleRect, viewportBox);
+  if (!visibleRect) {
+    return false;
+  }
+
+  // Actually scroll the element into view.
+  element.scrollIntoView({block: 'nearest', inline: 'nearest'});
+
+  // Re-calculate the visible rect after the scroll to get the actual final
+  // coordinates.
+  let scrolledVisibleRect = getVisibleRectRespectingClips(
+      element, /*shouldAdjustRectForScroll=*/ false);
+  if (!scrolledVisibleRect) {
+    return false;
+  }
+  scrolledVisibleRect = clipRect(scrolledVisibleRect, viewportBox);
+  if (!scrolledVisibleRect) {
+    return false;
+  }
+
+  // Visual occlusion check: Performs a hit-test at the center of the clipped
+  // visible area.
+  //
+  // Handles:
+  // - Direct hits on the element or its descendants (e.g., inner input nodes).
+  // - Hits on an associated <label> or its children (via label.control).
+  // - Occlusion by floating modals, fixed headers, or cookie banners.
+  //
+  // Edge cases not covered:
+  // - Custom non-<label> floating overlays (<div>/<span>) unless they set
+  //   `pointer-events: none`.
+  // - Partial occlusion where the center point is clear but other areas are
+  // covered.
+  const centerX = scrolledVisibleRect.left + scrolledVisibleRect.width / 2;
+  const centerY = scrolledVisibleRect.top + scrolledVisibleRect.height / 2;
+  const hitElement = document.elementFromPoint(centerX, centerY);
+  const label = hitElement?.closest('label');
+  const isNotOccluded = hitElement &&
+      (element.contains(hitElement) || (label && label.control === element));
+
+  return !!isNotOccluded;
 }
 
 /**

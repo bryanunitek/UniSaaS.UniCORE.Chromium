@@ -160,8 +160,7 @@ const CGFloat kGrabberTopPadding = 5;
   [self.view addSubview:_omniboxPopupContainer];
 
   // Back Button.
-  UIImage* image =
-      DefaultSymbolWithPointSize(kChevronBackwardSymbol, kBackButtonSize);
+  UIImage* image = SymbolWithPointSize(SymbolChevronBackward, kBackButtonSize);
   UIButtonConfiguration* backButtonConfiguration =
       [UIButtonConfiguration plainButtonConfiguration];
   backButtonConfiguration.image = image;
@@ -272,12 +271,10 @@ const CGFloat kGrabberTopPadding = 5;
         constraintEqualToAnchor:_omniboxContainer.bottomAnchor],
     [_progressBar.heightAnchor constraintEqualToConstant:kProgressBarHeight],
   ]];
-  AddSameConstraintsToSides(
-      self.webViewContainer, self.view,
-      LayoutSides::kLeading | LayoutSides::kBottom | LayoutSides::kTrailing);
-  AddSameConstraintsToSides(
-      _omniboxPopupContainer, self.view,
-      LayoutSides::kLeading | LayoutSides::kBottom | LayoutSides::kTrailing);
+  AddSameConstraintsToSides(self.webViewContainer, self.view,
+                            LayoutSides::kBottom | LayoutSides::kHorizontal);
+  AddSameConstraintsToSides(_omniboxPopupContainer, self.view,
+                            LayoutSides::kBottom | LayoutSides::kHorizontal);
 
   [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                      withAction:@selector(updateMutatorDarkMode)];

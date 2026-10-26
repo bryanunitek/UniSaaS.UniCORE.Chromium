@@ -32,6 +32,7 @@ class FakeTabSlotController : public TabSlotController {
   void set_paint_throbber_to_layer(bool value) {
     paint_throbber_to_layer_ = value;
   }
+  void set_is_glass(bool value) { is_glass_ = value; }
 
   ui::ListSelectionModel GetSelectionModel() const override;
   Tab* tab_at(int index) const override;
@@ -78,6 +79,7 @@ class FakeTabSlotController : public TabSlotController {
   void HideHover(Tab* tab, TabStyle::HideHoverStyle style) override {}
   int GetStrokeThickness() const override;
   bool CanPaintThrobberToLayer() const override;
+  bool IsGlassFrame() const override;
   SkColor GetTabSeparatorColor() const override;
   std::u16string GetAccessibleTabName(const Tab* tab) const override;
   float GetHoverOpacityForTab(float range_parameter) const override;
@@ -90,11 +92,13 @@ class FakeTabSlotController : public TabSlotController {
   tab_groups::TabGroupColorId GetGroupColorId(
       const tab_groups::TabGroupId& group) const override;
   bool IsGroupCollapsed(const tab_groups::TabGroupId& group) const override;
+  std::optional<tab_groups::TabGroupId> GetFocusedGroup() const override;
+  void EnterFocusMode(const tab_groups::TabGroupId& group) override;
+  void ExitFocusMode(std::optional<TabGroupFocusExitReason> reason) override;
   SkColor GetPaintedGroupColor(
       const tab_groups::TabGroupColorId& color_id) const override;
   void ShiftGroupLeft(const tab_groups::TabGroupId& group) override {}
   void ShiftGroupRight(const tab_groups::TabGroupId& group) override {}
-  Browser* GetBrowser() override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
   TabGroup* GetTabGroup(const tab_groups::TabGroupId& group_id) const override;
 
@@ -105,6 +109,7 @@ class FakeTabSlotController : public TabSlotController {
   raw_ptr<Tab, DanglingUntriaged> active_tab_ = nullptr;
   std::optional<int> tab_count_;
   bool paint_throbber_to_layer_ = true;
+  bool is_glass_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_FAKE_TAB_SLOT_CONTROLLER_H_

@@ -1179,6 +1179,23 @@
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
         },
+        "module_name": "//rlz:rlz_unittests",
+        "module_scheme": "gtest",
+        "name": "rlz_unittests",
+        "swarming": {
+          "dimensions": {
+            "os": "Windows-10-19045"
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "rlz_unittests",
+        "test_id_prefix": "ninja://rlz:rlz_unittests/"
+      },
+      {
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
         "module_name": "//sandbox/win:sbox_integration_tests",
         "module_scheme": "gtest",
         "name": "sbox_integration_tests",
@@ -1679,8 +1696,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
@@ -1716,8 +1733,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "idempotent": false,
@@ -1753,8 +1770,8 @@
         "swarming": {
           "dimensions": {
             "display_attached": "1",
-            "gpu": "10de:2184-31.0.15.4601",
-            "os": "Windows-10-19045",
+            "gpu": "10de:2184-31.0.15.4601|10de:2184-32.0.16.1074",
+            "os": "Windows-10-19045|Windows-11-26200",
             "pool": "chromium.tests.gpu"
           },
           "idempotent": false,

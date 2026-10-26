@@ -18,6 +18,7 @@ import org.chromium.base.BinderCallsListener;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TimeUtils;
+import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.task.PostTask;
@@ -231,6 +232,11 @@ public class StartupMetricsTracker {
         tabModelSelectorSupplier.addSyncObserverAndPostIfNonNull(this::registerObservers);
         SafeBrowsingApiBridge.setOneTimeSafeBrowsingApiUrlCheckObserver(
                 this::updateSafeBrowsingCheckTime);
+    }
+
+    /** Returns the {@link SystemClock#uptimeMillis()} timestamp when the activity was created. */
+    public long getActivityStartTimeMs() {
+        return mActivityStartTimeMs;
     }
 
     /**
@@ -525,8 +531,9 @@ public class StartupMetricsTracker {
                                 .getOrDefault(ApplicationStartInfo.START_TIMESTAMP_FIRST_FRAME, 0L)
                         / TimeUtils.NANOSECONDS_PER_MILLISECOND;
         if (firstFrameTimeMs != 0L && mProcessStartTimeMs < firstFrameTimeMs) {
-            RecordHistogram.recordMediumTimesHistogram(
-                    COLD_START_TIME_TO_FIRST_FRAME2, firstFrameTimeMs - mProcessStartTimeMs);
+            long durationMs = firstFrameTimeMs - mProcessStartTimeMs;
+            RecordHistogram.recordMediumTimesHistogram(COLD_START_TIME_TO_FIRST_FRAME2, durationMs);
+            TraceEvent.startupTimeToFirstFrame2(mProcessStartTimeMs, durationMs);
         }
     }
 }

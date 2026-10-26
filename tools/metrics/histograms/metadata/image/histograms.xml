@@ -113,7 +113,7 @@ chromium-metrics-reviews@google.com.
 </variants>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.CacheHit"
-    enum="BooleanCacheHit" expires_after="2026-12-20">
+    enum="BooleanCacheHit" expires_after="2027-02-28">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -129,7 +129,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.ClientResult"
-    enum="ImageAnnotationServiceClientResult" expires_after="2026-12-06">
+    enum="ImageAnnotationServiceClientResult" expires_after="2027-04-11">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -144,7 +144,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.DescFailure"
-    enum="DescFailureReason" expires_after="2026-10-01">
+    enum="DescFailureReason" expires_after="2027-03-01">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -156,7 +156,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.DescType"
-    enum="ImageAnnotationServiceDescType" expires_after="2026-10-01">
+    enum="ImageAnnotationServiceDescType" expires_after="2027-03-01">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -171,7 +171,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.EncodedJpegSizeKB"
-    units="KB" expires_after="2026-10-01">
+    units="KB" expires_after="2027-03-01">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -271,7 +271,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.ServerHttpResponseCode"
-    enum="HttpResponseCode" expires_after="2026-12-06">
+    enum="HttpResponseCode" expires_after="2027-02-07">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -316,7 +316,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageAnnotationService.AccessibilityV1.ServerRequestSizeKB"
-    units="KB" expires_after="2026-11-01">
+    units="KB" expires_after="2027-04-01">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -402,7 +402,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="ImageAnnotationService.{ImageAnnotationServiceAnnotationType}.AccessibilityV1.Status"
-    enum="GoogleRpcCode" expires_after="2026-08-01">
+    enum="GoogleRpcCode" expires_after="2027-06-20">
   <owner>dtseng@chromium.org</owner>
   <owner>amoylan@chromium.org</owner>
   <owner>mschillaci@google.com</owner>
@@ -430,7 +430,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageFetcher.CacheSize{ImageFetcherCacheStrategy}" units="KB"
-    expires_after="2026-11-29">
+    expires_after="2027-04-11">
   <owner>wylieb@google.com</owner>
   <owner>skym@chromium.org</owner>
   <summary>
@@ -440,8 +440,19 @@ chromium-metrics-reviews@google.com.
   <token key="ImageFetcherCacheStrategy" variants="ImageFetcherCacheStrategy"/>
 </histogram>
 
-<histogram name="ImageFetcher.Events{ImageFetcherClients}"
-    enum="ImageFetcherEvent" expires_after="2026-11-29">
+<histogram name="ImageFetcher.Events" enum="ImageFetcherEvent"
+    expires_after="2027-04-11">
+  <owner>wylieb@google.com</owner>
+  <owner>skym@chromium.org</owner>
+  <summary>
+    Events that track the lifecycle and performance of the cached_image_fetcher.
+    The events reported include: success/failure conditions, various recoverable
+    errors and a couple of dead-end errors.
+  </summary>
+</histogram>
+
+<histogram name="ImageFetcher.Events2{ImageFetcherClients}"
+    enum="ImageFetcherEvent" expires_after="2027-02-07">
   <owner>wylieb@google.com</owner>
   <owner>skym@chromium.org</owner>
   <summary>
@@ -449,9 +460,6 @@ chromium-metrics-reviews@google.com.
     The events reported include: success/failure conditions, various recoverable
     errors and a couple of dead-end errors. {ImageFetcherClients}
   </summary>
-  <token key="ImageFetcherClients" variants="ImageFetcherClients">
-    <variant name=""/>
-  </token>
 </histogram>
 
 <histogram name="ImageFetcher.ImageLoadFromCacheTimeJava{ImageFetcherClients}"
@@ -468,7 +476,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageFetcher.ImageLoadFromCacheTime{ImageFetcherClients}"
-    units="ms" expires_after="2026-08-30">
+    units="ms" expires_after="2027-03-10">
   <owner>wylieb@google.com</owner>
   <owner>skym@chromium.org</owner>
   <summary>
@@ -495,7 +503,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="ImageFetcher.ImageLoadFromNetworkAfterCacheHit{ImageFetcherClients}"
-    units="ms" expires_after="2026-09-13">
+    units="ms" expires_after="2027-09-13">
   <owner>wylieb@google.com</owner>
   <owner>skym@chromium.org</owner>
   <summary>
@@ -508,7 +516,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageFetcher.ImageLoadFromNetworkTime{ImageFetcherClients}"
-    units="ms" expires_after="2026-09-13">
+    units="ms" expires_after="2027-09-13">
   <owner>wylieb@google.com</owner>
   <owner>skym@chromium.org</owner>
   <summary>
@@ -531,7 +539,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ImageFetcher.RequestStatusCode{ImageFetcherClients}"
-    enum="CombinedHttpResponseAndNetErrorCode" expires_after="2026-11-29">
+    enum="CombinedHttpResponseAndNetErrorCode" expires_after="2027-02-07">
   <owner>wylieb@google.com</owner>
   <owner>skym@chromium.org</owner>
   <summary>

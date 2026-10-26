@@ -5,16 +5,22 @@
 #include "chromecast/media/audio/playback_rate_shifter.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 
 #include "base/check.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/time/time.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
 #include "media/filters/audio_renderer_algorithm.h"
+
+// TODO(crbug.com/538634417): Remove after compiler update.
+#include "base/memory/raw_ptr.h"
+static_assert(sizeof(raw_ptr<uint8_t>) > 0);
 
 namespace chromecast {
 namespace media {
@@ -38,6 +44,7 @@ PlaybackRateShifter::PlaybackRateShifter(AudioProvider* provider,
       audio_buffer_pool_(
           base::MakeRefCounted<::media::AudioBufferMemoryPool>()) {
   DCHECK(provider_);
+  CHECK_LE(num_channels_, static_cast<size_t>(kMaxChannels));
 }
 
 PlaybackRateShifter::~PlaybackRateShifter() = default;
@@ -107,12 +114,15 @@ int PlaybackRateShifter::FillFrames(int num_frames,
       auto buffer = ::media::AudioBuffer::CreateBuffer(
           ::media::SampleFormat::kSampleFormatPlanarF32, channel_layout_,
           num_channels_, sample_rate_, request_size_, audio_buffer_pool_);
+      std::array<float*, kMaxChannels> channel_ptrs;
+      for (size_t c = 0; c < num_channels_; ++c) {
+        channel_ptrs[c] = buffer->planar_channel_cast<float>(c).data();
+      }
       int new_fill = provider_->FillFrames(
           request_size_,
           playout_timestamp +
               FramesToMicroseconds(total_filled + BufferedFrames()),
-          const_cast<float**>(
-              reinterpret_cast<float* const*>(buffer->channel_data().data())));
+          channel_ptrs.data());
       if (new_fill == 0) {
         break;
       }

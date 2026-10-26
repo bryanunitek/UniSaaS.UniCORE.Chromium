@@ -11,7 +11,7 @@
 #include "base/values.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
@@ -58,7 +58,7 @@ void PreventCloseTestBase::SetPoliciesAndWaitUntilInstalled(
     const webapps::AppId& app_id,
     std::string_view web_app_settings,
     std::string_view web_app_install_force_list) {
-  web_app::WebAppTestInstallObserver observer(browser()->profile());
+  web_app::WebAppTestInstallObserver observer(browser()->GetProfile());
   observer.BeginListening({app_id});
 
   SetPolicies(web_app_settings, web_app_install_force_list);
@@ -77,15 +77,16 @@ void PreventCloseTestBase::InstallPWA(const GURL& app_url,
       web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
   web_app_info->scope = app_url.GetWithoutFilename();
   webapps::AppId installed_app_id = web_app::test::InstallWebApp(
-      browser()->profile(), std::move(web_app_info));
+      browser()->GetProfile(), std::move(web_app_info));
   EXPECT_EQ(app_id, installed_app_id);
 }
 
-Browser* PreventCloseTestBase::LaunchPWA(const webapps::AppId& app_id,
-                                         bool launch_in_window) {
+BrowserWindowInterface* PreventCloseTestBase::LaunchPWA(
+    const webapps::AppId& app_id,
+    bool launch_in_window) {
   return launch_in_window
              ? web_app::LaunchWebAppBrowserAndWait(
-                   profile(), app_id, WindowOpenDisposition::NEW_WINDOW)
+                   profile(), app_id, WindowOpenDisposition::kNewWindow)
              : web_app::LaunchBrowserForWebAppInTab(profile(), app_id);
 }
 
@@ -99,5 +100,5 @@ base::Value PreventCloseTestBase::ReturnPolicyValueFromJson(
 }
 
 Profile* PreventCloseTestBase::profile() {
-  return browser()->profile();
+  return browser()->GetProfile();
 }

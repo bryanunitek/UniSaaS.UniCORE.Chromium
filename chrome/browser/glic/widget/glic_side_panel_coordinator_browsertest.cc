@@ -14,7 +14,6 @@
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
@@ -24,6 +23,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/side_panel.h"
@@ -98,7 +98,7 @@ class GlicSidePanelCoordinatorTest : public InProcessBrowserTest {
     registry()->Register(std::move(lens_entry));
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   GlicEnabling* enabling() {
     return &GlicKeyedServiceFactory::GetGlicKeyedService(profile())->enabling();
@@ -209,7 +209,7 @@ IN_PROC_BROWSER_TEST_F(GlicSidePanelCoordinatorTest,
   EXPECT_TRUE(GlicSidePanelCoordinator::IsGlicSidePanelActive(first_tab));
 
   // Switch back to the first tab.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
 
   // The Glic side panel should be active for the first tab again.
   EXPECT_TRUE(GlicSidePanelCoordinator::IsGlicSidePanelActive(first_tab));
@@ -318,7 +318,7 @@ IN_PROC_BROWSER_TEST_F(GlicSidePanelCoordinatorStateTest, Backgrounded) {
             GlicSidePanelCoordinator::State::kBackgrounded);
 
   // Switch back to the first tab.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
 
   // It should transition back to kShown.
   EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kShown);
@@ -423,8 +423,9 @@ IN_PROC_BROWSER_TEST_F(GlicSidePanelCoordinatorRoundedCornersTest,
   coordinator().Show();
   EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kShown);
 
-  views::View* content_parent =
-      browser()->GetBrowserView().side_panel()->GetContentParentView();
+  views::View* content_parent = BrowserView::GetBrowserViewForBrowser(browser())
+                                    ->side_panel()
+                                    ->GetContentParentView();
   ASSERT_TRUE(content_parent);
 
   // 2. Perform in-place view swap. This tests that the corners are applied
@@ -440,22 +441,18 @@ IN_PROC_BROWSER_TEST_F(GlicSidePanelCoordinatorRoundedCornersTest,
 
   views::WebView* web_view = FindWebView(content_parent);
   ASSERT_TRUE(web_view);
-  ui::Layer* layer = web_view->holder()->GetUILayer();
-  ASSERT_TRUE(layer);
-  EXPECT_FALSE(layer->rounded_corner_radii().IsEmpty());
+  EXPECT_FALSE(web_view->holder()->GetNativeViewCornerRadii().IsEmpty());
 
   // 3. Add a new tab and switch to it.
   chrome::AddTabAt(browser(), GURL("about:blank"), -1, true);
   EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kBackgrounded);
 
   // Switch back to the first tab.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
   EXPECT_EQ(future_.Take(), GlicSidePanelCoordinator::State::kShown);
 
   // Verify rounded corners are still there
-  ui::Layer* layer_after = web_view->holder()->GetUILayer();
-  ASSERT_TRUE(layer_after);
-  EXPECT_FALSE(layer_after->rounded_corner_radii().IsEmpty());
+  EXPECT_FALSE(web_view->holder()->GetNativeViewCornerRadii().IsEmpty());
 }
 
 }  // namespace

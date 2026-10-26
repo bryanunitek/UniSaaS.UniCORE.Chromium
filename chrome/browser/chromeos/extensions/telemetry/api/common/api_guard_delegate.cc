@@ -23,6 +23,7 @@
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chromeos/extensions/chromeos_system_extension_info.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user.h"
@@ -158,29 +159,32 @@ bool IsExtensionUsedByShimlessRMA(content::BrowserContext* context) {
   return ::ash::IsShimlessRmaAppBrowserContext(context);
 }
 
-bool IsCurrentUserAffiliated() {
-  auto* active_user = user_manager::UserManager::Get()->GetActiveUser();
-  CHECK(active_user);
-  return active_user->IsAffiliated();
+bool IsContextUserAffiliated(content::BrowserContext* context) {
+  const user_manager::User* context_user =
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(context);
+  return context_user && context_user->IsAffiliated();
 }
 
-void IsCurrentUserOwnerOnOwnerFetched(CheckCallback callback) {
-  std::move(callback).Run(
-      user_manager::UserManager::Get()->IsCurrentUserOwner());
-}
-
-void IsCurrentUserOwner(content::BrowserContext* context,
+void IsContextUserOwner(content::BrowserContext* context,
                         CheckCallback callback) {
-  auto on_owner_fetched = base::IgnoreArgs<const AccountId&>(
-      base::BindOnce(&IsCurrentUserOwnerOnOwnerFetched, std::move(callback)));
-
-  user_manager::UserManager::Get()->GetOwnerAccountIdAsync(
-      std::move(on_owner_fetched));
+  const user_manager::User* context_user =
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(context);
+  if (!context_user) {
+    std::move(callback).Run(false);
+    return;
+  }
+  user_manager::UserManager::Get()->GetOwnerAccountIdAsync(base::BindOnce(
+      [](const AccountId& context_account_id, CheckCallback callback,
+         const AccountId& owner_account_id) {
+        std::move(callback).Run(context_account_id == owner_account_id);
+      },
+      context_user->GetAccountId(), std::move(callback)));
 }
 
 class ApiGuardDelegateImpl : public ApiGuardDelegate {
  public:
-  ApiGuardDelegateImpl();
+  explicit ApiGuardDelegateImpl(
+      IsAppUiOpenAndSecureCallback is_app_ui_open_and_secure_callback);
   ApiGuardDelegateImpl(const ApiGuardDelegateImpl&) = delete;
   ApiGuardDelegateImpl& operator=(const ApiGuardDelegateImpl&) = delete;
   ~ApiGuardDelegateImpl() override;
@@ -199,10 +203,14 @@ class ApiGuardDelegateImpl : public ApiGuardDelegate {
                     CanAccessApiCallback callback) override;
 
  private:
+  IsAppUiOpenAndSecureCallback is_app_ui_open_and_secure_callback_;
   std::unique_ptr<AsyncConditionChecker> condition_checker_;
 };
 
-ApiGuardDelegateImpl::ApiGuardDelegateImpl() = default;
+ApiGuardDelegateImpl::ApiGuardDelegateImpl(
+    IsAppUiOpenAndSecureCallback is_app_ui_open_and_secure_callback)
+    : is_app_ui_open_and_secure_callback_(
+          std::move(is_app_ui_open_and_secure_callback)) {}
 
 ApiGuardDelegateImpl::~ApiGuardDelegateImpl() = default;
 
@@ -221,19 +229,19 @@ void ApiGuardDelegateImpl::CanAccessApi(content::BrowserContext* context,
   if (IsExtensionUsedByShimlessRMA(context)) {
     // No user to check for the Shimless RMA flow. Note that in this
     // case there is no active user in UserManager.
-  } else if (IsCurrentUserAffiliated()) {
+  } else if (IsContextUserAffiliated(context)) {
     condition_checker_->AppendChecker(
         base::BindOnce(&IsExtensionForceInstalled, base::Unretained(context),
                        extension->id()),
         "This extension is not installed by the admin");
   } else {
     condition_checker_->AppendChecker(
-        base::BindOnce(&IsCurrentUserOwner, base::Unretained(context)),
+        base::BindOnce(&IsContextUserOwner, base::Unretained(context)),
         "This extension is not run by the device owner");
   }
 
   condition_checker_->AppendChecker(
-      base::BindOnce(&IsTelemetryExtensionAppUiOpenAndSecure,
+      base::BindOnce(is_app_ui_open_and_secure_callback_,
                      base::Unretained(context), base::Unretained(extension)),
       "Companion app UI is not open or not secure");
 
@@ -257,7 +265,15 @@ std::unique_ptr<ApiGuardDelegate> ApiGuardDelegate::Factory::Create() {
   if (test_factory_) {
     return test_factory_->CreateInstance();
   }
-  return base::WrapUnique<ApiGuardDelegate>(new ApiGuardDelegateImpl());
+  return base::WrapUnique<ApiGuardDelegate>(new ApiGuardDelegateImpl(
+      base::BindRepeating(&IsTelemetryExtensionAppUiOpenAndSecure)));
+}
+
+// static
+std::unique_ptr<ApiGuardDelegate> ApiGuardDelegate::Factory::CreateForTesting(
+    IsAppUiOpenAndSecureCallback is_app_ui_open_and_secure_callback) {
+  return base::WrapUnique<ApiGuardDelegate>(
+      new ApiGuardDelegateImpl(std::move(is_app_ui_open_and_secure_callback)));
 }
 
 // static

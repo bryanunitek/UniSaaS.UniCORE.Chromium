@@ -13,9 +13,10 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/controlled_home_dialog.h"
 #include "chrome/browser/ui/extensions/controlled_home_dialog_controller.h"
 #include "chrome/browser/ui/extensions/extension_settings_overridden_dialog.h"
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
+#include "chrome/browser/ui/extensions/settings_overridden_dialog.h"
 #include "chrome/browser/ui/extensions/settings_overridden_params_providers.h"
 #include "chrome/common/url_constants.h"
 #include "components/prefs/pref_registry.h"
@@ -78,7 +79,7 @@ base::AutoReset<bool> SetAcknowledgeExistingNtpExtensionsForTesting(
 }
 
 void AcknowledgePreExistingNtpExtensions(Profile* profile) {
-  DCHECK(g_acknowledge_existing_ntp_extensions);
+  CHECK(g_acknowledge_existing_ntp_extensions, base::NotFatalUntil::M162);
 
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile);
   PrefService* profile_prefs = profile->GetPrefs();
@@ -124,10 +125,10 @@ void MaybeShowExtensionControlledHomeNotification(
 
 void MaybeShowExtensionControlledSearchNotification(
     content::WebContents* web_contents,
-    AutocompleteMatch::Type match_type) {
+    omnibox::AutocompleteMatchType match_type) {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   if (!AutocompleteMatch::IsSearchType(match_type) ||
-      match_type == AutocompleteMatchType::SEARCH_OTHER_ENGINE) {
+      match_type == omnibox::AutocompleteMatchType::kSearchOtherEngine) {
     return;
   }
 
@@ -175,11 +176,18 @@ void MaybeShowExtensionControlledNewTabPage(
 
   // Jump through a series of hoops to see if the web contents is pointing to
   // an extension-controlled NTP.
-  // TODO(devlin): Some of this is redundant with the checks in the bubble/
-  // dialog. We should consolidate, but that'll be simpler once we only have
-  // one UI option. In the meantime, extra checks don't hurt.
+  // On Android, the dialog is shown as a tab modal which is dismissed if page
+  // load starts (via TabModalLifetimeHandler), so we must wait until the
+  // navigation has committed (GetLastCommittedEntry). On Desktop, the dialog
+  // is anchored to the browser window and shows during tab selection
+  // (GetVisibleEntry).
+#if BUILDFLAG(IS_ANDROID)
+  content::NavigationEntry* entry =
+      web_contents->GetController().GetLastCommittedEntry();
+#else
   content::NavigationEntry* entry =
       web_contents->GetController().GetVisibleEntry();
+#endif
   if (!entry) {
     return;
   }

@@ -10,6 +10,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
@@ -22,6 +23,8 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.suggestions.SuggestionsConfig;
@@ -57,6 +60,7 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
      *     e.g.configuration changes. We need this to adjust the paddings and margins of the tile
      *     views.
      * @param mvTilesContainerLayout The container view of most visited tiles layout.
+     * @param uiConfig UiConfig providing display style information for the surface.
      * @param snapshotTileGridChangedRunnable The runnable called when the snapshot tile grid is
      *     changed.
      * @param tileCountChangedRunnable The runnable called when the tile count is changed.
@@ -65,17 +69,33 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
             Activity activity,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
             View mvTilesContainerLayout,
+            UiConfig uiConfig,
             @Nullable Runnable snapshotTileGridChangedRunnable,
             @Nullable Runnable tileCountChangedRunnable) {
         mActivity = activity;
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
         mMvTilesContainerLayout = mvTilesContainerLayout;
+        mUiConfig = uiConfig;
         mIsLff = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
+
+        @PaddingStyle int paddingStyle = NewTabPageUtils.getPaddingStyleForAurora();
+        if (paddingStyle != PaddingStyle.DEFAULT) {
+            Resources res = activity.getResources();
+            int topPadding = res.getDimensionPixelSize(R.dimen.mvt_container_top_padding_small);
+            int bottomPadding =
+                    res.getDimensionPixelSize(R.dimen.mvt_container_bottom_padding_small);
+            mvTilesContainerLayout.setPaddingRelative(
+                    mvTilesContainerLayout.getPaddingStart(),
+                    topPadding,
+                    mvTilesContainerLayout.getPaddingEnd(),
+                    bottomPadding);
+
+            updateTopMarginForAurora(paddingStyle);
+        }
 
         MostVisitedTilesLayout tilesLayout =
                 mvTilesContainerLayout.findViewById(R.id.mv_tiles_layout);
 
-        mUiConfig = new UiConfig(tilesLayout);
         PropertyModel propertyModel = new PropertyModel(MostVisitedTilesProperties.ALL_KEYS);
         PropertyModelChangeProcessor.create(
                 propertyModel,
@@ -155,26 +175,53 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
     }
 
     /**
-     * Updates the width and margins of the MV tiles container.
+     * Updates the width and lateral margins of the MVT container.
      *
-     * @param totalWidth The total width of the MV tiles layout.
+     * @param totalWidth The total available width of the parent layout.
+     * @param mvtWidth The target width that the MVT layout should align to.
      */
-    public void updateMvtWidth(int totalWidth) {
-        if (mMvTilesContainerLayout.getVisibility() == GONE) return;
-
-        mMediator.updateMvtWidth(totalWidth);
+    public void updateMvtWidth(int totalWidth, int mvtWidth) {
+        if (mMvTilesContainerLayout.getVisibility() != GONE) {
+            mMediator.updateMvtWidth(totalWidth, mvtWidth);
+        }
     }
 
     /**
      * Updates the margins for the most visited tiles layout based on what is shown above it.
      *
      * @param shouldShowLogo Whether the logo is shown.
-     * @param isWhiteBackgroundOnSearchBoxApplied Whether a white background is applied to the fake
-     *     search box.
      * @param isLff Whether the device is a large form factor.
      */
     public void updateTilesLayoutMargins(boolean shouldShowLogo, boolean isLff) {
+        @PaddingStyle int paddingStyle = NewTabPageUtils.getPaddingStyleForAurora();
+        if (paddingStyle != PaddingStyle.DEFAULT) {
+            // NTP Aurora's top margin doesn't depend on the logo, so re-apply the one set in the
+            // constructor, e.g. after the default search engine changes.
+            updateTopMarginForAurora(paddingStyle);
+            return;
+        }
+
         mMediator.updateTilesLayoutMargins(shouldShowLogo, isLff);
+    }
+
+    /**
+     * Sets the top margin of the MVT container for NTP Aurora.
+     *
+     * @param paddingStyle The {@link PaddingStyle} for NTP Aurora, which isn't {@link
+     *     PaddingStyle#DEFAULT}.
+     */
+    private void updateTopMarginForAurora(@PaddingStyle int paddingStyle) {
+        int topMarginDimen =
+                (paddingStyle == PaddingStyle.SMALL)
+                        ? R.dimen.mvt_container_top_margin_medium
+                        : R.dimen.mvt_container_top_margin_large;
+        View targetView =
+                NewTabPageUtils.getTilesLayoutTopMarginTargetView(mMvTilesContainerLayout);
+        ViewGroup.MarginLayoutParams marginLayoutParams =
+                (ViewGroup.MarginLayoutParams) targetView.getLayoutParams();
+        marginLayoutParams.topMargin =
+                mActivity.getResources().getDimensionPixelSize(topMarginDimen);
+        targetView.setLayoutParams(marginLayoutParams);
     }
 
     /** Called when the TasksSurface is hidden or NewTabPageLayout is destroyed. */

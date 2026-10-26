@@ -15,6 +15,8 @@
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/core/css/parser/css_variable_parser.h"
+#include "third_party/blink/renderer/core/css/property_registration.h"
+#include "third_party/blink/renderer/core/css/property_registry.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/css/style_rule_font_feature_values.h"
@@ -66,6 +68,8 @@ class TestCSSParserObserver : public CSSParserObserver {
     if (IsAtTargetLevel()) {
       property_start_ = start_offset;
       property_end_ = end_offset;
+      property_is_important_ = is_important;
+      property_is_parsed_ = is_parsed;
     }
   }
   void ObserveComment(unsigned start_offset, unsigned end_offset) override {}
@@ -93,6 +97,8 @@ class TestCSSParserObserver : public CSSParserObserver {
   StyleRule::RuleType rule_type_ = StyleRule::RuleType::kStyle;
   unsigned property_start_ = 0;
   unsigned property_end_ = 0;
+  bool property_is_important_ = false;
+  bool property_is_parsed_ = false;
   unsigned rule_header_start_ = 0;
   unsigned rule_header_end_ = 0;
   unsigned rule_body_start_ = 0;
@@ -1259,6 +1265,293 @@ TEST(CSSParserImplTest, CSSFunction) {
   EXPECT_EQ("red", result->VariableDataValue()->OriginalText());
 }
 
+TEST(CSSParserImplTest, PrivateRuleInsideStyleRule) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  String sheet_text = R"CSS(
+    .a {
+      @private {
+        --x: 1px;
+        --y;
+      }
+    }
+  )CSS";
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(sheet_text, context, sheet);
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+
+  const StyleRule* style_rule =
+      DynamicTo<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule);
+  ASSERT_NE(nullptr, style_rule->ChildRules());
+  ASSERT_EQ(1u, style_rule->ChildRules()->size());
+
+  const auto* private_rule =
+      DynamicTo<StyleRule>((*style_rule->ChildRules())[0].Get());
+  ASSERT_TRUE(private_rule);
+  EXPECT_TRUE(private_rule->IsPrivateRule());
+  EXPECT_FALSE(private_rule->FirstSelector());
+
+  const CSSPropertyValueSet& properties = private_rule->Properties();
+  ASSERT_EQ(1u, properties.PropertyCount());
+  const CSSPropertyValue& variable = properties.PropertyAt(0);
+  EXPECT_NE(AtomicString("--x"), variable.CustomPropertyName());
+  EXPECT_FALSE(CSSVariableParser::IsValidVariableName(
+      StringView(variable.CustomPropertyName())));
+  const PropertyRegistry* registry = sheet->GetPrivatePropertyRegistry();
+  ASSERT_TRUE(registry);
+  EXPECT_EQ(AtomicString("--x"), registry->AuthoredPrivatePropertyName(
+                                     variable.CustomPropertyName()));
+  EXPECT_TRUE(registry->PrivateRegistration(variable.CustomPropertyName()));
+  EXPECT_FALSE(registry->Registration(variable.CustomPropertyName()));
+  const auto* value = DynamicTo<CSSUnparsedDeclarationValue>(variable.Value());
+  ASSERT_TRUE(value);
+  EXPECT_EQ("1px", value->VariableDataValue()->OriginalText());
+}
+
+TEST(CSSParserImplTest, PrivateRuleNotAllowedAtTopLevel) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+
+  // @private is only allowed nested inside a style rule, not at the top level.
+  String sheet_text = "@private { --x: 1px; }";
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(sheet_text, context, sheet);
+  EXPECT_EQ(0u, sheet->ChildRules().size());
+}
+
+TEST(CSSParserImplTest, PrivateRuleTrailingWhitespace) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  String sheet_text = R"CSS(
+    .a {
+      @private {
+        --a    ;
+        --b: 1px    ;
+        --c <length>    ;
+        --d <length>: 2px    ;
+      }
+    }
+  )CSS";
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(sheet_text, context, sheet);
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+
+  const StyleRule* style_rule =
+      DynamicTo<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule);
+  ASSERT_NE(nullptr, style_rule->ChildRules());
+  ASSERT_EQ(1u, style_rule->ChildRules()->size());
+
+  const auto* private_rule =
+      DynamicTo<StyleRule>((*style_rule->ChildRules())[0].Get());
+  ASSERT_TRUE(private_rule);
+
+  const CSSPropertyValueSet& properties = private_rule->Properties();
+  ASSERT_EQ(2u, properties.PropertyCount());
+  const PropertyRegistry* registry = sheet->GetPrivatePropertyRegistry();
+  ASSERT_TRUE(registry);
+  EXPECT_EQ(AtomicString("--b"),
+            registry->AuthoredPrivatePropertyName(
+                properties.PropertyAt(0).CustomPropertyName()));
+  const auto* first_value =
+      DynamicTo<CSSUnparsedDeclarationValue>(properties.PropertyAt(0).Value());
+  ASSERT_TRUE(first_value);
+  EXPECT_EQ("1px", first_value->VariableDataValue()->OriginalText());
+  EXPECT_EQ(AtomicString("--d"),
+            registry->AuthoredPrivatePropertyName(
+                properties.PropertyAt(1).CustomPropertyName()));
+  const auto* second_value =
+      DynamicTo<CSSUnparsedDeclarationValue>(properties.PropertyAt(1).Value());
+  ASSERT_TRUE(second_value);
+  EXPECT_EQ("2px", second_value->VariableDataValue()->OriginalText());
+  const PropertyRegistration* registration = registry->PrivateRegistration(
+      properties.PropertyAt(1).CustomPropertyName());
+  ASSERT_TRUE(registration);
+  EXPECT_FALSE(registration->Syntax().IsUniversal());
+}
+
+TEST(CSSParserImplTest, PrivateRuleInvalidVariableIsSkipped) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  // "x" is not a valid custom property name, so it is skipped, leaving an
+  // empty (but still present) @private rule.
+  String sheet_text = ".a { @private { x: 1px; } }";
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(sheet_text, context, sheet);
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+
+  const StyleRule* style_rule =
+      DynamicTo<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule);
+  ASSERT_NE(nullptr, style_rule->ChildRules());
+  ASSERT_EQ(1u, style_rule->ChildRules()->size());
+
+  const auto* private_rule =
+      DynamicTo<StyleRule>((*style_rule->ChildRules())[0].Get());
+  ASSERT_TRUE(private_rule);
+  EXPECT_EQ(0u, private_rule->Properties().PropertyCount());
+}
+
+TEST(CSSParserImplTest, PrivateRuleSkipsInvalidDeclarationsKeepingValidOnes) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  // The invalid `background` declaration is skipped, but the valid `--foo`
+  // custom property is still collected.
+  String sheet_text =
+      ".a { @private { --foo: green; background: var(--foo, red); } }";
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(sheet_text, context, sheet);
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+
+  const StyleRule* style_rule =
+      DynamicTo<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule);
+  ASSERT_NE(nullptr, style_rule->ChildRules());
+  ASSERT_EQ(1u, style_rule->ChildRules()->size());
+
+  const auto* private_rule =
+      DynamicTo<StyleRule>((*style_rule->ChildRules())[0].Get());
+  ASSERT_TRUE(private_rule);
+
+  const CSSPropertyValueSet& properties = private_rule->Properties();
+  ASSERT_EQ(1u, properties.PropertyCount());
+  const CSSPropertyValue& variable = properties.PropertyAt(0);
+  const PropertyRegistry* registry = sheet->GetPrivatePropertyRegistry();
+  ASSERT_TRUE(registry);
+  EXPECT_EQ(AtomicString("--foo"), registry->AuthoredPrivatePropertyName(
+                                       variable.CustomPropertyName()));
+  const auto* value = DynamicTo<CSSUnparsedDeclarationValue>(variable.Value());
+  ASSERT_TRUE(value);
+  EXPECT_EQ("green", value->VariableDataValue()->OriginalText());
+}
+
+TEST(CSSParserImplTest, PrivateNamesAreSharedWithinStyleRuleScope) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(
+      ".a { @private { --x: red; } @private { --x: blue; } }", context, sheet);
+
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+  const auto* style_rule = To<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule->ChildRules());
+  ASSERT_EQ(2u, style_rule->ChildRules()->size());
+  const auto* first = To<StyleRule>((*style_rule->ChildRules())[0].Get());
+  const auto* second = To<StyleRule>((*style_rule->ChildRules())[1].Get());
+  EXPECT_EQ(first->Properties().PropertyAt(0).CustomPropertyName(),
+            second->Properties().PropertyAt(0).CustomPropertyName());
+}
+
+TEST(CSSParserImplTest, NestedStyleRulesUseDifferentPrivateNames) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(
+      ".a { @private { --x: red; } & { @private { --x: blue; } } }", context,
+      sheet);
+
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+  const auto* style_rule = To<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule->ChildRules());
+  ASSERT_EQ(2u, style_rule->ChildRules()->size());
+  const auto* outer_private =
+      To<StyleRule>((*style_rule->ChildRules())[0].Get());
+  const auto* nested_style =
+      To<StyleRule>((*style_rule->ChildRules())[1].Get());
+  ASSERT_TRUE(nested_style->ChildRules());
+  ASSERT_EQ(1u, nested_style->ChildRules()->size());
+  const auto* nested_private =
+      To<StyleRule>((*nested_style->ChildRules())[0].Get());
+  EXPECT_NE(outer_private->Properties().PropertyAt(0).CustomPropertyName(),
+            nested_private->Properties().PropertyAt(0).CustomPropertyName());
+}
+
+TEST(CSSParserImplTest, NestedGroupRulesSharePrivateNames) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(
+      ".a { @private { --x: red; } "
+      "@media (width > 0px) { @private { --x: blue; } } }",
+      context, sheet);
+
+  ASSERT_EQ(1u, sheet->ChildRules().size());
+  const auto* style_rule = To<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule->ChildRules());
+  ASSERT_EQ(2u, style_rule->ChildRules()->size());
+  const auto* outer_private =
+      To<StyleRule>((*style_rule->ChildRules())[0].Get());
+  const auto* media_rule =
+      To<StyleRuleMedia>((*style_rule->ChildRules())[1].Get());
+  ASSERT_EQ(1u, media_rule->ChildRules().size());
+  const auto* grouped_private =
+      To<StyleRule>(media_rule->ChildRules()[0].Get());
+  EXPECT_EQ(outer_private->Properties().PropertyAt(0).CustomPropertyName(),
+            grouped_private->Properties().PropertyAt(0).CustomPropertyName());
+}
+
+TEST(CSSParserImplTest, CloningPrivateRulePreservesPrivateName) {
+  test::TaskEnvironment task_environment;
+  ScopedCSSPrivateForTest scoped_feature(true);
+  ScopedNullExecutionContext execution_context;
+  Document* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
+
+  auto* context = MakeGarbageCollected<CSSParserContext>(*document);
+  auto* sheet = MakeGarbageCollected<StyleSheetContents>(context);
+  CSSParserImpl::ParseStyleSheet(".a { @private { --x: red; } }", context,
+                                 sheet);
+
+  const auto* style_rule = To<StyleRule>(sheet->ChildRules()[0].Get());
+  ASSERT_TRUE(style_rule->ChildRules());
+  const auto* private_rule =
+      To<StyleRule>((*style_rule->ChildRules())[0].Get());
+  const auto* clone =
+      To<StyleRule>(const_cast<StyleRule*>(private_rule)
+                        ->Clone(/*new_parent=*/nullptr,
+                                /*mixin_parameter_bindings=*/nullptr));
+  EXPECT_EQ(private_rule->Properties().PropertyAt(0).CustomPropertyName(),
+            clone->Properties().PropertyAt(0).CustomPropertyName());
+}
+
 static String RoundTripProperty(Document& document, String property_text) {
   String rule_text = "p { " + property_text + " }";
   StyleRule* style_rule =
@@ -1275,7 +1568,7 @@ TEST(CSSParserImplTest, AllPropertiesCanParseImportant) {
   Document* document =
       Document::CreateForTest(execution_context.GetExecutionContext());
   const ComputedStyle& initial_style =
-      *ComputedStyle::GetInitialStyleSingleton();
+      ComputedStyle::GetInitialStyleSingleton();
 
   int broken_properties = 0;
 
@@ -1549,6 +1842,29 @@ TEST(CSSParserImplTest, CustomMediaQueryValueInvalid) {
   EXPECT_TRUE(stream.AtEnd());
   EXPECT_EQ(rule->GetName(), "--query");
   EXPECT_EQ(rule->GetMediaQueryValue()->MediaText(), "not all");
+}
+
+TEST(CSSParserImplTest, CustomPropertyImportantObserver) {
+  test::TaskEnvironment task_environment;
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
+
+  {
+    TestCSSParserObserver observer;
+    CSSParserImpl::ParseStyleSheetForInspector("div { --foo: bar !important; }",
+                                               context, style_sheet, observer);
+    EXPECT_TRUE(observer.property_is_parsed_);
+    EXPECT_TRUE(observer.property_is_important_);
+  }
+
+  {
+    TestCSSParserObserver observer;
+    CSSParserImpl::ParseStyleSheetForInspector("div { --foo: bar; }", context,
+                                               style_sheet, observer);
+    EXPECT_TRUE(observer.property_is_parsed_);
+    EXPECT_FALSE(observer.property_is_important_);
+  }
 }
 
 }  // namespace blink

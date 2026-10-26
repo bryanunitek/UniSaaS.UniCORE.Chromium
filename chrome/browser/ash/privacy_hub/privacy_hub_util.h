@@ -50,9 +50,6 @@ bool MicrophoneSwitchState();
 // to the device, irrespective of what this function returns.
 bool ShouldForceDisableCameraSwitch();
 
-// Needs to be called for the Privacy Hub to be aware of the camera count.
-void SetUpCameraCountObserver();
-
 // Notifies the Privacy Hub controller.
 void TrackGeolocationAttempted(const std::string& name);
 
@@ -103,6 +100,9 @@ std::unique_ptr<ContentBlockObservation> CreateObservationForBlockedContent(
 // Opens the system settings page that allows OS level control for the provided
 // content type if such settings page exists.
 void OpenSystemSettings(ContentType type);
+
+// Returns true if the Privacy Hub internals are fully initialized and usable.
+bool IsPrivacyHubAvailable();
 
 class ScopedUserPermissionPrefForTest {
  public:

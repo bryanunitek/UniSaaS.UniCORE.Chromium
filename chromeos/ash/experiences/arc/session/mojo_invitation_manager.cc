@@ -16,7 +16,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/mojo_proxy/service/switches.h"
-#include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "mojo/public/cpp/system/message_pipe.h"
@@ -89,36 +88,28 @@ void MojoInvitationManager::SendInvitation(mojo::PlatformChannel& channel,
   mojo::OutgoingInvitation invitation;
   pipe_ = invitation.AttachMessagePipe(token);
 
-  if (mojo::core::IsMojoIpczEnabled()) {
-    // ARCVM containers still use legacy Mojo Core. If IPCZ is enabled, we
-    // spawn an instance of Mojo Proxy which acts as a IPCZ <=> Mojo Core
-    // translation layer between Ash Chrome and ARCVM.
-    mojo::PlatformChannel proxy_channel;
-    proxy_process_ = LaunchMojoProxy(channel, proxy_channel, token);
-    DCHECK(proxy_process_.IsValid());
-    invitation.set_extra_flags(MOJO_SEND_INVITATION_FLAG_SHARE_BROKER);
-    mojo::OutgoingInvitation::Send(std::move(invitation),
-                                   proxy_process_.Handle(),
-                                   proxy_channel.TakeLocalEndpoint());
-  } else {
-    mojo::OutgoingInvitation::Send(std::move(invitation),
-                                   base::kNullProcessHandle,
-                                   channel.TakeLocalEndpoint());
-  }
+  // ARCVM containers still use legacy Mojo Core, so we spawn an instance of
+  // Mojo Proxy which acts as an IPCZ <=> Mojo Core translation layer between
+  // Ash Chrome and ARCVM.
+  mojo::PlatformChannel proxy_channel;
+  proxy_process_ = LaunchMojoProxy(channel, proxy_channel, token);
+  DCHECK(proxy_process_.IsValid());
+  invitation.set_extra_flags(MOJO_SEND_INVITATION_FLAG_SHARE_BROKER);
+  mojo::OutgoingInvitation::Send(std::move(invitation), proxy_process_.Handle(),
+                                 proxy_channel.TakeLocalEndpoint());
 }
 
 // static
 void MojoInvitationManager::CollectMojoProxyProcess(
     base::Process proxy_process) {
-  // Wait for some time until the proxy process terminates.
-  // In the common case, Mojo Proxy will exit cleanly once
-  // all portals are closed.
-  constexpr base::TimeDelta timeout = base::Milliseconds(2500);
-  if (proxy_process.WaitForExitWithTimeout(timeout, nullptr)) {
+  // Reap immediately if the proxy has already exited. Do not block waiting for
+  // a clean exit: on browser shutdown ARCVM and external daemons (iioservice,
+  // midis) outlive Chrome, keeping secondary portals open in mojo_proxy so a
+  // timed wait always expires and eats the 3 s session_manager shutdown budget.
+  if (proxy_process.WaitForExitWithTimeout(base::TimeDelta(), nullptr)) {
     return;
   }
 
-  // Otherwise, terminate the process forcefully.
   bool success = proxy_process.Terminate(/*exit_code=*/0, /*wait=*/true);
   LOG_IF(ERROR, !success) << "Failed to terminate Mojo Proxy process";
 }

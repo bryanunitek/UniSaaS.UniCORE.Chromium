@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -12,12 +11,13 @@
 #include "components/autofill/core/browser/logging/log_router.h"
 #include "components/password_manager/content/browser/password_manager_log_router_factory.h"
 #include "content/public/test/browser_test.h"
+#include "ui/base/window_open_disposition.h"
 
 class PasswordManagerInternalsBrowserTest : public WebUIMochaBrowserTest {
  protected:
   void SetUpOnMainThread() override {
     WebUIMochaBrowserTest::SetUpOnMainThread();
-    OpenInternalsPage(WindowOpenDisposition::CURRENT_TAB);
+    OpenInternalsPage(WindowOpenDisposition::kCurrentTab);
   }
 
   // Navigates to the internals page in a tab specified by |disposition| (and
@@ -26,7 +26,7 @@ class PasswordManagerInternalsBrowserTest : public WebUIMochaBrowserTest {
     OpenInternalsPageWithBrowser(browser(), disposition);
   }
 
-  void OpenInternalsPageWithBrowser(Browser* browser,
+  void OpenInternalsPageWithBrowser(BrowserWindowInterface* browser,
                                     WindowOpenDisposition disposition) {
     std::string url_string("chrome://");
     url_string += chrome::kChromeUIPasswordManagerInternalsHost;
@@ -39,7 +39,7 @@ class PasswordManagerInternalsBrowserTest : public WebUIMochaBrowserTest {
 IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest, LogText) {
   autofill::LogRouter* log_router =
       password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(log_router);
   log_router->ProcessLog("<script> text for testing");
   content::WebContents* web_contents =
@@ -55,7 +55,7 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest, LogText) {
 IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest, LogEmpty) {
   autofill::LogRouter* log_router =
       password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(log_router);
   content::WebContents* web_contents =
       chrome_test_utils::GetActiveWebContents(this);
@@ -71,10 +71,10 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest,
                        LogEmptyAfterReload) {
   autofill::LogRouter* log_router =
       password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(log_router);
   log_router->ProcessLog("<script> text for testing");
-  OpenInternalsPage(WindowOpenDisposition::CURRENT_TAB);  // Reload.
+  OpenInternalsPage(WindowOpenDisposition::kCurrentTab);  // Reload.
   content::WebContents* web_contents =
       chrome_test_utils::GetActiveWebContents(this);
   ASSERT_TRUE(RunTestOnWebContents(
@@ -88,7 +88,7 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest,
 IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest, NavigateAway) {
   autofill::LogRouter* log_router =
       password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(log_router);
   log_router->ProcessLog("<script> text for testing");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
@@ -100,7 +100,7 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest,
                        NonIncognitoDescription) {
   autofill::LogRouter* log_router =
       password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(log_router);
   content::WebContents* web_contents =
       chrome_test_utils::GetActiveWebContents(this);
@@ -108,6 +108,34 @@ IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest,
       web_contents,
       "password_manager_internals/password_manager_internals_test.js",
       "runMochaTest('PasswordManagerInternals', 'NonIncognitoDescription')",
+      /*skip_test_loader=*/true));
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest, AutoScroll) {
+  autofill::LogRouter* log_router =
+      password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
+          browser()->GetProfile());
+  ASSERT_TRUE(log_router);
+  for (int i = 0; i < 50; ++i) {
+    log_router->ProcessLog("Log entry for auto-scroll testing");
+  }
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(RunTestOnWebContents(
+      web_contents,
+      "password_manager_internals/password_manager_internals_test.js",
+      "runMochaTest('PasswordManagerInternals', 'AutoScroll')",
+      /*skip_test_loader=*/true));
+}
+
+// Tests that wiggling the cursor changes it to the Password Manager logo.
+IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsBrowserTest, CursorWiggle) {
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+  ASSERT_TRUE(RunTestOnWebContents(
+      web_contents,
+      "password_manager_internals/password_manager_internals_test.js",
+      "runMochaTest('PasswordManagerInternals', 'CursorWiggle')",
       /*skip_test_loader=*/true));
 }
 
@@ -123,10 +151,10 @@ class PasswordManagerInternalsIncognitoBrowserTest
 // Test that the description is correct in an Incognito tab.
 IN_PROC_BROWSER_TEST_F(PasswordManagerInternalsIncognitoBrowserTest,
                        IncognitoDescription) {
-  EXPECT_TRUE(browser()->profile()->IsOffTheRecord());
+  EXPECT_TRUE(browser()->GetProfile()->IsOffTheRecord());
   autofill::LogRouter* log_router =
       password_manager::PasswordManagerLogRouterFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_FALSE(log_router);  // There should be no log_router for Incognito.
   content::WebContents* web_contents =
       chrome_test_utils::GetActiveWebContents(this);

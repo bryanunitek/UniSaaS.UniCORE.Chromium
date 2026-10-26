@@ -17,9 +17,9 @@
 #import "ios/chrome/common/ui/util/button_util.h"
 #import "ios/chrome/common/ui/util/chrome_button.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
-#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
@@ -96,16 +96,23 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   UIScrollView* _scrollView;
   UIView* _bottomGradientView;
   CAGradientLayer* _bottomGradientLayer;
+  NSLayoutConstraint* _incognitoStackWidthConstraint;
+  // Registration for window trait changes.
+  id<UITraitChangeRegistration> _windowTraitChangeRegistration;
+  // The window on which `_windowTraitChangeRegistration` is registered.
+  __weak UIWindow* _observedWindow;
 }
 
 - (instancetype)init {
   return [super initWithNibName:nil bundle:nil];
 }
 
+#pragma mark - UIViewController
+
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-  self.view.backgroundColor = [UIColor systemBackgroundColor];
+  self.view.backgroundColor = [UIColor colorNamed:kBackgroundColor];
 
   _scrollView = [[UIScrollView alloc] init];
   _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -203,11 +210,9 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
 
   [self.view addSubview:primaryButton];
 
-  // Only apply a width offset if the device is Ipad.
-  CGFloat incognitoStackWidthOffset =
-      (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET)
-          ? kIncognitoStackWidthOffset
-          : 0;
+  _incognitoStackWidthConstraint = [incognitoContentStackView.widthAnchor
+      constraintEqualToAnchor:mainStackView.widthAnchor
+                     constant:-[self incognitoStackWidthOffset]];
 
   [NSLayoutConstraint activateConstraints:@[
     [_scrollView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
@@ -228,9 +233,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
         constraintEqualToAnchor:_scrollView.frameLayoutGuide.trailingAnchor
                        constant:-kHorizontalPadding],
 
-    [incognitoContentStackView.widthAnchor
-        constraintEqualToAnchor:mainStackView.widthAnchor
-                       constant:-incognitoStackWidthOffset],
+    _incognitoStackWidthConstraint,
 
     [primaryButton.leadingAnchor
         constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor
@@ -258,23 +261,22 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   [self setUpBottomSheetDetents];
 }
 
-- (void)viewDidLayoutSubviews {
-  [super viewDidLayoutSubviews];
-
-  _bottomGradientLayer.frame = _bottomGradientView.bounds;
-  BOOL isScrollable =
-      _scrollView.contentSize.height > _scrollView.bounds.size.height;
-
-  // Show gradient only if scrollable
-  _bottomGradientView.hidden = !isScrollable;
-}
-
-- (void)primaryButtonTapped {
-  [self.delegate didTapPrimaryActionButton];
-}
-
-- (void)learnMoreButtonPressed {
-  [self.URLLoaderDelegate loadURLInTab:GetLearnMoreIncognitoUrl()];
+- (void)viewIsAppearing:(BOOL)animated {
+  [super viewIsAppearing:animated];
+  [self updateIncognitoStackWidthConstraint];
+  if (self.view.window && self.view.window != _observedWindow) {
+    [_observedWindow unregisterForTraitChanges:_windowTraitChangeRegistration];
+    _observedWindow = self.view.window;
+    __weak __typeof(self) weakSelf = self;
+    _windowTraitChangeRegistration = [_observedWindow
+        registerForTraitChanges:@[
+          UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class
+        ]
+                    withHandler:^(id<UITraitEnvironment> traitEnvironment,
+                                  UITraitCollection* previousCollection) {
+                      [weakSelf updateIncognitoStackWidthConstraint];
+                    }];
+  }
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -287,6 +289,51 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
                      [weakSelf titleViewAnimation];
                    }
                    completion:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+  [super viewDidDisappear:animated];
+  if (_windowTraitChangeRegistration) {
+    [_observedWindow unregisterForTraitChanges:_windowTraitChangeRegistration];
+    _windowTraitChangeRegistration = nil;
+    _observedWindow = nil;
+  }
+}
+
+- (void)viewDidLayoutSubviews {
+  [super viewDidLayoutSubviews];
+
+  _bottomGradientLayer.frame = _bottomGradientView.bounds;
+  BOOL isScrollable =
+      _scrollView.contentSize.height > _scrollView.bounds.size.height;
+
+  // Show gradient only if scrollable
+  _bottomGradientView.hidden = !isScrollable;
+}
+
+#pragma mark - Private
+
+// Updates the width constraint of the incognito content stack view based on the
+// window's size class.
+- (void)updateIncognitoStackWidthConstraint {
+  _incognitoStackWidthConstraint.constant = -[self incognitoStackWidthOffset];
+}
+
+// Returns the horizontal width offset for the incognito content stack view.
+- (CGFloat)incognitoStackWidthOffset {
+  return IsRegularXRegularSizeClass(self.view.window)
+             ? kIncognitoStackWidthOffset
+             : 0;
+}
+
+// Handles taps on the primary action button.
+- (void)primaryButtonTapped {
+  [self.delegate didTapPrimaryActionButton];
+}
+
+// Handles taps on the "Learn More" button.
+- (void)learnMoreButtonPressed {
+  [self.URLLoaderDelegate loadURLInTab:GetLearnMoreIncognitoUrl()];
 }
 
 // Configures the bottom sheet's presentation controller appearance.
@@ -315,6 +362,8 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   presentationController.selectedDetentIdentifier = @"customMaximizedDetent";
 }
 
+// Creates and configures the animated title view containing the Chrome and
+// Incognito logos.
 - (UIView*)animatedTitleView {
   UIView* chromeIconView = [[UIView alloc] init];
   chromeIconView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -322,10 +371,10 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   chromeIconView.backgroundColor = [UIColor whiteColor];
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   UIImage* chromeLogo = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kChromeLogoSize));
+      SymbolWithPointSize(SymbolMulticolorChromeball, kChromeLogoSize));
 #else
   UIImage* chromeLogo =
-      CustomSymbolWithPointSize(kChromeProductSymbol, kChromeLogoSize);
+      SymbolWithPointSize(SymbolChromeProduct, kChromeLogoSize);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
 
   UIImageView* chromeLogoView = [[UIImageView alloc] initWithImage:chromeLogo];
@@ -337,7 +386,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   _icognitoIconView.layer.cornerRadius = kTitleContainerCornerRadius;
   _icognitoIconView.backgroundColor = LargeIncognitoBackgroundColor();
   UIImage* incognitoLogo =
-      CustomSymbolWithPointSize(kIncognitoSymbol, kIncognitoLogoSize);
+      SymbolWithPointSize(SymbolIncognito, kIncognitoLogoSize);
   UIImageView* incognitoLogoView =
       [[UIImageView alloc] initWithImage:incognitoLogo];
   incognitoLogoView.tintColor = LargeIncognitoForegroundColor();
@@ -360,11 +409,13 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   AddSameConstraints(chromeIconView, _icognitoIconView);
   AddSameCenterConstraints(_icognitoIconView, incognitoLogoView);
   AddSameConstraintsToSidesWithInsets(
-      chromeIconView, outerView, LayoutSides::kTop | LayoutSides::kBottom,
+      chromeIconView, outerView, LayoutSides::kVertical,
       NSDirectionalEdgeInsetsMake(kTitleContainerTopPadding, 0, 0, 0));
   return outerView;
 }
 
+// Animates the incognito icon view to the bottom-right corner of the Chrome
+// logo.
 - (void)titleViewAnimation {
   CGFloat translationX =
       _icognitoIconView.frame.size.width / 2 - kAnimationTranslationOffset;
@@ -376,6 +427,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
       CGAffineTransformMakeTranslation(translationX, translationY));
 }
 
+// Creates and configures the primary action button.
 - (ChromeButton*)createPrimaryActionButton {
   ChromeButton* primaryActionButton =
       [[ChromeButton alloc] initWithStyle:ChromeButtonStylePrimary];
@@ -390,6 +442,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
   return primaryActionButton;
 }
 
+// Creates and configures the sheet's title label.
 - (UILabel*)createTitleLabel {
   UILabel* title = [[UILabel alloc] init];
   title.numberOfLines = 0;

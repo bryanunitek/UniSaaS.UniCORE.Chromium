@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/incognito_clear_browsing_data_dialog.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/view_utils.h"
@@ -20,7 +21,7 @@ IncognitoClearBrowsingDataDialogCoordinator::
 }
 
 void IncognitoClearBrowsingDataDialogCoordinator::Show(
-    IncognitoClearBrowsingDataDialogInterface::Type type,
+    IncognitoClearBrowsingDataDialog::Type type,
     views::BubbleAnchor anchor) {
   if (bubble_tracker_.view() && bubble_tracker_.view()->GetWidget()) {
     // Ensure the previous bubble is closed before creating and showing the new
@@ -48,6 +49,16 @@ IncognitoClearBrowsingDataDialog* IncognitoClearBrowsingDataDialogCoordinator::
                      : nullptr;
 }
 
+DEFINE_USER_DATA(IncognitoClearBrowsingDataDialogCoordinator);
+
+// static
+IncognitoClearBrowsingDataDialogCoordinator*
+IncognitoClearBrowsingDataDialogCoordinator::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
 IncognitoClearBrowsingDataDialogCoordinator::
-    IncognitoClearBrowsingDataDialogCoordinator(Profile* profile)
-    : profile_(profile) {}
+    IncognitoClearBrowsingDataDialogCoordinator(Profile* profile,
+                                                ui::UnownedUserDataHost& host)
+    : scoped_unowned_user_data_(host, *this), profile_(profile) {}

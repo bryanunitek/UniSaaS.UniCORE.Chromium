@@ -18,7 +18,6 @@ import android.content.Context;
 import android.content.pm.ResolveInfo;
 
 import androidx.test.core.app.ApplicationProvider;
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
@@ -38,6 +37,9 @@ import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManagerProvider;
 import org.chromium.components.autofill.payments.AccountType;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
@@ -110,6 +112,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     @Mock private ManagedBottomSheetController mBottomSheetController;
     @Mock private AutofillImageFetcher mAutofillImageFetcher;
     @Mock private Profile mProfile;
+    @Mock private SnackbarManager mSnackbarManager;
 
     private Context mApplicationContext;
     private FacilitatedPaymentsPaymentMethodsViewBridge mViewBridge;
@@ -123,6 +126,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
         mApplicationContext.setTheme(R.style.Theme_BrowserUI_DayNight);
         mWindow = new WindowAndroid(mApplicationContext, /* occlusionTrackingAllowed= */ false);
         BottomSheetControllerFactory.attach(mWindow, mBottomSheetController);
+        SnackbarManagerProvider.attach(mWindow, mSnackbarManager);
         mViewBridge =
                 FacilitatedPaymentsPaymentMethodsViewBridge.create(
                         mDelegateMock, mWindow, mProfile);
@@ -130,12 +134,12 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
 
     @After
     public void tearDown() {
+        SnackbarManagerProvider.detach(mSnackbarManager);
         BottomSheetControllerFactory.detach(mBottomSheetController);
         mWindow.destroy();
     }
 
     @Test
-    @SmallTest
     public void create_nullProfile() {
         mViewBridge =
                 FacilitatedPaymentsPaymentMethodsViewBridge.create(
@@ -145,7 +149,6 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     public void create_nullWindowAndroid() {
         mViewBridge =
                 FacilitatedPaymentsPaymentMethodsViewBridge.create(
@@ -155,7 +158,6 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     public void create_nullBottomSheetController() {
         BottomSheetControllerFactory.detach(mBottomSheetController);
 
@@ -167,9 +169,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     public void requestShowContent_callsControllerRequestShowContent() {
-
         mViewBridge.requestShowContent(BANK_ACCOUNTS);
 
         verify(mBottomSheetController)
@@ -178,9 +178,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     public void requestShowContent_bottomSheetContentImplIsStubbed() {
-
         mViewBridge.requestShowContent(BANK_ACCOUNTS);
 
         ArgumentCaptor<FacilitatedPaymentsPaymentMethodsView> contentCaptor =
@@ -190,12 +188,6 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
         FacilitatedPaymentsPaymentMethodsView content = contentCaptor.getValue();
         assertThat(content.getContentView(), notNullValue());
         assertThat(
-                content.getSheetContentDescription(mApplicationContext),
-                equalTo(
-                        mApplicationContext.getString(
-                                R.string
-                                        .facilitated_payments_payment_methods_bottom_sheet_content_description)));
-        assertThat(
                 content.getSheetFullHeightAccessibilityStringId(),
                 equalTo(R.string.facilitated_payments_payment_methods_bottom_sheet_full_height));
         assertThat(
@@ -204,10 +196,8 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures({ChromeFeatureList.FACILITATED_PAYMENTS_ENABLE_A2A_PAYMENT})
     public void requestShowContentForPaymentLink_callsControllerRequestShowContent() {
-
         mViewBridge.requestShowContentForPaymentLink(EWALLETS, APPS);
 
         verify(mBottomSheetController)
@@ -216,10 +206,8 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures({ChromeFeatureList.FACILITATED_PAYMENTS_ENABLE_A2A_PAYMENT})
     public void requestShowContentForPaymentLink_callsControllerRequestShowContent_nullAppArray() {
-
         mViewBridge.requestShowContentForPaymentLink(EWALLETS, null);
 
         verify(mBottomSheetController)
@@ -228,10 +216,8 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     @DisableFeatures({ChromeFeatureList.FACILITATED_PAYMENTS_ENABLE_A2A_PAYMENT})
     public void requestShowContentForPaymentLink_bottomSheetContentImplIsStubbed() {
-
         mViewBridge.requestShowContentForPaymentLink(EWALLETS, APPS);
 
         ArgumentCaptor<FacilitatedPaymentsPaymentMethodsView> contentCaptor =
@@ -242,12 +228,6 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
 
         assertThat(content.getContentView(), notNullValue());
         assertThat(
-                content.getSheetContentDescription(mApplicationContext),
-                equalTo(
-                        mApplicationContext.getString(
-                                R.string
-                                        .facilitated_payments_payment_methods_bottom_sheet_content_description)));
-        assertThat(
                 content.getSheetFullHeightAccessibilityStringId(),
                 equalTo(R.string.facilitated_payments_payment_methods_bottom_sheet_full_height));
         assertThat(
@@ -256,10 +236,8 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     public void showPixAccountLinkingPrompt_callsControllerRequestShowContent() {
-
-        mViewBridge.showPixAccountLinkingPrompt(/* strikeCount= */ 0);
+        mViewBridge.showPixAccountLinkingPrompt(/* strikeCount= */ 0, "test@gmail.com");
 
         verify(mBottomSheetController)
                 .requestShowContent(
@@ -267,13 +245,60 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     }
 
     @Test
-    @SmallTest
     public void showPixAccountLinkingSuccessScreen_callsControllerRequestShowContent() {
-
         mViewBridge.showPixAccountLinkingSuccessScreen();
 
         verify(mBottomSheetController)
                 .requestShowContent(
                         any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    public void showProgressScreen_callsControllerRequestShowContent() {
+        mViewBridge.showProgressScreen(ProgressScreenType.PAYMENT);
+
+        verify(mBottomSheetController)
+                .requestShowContent(
+                        any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    public void showErrorScreen_callsControllerRequestShowContent() {
+        mViewBridge.showErrorScreen();
+
+        verify(mBottomSheetController)
+                .requestShowContent(
+                        any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    public void dismiss_callsControllerHideContent() {
+        mViewBridge.dismiss();
+
+        verify(mBottomSheetController)
+                .hideContent(
+                        any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    public void showAccountLinkingPrompt_callsControllerRequestShowContent() {
+        mViewBridge.showAccountLinkingPrompt(
+                org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType
+                        .EWALLET,
+                "Pix",
+                0);
+
+        verify(mBottomSheetController)
+                .requestShowContent(
+                        any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    public void showAccountLinkingFailureNotification_showsSnackbar() {
+        mViewBridge.showAccountLinkingFailureNotification(
+                org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType
+                        .PIX);
+
+        verify(mSnackbarManager).showSnackbar(any(Snackbar.class));
     }
 }

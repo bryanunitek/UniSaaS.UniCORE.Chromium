@@ -54,7 +54,7 @@ namespace {
 
 // There are some cases where |SelectionModifier::ModifyWithPageGranularity()|
 // enters an infinite loop. Work around it by hard-limiting the iteration.
-const unsigned kMaxIterationForPageGranularityMovement = 1024;
+const wtf_size_t kMaxIterationForPageGranularityMovement = 1024;
 
 VisiblePositionInFlatTree LeftBoundaryOfLine(const VisiblePositionInFlatTree& c,
                                              TextDirection direction) {
@@ -1002,10 +1002,11 @@ static bool AbsoluteCaretY(const PositionInFlatTreeWithAffinity& c, int& y) {
 
 bool SelectionModifier::ModifyWithPageGranularity(
     SelectionModifyAlteration alter,
-    unsigned vertical_distance,
+    int vertical_distance,
     SelectionModifyVerticalDirection direction) {
-  if (!vertical_distance)
+  if (vertical_distance == 0) {
     return false;
+  }
 
   DCHECK(!GetFrame().GetDocument()->NeedsLayoutTreeUpdate());
   UpdateAllLifecyclePhasesExceptPaint();
@@ -1047,7 +1048,7 @@ bool SelectionModifier::ModifyWithPageGranularity(
 
   VisiblePositionInFlatTree result;
   VisiblePositionInFlatTree next;
-  unsigned iteration_count = 0;
+  wtf_size_t iteration_count = 0;
   for (VisiblePositionInFlatTree p = pos;
        iteration_count < kMaxIterationForPageGranularityMovement; p = next) {
     ++iteration_count;
@@ -1068,8 +1069,9 @@ bool SelectionModifier::ModifyWithPageGranularity(
       break;
     if (direction == SelectionModifyVerticalDirection::kUp)
       next_y = -next_y;
-    if (next_y - start_y > static_cast<int>(vertical_distance))
+    if (next_y - start_y > vertical_distance) {
       break;
+    }
     if (next_y >= last_y) {
       last_y = next_y;
       result = next;
@@ -1123,7 +1125,7 @@ static LayoutUnit LineDirectionPointForBlockDirectionNavigationOf(
     caret_point = caret_rect.rect.MinXMinYCorner();
   }
   caret_point = caret_rect.layout_object->LocalToAbsolutePoint(
-      caret_point, kIgnoreTransforms);
+      caret_point, {MapCoordinatesMode::kIgnoreTransforms});
   return caret_rect.layout_object->IsHorizontalWritingMode() ? caret_point.left
                                                              : caret_point.top;
 }

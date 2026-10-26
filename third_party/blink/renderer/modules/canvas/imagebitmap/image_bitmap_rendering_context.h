@@ -103,8 +103,6 @@ class MODULES_EXPORT ImageBitmapRenderingContext final
   // TODO(junov): handle lost contexts when content is GPU-backed
   void LoseContext(LostContextMode) override {}
 
-  void Reset() override;
-
   base::ByteSize AllocatedBufferSize() const override;
 
   void Stop() override;
@@ -119,6 +117,7 @@ class MODULES_EXPORT ImageBitmapRenderingContext final
 
   // CanvasRenderingContext implementation
   ImageBitmap* TransferToImageBitmap(ScriptState*, ExceptionState&) override;
+  void Reshape(gfx::Size old_size, gfx::Size new_size) override;
 
   V8RenderingContext* AsV8RenderingContext() final;
   V8OffscreenRenderingContext* AsV8OffscreenRenderingContext() final;

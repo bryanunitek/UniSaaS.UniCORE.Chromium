@@ -46,18 +46,23 @@ class OsSettingsJapaneseManageUserDictionaryPageElement extends I18nMixin
         type: String,
         value: 'No dictionary call made',
       },
+
+      dictionaries_: {
+        type: Array,
+        value: () => [],
+      },
     };
   }
 
   // Status that is shown on the page for debugging.
-  status: string;
+  declare status: string;
 
   // Internal properties for mixins.
   // From GlobalScrollTargetMixin.
   override subpageRoute = routes.OS_LANGUAGES_JAPANESE_MANAGE_USER_DICTIONARY;
 
   // All Japanese user dictionary data that is loaded into the app.
-  private dictionaries_: JapaneseDictionary[] = [];
+  declare private dictionaries_: JapaneseDictionary[];
 
   override ready(): void {
     super.ready();

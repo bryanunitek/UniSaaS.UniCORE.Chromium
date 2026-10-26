@@ -85,6 +85,10 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
   // Gets the registered defaults.
   scoped_refptr<PrefStore> defaults();
 
+  // Returns a raw pointer to the underlying default store without atomic
+  // reference-count overhead for internal callers that do not take ownership.
+  PrefStore* default_store() const;
+
   // Allows iteration over defaults.
   const_iterator begin() const;
   const_iterator end() const;
@@ -118,10 +122,14 @@ class COMPONENTS_PREFS_EXPORT PrefRegistry
   // A map of pref name to a bitmask of PrefRegistrationFlags.
   PrefRegistrationFlagsMap registration_flags_;
 
-  // A map of pref name to its registered type.
+  // A map of pref name to its non-default registered type. Entries that are
+  // not in the map are assumed to be of type `RegisteredPrefType::kOther`.
+  // This is shared between regular and incognito registries so late
+  // registrations propagate.
   using PrefRegistrationTypeMap =
       absl::flat_hash_map<std::string, RegisteredPrefType>;
-  PrefRegistrationTypeMap registration_types_;
+  scoped_refptr<base::RefCountedData<PrefRegistrationTypeMap>>
+      registration_types_;
 };
 
 #endif  // COMPONENTS_PREFS_PREF_REGISTRY_H_

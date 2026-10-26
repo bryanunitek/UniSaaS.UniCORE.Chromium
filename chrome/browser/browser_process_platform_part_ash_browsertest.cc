@@ -10,7 +10,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "chrome/browser/chromeos/app_mode/kiosk_browser_session.h"
+#include "chrome/browser/ash/app_mode/kiosk_browser_session.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
@@ -31,6 +31,7 @@
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
@@ -85,7 +86,7 @@ IN_PROC_BROWSER_TEST_F(BrowserProcessPlatformPartAshBrowsertest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Keep the browser process running while browsers are closed.
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
   ScopedProfileKeepAlive profile_keep_alive(
@@ -145,7 +146,7 @@ IN_PROC_BROWSER_TEST_F(BrowserProcessPlatformPartAshBrowsertest,
             tab_strip_model->GetWebContentsAt(0)->GetLastCommittedURL());
 
   // Keep the browser process running while browsers are closed.
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
   ScopedProfileKeepAlive profile_keep_alive(
@@ -216,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(BrowserProcessPlatformPartAshBrowsertest,
             tab_strip_model->GetWebContentsAt(0)->GetLastCommittedURL());
 
   // Keep the browser process running while browsers are closed.
-  auto* profile = browser()->profile();
+  auto* profile = browser()->GetProfile();
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED);
   ScopedProfileKeepAlive profile_keep_alive(

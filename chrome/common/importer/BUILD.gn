@@ -10,6 +10,7 @@ mojom("interfaces") {
   sources = [ "profile_import.mojom" ]
 
   public_deps = [
+    "//components/user_data_importer/mojom",
     "//mojo/public/mojom/base",
     "//sandbox/policy/mojom",
     "//url/mojom:url_mojom_gurl",
@@ -132,6 +133,20 @@ if (!is_android) {
       "//base",
       "//components/user_data_importer/common",
       "//testing/gmock",
+    ]
+  }
+
+  source_set("unit_tests") {
+    testonly = true
+    sources = [ "firefox_importer_utils_unittest.cc" ]
+    deps = [
+      ":importer",
+      "//base",
+      "//base/test:test_support",
+      "//chrome/app:generated_resources",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//ui/base",
     ]
   }
 }

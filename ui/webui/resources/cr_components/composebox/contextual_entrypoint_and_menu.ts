@@ -13,7 +13,7 @@ import type {TabInfo} from '//resources/mojo/components/omnibox/browser/searchbo
 import type {InputState} from '//resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 import type {UnguessableToken} from '//resources/mojo/mojo/public/mojom/base/unguessable_token.mojom-webui.js';
 
-import {GlifAnimationState, TabSuggestionsState} from './common.js';
+import {getLoadTimeBoolean, GlifAnimationState, TabSuggestionsState} from './common.js';
 import type {ContextualActionMenuElement} from './contextual_action_menu.js';
 import {getCss} from './contextual_entrypoint_and_menu.css.js';
 import {getHtml} from './contextual_entrypoint_and_menu.html.js';
@@ -57,18 +57,18 @@ export class ContextualEntrypointAndMenuElement extends
       smartTabSharingActive: {type: Boolean},
       smartTabSharingVisible: {type: Boolean},
       contextManagementInComposeboxEnabled: {type: Boolean},
+      composeboxContextMenuTooltipsEnabled: {type: Boolean},
       hasImageFiles: {
         reflect: true,
         type: Boolean,
       },
-      disabledTabIds: {type: Object},
+      selectedTabIds: {type: Object},
       aimThreadRestoredTabs: {type: Array},
       tabSuggestions: {type: Array},
       inputState: {type: Object},
       tabSuggestionsState: {type: Number},
       glifAnimationState: {type: String},
       searchboxLayoutMode: {type: String},
-      uploadButtonDisabled: {type: Boolean},
       disableAutoReposition: {type: Boolean},
       isSidePanel: {type: Boolean},
       usePecApi: {type: Boolean},
@@ -76,6 +76,11 @@ export class ContextualEntrypointAndMenuElement extends
       disableFallbackGlifAnimation: {type: Boolean},
       recentTabId: {type: Number},
       shareTabsFlyoutOpen: {type: Boolean},
+      unboundedMenuEnabled: {
+        reflect: true,
+        type: Boolean,
+        attribute: 'unbounded-menu-enabled',
+      },
 
       // =========================================================================
       // Protected properties
@@ -94,16 +99,18 @@ export class ContextualEntrypointAndMenuElement extends
   accessor smartTabSharingActive: boolean = false;
   accessor smartTabSharingVisible: boolean = false;
   accessor contextManagementInComposeboxEnabled: boolean = false;
-  accessor disabledTabIds: Map<number, UnguessableToken> = new Map();
+  accessor composeboxContextMenuTooltipsEnabled: boolean =
+      getLoadTimeBoolean('composeboxContextMenuTooltipsEnabled', false);
+  accessor selectedTabIds: Map<number, UnguessableToken> = new Map();
   accessor aimThreadRestoredTabs: TabInfo[] = [];
   accessor tabSuggestions: TabInfo[] = [];
   accessor inputState: InputState|null = null;
   accessor glifAnimationState: GlifAnimationState =
       GlifAnimationState.INELIGIBLE;
-  accessor uploadButtonDisabled: boolean = false;
   accessor sharedTabs: TabInfo[] = [];
   accessor recentTabId: number|null = null;
   accessor shareTabsFlyoutOpen: boolean = false;
+  accessor unboundedMenuEnabled: boolean = false;
   accessor tabSuggestionsState: TabSuggestionsState =
       TabSuggestionsState.NOT_STARTED;
   menuOpenDelayMs: number = 200;
@@ -185,11 +192,7 @@ export class ContextualEntrypointAndMenuElement extends
   }
 
   closeMenu() {
-    const menu =
-        this.shadowRoot.querySelector<ContextualActionMenuElement>('#menu');
-    if (menu) {
-      menu.close();
-    }
+    this.$.menu.close();
   }
 
   protected onMenuClose_() {

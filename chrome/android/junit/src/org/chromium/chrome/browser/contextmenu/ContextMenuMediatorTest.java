@@ -14,7 +14,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import static org.chromium.base.test.util.Batch.UNIT_TESTS;
 import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM;
 import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM_WITH_SUBMENU;
 import static org.chromium.ui.listmenu.ListItemType.SUBMENU_HEADER;
@@ -35,11 +34,14 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.Callback;
+import org.chromium.base.FeatureList;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.contextmenu.ContextMenuCoordinator.ContextMenuItemType;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
 import org.chromium.ui.listmenu.ListItemType;
@@ -55,7 +57,7 @@ import java.util.List;
 
 /** Unit tests for the context menu mediator. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(UNIT_TESTS)
+@DisableFeatures({ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU})
 public class ContextMenuMediatorTest {
 
     // For submenu navigation tests
@@ -68,14 +70,14 @@ public class ContextMenuMediatorTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private Activity mActivity;
     @Mock private ContextMenuHeaderCoordinator mHeaderCoordinator;
     @Mock private Callback<Integer> mClickCallback;
     @Mock private OnClickListener mItemClickListener;
     @Mock private Runnable mDismissDialog;
     @Mock private Profile mProfile;
-    @Mock private ListView mListView;
 
+    private Activity mActivity;
+    private ListView mListView;
     private ContextMenuMediator mMediator;
 
     // For submenu navigation tests
@@ -89,9 +91,16 @@ public class ContextMenuMediatorTest {
 
     @Before
     public void setup() {
+        FeatureList.setDisableNativeForTesting(true);
+        mActivity = Robolectric.buildActivity(Activity.class).get();
+        mListView = new ListView(mActivity);
         mMediator =
                 new ContextMenuMediator(
-                        mActivity, mHeaderCoordinator, mClickCallback, mDismissDialog);
+                        mActivity,
+                        mHeaderCoordinator,
+                        /* isIncognito= */ false,
+                        mClickCallback,
+                        mDismissDialog);
 
         mListItemWithModelClickCallback =
                 new ListItem(

@@ -11,7 +11,10 @@ import org.junit.runners.model.Statement;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+import org.chromium.chrome.browser.layouts.LayoutTestUtils;
+import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabHostUtils;
@@ -54,7 +57,16 @@ public class BlankCTATabInitialStateRule implements TestRule {
         return new Statement() {
             @Override
             public void evaluate() throws Throwable {
+                // Reset sActivity if the activity was garbage collected or is finishing/destroyed.
+                if (sActivity != null) {
+                    ChromeTabbedActivity cta = sActivity.get();
+                    if (cta == null || cta.isActivityFinishingOrDestroyed()) {
+                        sActivity = null;
+                    }
+                }
+
                 if (sActivity == null) {
+                    // Launch a fresh activity if no active instance is cached.
                     ThreadUtils.runOnUiThreadBlocking(
                             () -> {
                                 FirstRunStatus.setFirstRunFlowComplete(true);
@@ -67,10 +79,12 @@ public class BlankCTATabInitialStateRule implements TestRule {
                     // Previous tests may have left tabs open and finished the Activity.
                     if (regularTabCount() > 1) resetTabStateFast();
                 } else {
+                    // Reuse the existing activity instance and reset tab state.
                     ChromeTabbedActivity cta = sActivity.get();
                     if (cta == null) {
                         throw new IllegalStateException(
-                                "sActivity was destroyed between last test and this test.");
+                                "sActivity was unexpectedly garbage collected after being"
+                                        + " validated.");
                     }
                     mActivityTestRule.setActivity(cta);
                     if (shouldPerformFastReset()) {
@@ -151,6 +165,10 @@ public class BlankCTATabInitialStateRule implements TestRule {
                     if (activityTab.getIsPinned()) {
                         regularTabModel.unpinTab(activityTab.getId());
                     }
+                    LayoutManagerChrome layoutManager = getActivity().getLayoutManager();
+                    if (layoutManager.isLayoutVisible(LayoutType.HUB)) {
+                        layoutManager.showLayout(LayoutType.BROWSING, /* animate= */ false);
+                    }
                 });
         mActivityTestRule.loadUrl("about:blank");
         ThreadUtils.runOnUiThreadBlocking(
@@ -188,8 +206,18 @@ public class BlankCTATabInitialStateRule implements TestRule {
                                                             .build());
                                 }
                             }
+                            // Closing the last tab in a batched test initiates an asynchronous
+                            // transition to LayoutType.HUB that is not cancelled on tablets when a
+                            // new tab is launched above. Ensure LayoutType.BROWSING is active
+                            // before the next test starts.
+                            LayoutManagerChrome layoutManager = getActivity().getLayoutManager();
+                            if (!layoutManager.isLayoutVisible(LayoutType.BROWSING)
+                                    || layoutManager.isLayoutStartingToHide(LayoutType.BROWSING)) {
+                                layoutManager.showLayout(LayoutType.BROWSING, /* animate= */ false);
+                            }
                             return newTab;
                         });
         ChromeTabUtils.waitForTabPageLoaded(createdTab, "about:blank");
+        LayoutTestUtils.waitForLayout(getActivity().getLayoutManager(), LayoutType.BROWSING);
     }
 }

@@ -34,6 +34,7 @@
 #include "build/build_config.h"
 #include "content/browser/back_forward_cache/back_forward_cache_disable.h"
 #include "content/browser/payments/stub_secure_payment_confirmation_service.h"
+#include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/webauth/authenticator_environment.h"
 #include "content/browser/webauth/authenticator_impl.h"
@@ -65,7 +66,6 @@
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "device/fido/fake_fido_discovery.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/fido_test_data.h"
 #include "device/fido/fido_user_verification_requirement.h"
 #include "device/fido/large_blob.h"
@@ -2079,9 +2079,7 @@ class WebAuthConnectionAllowlistTest : public WebAuthCrossDomainTest {
  public:
   WebAuthConnectionAllowlistTest() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{network::features::kConnectionAllowlists,
-                              blink::features::
-                                  kOverrideConnectionAllowlistOriginTrial},
+        /*enabled_features=*/{network::features::kConnectionAllowlists},
         /*disabled_features=*/{});
   }
 

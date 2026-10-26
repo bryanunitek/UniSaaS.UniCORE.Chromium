@@ -19,7 +19,6 @@ import '../controls/settings_toggle_button.js';
 import '../settings_shared.css.js';
 import './change_dictation_locale_dialog.js';
 
-import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import type {SliderTick} from 'chrome://resources/ash/common/cr_elements/cr_slider/cr_slider.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
@@ -31,11 +30,11 @@ import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import type {Route} from '../router.js';
+import type {Route} from '../os_settings_routes.js';
+import {PrefsMixin} from '../prefs/prefs_mixin.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './keyboard_and_text_input_page.html.js';
-import type {KeyboardAndTextInputPageBrowserProxy} from './keyboard_and_text_input_page_browser_proxy.js';
 import {KeyboardAndTextInputPageBrowserProxyImpl} from './keyboard_and_text_input_page_browser_proxy.js';
 
 interface LocaleInfo {
@@ -139,6 +138,11 @@ export class SettingsKeyboardAndTextInputPageElement extends
         computed: 'computeBounceKeysDelayVirtualPref_(' +
             'prefs.settings.a11y.bounce_keys_delay_ms.value)',
       },
+
+      dictationLocaleSubtitleOverride_: {
+        type: String,
+        value: '',
+      },
     };
   }
 
@@ -167,51 +171,36 @@ export class SettingsKeyboardAndTextInputPageElement extends
     Setting.kStickyKeys,
   ]);
 
-  private dictationLearnMoreUrl_: string;
-  private dictationLocaleMenuSubtitle_: string;
-  private dictationLocaleOptions_: LocaleInfo[];
-  private dictationLocaleSubtitleOverride_: string;
-  private dictationLocalesList_: LocaleInfo[];
-  private isKioskModeActive_: boolean;
-  private focusHighlightEnabledPref_:
+  declare private dictationLearnMoreUrl_: string;
+  declare private dictationLocaleMenuSubtitle_: string;
+  declare private dictationLocaleOptions_: LocaleInfo[];
+  declare private dictationLocaleSubtitleOverride_: string;
+  declare private dictationLocalesList_: LocaleInfo[];
+  declare private isKioskModeActive_: boolean;
+  declare private focusHighlightEnabledVirtualPref_:
       chrome.settingsPrivate.PrefObject<boolean>;
-  private focusHighlightEnabledVirtualPref_:
+  private keyboardAndTextInputBrowserProxy_ =
+      KeyboardAndTextInputPageBrowserProxyImpl.getInstance();
+  declare private stickyKeysEnabledVirtualPref_:
       chrome.settingsPrivate.PrefObject<boolean>;
-  private keyboardAndTextInputBrowserProxy_:
-      KeyboardAndTextInputPageBrowserProxy;
-  private stickyKeysEnabledVirtualPref_:
-      chrome.settingsPrivate.PrefObject<boolean>;
-  private showDictationLocaleMenu_: boolean;
-  private useDictationLocaleSubtitleOverride_: boolean;
-  private caretBlinkIntervalVirtualPref_:
+  declare private showDictationLocaleMenu_: boolean;
+  private useDictationLocaleSubtitleOverride_: boolean = false;
+  declare private caretBlinkIntervalVirtualPref_:
       chrome.settingsPrivate.PrefObject<number>;
-  private defaultCaretBlinkRateMs_: number;
+  private defaultCaretBlinkRateMs_: number =
+      loadTimeData.getInteger('defaultCaretBlinkIntervalMs');
   private caretBlinkIntervalOffSliderValue_ = 40;
-  private slowKeysDelayVirtualPref_: chrome.settingsPrivate.PrefObject<number>;
-  private bounceKeysDelayVirtualPref_:
+  declare private slowKeysDelayVirtualPref_:
+      chrome.settingsPrivate.PrefObject<number>;
+  declare private bounceKeysDelayVirtualPref_:
       chrome.settingsPrivate.PrefObject<number>;
   private millisInSec_ = 1000;
   private filterKeysSliderMinMillis_ = 0;
   private filterKeysSliderMaxMillis_ = 2000;
   private filterKeysSliderIncrementMillis = 100;
 
-
-  constructor() {
-    super();
-
-    /** RouteOriginMixin override */
-    this.route = routes.A11Y_KEYBOARD_AND_TEXT_INPUT;
-
-    this.keyboardAndTextInputBrowserProxy_ =
-        KeyboardAndTextInputPageBrowserProxyImpl.getInstance();
-
-    this.dictationLocaleSubtitleOverride_ = '';
-
-    this.useDictationLocaleSubtitleOverride_ = false;
-
-    this.defaultCaretBlinkRateMs_ =
-        loadTimeData.getInteger('defaultCaretBlinkIntervalMs');
-  }
+  // RouteOriginMixin override
+  override route = routes.A11Y_KEYBOARD_AND_TEXT_INPUT;
 
   override ready(): void {
     super.ready();

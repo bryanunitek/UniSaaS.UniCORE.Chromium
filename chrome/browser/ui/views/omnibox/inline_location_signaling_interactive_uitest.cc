@@ -20,12 +20,13 @@
 #include "chrome/browser/permissions/system/system_permission_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -37,25 +38,28 @@
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/geolocation_header_service.h"
+#include "components/omnibox/browser/geolocation_header_service_test_api.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/unified_consent/pref_names.h"
+#include "content/public/browser/permission_controller_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
 #include "url/gurl.h"
 
 namespace {
@@ -125,8 +129,7 @@ class InlineLocationSignalingE2EInteractiveUiTest
           {{"display_order", GetParam().display_order},
            {"wording", GetParam().wording}}},
          {omnibox::kPlatformAgnosticXGeo, {}}},
-        {::features::kInitialWebUI,
-         ::features::kWebUIToolbarProcessOverheadExperiment});
+        {::features::kInitialWebUI});
 
     // Architectural Fix: Initialize the mock environment early so startup WebUI
     // toolbar autocomplete requests are intercepted immediately instead of
@@ -167,11 +170,11 @@ class InlineLocationSignalingE2EInteractiveUiTest
     // subview focus checks
     ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSearchSuggestEnabled,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kSearchSuggestEnabled, true);
     // Privacy Documentation: Anonymized data collection must be granted for
     // `SearchProvider` payload transmissions
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         unified_consent::prefs::kUrlKeyedAnonymizedDataCollectionEnabled, true);
 
     // Surgical Fix: Increase the global provider timeout specifically for this
@@ -205,7 +208,7 @@ class InlineLocationSignalingE2EInteractiveUiTest
 
 IN_PROC_BROWSER_TEST_P(InlineLocationSignalingE2EInteractiveUiTest,
                        VerifyE2EOrdering) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   TemplateURLService* template_url_service =
       TemplateURLServiceFactory::GetForProfile(profile);
   search_test_utils::WaitForTemplateURLServiceToLoad(template_url_service);
@@ -244,7 +247,8 @@ IN_PROC_BROWSER_TEST_P(InlineLocationSignalingE2EInteractiveUiTest,
       GeolocationHeaderServiceFactory::GetForProfile(profile);
   ASSERT_TRUE(geo_service);
   if (GetParam().has_cached_location) {
-    geo_service->SetLocationForTesting(CreateMockGeoposition());
+    GeolocationHeaderServiceTestApi(geo_service)
+        .SetLocation(CreateMockGeoposition());
   }
 
   HostContentSettingsMap* settings_map =
@@ -275,8 +279,9 @@ IN_PROC_BROWSER_TEST_P(InlineLocationSignalingE2EInteractiveUiTest,
 
   // Wait for any asynchronous Mojo geolocation query triggered by the focus
   // flow or DSE change to complete before modifying omnibox state.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return !geo_service->is_geolocation_bound_for_testing(); }));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !GeolocationHeaderServiceTestApi(geo_service).is_geolocation_bound();
+  }));
 
   prime_histogram_tester.ExpectUniqueSample(
       "Omnibox.GeolocationHeaderService.PrimeLocationOutcome",
@@ -293,7 +298,8 @@ IN_PROC_BROWSER_TEST_P(InlineLocationSignalingE2EInteractiveUiTest,
     EXPECT_TRUE(base::test::RunUntil([&]() {
       return controller->done() &&
              std::ranges::any_of(controller->result(), [](const auto& match) {
-               return match.type == AutocompleteMatchType::SEARCH_SUGGEST;
+               return match.type ==
+                      omnibox::AutocompleteMatchType::kSearchSuggest;
              });
     }));
   }
@@ -347,7 +353,7 @@ IN_PROC_BROWSER_TEST_P(InlineLocationSignalingE2EInteractiveUiTest,
   // Perform navigation to DSE results page to trigger and verify navigation
   // telemetry.
   content::TestNavigationObserver navigation_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   // Trigger omnibox click navigation to verify click telemetry.
   // 1. Find the parent or the ills suggestion (based on test_parent_click).
@@ -385,6 +391,23 @@ IN_PROC_BROWSER_TEST_P(InlineLocationSignalingE2EInteractiveUiTest,
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN, false,
                                               false, false, false));
   navigation_observer.Wait();
+
+  // Verify site permission reset: if the initial permission was DENY and the
+  // inline location signaling row was clicked, permission should be reset to
+  // ASK.
+  if (site_perm == CONTENT_SETTING_BLOCK && suggestion_found &&
+      !GetParam().test_parent_click) {
+    auto descriptor = blink::mojom::PermissionDescriptor::New(
+        blink::mojom::PermissionName::GEOLOCATION, nullptr);
+    blink::mojom::PermissionStatus current_status =
+        browser()
+            ->GetProfile()
+            ->GetPermissionControllerDelegate()
+            ->GetPermissionStatus(
+                descriptor, test_server_->GetURL(kExternalEngineHost, "/"),
+                test_server_->GetURL(kExternalEngineHost, "/"));
+    EXPECT_EQ(blink::mojom::PermissionStatus::ASK, current_status);
+  }
 
   // Verify navigation telemetry.
   histogram_tester.ExpectUniqueSample(

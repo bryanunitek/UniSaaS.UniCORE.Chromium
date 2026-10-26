@@ -6,10 +6,12 @@
 
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_model_impl/converters/tab_converters.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/browser_apis/tab_strip/tab_strip_api_events.mojom.h"
 #include "components/browser_apis/tab_strip/types/node_id.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_collection_observer.h"
 
 namespace tabs_api::events {
@@ -107,17 +109,34 @@ mojom::OnNodeMovedEventPtr ToEvent(
 
 mojom::OnDataChangedEventPtr ToEvent(
     const tabs_api::TabStripModelAdapter& adapter,
-    size_t index,
+    tabs::TabInterface* tab,
     TabChangeType change_type) {
   auto tab_change = mojom::TabChange::New();
-  auto tabs = adapter.GetTabs();
-  if (index < tabs.size()) {
-    auto& handle = tabs.at(index);
+  if (tab) {
+    tabs::TabHandle handle = tab->GetHandle();
     const ui::ColorProvider& color_provider = adapter.GetColorProvider();
 
     tab_change->data = tabs_api::converters::BuildMojoTab(
-        handle.Get(), color_provider, adapter.GetTabStates(handle));
+        tab, color_provider, adapter.GetTabStates(handle));
     tab_change->mask = tabs_api::converters::BuildTabFieldMask(change_type);
+  }
+
+  return mojom::OnDataChangedEvent::NewTab(std::move(tab_change));
+}
+
+mojom::OnDataChangedEventPtr ToBlockedStateChangedEvent(
+    const tabs_api::TabStripModelAdapter& adapter,
+    tabs::TabInterface* tab) {
+  auto tab_change = mojom::TabChange::New();
+  if (tab) {
+    tabs::TabHandle handle = tab->GetHandle();
+    const ui::ColorProvider& color_provider = adapter.GetColorProvider();
+
+    tab_change->data = tabs_api::converters::BuildMojoTab(
+        tab, color_provider, adapter.GetTabStates(handle));
+    auto mask = tabs_api::mojom::TabFieldMask::New();
+    mask->is_blocked = true;
+    tab_change->mask = std::move(mask);
   }
 
   return mojom::OnDataChangedEvent::NewTab(std::move(tab_change));
@@ -169,8 +188,8 @@ std::vector<Event> ToEvent(const TabStripSelectionChange& selection,
         base::STLSetDifference<std::set<size_t>>(old_selected, new_selected);
 
     auto tabs = adapter.GetTabs();
-    // TODO(crbug.com/412738255): There is a bug here where a selected state
-    // might not be correctly cleared due to index shift. This is very
+    // TODO(crbug.com/crbug.com/542677767): There is a bug here where a selected
+    // state might not be correctly cleared due to index shift. This is very
     // difficult to solve at this point, so we should probably change the
     // selection change event to use handles instead of indices to fix this
     // issue.
@@ -207,6 +226,32 @@ std::vector<Event> ToEvent(const TabStripSelectionChange& selection,
         affected_tab.Get(), color_provider, adapter.GetTabStates(affected_tab));
     tab_change->mask = tabs_api::converters::BuildTabFieldMaskForSelection(
         active_changed, selection_changed);
+
+    events.push_back(mojom::OnDataChangedEvent::NewTab(std::move(tab_change)));
+  }
+  return events;
+}
+
+std::vector<Event> ToFaviconChangedEvents(
+    const tabs_api::TabStripModelAdapter& adapter) {
+  std::vector<Event> events;
+  auto tabs = adapter.GetTabs();
+  if (tabs.empty()) {
+    return events;
+  }
+
+  const ui::ColorProvider& color_provider = adapter.GetColorProvider();
+  for (auto& handle : tabs) {
+    if (!handle.Get()) {
+      continue;
+    }
+
+    auto tab_change = mojom::TabChange::New();
+    tab_change->data = tabs_api::converters::BuildMojoTab(
+        handle.Get(), color_provider, adapter.GetTabStates(handle));
+    auto mask = tabs_api::mojom::TabFieldMask::New();
+    mask->favicon = true;
+    tab_change->mask = std::move(mask);
 
     events.push_back(mojom::OnDataChangedEvent::NewTab(std::move(tab_change)));
   }

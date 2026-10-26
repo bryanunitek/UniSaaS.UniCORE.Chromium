@@ -122,6 +122,11 @@ void TouchEmulatorImpl::Enable(Mode mode,
     // TODO(dgozman): Use synthetic secondary touch to support multi-touch.
     gesture_provider_->SetMultiTouchZoomSupportEnabled(
         mode != Mode::kEmulatingTouchFromMouse);
+
+    // Disable scroll update compensation for emulated touch events since it is
+    // unreasonable to expect automation to react in realtime to manipulation of
+    // the input events.
+    gesture_provider_->DisableScrollUpdateCompensation();
   }
 
   UpdateCursor();
@@ -132,7 +137,11 @@ void TouchEmulatorImpl::Disable() {
     return;
 
   mode_ = Mode::kEmulatingTouchFromMouse;
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   CancelTouch();
+  if (!weak_this) {
+    return;
+  }
   if (gesture_provider_) {
     gesture_provider_->Shutdown();
     gesture_provider_ = nullptr;
@@ -485,6 +494,8 @@ void TouchEmulatorImpl::InjectTouchEvent(
     base::OnceClosure callback) {
   CHECK(IsEnabled() && mode_ == Mode::kInjectingTouchEvents,
         base::NotFatalUntil::M152);
+  // Injected touch events use the target root view's coordinate space, which
+  // is also used by the gesture provider and emulated gesture routing.
   touch_event_ = event;
   injected_touch_completion_callbacks_.push(std::move(callback));
   auto weak_this = weak_ptr_factory_.GetWeakPtr();
@@ -534,7 +545,9 @@ bool TouchEmulatorImpl::UpdateShiftPressed(bool shift_pressed) {
 
 void TouchEmulatorImpl::PinchBegin(const WebGestureEvent& event) {
   CHECK(InPinchGestureMode(), base::NotFatalUntil::M152);
-  CHECK(!pinch_gesture_active_, base::NotFatalUntil::M152);
+  // TODO(crbug.com/544741794): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!pinch_gesture_active_);
   pinch_gesture_active_ = true;
   pinch_anchor_ = event.PositionInWidget();
   pinch_scale_ = 1.f;

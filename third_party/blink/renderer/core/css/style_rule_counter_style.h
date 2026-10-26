@@ -48,6 +48,10 @@ class CORE_EXPORT StyleRuleCounterStyle : public StyleRuleBase {
   const CSSValue* GetAdditiveSymbols() const;
   const CSSValue* GetSpeakAs() const;
 
+  // Two rules are equal when they declare the same name and descriptors.
+  // `version_` is not compared: it tracks mutations, not content.
+  bool operator==(const StyleRuleCounterStyle& other) const;
+
   // Returns false if the new value is invalid or equivalent to the old value.
   bool NewValueInvalidOrEqual(AtRuleDescriptorID, const CSSValue*);
   void SetDescriptorValue(AtRuleDescriptorID, const CSSValue*);
@@ -57,7 +61,7 @@ class CORE_EXPORT StyleRuleCounterStyle : public StyleRuleBase {
     ++version_;
   }
 
-  bool HasFailedOrCanceledSubresources() const {
+  bool HasFailedOrCanceledSubresources(ResourceFetcher*) const {
     // TODO(crbug.com/1176323): Handle image symbols when we implement it.
     return false;
   }

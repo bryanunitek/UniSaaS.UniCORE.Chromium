@@ -11,7 +11,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -89,6 +89,7 @@ class UpdateAddressProfileViewTest : public ChromeViewsTestBase {
   MockUpdateAddressBubbleController* mock_controller() {
     return mock_controller_;
   }
+  void ClearMockController() { mock_controller_ = nullptr; }
 
  private:
   base::test::ScopedFeatureList feature_list_;
@@ -154,6 +155,15 @@ TEST_F(UpdateAddressProfileViewTest, CancelInvokesTheController) {
       OnUserDecision(AutofillClient::AddressPromptUserDecision::kDeclined,
                      Property(&profile_ref::has_value, false)));
   view()->CancelDialog();
+}
+
+TEST_F(UpdateAddressProfileViewTest, AcceptAfterHideDoesNotCrash) {
+  CreateViewAndShow();
+  EXPECT_CALL(*mock_controller(), OnUserDecision).Times(0);
+  ClearMockController();
+  view()->Hide();
+  EXPECT_EQ(view()->GetWindowTitle(), std::u16string());
+  view()->AcceptDialog();
 }
 
 }  // namespace autofill

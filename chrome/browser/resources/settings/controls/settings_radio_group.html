@@ -1,17 +1,7 @@
-<style>
-  cr-radio-group {
-    width: 100%;
-  }
-
-  :host([is-horizontal]) cr-radio-group {
-    display: flex;
-  }
-
-</style>
-<cr-radio-group selected="[[selected]]"
-    on-selected-changed="onSelectedChanged_"
-    aria-label$="[[groupAriaLabel]]"
-    selectable-elements="[[selectableElements]]"
-    nested-selectable="[[nestedSelectable]]">
+<cr-radio-group .selected="${this.selected}"
+    @selected-changed="${this.onSelectedChanged_}"
+    aria-label="${this.groupAriaLabel}"
+    .selectableElements="${this.selectableElements}"
+    ?nested-selectable="${this.nestedSelectable}">
   <slot></slot>
 </cr-radio-group>

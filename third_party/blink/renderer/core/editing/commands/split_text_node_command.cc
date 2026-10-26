@@ -30,11 +30,11 @@
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
-SplitTextNodeCommand::SplitTextNodeCommand(Text* text, int offset)
+SplitTextNodeCommand::SplitTextNodeCommand(Text* text, wtf_size_t offset)
     : SimpleEditCommand(text->GetDocument()), text2_(text), offset_(offset) {
   // NOTE: Various callers rely on the fact that the original node becomes
   // the second node (i.e. the new node is inserted before the existing one).
@@ -104,8 +104,7 @@ void SplitTextNodeCommand::InsertText1AndTrimText2() {
 }
 
 String SplitTextNodeCommand::ToString() const {
-  return StrCat(
-      {"SplitTextNodeCommand {offset:", String::Number(offset_), "}"});
+  return Format("SplitTextNodeCommand {{offset:{}}}", offset_);
 }
 
 void SplitTextNodeCommand::Trace(Visitor* visitor) const {

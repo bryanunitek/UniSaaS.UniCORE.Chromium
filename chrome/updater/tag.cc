@@ -4,9 +4,11 @@
 
 #include "chrome/updater/tag.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -26,6 +28,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_span.h"
 #include "base/no_destructor.h"
+#include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
@@ -47,23 +50,6 @@
 
 namespace updater::tagging {
 namespace {
-
-// These constants are conceptually cross-platform, but only currently used
-// on Mac.
-#if BUILDFLAG(IS_MAC)
-// Maximum length for the string representation of a tag that can be written
-// into a binary. This is the amount of space that must be reserved in a binary
-// for dynamic tagging, in a file format where tags can only be patched in place
-// rather than inserted, immediately after the magic signature and size bytes.
-// Because binary tag format includes an explicit tag size, no null terminator
-// is included in this count.
-constexpr size_t kMaxTagStringBytes = 8192;
-
-// Maximum length for the binary representation of a tag, including its magic
-// signature and length bytes.
-constexpr size_t kMaxBinaryTagBytes =
-    kMaxTagStringBytes + 2 + kTagMagicUtf8.size();
-#endif  // BUILDFLAG(IS_MAC)
 
 // Character that is disallowed from appearing in the tag.
 constexpr char kDisallowedCharInTag = '/';
@@ -555,7 +541,7 @@ ErrorCode ParseAppInstallerDataArgs(std::string_view app_installer_data_args,
 }
 
 // Checks that |args| does not contain |kDisallowedCharInTag|.
-bool IsValidArgs(std::string_view args) {
+constexpr bool IsValidArgs(std::string_view args) {
   return !args.contains(kDisallowedCharInTag);
 }
 
@@ -600,19 +586,12 @@ std::string ParseTagBuffer(const std::vector<uint8_t>& tag_buffer) {
 }
 
 std::vector<uint8_t> ReadEntireFile(const base::FilePath& file) {
-  std::optional<int64_t> file_size = base::GetFileSize(file);
-  if (!file_size.has_value()) {
-    PLOG(ERROR) << __func__ << ": Could not get file size: " << file;
-    return {};
-  }
-
-  std::vector<uint8_t> contents(file_size.value());
-  if (base::ReadFile(file, reinterpret_cast<char*>(&contents.front()),
-                     contents.size()) == -1) {
+  std::optional<std::vector<uint8_t>> contents = base::ReadFileToBytes(file);
+  if (!contents) {
     PLOG(ERROR) << __func__ << ": Could not read file: " << file;
     return {};
   }
-  return contents;
+  return std::move(*contents);
 }
 
 }  // namespace
@@ -827,12 +806,8 @@ std::unique_ptr<tagging::BinaryInterface> CreateBinary(
 }
 
 std::string BinaryReadTagString(const base::FilePath& file) {
-  if (file.MatchesExtension(FILE_PATH_LITERAL(".pkg"))) {
-    return ReadTagFromPkg(ReadFileTail(file));
-  }
-
   // For MSI files, simply search the tail of the file for the tag.
-  if (!file.MatchesExtension(FILE_PATH_LITERAL(".exe"))) {
+  if (file.MatchesExtension(FILE_PATH_LITERAL(".msi"))) {
     return ParseTagBuffer(ReadFileTail(file));
   }
 
@@ -850,12 +825,11 @@ std::string BinaryReadTagString(const base::FilePath& file) {
 
   std::optional<std::vector<uint8_t>> tag = bin->tag();
   if (!tag) {
-    LOG(ERROR) << __func__ << ": No superfluous certificate in file: " << file;
+    LOG(ERROR) << __func__ << ": No tag in file: " << file;
     return {};
   }
 
-  const std::vector<uint8_t> tag_data = {tag->begin(), tag->end()};
-  const std::string tag_string = ReadTag(tag_data);
+  const std::string tag_string = ReadTag(*tag);
   if (tag_string.empty()) {
     LOG(ERROR) << __func__ << ": file is untagged: " << file;
   }
@@ -891,6 +865,12 @@ bool BinaryWriteTag(const base::FilePath& in_file,
 
   // Validate the tag string, if any.
   if (!tag_string.empty()) {
+    if (tag_string.size() > kMaxTagStringBytes) {
+      LOG(ERROR) << __func__
+                 << ": Tag string is too long: " << tag_string.size() << " > "
+                 << kMaxTagStringBytes;
+      return false;
+    }
     tagging::TagArgs tag_args;
     const tagging::ErrorCode error = tagging::Parse(tag_string, {}, tag_args);
     if (error != tagging::ErrorCode::kSuccess) {
@@ -903,13 +883,9 @@ bool BinaryWriteTag(const base::FilePath& in_file,
   std::vector<uint8_t> tag_contents = tagging::GetTagFromTagString(tag_string);
 
   if (padded_length > 0) {
-    size_t new_size = 0;
-    if (base::CheckAdd(tag_contents.size(), padded_length)
-            .AssignIfValid(&new_size)) {
-      tag_contents.resize(new_size);
-    } else {
-      LOG(ERROR) << __func__ << "Failed to pad the tag contents.";
-      return false;
+    size_t padded_size = static_cast<size_t>(padded_length);
+    if (tag_contents.size() < padded_size) {
+      tag_contents.resize(padded_size);
     }
   }
 

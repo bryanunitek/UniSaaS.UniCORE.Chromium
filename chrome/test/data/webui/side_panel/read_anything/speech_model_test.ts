@@ -2,22 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {BrowserProxy, PauseActionSource, SpeechEngineState, SpeechModel} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {PauseActionSource, SpeechEngineState, SpeechModel} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 
-import {createSpeechSynthesisVoice} from './common.js';
-import {FakeReadingMode} from './fake_reading_mode.js';
-import {TestColorUpdaterBrowserProxy} from './test_color_updater_browser_proxy.js';
+import {createSpeechSynthesisVoice, setupTestEnvironment} from './common.js';
 
 suite('SpeechModel', () => {
   let speechModel: SpeechModel;
 
   setup(() => {
-    // Clearing the DOM should always be done first.
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    BrowserProxy.setInstance(new TestColorUpdaterBrowserProxy());
-    const readingMode = new FakeReadingMode();
-    chrome.readingMode = readingMode as unknown as typeof chrome.readingMode;
+    setupTestEnvironment();
     speechModel = new SpeechModel();
   });
 
@@ -95,6 +89,19 @@ suite('SpeechModel', () => {
     assertEquals(voice3, speechModel.getPreviewVoicePlaying());
   });
 
+  test('setActiveUtterance', () => {
+    const utterance1 = new SpeechSynthesisUtterance('hello');
+    const utterance2 = null;
+    const utterance3 = new SpeechSynthesisUtterance('world');
+
+    speechModel.setActiveUtterance(utterance1);
+    assertEquals(utterance1, speechModel.getActiveUtterance());
+    speechModel.setActiveUtterance(utterance2);
+    assertEquals(utterance2, speechModel.getActiveUtterance());
+    speechModel.setActiveUtterance(utterance3);
+    assertEquals(utterance3, speechModel.getActiveUtterance());
+  });
+
   test('setEngineState', () => {
     const state1 = SpeechEngineState.LOADING;
     const state2 = SpeechEngineState.NONE;
@@ -135,5 +142,23 @@ suite('SpeechModel', () => {
 
     speechModel.incrementWordsHeard();
     assertEquals(13, speechModel.getWordsHeard());
+  });
+
+  test('pagePlaybackTime starts at zero', () => {
+    assertEquals(0, speechModel.getPagePlaybackTime());
+  });
+
+  test('addPagePlaybackTime accumulates time', () => {
+    speechModel.addPagePlaybackTime(3000);
+    assertEquals(3000, speechModel.getPagePlaybackTime());
+    speechModel.addPagePlaybackTime(2000);
+    assertEquals(5000, speechModel.getPagePlaybackTime());
+  });
+
+  test('resetPagePlaybackTime resets to zero', () => {
+    speechModel.addPagePlaybackTime(5000);
+    assertEquals(5000, speechModel.getPagePlaybackTime());
+    speechModel.resetPagePlaybackTime();
+    assertEquals(0, speechModel.getPagePlaybackTime());
   });
 });
