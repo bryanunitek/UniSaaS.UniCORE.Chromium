@@ -10,9 +10,10 @@ import type {DictionaryValue} from '//resources/mojo/mojo/public/mojom/base/valu
 import {EventDispatcher} from './event_dispatcher.js';
 import type {EventDict, EventMap} from './event_dispatcher.js';
 import type {OnBeforeSendHeadersParams, OriginCheckParams} from './request_throttlers.js';
+import {PageHandler_PermissionResponseAction as PermissionResponseAction} from './slim_web_view.mojom-webui.js';
 import {getCss} from './slim_webview.css.js';
 import {getHtml} from './slim_webview.html.js';
-import {BrowserProxyImpl, PermissionResponseAction} from './slim_webview_browser_proxy.js';
+import {BrowserProxyImpl} from './slim_webview_browser_proxy.js';
 
 const GUEST_INSTANCE_ID_PENDING: number = 0;
 
@@ -197,10 +198,12 @@ class SizeChangedEvent extends Event {
       bubbles: true,
       cancelable: false,
     });
-    this.oldHeight = args.getInt('oldHeight');
-    this.oldWidth = args.getInt('oldWidth');
-    this.newHeight = args.getInt('newHeight');
-    this.newWidth = args.getInt('newWidth');
+    // Sizes are fractional CSS px when converted from physical pixels for a
+    // zoomed embedder, and whole otherwise.
+    this.oldHeight = args.getNumber('oldHeight');
+    this.oldWidth = args.getNumber('oldWidth');
+    this.newHeight = args.getNumber('newHeight');
+    this.newWidth = args.getNumber('newWidth');
   }
 
   handle(element: HTMLElement) {

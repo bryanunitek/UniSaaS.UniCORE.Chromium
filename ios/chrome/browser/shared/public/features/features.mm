@@ -938,8 +938,18 @@ const base::FeatureParam<base::TimeDelta> kIOSSoftLockBackgroundThreshold{
 
 BASE_FEATURE(kAimCobrowse, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE_PARAM(bool,
+                   kAimCobrowseAddTabEntrypoint,
+                   &kAimCobrowse,
+                   kAimCobrowseAddTabEntrypointParam,
+                   true);
+
 bool IsAimCobrowseEnabled() {
   return base::FeatureList::IsEnabled(kAimCobrowse);
+}
+
+bool IsAimCobrowseAddTabEntrypointEnabled() {
+  return IsAimCobrowseEnabled() && kAimCobrowseAddTabEntrypoint.Get();
 }
 
 BASE_FEATURE(kEnableCobrowseOnAimSrpTap, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -1293,10 +1303,4 @@ BASE_FEATURE(kAppBarDisableLongPress, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsAppBarDisableLongPressEnabled() {
   return base::FeatureList::IsEnabled(kAppBarDisableLongPress);
-}
-
-BASE_FEATURE(kRemoteActorCredentialSharing, base::FEATURE_DISABLED_BY_DEFAULT);
-
-bool IsRemoteActorCredentialSharingEnabled() {
-  return base::FeatureList::IsEnabled(kRemoteActorCredentialSharing);
 }

@@ -35,6 +35,7 @@ struct AXNodeData;
 namespace pdf {
 
 class PdfAccessibilityTreeBuilder;
+struct ListMarkerKind;
 
 // One nesting level of the list being built: the top-level list, or a sublist
 // inside an item of the level above. A level stays active, accepting new items,
@@ -51,6 +52,11 @@ struct ListLevel {
   // The most recent `kListItem` at this level. A deeper marker opens a
   // nested list inside it.
   raw_ptr<ui::AXNodeData> last_item;
+  // The x-coordinate, in page pixels, where `last_item`'s text starts.
+  float item_text_x = 0.0f;
+  // The value of the most recent item if this is an ordered list; unset for an
+  // unordered list.
+  std::optional<int> last_ordered_value;
 };
 
 // Heuristic-based accessibility tree building for untagged PDFs.
@@ -194,17 +200,20 @@ class PdfAccessibilityTreeBuilderHeuristic {
   // Result of `CreateBlockLevelNode()`.
   struct BlockLevelNodeResult;
 
+  // Tracks which text runs are on the same line.
+  class LineHelper;
+
   BlockLevelNodeResult CreateBlockLevelNode(
-      const TextRunContext& run_context,
+      const PageLayoutData& layout,
+      size_t text_run_index,
       const HeuristicPageProperties& page_properties,
       const chrome_pdf::AccessibilityFormGraphicInfo* graphic);
 
-  // Creates a `kListItem` node for `run_context`, updating `list_levels_` to
-  // open a new list, nest inside the previous item, or pop outdented levels.
-  // `item_font_size` is the font size of the item's text, which may differ
-  // from the marker's.
+  // Creates a `kListItem` node for `run_context` with `marker_kind`, updating
+  // `list_levels_` to open a new list, nest inside the previous item, or pop
+  // outdented levels.
   ui::AXNodeData* CreateListItemNode(const TextRunContext& run_context,
-                                     float item_font_size,
+                                     const ListMarkerKind& marker_kind,
                                      std::vector<ListLevel> levels);
 
   ui::AXNodeData* CreateLineBreakingNode(ax::mojom::Role role,
@@ -225,21 +234,27 @@ class PdfAccessibilityTreeBuilderHeuristic {
                                    StaticTextState* static_text_state,
                                    size_t marker_prefix_char_count = 0);
 
+  // Adds the text runs in [`start_text_run_index`, `end_text_run_index`] to
+  // `ax_node`. `line_helper` is shared with `BuildPageTree()` so lines that
+  // start or end inside an object are tracked like body text.
   void AddTextToAXNode(size_t start_text_run_index,
                        uint32_t end_text_run_index,
                        ui::AXNodeData* ax_node,
-                       ui::AXNodeData** previous_on_line_node);
+                       ui::AXNodeData** previous_on_line_node,
+                       LineHelper* line_helper);
 
   void AddTextToObjectNode(size_t object_text_run_index,
                            uint32_t object_text_run_count,
                            ui::AXNodeData* object_node,
                            ui::AXNodeData* para_node,
                            ui::AXNodeData** previous_on_line_node,
+                           LineHelper* line_helper,
                            size_t* text_run_index);
 
   void AddLinkToParaNode(const chrome_pdf::AccessibilityLinkInfo& link,
                          ui::AXNodeData* para_node,
                          ui::AXNodeData** previous_on_line_node,
+                         LineHelper* line_helper,
                          size_t* text_run_index);
 
   void AddImageToParaNode(const chrome_pdf::AccessibilityImageInfo& image,
@@ -250,6 +265,7 @@ class PdfAccessibilityTreeBuilderHeuristic {
       const chrome_pdf::AccessibilityHighlightInfo& highlight,
       ui::AXNodeData* para_node,
       ui::AXNodeData** previous_on_line_node,
+      LineHelper* line_helper,
       size_t* text_run_index);
 
   void AddRemainingAnnotations(

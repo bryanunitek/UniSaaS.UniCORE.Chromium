@@ -17,12 +17,10 @@
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/android/tab_group_collection_data_android.h"
 #include "chrome/browser/android/tab_state_storage_service_factory.h"
-#include "chrome/browser/tab/collection_save_forwarder.h"
 #include "chrome/browser/tab/storage_loaded_data.h"
 #include "chrome/browser/tab/storage_loading_context.h"
 #include "chrome/browser/tab/tab_group_collection_data.h"
 #include "components/tab_groups/tab_group_id.h"
-#include "components/tabs/public/android/jni_conversion.h"
 #include "third_party/jni_zero/jni_zero.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().

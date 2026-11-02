@@ -4,8 +4,10 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter.h"
 
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 #include "base/feature_list.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
@@ -13,6 +15,8 @@
 #include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_content.h"
+#include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
+#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "components/omnibox/common/omnibox_features.h"
 
 OmniboxPopupPresenter::OmniboxPopupPresenter(
@@ -20,15 +24,10 @@ OmniboxPopupPresenter::OmniboxPopupPresenter(
     OmniboxPopupPresenterDelegate& presenter_delegate,
     OmniboxController* controller)
     : OmniboxPopupPresenterBase(location_bar, presenter_delegate, controller) {
-  // With `omnibox::kOmniboxWebUIPopupDeferCreation`, the content is created by
-  // the first `EnsureWebUIContentCreated()` call instead. It comes from the
-  // task posted after the browser window presents a frame, or from `Show()`.
+  // If the content is not created here, `Show()` creates it on demand.
   // `OmniboxPopupViewWebUI` reads the content only while the popup is shown.
-  if (base::FeatureList::IsEnabled(omnibox::kOmniboxWebUIPopupDeferCreation)) {
-    CreateWebUIContentAfterBrowserWindowPresentation();
-  } else {
-    SetWebUIContent(CreateWebUIContent());
-  }
+  ApplyWebUIContentCreationStrategy(GetWebUIContentCreationStrategy(
+      omnibox::kOmniboxWebUIPopupDeferCreation));
 
   // By initializing `content_height_` to 1, we ensure the widget starts 1px
   // taller than the location bar on first show. This creates a tiny visible
@@ -48,11 +47,12 @@ OmniboxPopupPresenter::OmniboxPopupPresenter(
 OmniboxPopupPresenter::~OmniboxPopupPresenter() = default;
 
 std::unique_ptr<OmniboxPopupWebUIBaseContent>
-OmniboxPopupPresenter::CreateWebUIContent() {
+OmniboxPopupPresenter::CreateWebUIContent(
+    std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>> contents) {
   return std::make_unique<OmniboxPopupWebUIContent>(
       this, location_bar(), controller(),
       /*include_location_bar_cutout=*/true,
-      /*wants_focus=*/false, /*set_content_url=*/true);
+      /*wants_focus=*/false, /*set_content_url=*/true, std::move(contents));
 }
 
 bool OmniboxPopupPresenter::ShouldHideForInitialLayout() const {

@@ -26,16 +26,21 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/omnibox/browser/omnibox_pref_names.h"
 #include "components/permissions/permission_recovery_success_rate_tracker.h"
+#include "components/prefs/pref_service.h"
 #include "components/security_state/core/security_state.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/referrer.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/picture_in_picture_window_options/picture_in_picture_window_options.mojom.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/animation/animation_test_api.h"
@@ -548,6 +553,54 @@ TEST_F(DocumentPipFrameViewTest, WindowTitleShowsFormattedHost) {
             GetWindowTitle(frame_view)->GetText());
 }
 
+// When a browser-initiated navigation is pending in the opener, the PiP window
+// title must show the opener's last committed URL rather than the pending URL
+// (crbug.com/577272290).
+TEST_F(DocumentPipFrameViewTest,
+       WindowTitleUsesLastCommittedUrlWhenNavigationPending) {
+  content::WebContentsTester::For(opener())->NavigateAndCommit(
+      GURL("https://www.example.com/page"));
+  opener()->GetController().LoadURL(
+      GURL("https://pending.example.org/"), content::Referrer(),
+      ui::PAGE_TRANSITION_TYPED, /*extra_headers=*/std::string());
+  ASSERT_TRUE(opener()->GetController().GetPendingEntry());
+  ASSERT_EQ(GURL("https://pending.example.org/"), opener()->GetVisibleURL());
+
+  auto* frame_view =
+      CreatePipAndGetFrameView(/*disallow_return_to_opener=*/false);
+
+  EXPECT_EQ(std::u16string(u"example.com"),
+            GetWindowTitle(frame_view)->GetText());
+}
+
+// When opened from chrome://newtab (or an extension New Tab Page override whose
+// virtual URL is chrome://newtab), the PiP window title displays the URL rather
+// than hiding it like the omnibox does (crbug.com/577264504).
+TEST_F(DocumentPipFrameViewTest, WindowTitleDisplaysNewTabPageUrl) {
+  content::WebContentsTester::For(opener())->NavigateAndCommit(
+      GURL("chrome://newtab"));
+
+  auto* frame_view =
+      CreatePipAndGetFrameView(/*disallow_return_to_opener=*/false);
+
+  EXPECT_EQ(std::u16string(u"chrome://newtab"),
+            GetWindowTitle(frame_view)->GetText());
+}
+
+// The PiP window title always trims the URL after the hostname, even when the
+// omnibox "Always show full URLs" preference is enabled.
+TEST_F(DocumentPipFrameViewTest, WindowTitleIgnoresPreventUrlElisionsPref) {
+  profile_.GetPrefs()->SetBoolean(omnibox::kPreventUrlElisionsInOmnibox, true);
+  content::WebContentsTester::For(opener())->NavigateAndCommit(
+      GURL("https://www.example.com/some/path?query=1#fragment"));
+
+  auto* frame_view =
+      CreatePipAndGetFrameView(/*disallow_return_to_opener=*/false);
+
+  EXPECT_EQ(std::u16string(u"example.com"),
+            GetWindowTitle(frame_view)->GetText());
+}
+
 // HTTPS URLs head-elide so a long origin cannot be pushed out of view.
 TEST_F(DocumentPipFrameViewTest, WindowTitleElidesHeadForHttps) {
   content::WebContentsTester::For(opener())->NavigateAndCommit(
@@ -583,6 +636,8 @@ TEST_F(DocumentPipFrameViewTest, HttpsSecureUrlHasEmptyChipText) {
       CreatePipAndGetFrameView(/*disallow_return_to_opener=*/false);
 
   EXPECT_TRUE(GetOriginChip(frame_view)->GetText().empty());
+  EXPECT_EQ(GetLayoutInsets(LOCATION_BAR_PAGE_INFO_ICON_PADDING),
+            GetOriginChip(frame_view)->GetInsets());
 }
 
 // A plain HTTP page reports the WARNING security level, so the chip shows the
@@ -596,6 +651,12 @@ TEST_F(DocumentPipFrameViewTest, HttpWarningUrlChipSaysNotSecure) {
 
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_NOT_SECURE_VERBOSE_STATE),
             GetOriginChip(frame_view)->GetText());
+  gfx::Insets expected = GetLayoutInsets(LOCATION_BAR_PAGE_INFO_ICON_PADDING);
+  expected.set_right(
+      expected.right() +
+      GetLayoutConstant(
+          LayoutConstant::kLocationBarPageInfoIconLabelExtraTrailingPadding));
+  EXPECT_EQ(expected, GetOriginChip(frame_view)->GetInsets());
 }
 
 // A DANGEROUS page that fails the malware check shows the "Dangerous" verbose
@@ -610,6 +671,12 @@ TEST_F(DocumentPipFrameViewTest, DangerousMalwareUrlChipSaysDangerous) {
 
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_DANGEROUS_VERBOSE_STATE),
             GetOriginChip(frame_view)->GetText());
+  gfx::Insets expected = GetLayoutInsets(LOCATION_BAR_PAGE_INFO_ICON_PADDING);
+  expected.set_left(GetLayoutConstant(
+      LayoutConstant::kLocationBarPageInfoIconDangerousLeadingPadding));
+  expected.set_right(GetLayoutConstant(
+      LayoutConstant::kLocationBarPageInfoIconDangerousTrailingPadding));
+  EXPECT_EQ(expected, GetOriginChip(frame_view)->GetInsets());
 }
 
 // A DANGEROUS page on the billing interstitial list carries its own UI, so the

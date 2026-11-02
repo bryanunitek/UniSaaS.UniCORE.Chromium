@@ -750,6 +750,9 @@ BASE_FEATURE(kFlushGpuChannelOnLayerTreeViewRelease,
 
 BASE_FEATURE(kFontAccessCheckFrameIsActive, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kFontResourceDecodedMemoryAccounting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kBlockPartialResponseWithoutRange,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -800,6 +803,10 @@ BASE_FEATURE(kGlobalPrivacyControlAlwaysSample,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kGMSCoreEmoji, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Appends "&compat=none" to the GMS Core "Noto Color Emoji Compat" font query
+// so GMS Core can serve the plain 3D system emoji font when available.
+BASE_FEATURE(kGMSCoreEmojiCompatNone, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE_PARAM(std::string,
                    kHTMLParserYieldEventNameForPause,
@@ -1395,9 +1402,6 @@ BASE_FEATURE(kLightweightNoStatePrefetch,
 // Makes network loading tasks unfreezable so that they can be processed while
 // the page is frozen.
 BASE_FEATURE(kLoadingTasksUnfreezable, base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kLogUnexpectedIPCPostedToBackForwardCachedDocuments,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_ANDROID)
 // Allow low latency canvas (both 2D and WebGL) to be in overlay (generally

@@ -1656,14 +1656,14 @@ bool StoragePartitionImpl::IsNetworkContextInitialized() {
 
 void StoragePartitionImpl::CloneNetworkContext(
     mojo::PendingReceiver<network::mojom::NetworkContext> receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
   CHECK(initialized_);
   GetNetworkContext()->Clone(std::move(receiver));
 }
 
 scoped_refptr<CrossThreadNetworkContext>
 StoragePartitionImpl::CreateCrossThreadNetworkContext() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
   CHECK(initialized_);
   return CrossThreadNetworkContext::Create(weak_factory_.GetWeakPtr());
 }
@@ -1887,7 +1887,9 @@ BucketManager* StoragePartitionImpl::GetBucketManager() {
 
 GeneratedCodeCacheContext*
 StoragePartitionImpl::GetGeneratedCodeCacheContext() {
-  CHECK(initialized_, base::NotFatalUntil::M159);
+  // TODO(crbug.com/577473808): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
+  DCHECK(initialized_);
   return generated_code_cache_context_.get();
 }
 
@@ -2055,7 +2057,8 @@ void StoragePartitionImpl::OnAuthRequired(
         auth_challenge_responder) {
   // The network service only forwards proxy challenges for requests that must
   // not prompt for login.
-  DCHECK(!do_not_prompt_for_login || auth_info.is_proxy);
+  CHECK(!do_not_prompt_for_login || auth_info.is_proxy,
+        base::NotFatalUntil::M163);
 
   URLLoaderNetworkContext context =
       url_loader_network_observers_.current_context();

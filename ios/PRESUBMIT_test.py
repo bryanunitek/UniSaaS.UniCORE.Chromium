@@ -3,6 +3,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+
 import os
 import sys
 import unittest
@@ -64,11 +65,19 @@ class CheckNullabilityAnnotationsTest(unittest.TestCase):
         bad_lines = [
             '- (nullable NSString*)foo;',
             '- (nonnull NSString*)bar;',
+            '@property(nonatomic, strong, _Nullable) UIView* view;',
+            'void Foo(NSString* _Nonnull arg);',
         ]
         mock_input = PRESUBMIT_test_mocks.MockInputApi()
         mock_input.files = [
             PRESUBMIT_test_mocks.MockFile(
                 'ios/path/foo_controller.h', bad_lines
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/web_view/public/cwv_foo.h', bad_lines
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/third_party/bar/bar.h', bad_lines
             ),
             PRESUBMIT_test_mocks.MockFile('ios/path/README.md', bad_lines),
             PRESUBMIT_test_mocks.MockFile('ios/PRESUBMIT_test.py', bad_lines),
@@ -79,14 +88,41 @@ class CheckNullabilityAnnotationsTest(unittest.TestCase):
         )
         self.assertEqual(len(results), 1)
         self.assertEqual('warning', results[0].type)
-        self.assertTrue('ios/path/foo_controller.h:1' in results[0].items)
-        self.assertTrue('ios/path/foo_controller.h:2' in results[0].items)
-        self.assertFalse(
-            any('ios/path/README.md' in item for item in results[0].items)
+        self.assertIn(
+            'Found Nullability annotations. '
+            'These should only be used when needed for Swift interop.',
+            results[0].message,
         )
-        self.assertFalse(
-            any('ios/PRESUBMIT_test.py' in item for item in results[0].items)
+        self.assertEqual(
+            [
+                f'ios/path/foo_controller.h:{i}'
+                for i in range(1, len(bad_lines) + 1)
+            ],
+            results[0].items,
         )
+
+
+class CheckNoTearDownEGTest(unittest.TestCase):
+    """Test the _CheckNoTearDownEGTest presubmit check."""
+
+    def testTearDownInEGTest(self):
+        lines = [
+            '- (void)setUp {',
+            '- (void)tearDown {',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_egtest.mm', lines),
+            PRESUBMIT_test_mocks.MockFile('ios/path/foo_unittest.mm', lines),
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckNoTearDownEGTest(mock_input, mock_output)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('error', errors[0].type)
+        self.assertIn('addTeardownBlock:', errors[0].message)
+        self.assertIn('setTearDownHandler:', errors[0].message)
+        self.assertIn('ios/path/foo_egtest.mm:2', errors[0].message)
+        self.assertNotIn('foo_unittest.mm', errors[0].message)
 
 
 class CheckHasNoBoxedBOOLTest(unittest.TestCase):
@@ -579,6 +615,12 @@ class CheckSystemColorUsageTest(unittest.TestCase):
 
         self.assertEqual(len(errors), 1)
         self.assertEqual('warning', errors[0].type)
+        self.assertIn(
+            'Found forbidden usage of system colors. '
+            'Only white, black and clear colors are accepted. '
+            'Prefer semantic colors in ios code instead of the system ones:',
+            errors[0].message,
+        )
 
         for i in range(1, len(bad_lines)):
             self.assertTrue(f'ios/path/foo.mm:{i}' in errors[0].items)
@@ -671,6 +713,167 @@ class CheckLargeImagesetsTest(unittest.TestCase):
         self.assertEqual('error', errors[0].type)
         self.assertTrue('test1.svg' in str(errors[0].items))
         self.assertTrue('test2.pdf' in str(errors[0].items))
+
+
+class CheckEarlGreyHeaderDocstringsTest(unittest.TestCase):
+    """Test the _CheckEarlGreyHeaderDocstrings presubmit check."""
+
+    def testValidDocstrings(self):
+        lines = [
+            '@interface FooAppInterface : NSObject',
+            '// Clears the current browsing history.',
+            '+ (void)clearHistory;',
+            '// Loads `URL` in the current tab and waits `timeout` seconds.',
+            '+ (void)loadURL:(NSString*)URL timeout:(NSTimeInterval)timeout;',
+            '// Returns YES if `featureName` is enabled.',
+            '+ (BOOL)isFeatureEnabled:(NSString*)featureName;',
+            '// Returns a matcher for a button with `label`.',
+            '+ (id<GREYMatcher>)buttonWithLabel:(NSString*)label',
+            '                             error:(NSError**)error;',
+            '- (instancetype)init NS_UNAVAILABLE;',
+            '@end',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/browser/foo/test/foo_app_interface.h', lines
+            )
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckEarlGreyHeaderDocstrings(
+            mock_input, mock_output
+        )
+        self.assertEqual(len(errors), 0)
+
+    def testDetectsMissingDocstringsArgsAndReturn(self):
+        lines = [
+            '@interface FooAppInterface : NSObject',
+            '+ (void)undocumentedMethod;',
+            '// Loads the specified URL in the current tab.',
+            '+ (void)loadURL:(NSString*)targetURL;',
+            '// Saves a test passport entity.',
+            '+ (BOOL)savePassportEntity;',
+            '@end',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/browser/foo/test/foo_app_interface.h', lines
+            )
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckEarlGreyHeaderDocstrings(
+            mock_input, mock_output
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('error', errors[0].type)
+        items_str = '\n'.join(errors[0].items)
+        self.assertIn(
+            'undocumentedMethod: Missing docstring describing method '
+            'functionality',
+            items_str,
+        )
+        self.assertIn(
+            'loadURL:: Undocumented parameter `targetURL`',
+            items_str,
+        )
+        self.assertIn(
+            'savePassportEntity: Missing return value description for `BOOL`',
+            items_str,
+        )
+
+    def testRejectsBlockComments(self):
+        lines = [
+            '@interface FooAppInterface : NSObject',
+            '/*',
+            ' * Clears the browsing history.',
+            ' */',
+            '+ (void)clearHistory;',
+            '@end',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/browser/foo/test/foo_app_interface.h', lines
+            )
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckEarlGreyHeaderDocstrings(
+            mock_input, mock_output
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual('error', errors[0].type)
+        self.assertIn(
+            'Missing docstring describing method functionality '
+            '(use `//` comments, not `/* ... */` comment blocks)',
+            errors[0].items[0],
+        )
+
+    def testIgnoresNonEarlGreyHeaders(self):
+        lines = [
+            '@interface RegularCoordinator : NSObject',
+            '+ (BOOL)undocumentedMethod:(NSString*)arg;',
+            '@end',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/browser/foo/regular_coordinator.h', lines
+            )
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckEarlGreyHeaderDocstrings(
+            mock_input, mock_output
+        )
+        self.assertEqual(len(errors), 0)
+
+    def testMatchesTestingAndFeatureEarlGreyHeaders(self):
+        lines = [
+            '@interface FooEarlGreyImpl : NSObject',
+            '- (void)undocumentedHelper;',
+            '@end',
+        ]
+        mock_input = PRESUBMIT_test_mocks.MockInputApi()
+        mock_input.files = [
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/testing/earl_grey/app_launch_manager.h', lines
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/browser/bookmarks/test/bookmark_earl_grey_ui.h',
+                lines,
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/test/earl_grey/chrome_earl_grey_app_interface.h',
+                lines,
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/test/earl_grey/chrome_test_case.h',
+                lines,
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/web/shell/test/earl_grey/shell_earl_grey.h',
+                lines,
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/web/shell/test/earl_grey/shell_earl_grey_app_interface.h',
+                lines,
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/web/shell/test/earl_grey/web_shell_test_case.h',
+                lines,
+            ),
+            PRESUBMIT_test_mocks.MockFile(
+                'ios/chrome/test/earl_grey/'
+                'earl_grey_scoped_block_swizzler_app_interface.h',
+                lines,
+            ),
+        ]
+        mock_output = PRESUBMIT_test_mocks.MockOutputApi()
+        errors = PRESUBMIT._CheckEarlGreyHeaderDocstrings(
+            mock_input, mock_output
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(len(errors[0].items), 5)
 
 
 if __name__ == '__main__':

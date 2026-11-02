@@ -212,6 +212,10 @@ source_set("asan_raw_ptr_service") {
     if (use_asan_backup_ref_ptr_v2) {
       deps += [ "//build/config/sanitizers:sanitizer_shared_hooks" ]
       configs -= [ "//build/config/sanitizers:default_sanitizer_flags" ]
+      sources += [
+        "memory/reentrancy_guard.cc",
+        "memory/reentrancy_guard.h",
+      ]
     }
 
     deps += [
@@ -311,6 +315,7 @@ component("base") {
     "containers/id_map.h",
     "containers/intrusive_heap.cc",
     "containers/intrusive_heap.h",
+    "containers/linear_find.h",
     "containers/linked_list.cc",
     "containers/linked_list.h",
     "containers/lru_cache.h",
@@ -585,6 +590,8 @@ component("base") {
     "metrics/user_metrics_action.h",
     "no_destructor.h",
     "not_fatal_until.h",
+    "not_fatal_until_severity_override.cc",
+    "not_fatal_until_severity_override.h",
     "notimplemented.h",
     "notreached.h",
     "observer_list.h",
@@ -1142,8 +1149,8 @@ component("base") {
   ]
 
   deps = [
+    ":base64_rust_shim",
     ":check_version_internal",
-    ":simdutf_shim",
     "//base/allocator:buildflags",
     "//base/third_party/cityhash",
     "//base/third_party/cityhash_v103",
@@ -2651,6 +2658,7 @@ if (enable_rust_api_from_cpp) {
   rust_api_from_cpp("base_rs_api") {
     bindings_target = ":base"
     public_headers = [ "types/id_type.h" ]
+    root_namespaces = [ "base" ]
 
     # Limiting visibility, because certain foundational libraries (`//base`,
     # `//net`, etc) can't use `rust_api_from_cpp` yet.  For more details see
@@ -2712,19 +2720,13 @@ source_set("dcheck_is_on") {
   deps = [ ":debugging_buildflags" ]
 }
 
-# Separate simdutf from ":base", so simdutf cannot accidentally affect the
-# build config for ":base".
-source_set("simdutf_shim") {
+rust_static_library("base64_rust_shim") {
   visibility = [ ":base" ]
-  configs += [ "//build/config/compiler:wglobal_constructors" ]
-  if (!is_win) {
-    # Generates -Werror,-Wsign-conversion
-    configs += [ "//build/config/compiler:prevent_unsafe_narrowing" ]
-  }
-
-  public = [ "simdutf_shim.h" ]
-  sources = [ "simdutf_shim.cc" ]
-  deps = [ "//third_party/simdutf" ]
+  allow_unsafe = true  # Needed for FFI that underpins the `cxx` crate.
+  crate_root = "base64_rust_shim.rs"
+  sources = [ "base64_rust_shim.rs" ]
+  cxx_bindings = [ "base64_rust_shim.rs" ]
+  deps = [ "//third_party/rust/base64/v0_23:lib" ]
 }
 
 if (is_android) {
@@ -3350,6 +3352,9 @@ executable("containers_memory_benchmark") {
 }
 
 test("base_perftests") {
+  configs -= [ "//build/config/compiler:thinlto_optimize_default" ]
+  configs += [ "//build/config/compiler:thinlto_optimize_max" ]
+
   sources = [
     "base64_perftest.cc",
     "byte_conversions_perftest.cc",
@@ -3417,6 +3422,9 @@ test("base_perftests") {
 }
 
 test("partition_alloc_perftests") {
+  configs -= [ "//build/config/compiler:thinlto_optimize_default" ]
+  configs += [ "//build/config/compiler:thinlto_optimize_max" ]
+
   deps = [
     "//base/allocator/partition_allocator/src/partition_alloc:perftests",
     "//testing/gtest:gtest_main",
@@ -3839,6 +3847,7 @@ test("base_unittests") {
     "containers/heap_array_unittest.cc",
     "containers/id_map_unittest.cc",
     "containers/intrusive_heap_unittest.cc",
+    "containers/linear_find_unittest.cc",
     "containers/linked_list_unittest.cc",
     "containers/lru_cache_unittest.cc",
     "containers/map_util_unittest.cc",
@@ -4316,7 +4325,10 @@ test("base_unittests") {
   }
 
   if (is_asan) {
-    sources += [ "memory/raw_ptr_asan_unittest.cc" ]
+    sources += [
+      "memory/raw_ptr_asan_unittest.cc",
+      "memory/reentrancy_guard_unittest.cc",
+    ]
   }
 
   if (is_ios) {
@@ -4954,6 +4966,7 @@ if (enable_nocompile_tests) {
       "containers/fixed_flat_map_nocompile.nc",
       "containers/fixed_flat_set_nocompile.nc",
       "containers/heap_array_nocompile.nc",
+      "containers/linear_find_nocompile.nc",
       "containers/span_nocompile.nc",
       "containers/to_array_nocompile.nc",
       "containers/to_value_list_nocompile.nc",

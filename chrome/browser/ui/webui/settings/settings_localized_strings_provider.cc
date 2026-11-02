@@ -28,7 +28,6 @@
 #include "chrome/browser/glic/glic_settings_util.h"
 #include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
-#include "chrome/browser/history_embeddings/history_embeddings_utils.h"
 #include "chrome/browser/indigo/resources/grit/indigo_strings.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/obsolete_system/obsolete_system.h"
@@ -130,6 +129,7 @@
 #include "net/net_buildflags.h"
 #include "services/device/public/cpp/device_features.h"
 #include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/public_buildflags.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/accessibility_switches.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -137,7 +137,6 @@
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/webui/web_ui_util.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/webui/webui_util.h"
 
@@ -416,38 +415,6 @@ void AddAiStrings(content::WebUIDataSource* html_source) {
       {"aiSubpageFeatureManagedDisabledLabel",
        IDS_SETTINGS_AI_SUBPAGE_FEATURE_MANAGED_DISABLED_LABEL},
 
-      // History search strings.
-      {"historySearchSettingLabel", IDS_SETTINGS_HISTORY_SEARCH_SETTING_LABEL},
-      {"historySearchSettingSublabelV2",
-       IDS_SETTINGS_HISTORY_SEARCH_SETTING_SUBLABEL_V2},
-      {"historySearchWhenOnLogStart",
-       IDS_SETTINGS_HISTORY_SEARCH_WHEN_ON_LOG_START},
-      {"historySearchWhenOnPageContent",
-       IDS_SETTINGS_HISTORY_SEARCH_WHEN_ON_PAGE_CONTENT},
-      {"historySearchWhenOnSearchFrom",
-       IDS_SETTINGS_HISTORY_SEARCH_WHEN_ON_SEARCH_FROM},
-      {"historySearchConsiderData", IDS_SETTINGS_HISTORY_SEARCH_CONSIDER_DATA},
-      {"historySearchConsiderDataEncrypted",
-       IDS_SETTINGS_HISTORY_SEARCH_CONSIDER_DATA_ENCRYPTED},
-      {"historySearchLearnMoreA11yLabel",
-       IDS_SETTINGS_HISTORY_SEARCH_LEARN_MORE_A11Y_LABEL},
-      {"historySearchSublabelOn", IDS_SETTINGS_HISTORY_SEARCH_SUBLABEL_ON},
-      {"historySearchSublabelOff", IDS_SETTINGS_HISTORY_SEARCH_SUBLABEL_OFF},
-      {"historySearchWithAnswersSettingSublabelV2",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_SETTING_SUBLABEL_V2},
-      {"historySearchWithAnswersWhenOnPageContent",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_WHEN_ON_PAGE_CONTENT},
-      {"historySearchWithAnswersWhenOnRecallInfo",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_WHEN_ON_RECALL_INFO},
-      {"historySearchWithAnswersConsiderDataEncrypted",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_CONSIDER_DATA_ENCRYPTED},
-      {"historySearchWithAnswersConsiderOutdated",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_CONSIDER_OUTDATED},
-      {"historySearchWithAnswersSublabelOn",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_SUBLABEL_ON},
-      {"historySearchWithAnswersSublabelOff",
-       IDS_SETTINGS_HISTORY_SEARCH_WITH_ANSWERS_SUBLABEL_OFF},
-
       // Compose strings.
       {"aiComposeLabel", IDS_COMPOSE_SUGGESTION_MAIN_TEXT},
       {"aiComposeSublabelV2", IDS_SETTINGS_AI_COMPOSE_SUBLABEL_V2},
@@ -544,6 +511,9 @@ void AddAiStrings(content::WebUIDataSource* html_source) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       {"onDeviceAiEnabledLabel",
        IDS_SETTINGS_SYSTEM_FEATURE_ON_DEVICE_AI_ENABLED_LABEL},
+      {"onDeviceAiRowSubLabel", IDS_SETTINGS_ON_DEVICE_AI_ROW_SUB_LABEL},
+      {"onDeviceAiCapabilitiesLabel",
+       IDS_SETTINGS_ON_DEVICE_AI_CAPABILITIES_LABEL},
 #endif
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
@@ -569,12 +539,6 @@ void AddAiStrings(content::WebUIDataSource* html_source) {
   html_source->AddString("aiPageMainManagedLearnMoreUrl",
                          chrome::kAiSettingsLearnMorePageManagedUrl);
 
-  html_source->AddString("historySearchLearnMoreUrl",
-                         chrome::kHistorySearchLearnMorePageURL);
-  html_source->AddString("historySearchLearnMoreManagedUrl",
-                         chrome::kHistorySearchLearnMorePageManagedURL);
-  html_source->AddString("historySearchDataHomeUrl",
-                         chrome::kChromeUIHistoryURL);
   html_source->AddString("composeLearnMorePageURL",
                          chrome::kComposeLearnMorePageURL);
   html_source->AddString("composeLearnMorePageManagedURL",
@@ -880,6 +844,13 @@ void AddGeicStrings(content::WebUIDataSource* html_source) {
       {"geicSectionTitle", IDS_SETTINGS_GEIC_SECTION_TITLE},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
+
+  html_source->AddString(
+      "geicDefaultTabAccessToggleLearnMoreUrl",
+      google_util::AppendGoogleLocaleParam(
+          GURL(features::kGeicDefaultTabAccessToggleLearnMoreURL.Get()),
+          g_browser_process->GetApplicationLocale())
+          .spec());
 }
 
 void AddGlicStrings(content::WebUIDataSource* html_source, Profile* profile) {
@@ -1758,11 +1729,11 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
        IDS_SETTINGS_AUTOFILL_MORE_ACTIONS_FOR_CREDIT_CARD_WITH_CVC},
       {"removeAddress", IDS_SETTINGS_ADDRESS_REMOVE},
       {"removeVerifiedEmailPermission",
-       IDS_SETTINGS_REMOVE_VERIFIED_EMAIL_PERMISSION},
+       IDS_AUTOFILL_SETTINGS_REMOVE_VERIFIED_EMAIL_PERMISSION},
       {"removeVerifiedEmailPermissionTitle",
-       IDS_SETTINGS_REMOVE_VERIFIED_EMAIL_PERMISSION_TITLE},
+       IDS_AUTOFILL_SETTINGS_REMOVE_VERIFIED_EMAIL_PERMISSION_TITLE},
       {"removeVerifiedEmailPermissionBody",
-       IDS_SETTINGS_REMOVE_VERIFIED_EMAIL_PERMISSION_BODY},
+       IDS_AUTOFILL_SETTINGS_REMOVE_VERIFIED_EMAIL_PERMISSION_BODY},
       {"removeAddressConfirmationTitle",
        IDS_SETTINGS_ADDRESS_REMOVE_CONFIRMATION_TITLE},
       {"removeSyncAddressConfirmationDescription",
@@ -2210,22 +2181,7 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
 
 void AddSignOutDialogStrings(content::WebUIDataSource* html_source,
                              Profile* profile) {
-  std::string sync_dashboard_url =
-      google_util::AppendGoogleLocaleParam(
-          GURL(base::FeatureList::IsEnabled(
-                   syncer::kSyncEnableNewSyncDashboardUrl)
-                   ? chrome::kNewSyncGoogleDashboardURL
-                   : chrome::kLegacySyncGoogleDashboardURL),
-          g_browser_process->GetApplicationLocale())
-          .spec();
-
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  html_source->AddString(
-      "syncDisconnectManagedProfileExplanation",
-      l10n_util::GetStringFUTF8(
-          IDS_SETTINGS_TURN_OFF_SYNC_MANAGED_PROFILE_EXPLANATION, u"$1",
-          base::ASCIIToUTF16(sync_dashboard_url)));
-
   if (profile->IsChild()) {
     static constexpr webui::LocalizedString kTurnOffStrings[] = {
         {"syncDisconnect", IDS_SETTINGS_PEOPLE_SYNC_TURN_OFF},
@@ -2237,8 +2193,6 @@ void AddSignOutDialogStrings(content::WebUIDataSource* html_source,
     static constexpr webui::LocalizedString kSyncDisconnectStrings[] = {
         {"syncDisconnectDeleteProfile",
          IDS_SETTINGS_TURN_OFF_SYNC_DIALOG_CHECKBOX},
-        {"syncDisconnectConfirm",
-         IDS_SETTINGS_TURN_OFF_SYNC_DIALOG_MANAGED_CONFIRM},
         {"syncDisconnectExplanation",
          IDS_SETTINGS_SYNC_DISCONNECT_AND_SIGN_OUT_EXPLANATION_SUPERVISED_PROFILE},
     };
@@ -2260,8 +2214,6 @@ void AddSignOutDialogStrings(content::WebUIDataSource* html_source,
     static constexpr webui::LocalizedString kSyncDisconnectStrings[] = {
         {"syncDisconnectDeleteProfile",
          IDS_SETTINGS_TURN_OFF_SYNC_DIALOG_CHECKBOX},
-        {"syncDisconnectConfirm",
-         IDS_SETTINGS_TURN_OFF_SYNC_DIALOG_MANAGED_CONFIRM},
         {"syncDisconnectExplanation",
          IDS_SETTINGS_SYNC_DISCONNECT_AND_SIGN_OUT_EXPLANATION},
     };
@@ -2573,10 +2525,6 @@ void AddPeopleStrings(content::WebUIDataSource* html_source, Profile* profile) {
           ? IDS_SETTINGS_CUSTOMIZE_PROFILE
           : IDS_SETTINGS_CUSTOMIZE_YOUR_CHROME_PROFILE);
 #endif
-
-  html_source->AddBoolean(
-      "historyEmbeddingsAnswersFeatureEnabled",
-      history_embeddings::IsHistoryEmbeddingsAnswersSettingVisible(profile));
 
   // Add Google Account URL and include UTM parameter to signal the source of
   // the navigation.
@@ -3192,18 +3140,20 @@ void AddSearchStrings(content::WebUIDataSource* html_source, Profile* profile) {
   html_source->AddString("searchExplanationLearnMoreURL",
                          chrome::kOmniboxLearnMoreURL);
 
-  const bool is_eea =
+  const bool is_in_search_engine_choice_screen_region =
       CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
                       GetForProfile(profile))
-          .IsInEeaCountry();
+          .IsInSearchEngineChoiceScreenRegion();
   html_source->AddLocalizedString(
       "searchEnginesSettingsDialogSubtitle",
-      is_eea ? IDS_SEARCH_ENGINE_CHOICE_SETTINGS_SUBTITLE
-             : IDS_SEARCH_ENGINE_CHOICE_SETTINGS_SUBTITLE_NON_EEA);
+      is_in_search_engine_choice_screen_region
+          ? IDS_SEARCH_ENGINE_CHOICE_SETTINGS_SUBTITLE
+          : IDS_SEARCH_ENGINE_CHOICE_SETTINGS_SUBTITLE_NON_EEA);
   html_source->AddLocalizedString(
       "searchEnginesPickerSubtitle",
-      is_eea ? IDS_SETTINGS_SEARCH_ENGINES_PICKER_SUBTITLE
-             : IDS_SETTINGS_SEARCH_ENGINES_PICKER_SUBTITLE_NON_EEA);
+      is_in_search_engine_choice_screen_region
+          ? IDS_SETTINGS_SEARCH_ENGINES_PICKER_SUBTITLE
+          : IDS_SETTINGS_SEARCH_ENGINES_PICKER_SUBTITLE_NON_EEA);
 }
 
 void AddSearchEnginesStrings(content::WebUIDataSource* html_source) {
@@ -3502,10 +3452,6 @@ void AddSiteSettingsStrings(content::WebUIDataSource* html_source,
       {"siteSettingsSerialPorts", IDS_SITE_SETTINGS_TYPE_SERIAL_PORTS},
       {"siteSettingsSerialPortsMidSentence",
        IDS_SITE_SETTINGS_TYPE_SERIAL_PORTS_MID_SENTENCE},
-#if BUILDFLAG(IS_CHROMEOS)
-      {"siteSettingsSmartCardReaders",
-       IDS_SITE_SETTINGS_TYPE_SMART_CARD_READERS},
-#endif
       {"siteSettingsUsbDevices", IDS_SITE_SETTINGS_TYPE_USB_DEVICES},
       {"siteSettingsUsbDevicesMidSentence",
        IDS_SITE_SETTINGS_TYPE_USB_DEVICES_MID_SENTENCE},
@@ -4158,6 +4104,7 @@ void AddSiteSettingsStrings(content::WebUIDataSource* html_source,
        IDS_SETTINGS_OFFER_WRITING_HELP_ENABLED_SUB_LABEL},
       {"siteSettingsOfferWritingHelpDisabledSublabel",
        IDS_SETTINGS_OFFER_WRITING_HELP_DISABLED_SUB_LABEL},
+#if BUILDFLAG(ENABLE_SMART_CARD)
       {"siteSettingsSmartCardReaders", IDS_SITE_SETTINGS_SMART_CARD_READERS},
       {"siteSettingsSmartCardReadersDescription",
        IDS_SITE_SETTINGS_SMART_CARD_READERS_DESCRIPTION},
@@ -4170,6 +4117,7 @@ void AddSiteSettingsStrings(content::WebUIDataSource* html_source,
        IDS_SITE_SETTINGS_NO_SMART_CARD_READERS_FOUND},
       {"siteSettingsResetSmartCardConfirmation",
        IDS_SITE_SETTINGS_RESET_SMART_CARD_CONFIRMATION},
+#endif
 
       {"siteSettingsLocalNetwork", IDS_SITE_SETTINGS_TYPE_LOCAL_NETWORK},
       {"siteSettingsLocalNetworkMidSentence",

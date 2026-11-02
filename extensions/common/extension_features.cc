@@ -87,6 +87,8 @@ BASE_FEATURE(kApiProxyOverrideRulesPrivate, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kApiRuntimeGetPlatformInfoNaClArch,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kApiRuntimeGetDocumentId, base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kWebRequestSecurityInfo, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kWebRequestPerContextEventDispatch,
@@ -139,6 +141,11 @@ BASE_FEATURE(kExtensionAsyncListenerRegistration,
 // TODO(crbug.com/561948316): Remove this kill switch in M160.
 BASE_FEATURE(kExtensionDebuggerStrictPolicyRestrictions,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// TODO(crbug.com/578677350): Remove this kill switch in M161.
+BASE_FEATURE(kExtensionDownloaderPublisherProofByUpdateUrl,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kExtensionLocalizationGuid, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kExtensionIconVariants, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -193,6 +200,10 @@ BASE_FEATURE(kLaunchWindowsNativeHostsDirectly,
 BASE_FEATURE(kSafeBrowsingCrxAllowlistAutoDisable,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kWebRequestProxyMoveResponse, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kWebRequestProxyNavigationResponseTaskRunner,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // TODO(https://crbug.com/328494022): Disable this on ChromeOS, too, and then
 // eventually remove it.
@@ -279,6 +290,9 @@ BASE_FEATURE(kOptimizeWebRequestProxy, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kUseSha256ForExtensionHashes, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kRestrictGeneratedPathsInWebAccessibleResources,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kRestrictMessagingReceiverFramesToExtensionProcesses,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace extensions_features

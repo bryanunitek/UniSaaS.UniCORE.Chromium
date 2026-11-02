@@ -71,7 +71,6 @@
 #import "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #import "components/regional_capabilities/regional_capabilities_prefs.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#import "components/safety_check/safety_check_pref_names.h"
 #import "components/safety_check/safety_check_prefs.h"
 #import "components/saved_tab_groups/public/pref_names.h"
 #import "components/search_engines/template_url_prepopulate_data.h"
@@ -109,6 +108,7 @@
 #import "components/webui/flags/pref_service_flags_storage.h"
 #import "ios/chrome/app/spotlight/spotlight_util.h"
 #import "ios/chrome/app/variations_app_state_agent.h"
+#import "ios/chrome/browser/authentication/account_switching_promo/model/account_switching_promo_prefs.h"
 #import "ios/chrome/browser/authentication/history_sync/model/history_sync_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin_promo_view_mediator.h"
@@ -147,14 +147,13 @@
 #import "ios/chrome/browser/upgrade/model/upgrade_constants.h"
 #import "ios/chrome/browser/voice/model/voice_search_prefs_registration.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_tab_helper.h"
-#import "ios/chrome/browser/welcome_back/model/welcome_back_prefs.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
 #import "ios/components/cookie_util/cookie_constants.h"
 #import "ios/web/common/features.h"
 #import "ui/base/l10n/l10n_util.h"
 
 #if !BUILDFLAG(IS_IOS_MACCATALYST)
-#import "ios/chrome/browser/default_browser/default_status/model/default_status_helper_prefs.h"
+#import "ios/chrome/browser/default_browser/default_status/model/default_status_helper.h"
 #endif  // !BUILDFLAG(IS_IOS_MACCATALYST)
 
 namespace {
@@ -236,6 +235,8 @@ inline constexpr char kSyncEncryptionBootstrapToken[] =
     "sync.encryption_bootstrap_token";
 inline constexpr char kSyncEncryptionBootstrapTokenPerAccountMigrationDone[] =
     "sync.encryption_bootstrap_token_per_account_migration_done";
+inline constexpr char kCustomLinksAiModeTileIndex[] =
+    "custom_links.ai_mode_tile_index";
 
 // Deprecated 10/2026.
 inline constexpr char kTailoredSecuritySyncFlowLastRunTime[] =
@@ -245,29 +246,9 @@ inline constexpr char kTailoredSecuritySyncFlowLastUserInteractionState[] =
 inline constexpr char kTailoredSecuritySyncFlowObservedOutcomeUnsetTimestamp[] =
     "safebrowsing.aesb_sync_flow_observed_outcome_unset_timestamp";
 
-// Renames a boolean pref within a PrefService.
-void RenameBooleanPref(std::string_view target_pref_name,
-                       std::string_view source_pref_name,
-                       PrefService* pref_service) {
-  const PrefService::Preference* target_pref =
-      pref_service->FindPreference(target_pref_name);
-  CHECK(target_pref);
-
-  const PrefService::Preference* source_pref =
-      pref_service->FindPreference(source_pref_name);
-  CHECK(source_pref);
-
-  // Only migrate the pref if 1. it is not set in target,
-  // 2. it is not the default in source.
-  if (target_pref->IsDefaultValue() && !source_pref->IsDefaultValue()) {
-    pref_service->SetBoolean(target_pref_name,
-                             pref_service->GetBoolean(source_pref_name));
-  }
-
-  // In all cases, clear the pref from source.
-  pref_service->ClearPref(source_pref_name);
-}
-
+// Deprecated 10/2026.
+inline constexpr char kWelcomeBackEligibleItems[] =
+    "ios.welcomeback.eligible_items";
 }  // namespace
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
@@ -307,7 +288,6 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   TipsNotificationClient::RegisterLocalStatePrefs(registry);
   auto_deletion::AutoDeletionService::RegisterLocalStatePrefs(registry);
   push_notification_prefs::RegisterLocalStatePrefs(registry);
-  RegisterWelcomeBackLocalStatePrefs(registry);
   feature_engagement::RegisterLocalStatePrefs(registry);
 
 #if !BUILDFLAG(IS_IOS_MACCATALYST)
@@ -510,6 +490,9 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   // Deprecated 08/2026.
   registry->RegisterTimePref(kWaitingForMultiProfileForcedMigrationTimestamp,
                              base::Time());
+
+  // Deprecated 10/2026.
+  registry->RegisterListPref(kWelcomeBackEligibleItems);
 }
 
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
@@ -519,6 +502,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   contextual_search::ContextualSearchService::RegisterProfilePrefs(registry);
   AimEligibilityService::RegisterProfilePrefs(registry);
   registry->RegisterDictionaryPref(prefs::kCobrowseSessionActiveMap);
+  registry->RegisterBooleanPref(prefs::kCobrowseTabSharingConsentAccepted,
+                                false);
   cross_device::RegisterProfilePrefs(registry);
   CrossPlatformPromosService::RegisterProfilePrefs(registry);
   data_controls::RegisterProfilePrefs(registry);
@@ -768,6 +753,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterListPref(prefs::kIosLatestMostVisitedSites,
                              PrefRegistry::LOSSY_PREF);
 
+  registry->RegisterIntegerPref(prefs::kIosMostVisitedAiModeTileIndex, 0);
+
   registry->RegisterBooleanPref(prefs::kUserAgentWasChanged, false);
 
   registry->RegisterTimePref(prefs::kLastApplicationStorageMetricsLogTime,
@@ -880,14 +867,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterTimeDeltaPref(
       prefs::kDeviceAuthorizationStartupFetchBackoff, base::TimeDelta());
 
-  // Use `safety_check::prefs::kSafetyCheckHomeModuleEnabled` instead.
-  registry->RegisterBooleanPref(
-      prefs::kHomeCustomizationMagicStackSafetyCheckEnabled, true);
-
   registry->RegisterBooleanPref(prefs::kUniversalOptOutErrorToastShown, false);
 
-  // Deprecated 11/2025.
-  registry->RegisterListPref(kReaderModeRecentlyUsedTimestampsPref);
+  signin::RegisterAccountSwitchingPromoProfilePrefs(registry);
 
   // Deprecated 12/2025.
   registry->RegisterStringPref(kAutofillStatesDataDir, std::string());
@@ -943,6 +925,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
       kTailoredSecuritySyncFlowLastUserInteractionState, 0);
   registry->RegisterTimePref(
       kTailoredSecuritySyncFlowObservedOutcomeUnsetTimestamp, base::Time());
+
+  // Deprecated 10/2026.
+  registry->RegisterIntegerPref(kCustomLinksAiModeTileIndex, 0);
 }
 
 // This method should be periodically pruned of year+ old migrations.
@@ -974,6 +959,9 @@ void MigrateObsoleteLocalStatePrefs(PrefService* prefs) {
 
   // Added 08/2026.
   prefs->ClearPref(kWaitingForMultiProfileForcedMigrationTimestamp);
+
+  // Added 10/2026.
+  prefs->ClearPref(kWelcomeBackEligibleItems);
 }
 
 // This method should be periodically pruned of year+ old migrations.
@@ -983,14 +971,6 @@ void MigrateObsoleteProfilePrefs(PrefService* prefs) {
 
   // Check MigrateDeprecatedAutofillPrefs() to see if this is safe to remove.
   autofill::prefs::MigrateDeprecatedAutofillPrefs(prefs);
-
-  // Added 10/2025.
-  RenameBooleanPref(safety_check::prefs::kSafetyCheckHomeModuleEnabled,
-                    prefs::kHomeCustomizationMagicStackSafetyCheckEnabled,
-                    prefs);
-
-  // Added 11/2025.
-  prefs->ClearPref(kReaderModeRecentlyUsedTimestampsPref);
 
   // Added 12/2025.
   prefs->ClearPref(kAutofillStatesDataDir);
@@ -1037,20 +1017,18 @@ void MigrateObsoleteProfilePrefs(PrefService* prefs) {
   prefs->ClearPref(kTailoredSecuritySyncFlowLastRunTime);
   prefs->ClearPref(kTailoredSecuritySyncFlowLastUserInteractionState);
   prefs->ClearPref(kTailoredSecuritySyncFlowObservedOutcomeUnsetTimestamp);
+
+  if (prefs->FindPreference(prefs::kIosMostVisitedAiModeTileIndex)
+          ->IsDefaultValue() &&
+      !prefs->FindPreference(kCustomLinksAiModeTileIndex)->IsDefaultValue()) {
+    prefs->SetInteger(prefs::kIosMostVisitedAiModeTileIndex,
+                      prefs->GetInteger(kCustomLinksAiModeTileIndex));
+  }
+  prefs->ClearPref(kCustomLinksAiModeTileIndex);
 }
 
 void MigrateObsoleteUserDefault() {
   NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-
-  // Added 10/2025.
-  [defaults removeObjectForKey:@"TimestampTriggerCriteriaExperimentStarted"];
-  [defaults removeObjectForKey:@"AllTimestampsAppLaunchColdStart"];
-  [defaults removeObjectForKey:@"AllTimestampsAppLaunchWarmStart"];
-  [defaults removeObjectForKey:@"AllTimestampsAppLaunchIndirectStart"];
-  [defaults removeObjectForKey:@"AutofillUseCount"];
-  [defaults removeObjectForKey:@"SpecialTabUseCount"];
-  [defaults removeObjectForKey:@"OmniboxUseCount"];
-  [defaults removeObjectForKey:@"BookmarkUseCount"];
 
   // Added 03/2026
   [defaults removeObjectForKey:@"fre_timestamp_migration_done"];

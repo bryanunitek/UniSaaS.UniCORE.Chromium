@@ -16,6 +16,7 @@
 #include "components/guest_view/browser/slim_web_view/request_utils.h"
 #include "components/guest_view/browser/slim_web_view/slim_web_view_permission_helper.h"
 #include "net/base/net_errors.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 
 class GURL;
 
@@ -89,7 +90,7 @@ class SlimWebViewGuest : public GuestView<SlimWebViewGuest> {
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
-      WindowOpenDisposition disposition,
+      ui::mojom::WindowOpenDisposition disposition,
       const blink::mojom::WindowFeatures& window_features,
       const content::StoragePartitionConfig& partition_config,
       content::SessionStorageNamespaceHandle* session_storage_namespace) final;
@@ -128,6 +129,7 @@ class SlimWebViewGuest : public GuestView<SlimWebViewGuest> {
                        GuestPageCreatedCallback callback) final;
   void GuestViewDidStopLoading() final;
   void GuestZoomChanged(double old_zoom_level, double new_zoom_level) final;
+  bool ZoomPropagatesFromEmbedderToGuest() const final;
 
   void LoadAbort(bool is_top_level, const GURL& url, net::Error error_code);
 
@@ -137,6 +139,9 @@ class SlimWebViewGuest : public GuestView<SlimWebViewGuest> {
 
   std::optional<OriginCheckParams> allowed_origins_params_;
   bool is_overriding_user_agent_ = false;
+  // Whether SetZoom() has been called, after which the guest no longer follows
+  // the embedder's zoom.
+  bool did_set_explicit_zoom_ = false;
 
   base::WeakPtrFactory<SlimWebViewGuest> weak_ptr_factory_{this};
 };

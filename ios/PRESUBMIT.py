@@ -75,7 +75,7 @@ def _CheckNullabilityAnnotations(input_api, output_api):
     plural_suffix = '' if len(errors) == 1 else 's'
     warning_message = (
         'Found Nullability annotation%(plural)s. '
-        'Prefer DCHECKs in ios code to check for nullness:'
+        'These should only be used when needed for Swift interop.'
         % {'plural': plural_suffix}
     )
 
@@ -324,9 +324,10 @@ def _CheckNoTearDownEGTest(input_api, output_api):
     warning_message = (
         '\n'.join(
             [
-                'To support hermetic EarlGrey test cases, tearDown has been renamed '
-                'to tearDownHelper, and will soon be removed. If tearDown is really '
-                'necessary for this test, please use addTeardownBlock'
+                'Do not override `- (void)tearDown` in EarlGrey tests. '
+                'Host app state is wiped automatically between tests; for '
+                'non-sandbox cleanup, register a block with '
+                '`addTeardownBlock:` or `setTearDownHandler:` instead:'
             ]
             + errors
         )
@@ -685,9 +686,11 @@ def _CheckUsageOfSystemColors(input_api, output_api):
     if not errors:
         return []
 
-    warning_message = 'Found forbidden usage of system colors. '
-    'Only white, black and clear colors are accepted.'
-    'Prefer semantic colors in ios code instead of the system ones:'
+    warning_message = (
+        'Found forbidden usage of system colors. '
+        'Only white, black and clear colors are accepted. '
+        'Prefer semantic colors in ios code instead of the system ones:'
+    )
 
     return [output_api.PresubmitPromptWarning(warning_message, items=errors)]
 
@@ -798,6 +801,141 @@ def _CheckLargeImagesets(input_api, output_api):
     return [output_api.PresubmitError(warning_message, items=errors)]
 
 
+def _ImportEarlGreyHeaderUtil(input_api):
+    """Imports the shared `earl_grey_header_util` module."""
+    try:
+        import earl_grey_header_util
+
+        return earl_grey_header_util
+    except ImportError:
+        pass
+
+    import sys
+
+    candidates = []
+    if hasattr(input_api, 'PresubmitLocalPath'):
+        candidates.append(
+            input_api.os_path.join(
+                input_api.PresubmitLocalPath(),
+                'testing',
+                'earl_grey_mcp',
+                'scripts',
+            )
+        )
+    if hasattr(input_api, 'change') and hasattr(
+        input_api.change, 'RepositoryRoot'
+    ):
+        candidates.append(
+            input_api.os_path.join(
+                input_api.change.RepositoryRoot(),
+                'ios',
+                'testing',
+                'earl_grey_mcp',
+                'scripts',
+            )
+        )
+
+    for candidate in candidates:
+        if input_api.os_path.isdir(candidate) and candidate not in sys.path:
+            sys.path.append(candidate)
+
+    import earl_grey_header_util
+
+    return earl_grey_header_util
+
+
+def _CheckEarlGreyHeaderDocstrings(input_api, output_api):
+    """Checks that modified EarlGrey header methods have complete docstrings.
+
+    Verifies that newly added or modified Objective-C methods in EarlGrey
+    headers document their functionality, arguments (enclosed in backticks),
+    and return values (for non-void methods).
+    """
+    eg_util = _ImportEarlGreyHeaderUtil(input_api)
+
+    errors = []
+    for filename in input_api.AffectedFiles(include_deletes=False):
+        local_path = filename.LocalPath()
+        if not eg_util.is_earlgrey_header(local_path):
+            continue
+
+        changed_lines = {line_num for line_num, _ in filename.ChangedContents()}
+        if not changed_lines:
+            continue
+
+        lines = filename.NewContents()
+        in_interface = False
+        line_idx = -1
+
+        while line_idx + 1 < len(lines):
+            line_idx += 1
+            line = lines[line_idx]
+            stripped = line.strip()
+            if stripped.startswith('@interface '):
+                in_interface = True
+                continue
+            if stripped.startswith('@end'):
+                in_interface = False
+                continue
+
+            if not in_interface:
+                continue
+
+            if not eg_util.METHOD_START_RE.match(line):
+                continue
+
+            start_line_idx = line_idx
+            full_decl, line_idx = eg_util.extract_method_declaration(
+                lines, start_line_idx
+            )
+            end_line_idx = line_idx
+
+            if 'NS_UNAVAILABLE' in full_decl:
+                continue
+
+            comment_lines, comment_start_line_idx = (
+                eg_util.extract_preceding_comments(lines, start_line_idx)
+            )
+
+            if not any(
+                line_no in changed_lines
+                for line_no in range(
+                    comment_start_line_idx + 1, end_line_idx + 2
+                )
+            ):
+                continue
+
+            doc_text = eg_util.clean_comment_text(comment_lines)
+            try:
+                method_info = eg_util.parse_method_declaration(full_decl)
+                validation_errors = eg_util.validate_method_docstrings(
+                    method_info, doc_text
+                )
+                selector_name = method_info.selector
+            except ValueError:
+                selector_name = full_decl
+                validation_errors = ['Malformed method declaration']
+
+            if validation_errors:
+                errors_str = '; '.join(validation_errors)
+                errors.append(
+                    f'{local_path}:{start_line_idx + 1} '
+                    f'({selector_name}: {errors_str})'
+                )
+
+    if not errors:
+        return []
+
+    error_message = (
+        'EarlGrey header methods must have complete docstrings documenting '
+        'their functionality, arguments (in backticks, e.g. `paramName`), and '
+        'return values so that MCP tool schemas have complete metadata.\n'
+        'See docs/ios/testing.md#accessing-app-internals for header '
+        'documentation requirements and examples.'
+    )
+    return [output_api.PresubmitError(error_message, items=errors)]
+
+
 def CheckChange(input_api, output_api):
     results = []
     results.extend(_CheckBugInToDo(input_api, output_api))
@@ -820,6 +958,7 @@ def CheckChange(input_api, output_api):
     results.extend(_CheckNoFlakyUnitTest(input_api, output_api))
     results.extend(_CheckUsageOfSystemColors(input_api, output_api))
     results.extend(_CheckLargeImagesets(input_api, output_api))
+    results.extend(_CheckEarlGreyHeaderDocstrings(input_api, output_api))
     results.extend(input_api.canned_checks.RunRuff(input_api, output_api))
     results.extend(
         input_api.canned_checks.CheckPatchFormatted(

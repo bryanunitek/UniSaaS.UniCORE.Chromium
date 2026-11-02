@@ -14,6 +14,7 @@
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_dialog_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
@@ -3710,6 +3711,206 @@ TEST_F(AccessibilityTest, SetAncestorsHaveDirtyDescendantsAndDynamicInclusion) {
   EXPECT_FALSE(ignored_included->HasDirtyDescendants());
   EXPECT_FALSE(main->HasDirtyDescendants());
   EXPECT_FALSE(root->HasDirtyDescendants());
+}
+
+TEST_F(AccessibilityTest, FilterableSelectControlsAndRole) {
+  ScopedFilterableSelectForTest filterable_select_enabled(true);
+  SetBodyInnerHTML(R"HTML(
+    <input id="input1" filter="select1">
+    <select id="select1" size="4">
+      <option>one</option>
+      <option>two</option>
+    </select>
+
+    <select id="select2" style="appearance: base-select">
+      <input id="input2">
+      <option>one</option>
+      <option>two</option>
+    </select>
+
+    <select id="select3" size="4">
+      <input id="input3">
+      <option>one</option>
+      <option>two</option>
+    </select>
+
+    <input type="checkbox" id="checkbox" filter="select1">
+  )HTML");
+
+  AXObjectCacheImpl& cache = GetAXObjectCache();
+  cache.UpdateAXForAllDocuments();
+
+  // 1. External <input filter="select1"> targeting <select id="select1"
+  // size="4">.
+  AXObject* ax_input1 = GetAXObjectByElementId("input1");
+  AXObject* ax_select1 = GetAXObjectByElementId("select1");
+  ASSERT_NE(nullptr, ax_input1);
+  ASSERT_NE(nullptr, ax_select1);
+  EXPECT_EQ(ax::mojom::blink::Role::kTextField, ax_input1->RoleValue());
+  EXPECT_EQ(ax::mojom::blink::Role::kListBox, ax_select1->RoleValue());
+
+  // 2. Nested <input> inside dropdown <select id="select2">.
+  auto* select2 = To<HTMLSelectElement>(GetElementById("select2"));
+  ASSERT_NE(nullptr, select2->ListBoxForFilter());
+  AXObject* ax_input2 = GetAXObjectByElementId("input2");
+  AXObject* ax_listbox2 = cache.Get(select2->ListBoxForFilter());
+  ASSERT_NE(nullptr, ax_input2);
+  ASSERT_NE(nullptr, ax_listbox2);
+  EXPECT_EQ(ax::mojom::blink::Role::kTextField, ax_input2->RoleValue());
+  EXPECT_EQ(ax::mojom::blink::Role::kListBox, ax_listbox2->RoleValue());
+
+  // 3. Nested <input> inside listbox <select id="select3" size="4">.
+  auto* select3 = To<HTMLSelectElement>(GetElementById("select3"));
+  ASSERT_NE(nullptr, select3->ListBoxForFilter());
+  AXObject* ax_input3 = GetAXObjectByElementId("input3");
+  AXObject* ax_listbox3 = cache.Get(select3->ListBoxForFilter());
+  ASSERT_NE(nullptr, ax_input3);
+  ASSERT_NE(nullptr, ax_listbox3);
+  EXPECT_EQ(ax::mojom::blink::Role::kTextField, ax_input3->RoleValue());
+  EXPECT_EQ(ax::mojom::blink::Role::kListBox, ax_listbox3->RoleValue());
+
+  // 4. Non-textfield <input type="checkbox" filter="select1"> should not get
+  // controlsIds.
+  AXObject* ax_checkbox = GetAXObjectByElementId("checkbox");
+  ASSERT_NE(nullptr, ax_checkbox);
+
+  {
+    ScopedFreezeAXCache freeze(cache);
+
+    ui::AXNodeData node_data1;
+    ax_input1->Serialize(&node_data1, ui::kAXModeComplete);
+    EXPECT_THAT(node_data1.GetIntListAttribute(
+                    ax::mojom::blink::IntListAttribute::kControlsIds),
+                testing::ElementsAre(ax_select1->AXObjectID()));
+
+    ui::AXNodeData node_data2;
+    ax_input2->Serialize(&node_data2, ui::kAXModeComplete);
+    EXPECT_THAT(node_data2.GetIntListAttribute(
+                    ax::mojom::blink::IntListAttribute::kControlsIds),
+                testing::ElementsAre(ax_listbox2->AXObjectID()));
+
+    ui::AXNodeData node_data3;
+    ax_input3->Serialize(&node_data3, ui::kAXModeComplete);
+    EXPECT_THAT(node_data3.GetIntListAttribute(
+                    ax::mojom::blink::IntListAttribute::kControlsIds),
+                testing::ElementsAre(ax_listbox3->AXObjectID()));
+
+    ui::AXNodeData checkbox_data;
+    ax_checkbox->Serialize(&checkbox_data, ui::kAXModeComplete);
+    EXPECT_FALSE(checkbox_data.HasIntListAttribute(
+        ax::mojom::blink::IntListAttribute::kControlsIds));
+  }
+
+  // 5. Updating the filter attribute marks the input dirty and updates
+  // controlsIds.
+  GetElementById("input1")->setAttribute(html_names::kFilterAttr,
+                                         AtomicString("select3"));
+  cache.UpdateAXForAllDocuments();
+  {
+    ScopedFreezeAXCache freeze(cache);
+    ui::AXNodeData node_data1;
+    ax_input1->Serialize(&node_data1, ui::kAXModeComplete);
+    EXPECT_THAT(node_data1.GetIntListAttribute(
+                    ax::mojom::blink::IntListAttribute::kControlsIds),
+                testing::ElementsAre(ax_listbox3->AXObjectID()));
+  }
+}
+
+TEST_F(AccessibilityTest, SerializeCachedNativeRoleAndAttributes) {
+  SetBodyInnerHTML(R"HTML(
+      <time id="time" datetime="2026-10-10">Oct 10</time>
+      <ins id="ins" datetime="2026-10-11">Inserted</ins>
+      <del id="del" datetime="2026-10-12">Deleted</del>
+      <time id="time_aria" role="note" datetime="2026-10-13">Note time</time>
+      <span id="lbl1">First label</span>
+      <span id="lbl2">Second label</span>
+      <button id="btn_labelledby" aria-labelledby="lbl1" aria-label="Fallback">
+        Button
+      </button>
+      <button id="btn_labeledby" aria-labeledby="lbl2">Button</button>
+      <ul style="list-style-type: disc;">
+        <li id="li" dir="rtl"
+            style="font-size: 20px; font-weight: 700; text-align: center; text-indent: 10mm;">
+          Item
+        </li>
+      </ul>
+      )HTML");
+
+  auto serialize = [&](const char* id) {
+    ui::AXNodeData node_data;
+    AXObject* ax_object = GetAXObjectByElementId(id);
+    if (!ax_object) {
+      ADD_FAILURE() << "No AXObject for " << id;
+      return node_data;
+    }
+    ScopedFreezeAXCache freeze(GetAXObjectCache());
+    ax_object->Serialize(&node_data, ui::kAXModeComplete);
+    return node_data;
+  };
+
+  ui::AXNodeData time_data = serialize("time");
+  EXPECT_EQ(ax::mojom::blink::Role::kTime, time_data.role);
+  EXPECT_EQ("2026-10-10", time_data.GetStringAttribute(
+                              ax::mojom::blink::StringAttribute::kDateTime));
+
+  ui::AXNodeData ins_data = serialize("ins");
+  EXPECT_EQ(ax::mojom::blink::Role::kContentInsertion, ins_data.role);
+  EXPECT_EQ("2026-10-11", ins_data.GetStringAttribute(
+                              ax::mojom::blink::StringAttribute::kDateTime));
+
+  ui::AXNodeData del_data = serialize("del");
+  EXPECT_EQ(ax::mojom::blink::Role::kContentDeletion, del_data.role);
+  EXPECT_EQ("2026-10-12", del_data.GetStringAttribute(
+                              ax::mojom::blink::StringAttribute::kDateTime));
+
+  // Even when `RoleValue()` is overridden by an explicit ARIA `role`, cached
+  // `native_role_` remains `kTime` and serializes `kDateTime`.
+  ui::AXNodeData time_aria_data = serialize("time_aria");
+  EXPECT_EQ(ax::mojom::blink::Role::kNote, time_aria_data.role);
+  EXPECT_EQ("2026-10-13", time_aria_data.GetStringAttribute(
+                              ax::mojom::blink::StringAttribute::kDateTime));
+
+  // Verify `NameSources` population for `aria-labelledby` and `aria-labeledby`.
+  const AXObject* btn_labelledby = GetAXObjectByElementId("btn_labelledby");
+  ASSERT_NE(nullptr, btn_labelledby);
+  ax::mojom::blink::NameFrom name_from;
+  AXObject::NameSources name_sources;
+  EXPECT_EQ("First label",
+            btn_labelledby->GetName(name_from, nullptr, &name_sources));
+  EXPECT_EQ(ax::mojom::blink::NameFrom::kRelatedElement, name_from);
+  ASSERT_GE(name_sources.size(), 2u);
+  EXPECT_EQ(html_names::kAriaLabelledbyAttr, name_sources[0].attribute);
+  EXPECT_EQ("First label", name_sources[0].text);
+  EXPECT_FALSE(name_sources[0].superseded);
+  EXPECT_EQ(html_names::kAriaLabelAttr, name_sources[1].attribute);
+  EXPECT_EQ("Fallback", name_sources[1].text);
+  EXPECT_TRUE(name_sources[1].superseded);
+
+  const AXObject* btn_labeledby = GetAXObjectByElementId("btn_labeledby");
+  ASSERT_NE(nullptr, btn_labeledby);
+  name_sources.clear();
+  EXPECT_EQ("Second label",
+            btn_labeledby->GetName(name_from, nullptr, &name_sources));
+  EXPECT_EQ(ax::mojom::blink::NameFrom::kRelatedElement, name_from);
+  ASSERT_GE(name_sources.size(), 1u);
+  EXPECT_EQ(html_names::kAriaLabeledbyAttr, name_sources[0].attribute);
+  EXPECT_EQ("Second label", name_sources[0].text);
+
+  // Verify style attribute serialization on `<li>`.
+  ui::AXNodeData li_data = serialize("li");
+  EXPECT_EQ(ax::mojom::blink::Role::kListItem, li_data.role);
+  EXPECT_FLOAT_EQ(20.0f, li_data.GetFloatAttribute(
+                             ax::mojom::blink::FloatAttribute::kFontSize));
+  EXPECT_FLOAT_EQ(700.0f, li_data.GetFloatAttribute(
+                              ax::mojom::blink::FloatAttribute::kFontWeight));
+  EXPECT_NEAR(
+      10.0f,
+      li_data.GetFloatAttribute(ax::mojom::blink::FloatAttribute::kTextIndent),
+      0.01f);
+  EXPECT_EQ(ax::mojom::blink::TextAlign::kCenter, li_data.GetTextAlign());
+  EXPECT_EQ(ax::mojom::blink::ListStyle::kDisc, li_data.GetListStyle());
+  EXPECT_EQ(ax::mojom::blink::WritingDirection::kRtl,
+            li_data.GetTextDirection());
 }
 
 }  // namespace test

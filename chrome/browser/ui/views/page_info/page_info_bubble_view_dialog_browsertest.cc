@@ -63,12 +63,14 @@
 #include "url/origin.h"
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-#include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
+#include "chrome/browser/safe_browsing/password_protection/chrome_password_protection_service.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 #if BUILDFLAG(IS_MAC)
-#include "chrome/browser/web_applications/os_integration/mac/app_shim_registry.h"
+#include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
+#include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
+#include "chrome/services/mac_notifications/public/mojom/mac_notifications.mojom.h"
 #endif
 
 namespace {
@@ -917,9 +919,12 @@ class PageInfoBubbleViewWebAppBrowserTest
 
 #if BUILDFLAG(IS_MAC)
     if (name == "NotificationSystemPermissionDenied") {
-      AppShimRegistry::Get()->SaveNotificationPermissionStatusForApp(
-          app_id_,
-          AppShimRegistry::NotificationPermissionStatus::kExplicitlyDenied);
+      AppShimHost* app_shim_host =
+          apps::AppShimManager::Get()->FindOrCreateHostForTesting(
+              browser()->GetProfile(), app_id_);
+      ASSERT_TRUE(app_shim_host);
+      app_shim_host->SetNotificationPermissionStatusForTesting(
+          mac_notifications::mojom::PermissionStatus::kDenied);
 
       HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile())
           ->SetContentSettingDefaultScope(

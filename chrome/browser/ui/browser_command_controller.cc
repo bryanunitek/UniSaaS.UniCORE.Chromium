@@ -1425,9 +1425,7 @@ void BrowserCommandController::HandleCommandWithDisposition(
       ShowBetaForum(browser_);
       break;
     case IDC_CHROME_ENTERPRISE_RELEASE_NOTES:
-      if (base::FeatureList::IsEnabled(features::kEnterpriseReleaseNotes)) {
-        chrome::ShowChromeEnterpriseReleaseNotes(browser_);
-      }
+      chrome::ShowChromeEnterpriseReleaseNotes(browser_);
       break;
     case IDC_ROUTE_MEDIA:
       RouteMediaInvokedFromAppMenu(browser_);
@@ -1975,9 +1973,8 @@ void BrowserCommandController::InitCommandState() {
   command_updater_->UpdateCommandEnabled(IDC_HELP_PAGE_VIA_KEYBOARD, true);
   command_updater_->UpdateCommandEnabled(IDC_HELP_PAGE_VIA_MENU, true);
   command_updater_->UpdateCommandEnabled(IDC_SHOW_BETA_FORUM, true);
-  command_updater_->UpdateCommandEnabled(
-      IDC_CHROME_ENTERPRISE_RELEASE_NOTES,
-      base::FeatureList::IsEnabled(features::kEnterpriseReleaseNotes));
+  command_updater_->UpdateCommandEnabled(IDC_CHROME_ENTERPRISE_RELEASE_NOTES,
+                                         true);
   command_updater_->UpdateCommandEnabled(
       IDC_BOOKMARKS_MENU, (!guest_session && !profile()->IsSystemProfile()));
   command_updater_->UpdateCommandEnabled(IDC_SAVED_TAB_GROUPS_MENU, true);
@@ -2322,10 +2319,11 @@ void BrowserCommandController::UpdateCommandsForTabState() {
       IDC_OPEN_IN_CHROME,
       IsWebAppOrCustomTab(browser_) && !is_isolated_app && !is_pinned_home_tab);
 
+  tabs::TabInterface* active_tab = browser_->tab_strip_model()->GetActiveTab();
   command_updater_->UpdateCommandEnabled(
       IDC_READING_LIST_MENU_ADD_TAB,
-      browser_->tab_strip_model()->IsReadLaterSupportedForAny(
-          {browser_->tab_strip_model()->active_index()}));
+      active_tab && browser_->tab_strip_model()->IsReadLaterSupportedForAny(
+                        {active_tab->GetHandle()}));
 
   command_updater_->UpdateCommandEnabled(
       IDC_TOGGLE_REQUEST_TABLET_SITE,

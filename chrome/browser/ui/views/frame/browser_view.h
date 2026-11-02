@@ -316,6 +316,7 @@ class BrowserView : public BrowserWindow,
   }
 
   views::LabelButton* GetGlicButton();
+  bool IsGlicButtonVisible();
 
   // Accessor for the BrowserView's TabSearchBubbleHost instance.
   TabSearchBubbleHost* GetTabSearchBubbleHost();
@@ -842,6 +843,7 @@ class BrowserView : public BrowserWindow,
   friend class TopControlsSlideControllerTest;
   FRIEND_TEST_ALL_PREFIXES(BrowserViewTest, BrowserView);
   FRIEND_TEST_ALL_PREFIXES(BrowserViewTest, AccessibleWindowTitle);
+  FRIEND_TEST_ALL_PREFIXES(BrowserViewTest, FullscreenControlHostLeakOnMac);
   FRIEND_TEST_ALL_PREFIXES(PermissionChipUnitTest, AccessibleName);
 
   // Modes that require reparenting of views. For example, tab strip and web app

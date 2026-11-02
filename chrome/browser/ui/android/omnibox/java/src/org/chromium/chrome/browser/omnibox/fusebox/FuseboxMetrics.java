@@ -14,6 +14,7 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.UmaRecorderHolder;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.fusebox.ImageFormatSniffer.ImageFormat;
 import org.chromium.chrome.browser.omnibox.fusebox.PopupButtonData.PopupButtonType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -59,6 +60,14 @@ public class FuseboxMetrics {
             "Omnibox.MobileFusebox.AttachmentReadResult";
 
     @VisibleForTesting
+    /* package */ static final String ATTACHMENT_IMAGE_FORMAT_HISTOGRAM =
+            "Omnibox.MobileFusebox.AttachmentImageFormat";
+
+    @VisibleForTesting
+    /* package */ static final String ATTACHMENT_IMAGE_FORMAT_MISMATCH_HISTOGRAM =
+            "Omnibox.MobileFusebox.AttachmentImageFormatMismatch";
+
+    @VisibleForTesting
     /* package */ static final String TAB_ATTACHMENT_EFFECTIVE_DURATION_HISTOGRAM =
             "Omnibox.MobileFusebox.TabAttachment.EffectiveDuration";
 
@@ -90,7 +99,7 @@ public class FuseboxMetrics {
     @VisibleForTesting /* package */ static final int TOOL_MODE_HISTOGRAM_BOUND = 13;
     // LINT.ThenChange(//tools/metrics/histograms/metadata/omnibox/enums.xml:OmniboxToolMode)
     // LINT.IfChange(ModelMode)
-    @VisibleForTesting /* package */ static final int MODEL_MODE_HISTOGRAM_BOUND = 8;
+    @VisibleForTesting /* package */ static final int MODEL_MODE_HISTOGRAM_BOUND = 18;
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/omnibox/enums.xml:OmniboxModelMode)
 
@@ -540,6 +549,16 @@ public class FuseboxMetrics {
 
     static void recordAttachmentC2paDetected(boolean detected) {
         RecordHistogram.recordBooleanHistogram(ATTACHMENT_C2PA_DETECTED_HISTOGRAM, detected);
+    }
+
+    static void recordAttachmentImageFormat(@ImageFormat int format) {
+        RecordHistogram.recordEnumeratedHistogram(
+                ATTACHMENT_IMAGE_FORMAT_HISTOGRAM, format, ImageFormat.COUNT);
+    }
+
+    static void recordAttachmentImageFormatMismatch(boolean mismatch) {
+        RecordHistogram.recordBooleanHistogram(
+                ATTACHMENT_IMAGE_FORMAT_MISMATCH_HISTOGRAM, mismatch);
     }
 
     static void recordAttachmentReadResult(

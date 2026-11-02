@@ -49,6 +49,11 @@ inline constexpr char kBwgSessionMap[] = "ios.bwg.session_map";
 inline constexpr char kCobrowseSessionActiveMap[] =
     "ios.cobrowse.session_active_map";
 
+// Boolean indicating whether the user has accepted the tab sharing consent
+// alert in the AI Mode Cobrowse assistant.
+inline constexpr char kCobrowseTabSharingConsentAccepted[] =
+    "ios.cobrowse.tab_sharing_consent_accepted";
+
 // Number of times the "BWG" settings "new" IPH badge has been shown.
 // This is set to INT_MAX when the user visites the "BWG" settings page.
 inline constexpr char kBWGSettingsNewBadgeShownCount[] =
@@ -270,6 +275,12 @@ inline constexpr char kIosDockingPromoEligibilityMet[] =
 
 // A list of the latest fetched Most Visited Sites.
 inline constexpr char kIosLatestMostVisitedSites[] = "ios.most_visited_sites";
+
+// Integer storing the position of the AI Mode tile in Most Visited Tiles.
+// A non-negative value indicates the position (default 0), and -1 indicates
+// that the tile was unpinned/removed by the user.
+inline constexpr char kIosMostVisitedAiModeTileIndex[] =
+    "ios.most_visited_tiles.ai_mode_tile_index";
 
 // The last saved index of an NTP WebState. Only updated on app background, so
 // it does not always reflect the current WebStateList.
@@ -772,9 +783,7 @@ inline constexpr char kUserAgentWasChanged[] = "UserAgentWasChanged";
 inline constexpr char kLastApplicationStorageMetricsLogTime[] =
     "LastApplicationStorageMetricsLogTime";
 
-// Prefs indicating whether Magic Stack cards are enabled.
-inline constexpr char kHomeCustomizationMagicStackSafetyCheckEnabled[] =
-    "ios.home_customization.magic_stack.safety_check.enabled";
+// Pref indicating whether the ShopCard Reviews Magic Stack card is enabled.
 inline constexpr char kHomeCustomizationMagicStackShopCardReviewsEnabled[] =
     "ios.home_customization.magic_stack.shop_card_price_reviews.enabled";
 

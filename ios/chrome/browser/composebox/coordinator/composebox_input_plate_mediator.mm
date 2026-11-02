@@ -776,6 +776,9 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 - (void)removeItem:(ComposeboxInputItem*)item {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   if (item.type == ComposeboxInputItemType::kComposeboxInputItemTypeTab) {
+    if (item.isAutoAdded) {
+      [self.assistantMetricsRecorder recordAutoAddedTabRemoved];
+    }
     web::WebStateID webStateID = _latestTabSelectionMapping[item.identifier];
     if ([self isItem:item matchingCurrentURLOfWebStateID:webStateID]) {
       _removedWebStateIDs.insert(webStateID);
@@ -923,42 +926,6 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 - (void)processText:(NSString*)text {
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   [self.delegate refineWithText:text];
-}
-
-- (void)processContextLibraryWebpageSignalWithURL:(const GURL&)url
-                                            title:(NSString*)title {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
-  CHECK(_entrypoint == ComposeboxEntrypoint::kCobrowse);
-
-  ComposeboxInputItem* item = [[ComposeboxInputItem alloc]
-      initWithComposeboxInputItemType:ComposeboxInputItemType::
-                                          kComposeboxInputItemTypeTab
-                               source:ComposeboxInputItemSource::
-                                          kContextLibrary];
-  item.title = title;
-  item.tabURL = url;
-  item.state = ComposeboxInputItemState::kLoaded;
-  base::UnguessableToken identifier = item.identifier;
-
-  [_items addItem:item];
-
-  if (_faviconLoader) {
-    __weak __typeof(self) weakSelf = self;
-
-    /// Based on the favicon loader API, this callback could be called twice.
-    auto faviconLoadedBlock = ^(FaviconAttributes* attributes, bool cached) {
-      if (attributes.faviconImage) {
-        [weakSelf didLoadFaviconIcon:attributes.faviconImage
-               forItemWithIdentifier:identifier];
-      }
-    };
-
-    _faviconLoader->FaviconForPageUrl(url, gfx::kFaviconSize, gfx::kFaviconSize,
-                                      /*fallback_to_google_server=*/true,
-                                      faviconLoadedBlock);
-  }
-
-  [self notifyContextChanged];
 }
 
 - (void)processFileURL:(GURL)fileURL isPDF:(BOOL)isPDF {
@@ -2009,7 +1976,7 @@ lens::ImageEncodingOptions GetDefaultImageEncodingOptions() {
 // instead of routing through the standard search navigation flow.
 - (BOOL)shouldInvokeAssistantForAIMQuery {
   return _modeHolder.mode == ComposeboxMode::kAIM && !_isIncognito &&
-         IsAimCobrowseEligible(_aimEligibilityService, _prefService) &&
+         IsAimCobrowseAddTabEligible(_aimEligibilityService, _prefService) &&
          [self isActiveTabAttached];
 }
 

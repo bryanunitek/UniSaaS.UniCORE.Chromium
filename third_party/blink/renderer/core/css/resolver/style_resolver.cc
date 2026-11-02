@@ -1523,7 +1523,8 @@ const ComputedStyle* StyleResolver::ResolveStyle(
 
   PropagateStyleBuilderFlags(state);
 
-  if (!cascade.GetMatchResult().MayPrecomputeHover()) {
+  if (state.HasAffectedByHoverAncestor() ||
+      !cascade.GetMatchResult().MayPrecomputeHover()) {
     return state.TakeStyle();
   }
 
@@ -2088,6 +2089,9 @@ void StyleResolver::ApplyBaseStyleNoCache(
   }
   if (match_result.HasFlag(MatchFlag::kAffectedByHover)) {
     builder.SetAffectedByHover();
+  }
+  if (match_result.HasFlag(MatchFlag::kAffectedByNonSubjectHoverSelector)) {
+    builder.SetAffectedByNonSubjectHoverSelector();
   }
   if (match_result.HasFlag(MatchFlag::kAffectedByActive)) {
     builder.SetAffectedByActive();
@@ -2832,7 +2836,7 @@ bool StyleResolver::ApplyAnimatedStyle(
 
   CSSAnimations::CalculateAnimationUpdate(
       state.AnimationUpdate(), *animating_element, element,
-      state.StyleBuilder(), state.ParentStyle(), this,
+      state.StyleBuilder(), state.OldStyle(), state.ParentStyle(), this,
       state.CanTriggerAnimations());
   CSSAnimations::CalculateTransitionUpdate(
       state.AnimationUpdate(), *animating_element, state.StyleBuilder(),
@@ -2889,8 +2893,9 @@ bool StyleResolver::ApplyAnimatedStyle(
   }
   CSSAnimations::CalculateCompositorAnimationUpdate(
       state.AnimationUpdate(), *animating_element, element,
-      *state.StyleBuilder().GetBaseComputedStyle(), state.ParentStyle(),
-      WasViewportResized(), state.AffectsCompositorSnapshots());
+      *state.StyleBuilder().GetBaseComputedStyle(), state.OldStyle(),
+      state.ParentStyle(), WasViewportResized(),
+      state.AffectsCompositorSnapshots());
   CSSAnimations::SnapshotCompositorKeyframes(
       *animating_element, state.AnimationUpdate(),
       *state.StyleBuilder().GetBaseComputedStyle(), state.ParentStyle());
@@ -3239,7 +3244,9 @@ const CSSValue* StyleResolver::ComputeValue(
     const CSSValue& value,
     CSSToLengthConversionData::Flags& flags) {
   bool has_random = false;
-  return ComputeValue(element, property_name, value, flags, has_random);
+  bool has_attr = false;
+  return ComputeValue(element, property_name, value, flags, has_random,
+                      has_attr);
 }
 
 const CSSValue* StyleResolver::ComputeValue(
@@ -3247,7 +3254,8 @@ const CSSValue* StyleResolver::ComputeValue(
     const CSSPropertyName& property_name,
     const CSSValue& value,
     CSSToLengthConversionData::Flags& flags,
-    bool& has_random) {
+    bool& has_random,
+    bool& has_attr) {
   Document& document = element->GetDocument();
   document.GetStyleEngine().UpdateViewportSize();
   const ComputedStyle* base_style = element->GetComputedStyle();
@@ -3296,11 +3304,12 @@ const CSSValue* StyleResolver::ComputeValue(
       {.origin = CascadeOrigin::kAuthor});
   cascade.Apply();
 
+  flags = state.TakeLengthConversionFlags();
+  has_attr = state.HasAttrFunction();
   if (state.HasUnsupportedGuaranteedInvalid()) {
     return nullptr;
   }
   CSSPropertyRef property_ref(&property_name, document);
-  flags = state.TakeLengthConversionFlags();
   const ComputedStyle* style = state.TakeStyle();
   const CSSValue* computed_value = ComputedStyleUtils::ComputedPropertyValue(
       property_ref.GetProperty(), *style);

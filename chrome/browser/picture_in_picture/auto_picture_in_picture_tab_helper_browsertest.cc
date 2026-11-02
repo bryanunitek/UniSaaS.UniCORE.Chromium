@@ -88,7 +88,7 @@
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/test_event.h"
 #include "ui/gfx/geometry/vector2d.h"
@@ -587,7 +587,8 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
         base::FilePath(base::FilePath::kCurrentDirectory),
         base::FilePath(kBlankPage));
     ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser, test_page_url, WindowOpenDisposition::kNewForegroundTab,
+        browser, test_page_url,
+        ui::mojom::WindowOpenDisposition::kNewForegroundTab,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   }
 
@@ -596,7 +597,7 @@ class AutoPictureInPictureTabHelperBrowserTest : public WebRtcTestBase {
         base::FilePath(base::FilePath::kCurrentDirectory),
         base::FilePath(kBlankPage));
     ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-        browser, test_page_url, WindowOpenDisposition::kNewPopup,
+        browser, test_page_url, ui::mojom::WindowOpenDisposition::kNewPopup,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   }
 
@@ -1282,6 +1283,30 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
 
   SwitchToNewTabAndBackAndExpectAutopip(/*should_video_pip=*/true,
                                         /*should_document_pip=*/false);
+}
+
+IN_PROC_BROWSER_TEST_F(AutoPictureInPictureWithVideoPlaybackBrowserTest,
+                       DoesNotAutopip_WhenTabIsBeingVisiblyCaptured) {
+  // Load a page that registers for autopip and start video playback.
+  LoadAutoVideoPipPage(browser());
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Simulate the tab being actively captured via getDisplayMedia tab capture.
+  base::ScopedClosureRunner capture_handle =
+      web_contents->IncrementCapturerCount(gfx::Size(1280, 720),
+                                           /*stay_hidden=*/false,
+                                           /*stay_awake=*/true,
+                                           /*is_activity=*/true);
+  ASSERT_TRUE(web_contents->IsBeingVisiblyCaptured());
+
+  // Switching to another tab while this tab is being visibly captured should
+  // NOT trigger Auto-PiP on the captured tab.
+  SwitchToNewTabAndDontExpectAutopip();
 }
 
 // TODO(crbug.com/335630150): Flaky.
@@ -3826,6 +3851,31 @@ IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
+                       DoesNotBrowserAutopip_WhenTabIsBeingVisiblyCaptured) {
+  // Load a page that does not register for autopip (e.g. YouTube) and start
+  // video playback.
+  LoadNotRegisteredPage(browser());
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
+  PlayVideo(web_contents);
+  WaitForAudioFocusGained();
+  WaitForMediaSessionPlaying(web_contents);
+  WaitForWasRecentlyAudible(web_contents);
+  SetExpectedHasHighEngagement(true);
+
+  // Simulate the tab being actively captured via getDisplayMedia tab capture.
+  base::ScopedClosureRunner capture_handle =
+      web_contents->IncrementCapturerCount(gfx::Size(1280, 720),
+                                           /*stay_hidden=*/false,
+                                           /*stay_awake=*/true,
+                                           /*is_activity=*/true);
+  ASSERT_TRUE(web_contents->IsBeingVisiblyCaptured());
+
+  // Switching to another tab (e.g. the Meet call tab) while this tab is being
+  // visibly captured should NOT trigger Auto-PiP on the captured tab.
+  SwitchToNewTabAndDontExpectAutopip();
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
                        DoesNotBrowserAutopip_NotRecentlyAudible) {
   // Load a page that does not register for autopip and start video playback.
   LoadNotRegisteredPage(browser());
@@ -4136,8 +4186,9 @@ IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
                                         /*should_document_pip=*/false);
 }
 
+// TODO(crbug.com/577969196): Flaky across multiple platforms/variants.
 IN_PROC_BROWSER_TEST_F(BrowserInitiatedAutoPictureInPictureBrowserTest,
-                       SizeConstraintMetricsBlocked) {
+                       DISABLED_SizeConstraintMetricsBlocked) {
   LoadNotRegisteredPage(browser());
   auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   PlayVideo(web_contents);

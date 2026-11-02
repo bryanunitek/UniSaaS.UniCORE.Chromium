@@ -28,7 +28,6 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/layer_tree_owner.h"
@@ -287,6 +286,18 @@ class OmniboxViewViews
   bool HandleEarlyTabActions(const ui::KeyEvent& event);
 
   void ClearAccessibilityLabel();
+
+  // Stops tail-eliding the text, so that it can scroll to keep the caret in
+  // view. `OnFocus()` does this for the focused classic omnibox. In Full WebUI
+  // mode the textfield never takes focus, so `OnMousePressed()` does it for the
+  // duration of a left press instead, letting the text follow a drag past its
+  // visible end.
+  void StopEliding();
+
+  // Elides the text again once a press is over (on release, capture loss, or
+  // a context menu handoff), undoing `StopEliding()` from `OnMousePressed()`.
+  // Does nothing while the textfield is focused.
+  void ElideAfterPress();
 
   // Tail-elides the text and resets the scroll position, for when the
   // textfield stops being where the user edits text.

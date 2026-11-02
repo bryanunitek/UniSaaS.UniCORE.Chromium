@@ -303,6 +303,7 @@ Warning: Missing class com.example.Foo
                 z.writestr('pkg/Bar.class', b'b' * 250)
                 z.writestr('META-INF/services/', b'')
                 z.writestr('META-INF/services/pkg.Svc', b'pkg.Bar\n')
+                z.writestr('META-INF/versions/9/pkg/Bar.class', b'c' * 50)
 
             entries, service_jars = dex._ScanClassInputJars([jar1, jar2])
             self.assertEqual(
@@ -378,15 +379,17 @@ Warning: Missing class com.example.Foo
         )
 
         self.assertEqual(
-            zb.add_all_from_zip.call_args_list,
+            zb.add_from_zip.call_args_list,
             [
                 unittest.mock.call(
+                    'classes.dex',
                     's0.dex.jar',
-                    compress_level=dex.zipbuilder.KEEP_COMPRESSION,
+                    'classes.dex',
                 ),
                 unittest.mock.call(
+                    'classes2.dex',
                     's1.dex.jar',
-                    compress_level=dex.zipbuilder.KEEP_COMPRESSION,
+                    'classes.dex',
                 ),
             ],
         )

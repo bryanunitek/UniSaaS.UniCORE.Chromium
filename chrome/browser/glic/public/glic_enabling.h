@@ -8,9 +8,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "base/auto_reset.h"
 #include "base/callback_list.h"
+#include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -41,6 +44,10 @@ class Profile;
 class ProfileAttributesStorage;
 
 namespace glic {
+
+#if BUILDFLAG(IS_ANDROID)
+class BackgroundActuationCapability;
+#endif  // BUILDFLAG(IS_ANDROID)
 class GlicActorPolicyChecker;
 class GlicKeyedService;
 namespace prefs {
@@ -214,6 +221,20 @@ enum class RequiredExperimentalOptIn {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicRequiredExperimentalOptIn)
 
+// Why experimental triggering isn't ready, i.e. why
+// GlicEnabling::GetExperimentalTriggeringState() isn't kReady. Logged to the
+// actor journal.
+enum class ExperimentalTriggeringNotReadyReason {
+  kNone,
+  kGlicNotEnabled,
+  kFeatureDisabled,
+  kDisabledBySparkPolicy,
+  kCannotActOnWeb,
+  kMissingGlicOptIn,
+  kMissingActuationOptIn,
+  kMissingExperimentalOptIn,
+};
+
 // Returns true if any Glic entry point (such as the tab strip button or the
 // OS-level shortcut) is enabled in settings.
 bool IsAnyEntryPointEnabled(Profile* profile);
@@ -248,6 +269,7 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
                            public subscription_eligibility::
                                SubscriptionEligibilityService::Observer {
  public:
+  enum class EnablementMetricsPhase { kStartup, kSteadyState };
   // Returns whether the global Glic feature is enabled for Chrome. This status
   // will not change at runtime.
   static bool IsEnabledByGlobalCriteria();
@@ -382,7 +404,6 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // and the account is non-enterprise (or for Glic dev).
   static bool IsShareImageEnabledForProfile(Profile* profile);
 
-
   // Whether the live mode and floaty window are enabled by flags.
   static bool IsLiveAndFloatyEnabledByFlags();
 
@@ -473,10 +494,6 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
       kMaxValue = kDisallowedByRemoteOther,
     };
 
-    // Record the state of this struct to UMA.
-    void RecordStartupMetrics() const;
-    void RecordSteadyStateMetrics() const;
-
     bool IsProfileEligible() const;
 
     // Returns true if Glic is fully enabled and allowed to run on this profile.
@@ -512,13 +529,7 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
 
     bool EligibleForShareImage() const;
 
-
     bool DisallowedByAdmin() const;
-
-   private:
-    // `suffix` should be either "Startup" or "SteadyState".
-    void RecordMetrics(const std::string& suffix) const;
-    void RecordFeatureDisabledReason(const std::string& suffix) const;
   };
   static ProfileEnablement EnablementForProfile(Profile* profile);
 
@@ -623,25 +634,43 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // them.
   void MaybeRecordStartupMetrics();
 
+  static void RecordSteadyStateMetrics(Profile* profile);
+
+  static void RecordProfileEnablementMetricsForTesting(
+      Profile* profile,
+      EnablementMetricsPhase phase,
+      const ProfileEnablement& enablement);
+
   // Records startup metrics related to profile ineligibility. Should only be
   // called once per profile.
   static void RecordProfileIneligibilityMetricsAtStartup(Profile* profile);
 
+  // The user status fetcher only exists if `features::kGlicUserStatusCheck` is
+  // enabled and the profile's provider requires Gemini account eligibility.
+  bool HasUserStatusFetcherForTesting() const {
+    return !!glic_user_status_fetcher_;
+  }
+
   void SetGlicUserStatusUrlForTest(const GURL& test_url) {
+    CHECK(glic_user_status_fetcher_);
     glic_user_status_fetcher_->SetGlicUserStatusUrlForTest(test_url);
   }
 
   void SetUserStatusFetchOverrideForTest(
       GlicUserStatusFetcher::FetchOverrideCallback fetch_override) {
+    CHECK(glic_user_status_fetcher_);
     glic_user_status_fetcher_->SetFetchOverrideForTest(
         std::move(fetch_override));
   }
 
   // Updates the user status when information suggests that it might have
   // changed recently. This is internally debounced to avoid excessive
-  // requests, for signals that might be received multiple times.
+  // requests, for signals that might be received multiple times. Does nothing
+  // if there is no user status fetcher.
   void UpdateUserStatusWithThrottling() {
-    glic_user_status_fetcher_->UpdateUserStatusWithThrottling();
+    if (glic_user_status_fetcher_) {
+      glic_user_status_fetcher_->UpdateUserStatusWithThrottling();
+    }
   }
 
   // RAII helper to temporarily bypass enablement checks during a test, and
@@ -679,6 +708,8 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   base::CallbackListSubscription RegisterOnExperimentalTriggeringEnabledChanged(
       ExperimentalTriggeringEnabledChangedCallback callback);
 
+  // Called when `GetExperimentalTriggeringState()` or
+  // `GetExperimentalTriggeringCapabilities()` might return a different value.
   using ExperimentalTriggeringStateChangedCallback = base::RepeatingClosure;
   base::CallbackListSubscription RegisterOnExperimentalTriggeringStateChanged(
       ExperimentalTriggeringStateChangedCallback callback);
@@ -698,6 +729,9 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   void OnUserEnabledActuationOnWebChanged();
   void OnExperimentalTriggeringEnabledChanged();
   void OnActOnWebCapabilityChanged(bool can_act_on_web);
+  std::pair<syncer::DeviceInfo::GlicExperimentalTriggeringState,
+            ExperimentalTriggeringNotReadyReason>
+  ComputeExperimentalTriggeringState() const;
   void MaybeNotifyExperimentalTriggeringStateChanged();
 
   // IdentityManagerObserver:
@@ -732,6 +766,11 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   void UpdateConsentStatus();
 
   void MaybeNotifyProfileReadyStateChanged();
+
+  static void RecordProfileEnablementMetrics(
+      Profile* profile,
+      EnablementMetricsPhase phase,
+      const ProfileEnablement& enablement);
 
 #if BUILDFLAG(IS_CHROMEOS)
   static bool IsChromeOSProfileEligible(Profile* profile);
@@ -777,10 +816,20 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
       subscription_eligibility::SubscriptionEligibilityService,
       subscription_eligibility::SubscriptionEligibilityService::Observer>
       subscription_eligibility_service_observation_{this};
-  syncer::DeviceInfo::GlicExperimentalTriggeringState
-      last_experimental_triggering_state_ =
-          syncer::DeviceInfo::GlicExperimentalTriggeringState::kUnavailable;
+  std::optional<std::pair<syncer::DeviceInfo::GlicExperimentalTriggeringState,
+                          ExperimentalTriggeringNotReadyReason>>
+      last_experimental_triggering_state_;
+  // The experimental triggering capabilities as of the last
+  // `ExperimentalTriggeringStateChangedCallback` notification. Observers are
+  // notified when either the state or the capabilities change.
+  base::flat_set<std::string> last_experimental_triggering_capabilities_;
   mojom::ProfileReadyState last_profile_ready_state_;
+#if BUILDFLAG(IS_ANDROID)
+  // Tracks the "background_actuation" capability. Only created while
+  // `kGlicExperimentalTriggering` and `kGlicBackgroundActuation` are enabled.
+  std::unique_ptr<BackgroundActuationCapability>
+      background_actuation_capability_;
+#endif  // BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace glic

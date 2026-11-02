@@ -37,12 +37,14 @@ WebSigninTrackerBridge::WebSigninTrackerBridge(
     : tracker_(identity_manager,
                account_reconcilor,
                std::move(signin_account),
-               std::move(callback)) {
-  // TODO(crbug.com/570450501): Let callers start the tracker separately.
-  tracker_.Start();
-}
+               std::move(callback)) {}
 
 WebSigninTrackerBridge::~WebSigninTrackerBridge() = default;
+
+void WebSigninTrackerBridge::Start() {
+  // May destroy `this`; don't access members afterwards.
+  tracker_.Start();
+}
 
 static int64_t JNI_WebSigninTrackerBridge_CreateWithCoreAccountId(
     JNIEnv* env,
@@ -82,6 +84,13 @@ static int64_t JNI_WebSigninTrackerBridge_CreateWithEmail(
   return reinterpret_cast<intptr_t>(new WebSigninTrackerBridge(
       identity_manager, account_reconcilor, account_email,
       std::move(on_signin_completed)));
+}
+
+static void JNI_WebSigninTrackerBridge_Start(
+    JNIEnv* env,
+    int64_t web_signin_tracker_bridge) {
+  // May destroy the bridge if the result is already known.
+  reinterpret_cast<WebSigninTrackerBridge*>(web_signin_tracker_bridge)->Start();
 }
 
 static void JNI_WebSigninTrackerBridge_Destroy(

@@ -45,7 +45,6 @@ constexpr std::string_view kInputArgumentsParamDescription =
 
 }  // namespace
 
-using ::tabs::TabHandle;
 
 ScriptToolRequest::ScriptToolRequest(
     ActorSurfaceHandle actor_surface_handle,
@@ -93,12 +92,16 @@ ToolRequest::CreateToolResult ScriptToolRequest::CreateTool(
 
   ActorSurfaceHandle actor_surface_handle = GetActorSurfaceHandle();
   if (!actor_surface_handle.Get()) {
-    return {/*tool=*/nullptr, MakeResult(mojom::ActionResultCode::kTabWentAway,
-                                         /*requires_page_stabilization=*/false,
-                                         "The tab is no longer present.")};
+    return {/*tool=*/nullptr,
+            MakeResult(mojom::ActionResultCode::kTabWentAway,
+                       /*requires_page_stabilization=*/false,
+                       "The target surface is no longer present.")};
   }
 
-  auto script = mojom::ScriptToolAction::New(name_, input_arguments_);
+  // The tool ID, if any, is resolved against the last observation at time of
+  // use. See `ScriptToolHost::TimeOfUseValidation()`.
+  auto script = mojom::ScriptToolAction::New(name_, input_arguments_,
+                                             /*tool_id=*/std::nullopt);
   return {std::make_unique<ScriptToolHost>(
               task_id, tool_delegate, actor_surface_handle, target_document_id_,
               mojom::ToolAction::NewScriptTool(std::move(script))),

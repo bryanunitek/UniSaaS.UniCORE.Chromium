@@ -372,22 +372,6 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(/ios/chrome/browser/first_run/best_features/ui/metrics_util.h:BestFeaturesDetailScreenActionType) -->
 
-<!-- LINT.IfChange(IOSBestFeaturesItemType) -->
-
-<enum name="IOSBestFeaturesItemType">
-  <int value="0" label="Lens Search"/>
-  <int value="1" label="Enhanced Safe Browsing"/>
-  <int value="2" label="Locked Incognito Tabs"/>
-  <int value="3" label="Save and Autofill Passwords"/>
-  <int value="4" label="Tab Groups"/>
-  <int value="5" label="Price Tracking and Insights"/>
-  <int value="6" label="Autofill Passwords in Other Apps"/>
-  <int value="7" label="Share Passwords with Family"/>
-  <int value="8" label="Incognito Browsing"/>
-</enum>
-
-<!-- LINT.ThenChange(/ios/chrome/browser/first_run/public/best_features_item.h:BestFeaturesItemType) -->
-
 <!-- LINT.IfChange(IOSBestFeaturesMainScreenActionType) -->
 
 <enum name="IOSBestFeaturesMainScreenActionType">
@@ -1297,6 +1281,8 @@ chromium-metrics-reviews@google.com.
   <int value="18" label="Plus Button"/>
   <int value="19" label="Standalone AIM Module"/>
   <int value="20" label="AIM in Most Visited"/>
+  <int value="21" label="AIM Image Generation Quick Action"/>
+  <int value="22" label="AIM Attach Image Quick Action"/>
 </enum>
 
 <!-- LINT.IfChange(IOSHomeCustomizationBackgroundStyle) -->
@@ -2121,6 +2107,16 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(/ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_constants.h:AssistantAimEntrypoint) -->
 
+<!-- LINT.IfChange(IOSSicBottomSheetFRENoticeAction) -->
+
+<enum name="IOSSicBottomSheetFRENoticeAction">
+  <int value="0" label="Shown"/>
+  <int value="1" label="Accepted"/>
+  <int value="2" label="Learn more tapped"/>
+</enum>
+
+<!-- LINT.ThenChange(/ios/chrome/browser/cobrowse/shared/metrics/assistant_aim_metrics_constants.h:AssistantAimFRENoticeAction) -->
+
 <!-- LINT.IfChange(IOSSicBottomSheetHeaderAction) -->
 
 <enum name="IOSSicBottomSheetHeaderAction">
@@ -2471,6 +2467,26 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="CLD3 (TFLite model disabled)"/>
   <int value="3" label="CLD3 (TFLite model run but is ignored) (deprecated)"/>
 </enum>
+
+<!-- LINT.IfChange(LevelUpTaskType) -->
+
+<enum name="LevelUpTaskType">
+  <int value="0" label="Unknown"/>
+  <int value="1" label="TabGroups"/>
+  <int value="2" label="Autofill"/>
+  <int value="3" label="PinTabs"/>
+  <int value="4" label="Gemini"/>
+  <int value="5" label="PaymentMethods"/>
+  <int value="6" label="ClearBrowsingData"/>
+  <int value="7" label="SafeBrowsing"/>
+  <int value="8" label="Incognito"/>
+  <int value="9" label="PasswordCheckup"/>
+  <int value="10" label="LensWebsiteSearch"/>
+  <int value="11" label="AISearch"/>
+  <int value="12" label="LensCameraSearch"/>
+</enum>
+
+<!-- LINT.ThenChange(//ios/chrome/browser/level_up/model/task_types.h:LevelUpTaskType) -->
 
 <enum name="LinkToTextShouldOfferResult">
   <int value="0" label="Success"/>
@@ -3168,20 +3184,6 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(/ios/web/webui/web_ui_metrics.h:WebUIMojoActions) -->
-
-<!-- LINT.IfChange(WelcomeBackPromoRegistrationResult) -->
-
-<enum name="WelcomeBackPromoRegistrationResult">
-  <int value="0" label="Success"/>
-  <int value="1" label="Failure_TimeSinceActiveLimitNotMet"/>
-  <int value="2" label="Failure_MinEligibleFeaturesNotMet"/>
-  <int value="3" label="Failure_SessionEndTimeNil"/>
-  <int value="4" label="Failure_FirstRun"/>
-  <int value="5" label="Failure_TrackerInitialization"/>
-  <int value="6" label="Failure_NotResurrectedUser"/>
-</enum>
-
-<!-- LINT.ThenChange(/ios/chrome/browser/welcome_back/metrics/welcome_back_metrics.h:WelcomeBackPromoRegistrationResult) -->
 
 <enum name="WhatsNewType">
   <int value="-1" label="Error"/>

@@ -354,6 +354,7 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     private static final String TAG = "TabListMediator";
+    private static @Nullable TabGroupCreationDialogManager sTabGroupCreationDialogManagerForTesting;
     private final SparseIntArray mTabClosedFrom = new SparseIntArray();
 
     private final Callback<@Nullable TabModel> mOnTabModelChanged =
@@ -409,6 +410,9 @@ public class TabListMediator implements TabListNotificationHandler {
     private View.AccessibilityDelegate mAccessibilityDelegate;
     private int mCurrentSpanCount;
     private @Nullable OnLongPressTabItemEventListener mOnLongPressTabItemEventListener;
+    private boolean mSuppressUpdateLayout;
+    private boolean mInBatchReset;
+    private @Nullable Boolean mTrackPricesOnTabsEnabledForBatch;
 
     private final ActorUiTabController.Observer mActorObserver =
             new ActorUiTabController.Observer() {
@@ -853,8 +857,10 @@ public class TabListMediator implements TabListNotificationHandler {
                 };
 
         var tabGroupCreationDialogManager =
-                new TabGroupCreationDialogManager(
-                        activity, assumeNonNull(modalDialogManager), onTabGroupCreation);
+                sTabGroupCreationDialogManagerForTesting != null
+                        ? sTabGroupCreationDialogManagerForTesting
+                        : new TabGroupCreationDialogManager(
+                                activity, assumeNonNull(modalDialogManager), onTabGroupCreation);
         mTabGridItemTouchHelperCallback =
                 new TabGridItemTouchHelperCallback(
                         activity,
@@ -1126,6 +1132,8 @@ public class TabListMediator implements TabListNotificationHandler {
      */
     public void resetWithListOfTabs(
             @Nullable List<Tab> tabs, @Nullable List<String> tabGroupSyncIds, boolean quickMode) {
+        mInBatchReset = true;
+        mTrackPricesOnTabsEnabledForBatch = null;
         mTrackingTabs = tabs != null;
         TabModel tabModel = mCurrentTabModelSupplier.get();
         if (tabs != null) {
@@ -1139,25 +1147,40 @@ public class TabListMediator implements TabListNotificationHandler {
         }
         // Only update tabs in place if there are no saved tab groups to be shown.
         if (tabGroupSyncIds == null && areTabsUnchanged(tabs)) {
-            if (tabs == null) return;
+            if (tabs == null) {
+                mInBatchReset = false;
+                mTrackPricesOnTabsEnabledForBatch = null;
+                return;
+            }
 
-            for (int i = 0; i < tabs.size(); i++) {
-                Tab tab = tabs.get(i);
-                int index = mModelList.indexOfNthTabCard(i);
-                if (!mModelList.isValidIndex(index)) continue;
+            int tabsIndex = 0;
+            for (int i = 0; i < mModelList.size() && tabsIndex < tabs.size(); i++) {
+                PropertyModel model = mModelList.get(i).model;
+                if (!TabProperties.isTabOrTabGroup(model)) continue;
+
+                Tab tab = tabs.get(tabsIndex++);
                 // Update the id instead of reset the tab list when the tab group's selected tab id
                 // changed.
-                boolean updateId = mModelList.get(index).model.get(TAB_ID) != tab.getId();
-                updateTab(index, tab, updateId, quickMode);
+                boolean updateId = model.get(TAB_ID) != tab.getId();
+                updateTab(model, i, tab, updateId, quickMode);
             }
             mLastSelectedTabListModelIndex = TabList.INVALID_TAB_INDEX;
+            mInBatchReset = false;
+            mTrackPricesOnTabsEnabledForBatch = null;
             return;
         }
+
+        assert !mSuppressUpdateLayout;
+        mSuppressUpdateLayout = true;
+
         mModelList.clear();
         mTabListLayoutDelegate.reset();
         mLastSelectedTabListModelIndex = TabList.INVALID_TAB_INDEX;
 
         if (tabs == null && tabGroupSyncIds == null) {
+            mSuppressUpdateLayout = false;
+            mInBatchReset = false;
+            mTrackPricesOnTabsEnabledForBatch = null;
             return;
         }
 
@@ -1191,6 +1214,11 @@ public class TabListMediator implements TabListNotificationHandler {
                 addSavedTabGroupInfoToModel(savedTabGroup, i);
             }
         }
+
+        mInBatchReset = false;
+        mTrackPricesOnTabsEnabledForBatch = null;
+        mSuppressUpdateLayout = false;
+        updateLayout();
     }
 
     /**
@@ -1831,9 +1859,11 @@ public class TabListMediator implements TabListNotificationHandler {
         tabInfo.set(
                 TabProperties.QUICK_DELETE_ANIMATION_STATUS,
                 QuickDeleteAnimationStatus.TAB_RESTORE);
-        tabInfo.set(
-                TabProperties.FAVICON_FETCHER,
-                mTabListFaviconProvider.getDefaultFaviconFetcher(tab.isIncognito()));
+        if (!mTabListFaviconProvider.isInitialized()) {
+            tabInfo.set(
+                    TabProperties.FAVICON_FETCHER,
+                    mTabListFaviconProvider.getDefaultFaviconFetcher(tab.isIncognito()));
+        }
         tabInfo.set(TabProperties.IS_LOADING, false);
 
         setupPersistedTabDataFetcherForTab(tab, tabInfo);
@@ -2213,9 +2243,7 @@ public class TabListMediator implements TabListNotificationHandler {
 
     private void setupPersistedTabDataFetcherForTab(Tab tab, PropertyModel model) {
         if (mTabListConfig.supportsMessageCards && !tab.isIncognito()) {
-            assert mOriginalProfile != null;
-            if (PriceTrackingUtilities.isTrackPricesOnTabsEnabled(mOriginalProfile)
-                    && !isTabInTabGroup(tab)) {
+            if (isTrackPricesOnTabsEnabled() && !isTabInTabGroup(tab)) {
                 model.set(
                         TabProperties.SHOPPING_PERSISTED_TAB_DATA_FETCHER,
                         new ShoppingPersistedTabDataFetcher(
@@ -2226,6 +2254,18 @@ public class TabListMediator implements TabListNotificationHandler {
         } else {
             model.set(TabProperties.SHOPPING_PERSISTED_TAB_DATA_FETCHER, null);
         }
+    }
+
+    private boolean isTrackPricesOnTabsEnabled() {
+        assert mOriginalProfile != null;
+        if (mTrackPricesOnTabsEnabledForBatch != null) {
+            return mTrackPricesOnTabsEnabledForBatch;
+        }
+        boolean enabled = PriceTrackingUtilities.isTrackPricesOnTabsEnabled(mOriginalProfile);
+        if (mInBatchReset) {
+            mTrackPricesOnTabsEnabledForBatch = enabled;
+        }
+        return enabled;
     }
 
     void updateFaviconForTab(
@@ -2376,6 +2416,9 @@ public class TabListMediator implements TabListNotificationHandler {
      */
     @VisibleForTesting
     void updateLayout() {
+        if (mSuppressUpdateLayout) {
+            return;
+        }
         // Right now we need to update layout only if there is a price welcome message card in tab
         // switcher.
         if (!mTabListConfig.supportsMessageCards) {
@@ -2430,8 +2473,7 @@ public class TabListMediator implements TabListNotificationHandler {
                                 -1)
                 >= PriceTrackingFeatures.getAnnotationsEnabledMetricsWindowDurationMilliSeconds()) {
             RecordHistogram.recordBooleanHistogram(
-                    "Commerce.PriceDrop.AnnotationsEnabled",
-                    PriceTrackingUtilities.isTrackPricesOnTabsEnabled(mOriginalProfile));
+                    "Commerce.PriceDrop.AnnotationsEnabled", isTrackPricesOnTabsEnabled());
             preferencesManager.writeLong(
                     ChromePreferenceKeys.PRICE_TRACKING_ANNOTATIONS_ENABLED_METRICS_TIMESTAMP,
                     System.currentTimeMillis());
@@ -2530,9 +2572,11 @@ public class TabListMediator implements TabListNotificationHandler {
         if (controller != null) {
             controller.addObserver(mActorObserver);
 
-            PropertyModel model = getModelFromTabId(tab.getId());
-            if (model != null) {
-                updateActorUiState(model, tab);
+            if (!mInBatchReset) {
+                PropertyModel model = getModelFromTabId(tab.getId());
+                if (model != null) {
+                    updateActorUiState(model, tab);
+                }
             }
         }
 
@@ -3317,5 +3361,10 @@ public class TabListMediator implements TabListNotificationHandler {
         var oldValueId = mComponentId;
         mComponentId = componentId;
         ResettersForTesting.register(() -> mComponentId = oldValueId);
+    }
+
+    static void setTabGroupCreationDialogManagerForTesting(TabGroupCreationDialogManager manager) {
+        sTabGroupCreationDialogManagerForTesting = manager;
+        ResettersForTesting.register(() -> sTabGroupCreationDialogManagerForTesting = null);
     }
 }

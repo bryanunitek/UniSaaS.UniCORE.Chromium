@@ -79,8 +79,6 @@ bool IsContactInfoDataTypeForCustomPassphraseUsersEnabled();
 
 BASE_DECLARE_FEATURE(kSyncEnableContactInfoDataTypeForDasherUsers);
 
-// If enabled, keeps local and account search engines separate.
-BASE_DECLARE_FEATURE(kSeparateLocalAndAccountSearchEngines);
 
 // Feature flag to replace all sync-related UI with sign-in ones.
 // Do not use this flag directly in production code. Use
@@ -128,19 +126,6 @@ DECLARE_SYNC_AUTOFILL_AI_FEATURE(kSyncWalletVehicleRegistrations);
 // the local and account data separation behind this feature flag.
 BASE_DECLARE_FEATURE(kSpellcheckSeparateLocalAndAccountDictionaries);
 
-// Feature flag used for enabling sync (transport mode) for signed-in users that
-// haven't turned on full sync.
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-BASE_DECLARE_FEATURE(kReadingListEnableSyncTransportModeUponSignIn);
-// Returns whether reading list storage related UI can be enabled, by testing
-// `kReadingListEnableSyncTransportModeUponSignIn`.
-bool IsReadingListAccountStorageEnabled();
-#else
-constexpr bool IsReadingListAccountStorageEnabled() {
-  return true;
-}
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-
 // If enabled, sync-the-transport will auto-start (avoid deferring startup) if
 // sync metadata isn't available (i.e. initial sync never completed).
 BASE_DECLARE_FEATURE(kSyncAlwaysForceImmediateStartIfTransportDataMissing);
@@ -162,10 +147,6 @@ inline constexpr base::FeatureParam<double>
 BASE_DECLARE_FEATURE(kSyncTrustedVaultErrorMessageDuration);
 #endif  // BUILDFLAG(IS_ANDROID)
 
-// If enabled, the new sync dashboard URL will be opened when the user clicks
-// on the "Review your synced data" (or equivalent) entrypoint in settings.
-BASE_DECLARE_FEATURE(kSyncEnableNewSyncDashboardUrl);
-
 // If enabled, use the access token propagated from SyncSchedulerImpl through
 // SyncCycle rather than reading from ServerConnectionManager's cache.
 BASE_DECLARE_FEATURE(kSyncUsePropagatedAccessToken);
@@ -183,11 +164,6 @@ BASE_DECLARE_FEATURE(kAlwaysRegisterSessionsInvalidationsAndroid);
 // Feature flag for ChromeOS only to estimate new sign-in users population.
 BASE_DECLARE_FEATURE(kEstimateNewSignInUsersWithFinchAvailablePopulation);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-// If enabled, computes the web sign-in status based on account in cookies
-// values even if they are stale. This ensures that we log the last known cookie
-// sign-in status for short-lived sessions instead of the default OFF value.
-BASE_DECLARE_FEATURE(kSyncFixWebSigninSessionDurationForShortLivedSessions);
 
 // If enabled, disambiguates duplicate device display names using release
 // channel labels (e.g., "(Canary)").
@@ -229,6 +205,9 @@ BASE_DECLARE_FEATURE(kDeviceTabVisibilitySettings);
 // submenu.
 BASE_DECLARE_FEATURE(kCrossDeviceTabsInAppMenu);
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+// If enabled, tracks metrics about the user's storage of data on other devices.
+BASE_DECLARE_FEATURE(kSyncRecordDeviceStatisticsMetrics);
 
 }  // namespace syncer
 

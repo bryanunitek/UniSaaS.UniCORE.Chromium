@@ -69,8 +69,8 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/actions/actions.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/test/views_test_utils.h"
@@ -114,7 +114,7 @@ class ReadAnythingControllerBrowserTest : public InProcessBrowserTest {
   }
 
   void SetUp() override {
-    ReadAnythingController::SetFreezeDistillationOnCreationForTesting(true);
+    ReadAnythingController::SetFreezeEmptyStateOnCreationForTesting(true);
     InProcessBrowserTest::SetUp();
   }
 
@@ -127,7 +127,7 @@ class ReadAnythingControllerBrowserTest : public InProcessBrowserTest {
   }
 
   void TearDown() override {
-    ReadAnythingController::SetFreezeDistillationOnCreationForTesting(false);
+    ReadAnythingController::SetFreezeEmptyStateOnCreationForTesting(false);
     InProcessBrowserTest::TearDown();
   }
 
@@ -510,6 +510,32 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
       .WillOnce([&run_loop]() { run_loop.Quit(); });
   controller->OnSidePanelWillHide(SidePanelEntryHideReason::kBackgrounded);
   run_loop.Run();
+
+  controller->RemoveObserver(&observer);
+}
+
+IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
+                       CloseSidePanelUI_WhileLoading_DoesNotKeepCloseReason) {
+  tabs::TabInterface* tab = browser()->GetTabStripModel()->GetActiveTab();
+  ASSERT_TRUE(tab);
+  auto* controller = ReadAnythingController::From(tab);
+  ASSERT_TRUE(controller);
+  auto* side_panel_ui = SidePanelUI::From(browser());
+
+  // Ask to close the side panel before it finishes loading. It can't close
+  // yet, so the close is dropped and the side panel opens anyway.
+  ShowSidePanelUI(controller, SidePanelOpenTrigger::kAppMenu);
+  CloseSidePanelUI(controller, ReadAnythingCloseReason::kClosedByUser);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return side_panel_ui->IsSidePanelEntryShowing(
+        SidePanelEntryKey(SidePanelEntryId::kReadAnything));
+  }));
+
+  // The dropped close's reason isn't reported for the next close.
+  testing::NiceMock<MockReadAnythingLifecycleObserver> observer;
+  controller->AddObserver(&observer);
+  EXPECT_CALL(observer, OnWillClose(ReadAnythingCloseReason::kTabSwitched));
+  controller->OnSidePanelWillHide(SidePanelEntryHideReason::kBackgrounded);
 
   controller->RemoveObserver(&observer);
 }
@@ -2157,7 +2183,8 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
 
   content::OpenURLParams chrome_params =
       content::OpenURLParams::CreateBrowserInitiated(
-          GURL("chrome://settings/"), WindowOpenDisposition::kNewForegroundTab,
+          GURL("chrome://settings/"),
+          ui::mojom::WindowOpenDisposition::kNewForegroundTab,
           ui::PAGE_TRANSITION_LINK);
   EXPECT_EQ(nullptr, immersive_delegate->OpenURLFromTab(
                          immersive_contents, chrome_params, base::DoNothing()));
@@ -2165,7 +2192,8 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
 
   content::OpenURLParams file_params =
       content::OpenURLParams::CreateBrowserInitiated(
-          GURL("file:///etc/passwd"), WindowOpenDisposition::kNewForegroundTab,
+          GURL("file:///etc/passwd"),
+          ui::mojom::WindowOpenDisposition::kNewForegroundTab,
           ui::PAGE_TRANSITION_LINK);
   EXPECT_EQ(nullptr, immersive_delegate->OpenURLFromTab(
                          immersive_contents, file_params, base::DoNothing()));
@@ -2173,7 +2201,8 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
 
   content::OpenURLParams js_params =
       content::OpenURLParams::CreateBrowserInitiated(
-          GURL("javascript:alert(1)"), WindowOpenDisposition::kNewForegroundTab,
+          GURL("javascript:alert(1)"),
+          ui::mojom::WindowOpenDisposition::kNewForegroundTab,
           ui::PAGE_TRANSITION_LINK);
   EXPECT_EQ(nullptr, immersive_delegate->OpenURLFromTab(
                          immersive_contents, js_params, base::DoNothing()));
@@ -2248,7 +2277,7 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
   for (const GURL& target : non_web_urls) {
     content::OpenURLParams params =
         content::OpenURLParams::CreateBrowserInitiated(
-            target, WindowOpenDisposition::kNewForegroundTab,
+            target, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
             ui::PAGE_TRANSITION_LINK);
     EXPECT_EQ(nullptr, immersive_delegate->OpenURLFromTab(
                            immersive_contents, params, base::DoNothing()))
@@ -2280,7 +2309,7 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
   for (const GURL& target : non_web_urls) {
     content::OpenURLParams params =
         content::OpenURLParams::CreateBrowserInitiated(
-            target, WindowOpenDisposition::kNewForegroundTab,
+            target, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
             ui::PAGE_TRANSITION_LINK);
     EXPECT_EQ(nullptr, side_panel_delegate->OpenURLFromTab(
                            side_panel_contents, params, base::DoNothing()))
@@ -3049,9 +3078,9 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
   GURL popup_target = embedded_test_server()->GetURL("/title2.html");
   constexpr int kSpam = 3;
   for (int i = 0; i < kSpam; ++i) {
-    WindowOpenDisposition d = (i < kSpam - 1)
-                                  ? WindowOpenDisposition::kNewBackgroundTab
-                                  : WindowOpenDisposition::kNewForegroundTab;
+    ui::mojom::WindowOpenDisposition d =
+        (i < kSpam - 1) ? ui::mojom::WindowOpenDisposition::kNewBackgroundTab
+                        : ui::mojom::WindowOpenDisposition::kNewForegroundTab;
     content::PwnOpenURLWithDisposition(irm_rfh, popup_target, d,
                                        /*user_gesture=*/true);
   }
@@ -3089,9 +3118,9 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
 
   // Simulate a compromised renderer sending an OpenURL IPC with a spoofed user
   // gesture and a CURRENT_TAB disposition to hijack the active tab.
-  content::PwnOpenURLWithDisposition(irm_rfh, evil_target,
-                                     WindowOpenDisposition::kCurrentTab,
-                                     /*user_gesture=*/true);
+  content::PwnOpenURLWithDisposition(
+      irm_rfh, evil_target, ui::mojom::WindowOpenDisposition::kCurrentTab,
+      /*user_gesture=*/true);
 
   // The active tab was not hijacked. The navigation was converted to a
   // popup and blocked.
@@ -3145,9 +3174,9 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
   GURL popup_target = embedded_test_server()->GetURL("/title2.html");
   constexpr int kSpam = 3;
   for (int i = 0; i < kSpam; ++i) {
-    WindowOpenDisposition d = (i < kSpam - 1)
-                                  ? WindowOpenDisposition::kNewBackgroundTab
-                                  : WindowOpenDisposition::kNewForegroundTab;
+    ui::mojom::WindowOpenDisposition d =
+        (i < kSpam - 1) ? ui::mojom::WindowOpenDisposition::kNewBackgroundTab
+                        : ui::mojom::WindowOpenDisposition::kNewForegroundTab;
     content::PwnOpenURLWithDisposition(side_panel_rfh, popup_target, d,
                                        /*user_gesture=*/true);
   }
@@ -3192,9 +3221,10 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingControllerBrowserTest,
 
   // Simulate a compromised renderer sending an OpenURL IPC with a spoofed user
   // gesture and a CURRENT_TAB disposition to hijack the active tab.
-  content::PwnOpenURLWithDisposition(side_panel_rfh, evil_target,
-                                     WindowOpenDisposition::kCurrentTab,
-                                     /*user_gesture=*/true);
+  content::PwnOpenURLWithDisposition(
+      side_panel_rfh, evil_target,
+      ui::mojom::WindowOpenDisposition::kCurrentTab,
+      /*user_gesture=*/true);
 
   // The active tab was not hijacked. The navigation was converted to a
   // popup and blocked.

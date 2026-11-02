@@ -23,7 +23,6 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_variant.h"
@@ -31,18 +30,15 @@
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/tween.h"
-#include "ui/gfx/image/image_skia_operations.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/gfx/text_utils.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/animation/ink_drop.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/md_text_button.h"
-#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
@@ -98,16 +94,16 @@ class GlicSelectionContentsView : public views::View {
     auto border1 = std::make_unique<views::BubbleBorder>(
         views::BubbleBorder::NONE, views::BubbleBorder::STANDARD_SHADOW);
     border1->set_background_color(ui::kColorSysSurface);
+    gfx::RoundedCornersF small_chip_corners;
     if (is_small_chip) {
-      if (features::kGlicSelectionSmallChipOnTop.Get()) {
-        border1->set_rounded_corners(
-            gfx::RoundedCornersF(kSmallChipCornerRadius, kSmallChipCornerRadius,
-                                 kSmallChipCornerRadius, 0));
-      } else {
-        border1->set_rounded_corners(gfx::RoundedCornersF(
-            0, kSmallChipCornerRadius, kSmallChipCornerRadius,
-            kSmallChipCornerRadius));
-      }
+      small_chip_corners = features::kGlicSelectionSmallChipOnTop.Get()
+                               ? gfx::RoundedCornersF(kSmallChipCornerRadius,
+                                                      kSmallChipCornerRadius,
+                                                      kSmallChipCornerRadius, 0)
+                               : gfx::RoundedCornersF(0, kSmallChipCornerRadius,
+                                                      kSmallChipCornerRadius,
+                                                      kSmallChipCornerRadius);
+      border1->set_rounded_corners(small_chip_corners);
     } else {
       border1->set_rounded_corners(gfx::RoundedCornersF(kCornerRadius));
     }
@@ -156,7 +152,8 @@ class GlicSelectionContentsView : public views::View {
             base::BindRepeating(
                 &GlicSelectionContentsView::OnAskGeminiButtonClicked,
                 base::Unretained(this)),
-            cta_label));
+            cta_label, views::style::CONTEXT_BUTTON_MD,
+            /*use_text_color_for_icon=*/false));
     ask_gemini_btn->SetProperty(
         views::kElementIdentifierKey,
         GlicSelectionWidgetDelegate::kAskGeminiButtonElementId);
@@ -181,63 +178,20 @@ class GlicSelectionContentsView : public views::View {
 
     ask_gemini_btn_ = ask_gemini_btn;
 
-    gfx::ImageSkia* icon_skia =
-        ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-            IDR_GLIC_BUTTON_ALT_ICON);
-    gfx::ImageSkia resized_icon = gfx::ImageSkiaOperations::CreateResizedImage(
-        *icon_skia, skia::ImageOperations::RESIZE_BEST,
-        gfx::Size(kIconSize, kIconSize));
-    active_icon_model_ = ui::ImageModel::FromImageSkia(resized_icon);
-
-    auto inactive_generator = base::BindRepeating(
-        [](bool is_small_chip,
-           const ui::ColorProvider* color_provider) -> gfx::ImageSkia {
-          if (!color_provider) {
-            return gfx::ImageSkia();
-          }
-          const gfx::VectorIcon& vector_icon =
-              is_small_chip ? GetSmallChipIcon()
-                            : GlicVectorIconManager::GetVectorIcon(
-                                  IDR_GLIC_BUTTON_VECTOR_ICON);
-          return gfx::CreateVectorIcon(
-              vector_icon, kIconSize,
-              color_provider->GetColor(ui::kColorSysOnSurfaceSubtle));
-        },
-        is_small_chip);
-
-    inactive_icon_model_ = ui::ImageModel::FromImageGenerator(
-        std::move(inactive_generator), gfx::Size(kIconSize, kIconSize));
-
-    ask_gemini_btn->SetImageModel(views::Button::STATE_NORMAL,
-                                  inactive_icon_model_);
+    const gfx::VectorIcon& vector_icon =
+        is_small_chip
+            ? GetSmallChipIcon()
+            : GlicVectorIconManager::GetVectorIcon(IDR_GLIC_BUTTON_VECTOR_ICON);
+    ask_gemini_btn->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(
+            vector_icon, ui::kColorSysOnSurfaceSubtle, kIconSize));
 
     if (is_small_chip) {
       ask_gemini_btn->GetViewAccessibility().SetName(ask_gemini_tooltip);
-      if (!base::FeatureList::IsEnabled(
-              features::kGlicSelectionOverlayPromptBox)) {
-        ask_gemini_btn->SetImageModel(views::Button::STATE_HOVERED,
-                                      active_icon_model_);
-        ask_gemini_btn->SetImageModel(views::Button::STATE_PRESSED,
-                                      active_icon_model_);
-      }
-      ask_gemini_btn->SetShowInkDropWhenHotTracked(false);
-      ask_gemini_btn->SetHasInkDropActionOnClick(false);
-      views::InkDrop::Get(ask_gemini_btn)
-          ->SetMode(views::InkDropHost::InkDropMode::OFF);
+      ask_gemini_btn->SetCornerRadii(small_chip_corners);
     } else {
-      ask_gemini_btn->SetImageModel(views::Button::STATE_HOVERED,
-                                    active_icon_model_);
-      ask_gemini_btn->SetImageModel(views::Button::STATE_PRESSED,
-                                    active_icon_model_);
-      ask_gemini_btn->SetImageModel(views::Button::STATE_DISABLED,
-                                    inactive_icon_model_);
-      views::InkDrop::Get(ask_gemini_btn)
-          ->SetMode(views::InkDropHost::InkDropMode::ON);
-      ask_gemini_btn->SetHasInkDropActionOnClick(true);
-      ask_gemini_btn->SetShowInkDropWhenHotTracked(true);
       constexpr int kBtnCornerRadius = kCornerRadius - 2;
-      views::InstallRoundRectHighlightPathGenerator(
-          ask_gemini_btn, gfx::Insets(), kBtnCornerRadius);
       ask_gemini_btn->SetCornerRadius(kBtnCornerRadius);
     }
 
@@ -357,8 +311,6 @@ class GlicSelectionContentsView : public views::View {
  private:
   const raw_ptr<GlicSelectionWidgetDelegate> widget_delegate_;
   raw_ptr<views::MdTextButton> ask_gemini_btn_ = nullptr;
-  ui::ImageModel inactive_icon_model_;
-  ui::ImageModel active_icon_model_;
   raw_ptr<views::BoxLayoutView> ask_pill_ = nullptr;
   raw_ptr<views::ImageButton> close_btn_ = nullptr;
   base::CallbackListSubscription close_btn_subscription_;

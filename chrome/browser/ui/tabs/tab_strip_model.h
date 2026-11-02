@@ -735,19 +735,21 @@ class TabStripModel {
   void ExitFocusMode(
       std::optional<TabGroupFocusExitReason> reason = std::nullopt);
 
-  // Rotates the focused tab group between the unfocused state and active tab
-  // groups in the strip. Requires `features::kTabGroupsFocusing` to be enabled
-  // (CHECKs). If there are no tab groups, this is a no-op. When `forward` is
-  // true, rotates towards higher-indexed groups; otherwise rotates in reverse
-  // order.
+  // Rotates the focused tab group among open tab groups in the strip while in
+  // focus mode. Requires `features::kTabGroupsFocusing` to be enabled (CHECKs).
+  // If not currently in focus mode, if an ephemeral group is focused, or if
+  // there are fewer than two tab groups, this is a no-op. When `forward` is
+  // true, rotates towards higher-indexed groups (wrapping around to the first
+  // group); otherwise rotates in reverse order (wrapping around to the last
+  // group).
   void RotateFocusedGroup(bool forward);
 
-  // Returns true if one or more of the tabs pointed to by `indices` are
-  // supported by read later.
-  bool IsReadLaterSupportedForAny(const std::vector<int>& indices);
+  // Returns true if one or more of the `tabs` are supported by read later.
+  bool IsReadLaterSupportedForAny(
+      const std::vector<tabs::TabHandle>& tabs) const;
 
   // Saves tabs with url supported by Read Later.
-  void AddToReadLater(const std::vector<int>& indices);
+  void AddToReadLater(const std::vector<tabs::TabHandle>& tabs);
 
   // Notifies all group observers that the TabGroupEditor is opening. This is
   // used by Views that want to force the editor to open without having to find
@@ -839,28 +841,28 @@ class TabStripModel {
   void ExecuteAddToNewSplitCommand(int context_index,
                                    split_tabs::SplitTabLayout layout);
 
-  // Returns true if 'CommandToggleSiteMuted' will mute. `index` is the
-  // index supplied to `ExecuteContextMenuCommand`.
-  bool WillContextMenuMuteSites(int index);
+  // Returns true if 'CommandToggleSiteMuted' will mute. `context_tab` is the
+  // tab supplied to `ExecuteContextMenuCommand`.
+  bool WillContextMenuMuteSites(tabs::TabHandle context_tab);
 
-  // Sets the sound content setting for each site at the `indices`.
-  void SetSitesMuted(const std::vector<int>& indices, bool mute) const;
+  // Sets the sound content setting for each site for `tabs`.
+  void SetSitesMuted(const std::vector<tabs::TabHandle>& tabs, bool mute) const;
 
-  // Returns true if 'CommandTogglePinned' will pin. `index` is the index
+  // Returns true if 'CommandTogglePinned' will pin. `context_tab` is the tab
   // supplied to `ExecuteContextMenuCommand`.
-  bool WillContextMenuPin(int index);
+  bool WillContextMenuPin(tabs::TabHandle context_tab);
 
-  // Returns true if 'CommandToggleGrouped' will group. `index` is the index
+  // Returns true if 'CommandToggleGrouped' will group. `context_tab` is the tab
   // supplied to `ExecuteContextMenuCommand`.
-  bool WillContextMenuGroup(int index);
+  bool WillContextMenuGroup(tabs::TabHandle context_tab);
 
-  // Returns the group ID if all tabs at `indices` belong to the same group,
+  // Returns the group ID if all `tabs` belong to the same group,
   // or std::nullopt if they belong to different groups or any are ungrouped.
-  std::optional<tab_groups::TabGroupId> GetCommonGroupForIndices(
-      const std::vector<int>& indices) const;
+  std::optional<tab_groups::TabGroupId> GetCommonGroupForTabs(
+      const std::vector<tabs::TabHandle>& tabs) const;
 
-  // Returns true if none of the tabs at `indices` belong to any tab group.
-  bool AreAllUngrouped(const std::vector<int>& indices) const;
+  // Returns true if none of the `tabs` belong to any tab group.
+  bool AreAllUngrouped(const std::vector<tabs::TabHandle>& tabs) const;
 
   // Convert a ContextMenuCommand into a browser command. Returns true if a
   // corresponding browser command exists, false otherwise.
@@ -1266,7 +1268,7 @@ class TabStripModel {
                                     std::optional<tab_groups::TabGroupId> group,
                                     bool pinned);
 
-  void AddToReadLaterImpl(const std::vector<int>& indices);
+  void AddToReadLaterImpl(const std::vector<tabs::TabHandle>& tabs);
 
   // Updates the `contents_data_` and sends out observer notifications for
   // inserting a new tab in  the tabstrip.

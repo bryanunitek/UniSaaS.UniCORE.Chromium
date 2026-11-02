@@ -321,7 +321,10 @@ source_set("test_support") {
       "//ui/snapshot",
     ]
   }
-  public_deps = [ "//chrome/test/base:chrome_test_utils" ]
+  public_deps = [
+    "//chrome/test/base:chrome_test_utils",
+    "//components/reporting/storage:storage_uploader_interface",
+  ]
 }
 
 # Browser tests for specific policies.
@@ -868,6 +871,7 @@ source_set("unit_tests") {
     "//components/reporting/encryption:decryption",
     "//components/reporting/encryption:primitives",
     "//components/reporting/encryption:testing_primitives",
+    "//components/reporting/storage:storage_uploader_interface",
     "//components/reporting/storage:test_support",
     "//components/reporting/util:status_macros",
     "//components/reporting/util:test_callbacks_support",
@@ -880,6 +884,7 @@ source_set("unit_tests") {
 
   if (!is_chromeos) {
     sources += [
+      "browser_signin_policy_handler_unittest.cc",
       "cloud/user_policy_signin_service_unittest.cc",
       "cloud/user_policy_signin_service_util_unittest.cc",
       "file_selection_dialogs_policy_handler_unittest.cc",
@@ -1390,7 +1395,7 @@ source_set("impl") {
   }
 
   if (safe_browsing_mode != 0) {
-    deps += [ "//components/safe_browsing/content/common:file_type_policies" ]
+    deps += [ "//components/safe_browsing/content/common/file_type_policies" ]
   }
 
   if (is_android) {

@@ -30,7 +30,6 @@
 #import "components/autofill/core/browser/form_structure.h"
 #import "components/autofill/core/browser/foundations/autofill_driver_router.h"
 #import "components/autofill/core/common/autofill_debug_features.h"
-#import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/core/common/field_data_manager.h"
 #import "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #import "components/autofill/core/common/unique_ids.h"
@@ -390,10 +389,7 @@ void AutofillDriverIOS::TriggerFormExtractionInDriverFrame(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillAcrossIframesIosTriggerFormExtraction)) {
-    ScanForms();
-  }
+  ScanForms();
 }
 
 void AutofillDriverIOS::ScanForms(bool immediately,
@@ -436,6 +432,11 @@ void AutofillDriverIOS::FetchFormsFilteredByName(
     const std::u16string& form_name,
     FormFetchCompletion completion) {
   if (!web_frame()) {
+    // Report the failed lookup instead of dropping `completion` so callers
+    // querying suggestion availability (e.g. `AutofillAgent`, on behalf of
+    // `FormSuggestionController`'s provider loop) don't stall waiting for a
+    // reply.
+    std::move(completion).Run(std::nullopt);
     return;
   }
 

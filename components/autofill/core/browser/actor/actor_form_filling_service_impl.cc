@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -23,6 +24,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
@@ -99,10 +101,10 @@ void RecordFillSuggestionsMetrics(
 
 // Records the latency and result of getting suggestions.
 // It returns the unmodified `result` to enable usage in chained callbacks.
-base::expected<std::vector<ActorFormFillingRequest>, ActorFormFillingError>
-RecordGetSuggestionsMetrics(base::TimeTicks start_time,
-                            base::expected<std::vector<ActorFormFillingRequest>,
-                                           ActorFormFillingError> result) {
+template <typename T>
+base::expected<T, ActorFormFillingError> RecordGetSuggestionsMetrics(
+    base::TimeTicks start_time,
+    base::expected<T, ActorFormFillingError> result) {
   RecordMetrics("Autofill.Actor.GetSuggestions", start_time,
                 result.error_or(kActorFormFillingSuccessForMetrics));
   return result;
@@ -303,8 +305,8 @@ std::optional<FieldGlobalId> GetSafeCreditCardNumberField(
                 decider->IsIframeUrlAllowlistedForActor(origin.GetURL()));
       });
 
-  return it == form.fields().end() ? std::optional<FieldGlobalId>()
-                                   : (*it)->global_id();
+  return it == form.fields().end() ? std::nullopt
+                                   : std::optional((*it)->global_id());
 }
 
 // Generates credit card suggestions and the data needed for filling them.
@@ -485,7 +487,9 @@ void ActorFormFillingServiceImpl::GetSuggestions(
     base::span<const FillRequest> fill_requests,
     GetSuggestionsCallback callback) {
   auto callback_with_metrics =
-      base::BindOnce(&RecordGetSuggestionsMetrics, base::TimeTicks::Now())
+      base::BindOnce(
+          &RecordGetSuggestionsMetrics<std::vector<ActorFormFillingRequest>>,
+          base::TimeTicks::Now())
           .Then(std::move(callback));
 
   auto log_actor_error = [&](std::string_view error_message) {
@@ -645,18 +649,17 @@ void ActorFormFillingServiceImpl::GetSuggestions(
       request.request_origin = origin;
       // TODO(crbug.com/502158215): Integrate form-splitting with section label.
       request.section_label = fill_request.section_label;
-      request.suggestions.reserve(
-          suggestion_data.suggestions_with_fill_data.size());
       sections_.emplace_back(suggestion_data.trigger_field_id,
                              fill_request.section_label,
                              fill_request.requested_data);
-      for (ActorSuggestionWithFillData& entry :
-           suggestion_data.suggestions_with_fill_data) {
-        entry.suggestion.id =
-            ActorSuggestionId(suggestion_id_generator_.GenerateNextId());
-        fill_data_[entry.suggestion.id] = std::move(entry.filling_payload);
-        request.suggestions.emplace_back(std::move(entry.suggestion));
-      }
+      request.suggestions = base::ToVector(
+          suggestion_data.suggestions_with_fill_data,
+          [this](ActorSuggestionWithFillData& entry) {
+            entry.suggestion.id =
+                ActorSuggestionId(suggestion_id_generator_.GenerateNextId());
+            fill_data_[entry.suggestion.id] = std::move(entry.filling_payload);
+            return std::move(entry.suggestion);
+          });
     }
   }
 
@@ -675,9 +678,10 @@ void ActorFormFillingServiceImpl::RetrieveSuggestionForCreditCardOpaqueToken(
     AutofillClient& client,
     base::span<const FillRequest> fill_requests,
     const std::string& credit_card_opaque_token,
-    GetSuggestionsCallback callback) {
+    RetrieveSuggestionCallback callback) {
   auto callback_with_metrics =
-      base::BindOnce(&RecordGetSuggestionsMetrics, base::TimeTicks::Now())
+      base::BindOnce(&RecordGetSuggestionsMetrics<ActorSuggestionId>,
+                     base::TimeTicks::Now())
           .Then(std::move(callback));
 
   auto log_actor_error = [&](std::string_view error_message) {
@@ -794,7 +798,7 @@ void ActorFormFillingServiceImpl::RetrieveSuggestionForCreditCardOpaqueToken(
 void ActorFormFillingServiceImpl::OnRetrievedSuggestionForCreditCardOpaqueToken(
     base::WeakPtr<AutofillManager> weak_manager,
     std::optional<FormGlobalId> form_id,
-    GetSuggestionsCallback callback,
+    RetrieveSuggestionCallback callback,
     std::vector<FieldGlobalId> fields,
     std::string section_label,
     FieldGlobalId trigger_field_id,
@@ -819,19 +823,11 @@ void ActorFormFillingServiceImpl::OnRetrievedSuggestionForCreditCardOpaqueToken(
     return;
   }
 
-  sections_.emplace_back(trigger_field_id, section_label,
+  sections_.emplace_back(trigger_field_id, std::move(section_label),
                          ActorFormFillingRequestedData::kCreditCard);
 
-  ActorSuggestion suggestion;
-  suggestion.id = ActorSuggestionId(suggestion_id_generator_.GenerateNextId());
-
-  fill_data_[suggestion.id] = FillData(fields, *card);
-
-  ActorFormFillingRequest request;
-  request.requested_data = ActorFormFillingRequestedData::kCreditCard;
-  request.request_origin = origin;
-  request.section_label = std::move(section_label);
-  request.suggestions.push_back(std::move(suggestion));
+  ActorSuggestionId suggestion_id(suggestion_id_generator_.GenerateNextId());
+  fill_data_[suggestion_id] = FillData(std::move(fields), *std::move(card));
 
   if (weak_manager && form_id) {
     if (ActorAutofillManager* manager =
@@ -841,10 +837,7 @@ void ActorFormFillingServiceImpl::OnRetrievedSuggestionForCreditCardOpaqueToken(
     }
   }
 
-  std::vector<ActorFormFillingRequest> requests;
-  requests.push_back(std::move(request));
-
-  std::move(callback).Run(std::move(requests));
+  std::move(callback).Run(suggestion_id);
 }
 
 void ActorFormFillingServiceImpl::FillSuggestions(
@@ -1106,8 +1099,8 @@ void ActorFormFillingServiceImpl::LogSkipReasonsToJournal(
               {"field_", base::ToString(field_id.renderer_id.value())}),
           base::JoinString(base::ToVector(reasons,
                                           [](FieldFillingSkipReason reason) {
-                                            return base::ToString(
-                                                static_cast<int>(reason));
+                                            return base::NumberToString(
+                                                std::to_underlying(reason));
                                           }),
                            ", "));
     }

@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -7852,6 +7853,91 @@ TEST_P(QuicSessionPoolTest, PortMigrationDisabledOnPathDegrading) {
   base::RunLoop().RunUntilIdle();
 
   // The session should stay alive as if nothing happened.
+  EXPECT_EQ(1u, QuicSessionPoolPeer::GetNumDegradingSessions(pool_.get()));
+  EXPECT_TRUE(QuicSessionPoolPeer::IsLiveSession(pool_.get(), session));
+  EXPECT_TRUE(HasActiveSession(kDefaultDestination));
+  EXPECT_EQ(1u, session->GetNumActiveStreams());
+
+  stream.reset();
+  quic_data1.ExpectAllReadDataConsumed();
+  quic_data1.ExpectAllWriteDataConsumed();
+}
+
+TEST_P(QuicSessionPoolTest, PortMigrationDisabledByFeatureFlagOnPathDegrading) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(features::kQuicEnablePortMigration);
+
+  quic_params_->allow_port_migration = true;
+  socket_factory_ = std::make_unique<TestPortMigrationSocketFactory>();
+  Initialize();
+
+  ProofVerifyDetailsChromium verify_details = DefaultProofVerifyDetails();
+  crypto_client_stream_factory_.AddProofVerifyDetails(&verify_details);
+
+  int packet_number = 1;
+  MockQuicData quic_data1(version_);
+  quic_data1.AddReadPauseForever();
+  quic_data1.AddWrite(SYNCHRONOUS,
+                      ConstructInitialSettingsPacket(packet_number++));
+  quic_data1.AddWrite(SYNCHRONOUS,
+                      ConstructGetRequestPacket(
+                          packet_number++,
+                          GetNthClientInitiatedBidirectionalStreamId(0), true));
+  quic_data1.AddWrite(
+      SYNCHRONOUS,
+      client_maker_.Packet(packet_number++)
+          .AddStreamFrame(GetQpackDecoderStreamId(), /*fin=*/false,
+                          StreamCancellationQpackDecoderInstruction(0))
+          .AddStopSendingFrame(GetNthClientInitiatedBidirectionalStreamId(0),
+                               quic::QUIC_STREAM_CANCELLED)
+          .AddRstStreamFrame(GetNthClientInitiatedBidirectionalStreamId(0),
+                             quic::QUIC_STREAM_CANCELLED)
+          .Build());
+  quic_data1.AddSocketDataToFactory(socket_factory_.get());
+
+  RequestBuilder builder(this);
+  EXPECT_EQ(ERR_IO_PENDING, builder.CallRequest());
+  EXPECT_THAT(callback_.WaitForResult(), IsOk());
+  std::unique_ptr<HttpStream> stream = CreateStream(&builder.request);
+  EXPECT_TRUE(stream.get());
+
+  HttpRequestInfo request_info;
+  request_info.method = "GET";
+  request_info.url = GURL(kDefaultUrl);
+  request_info.traffic_annotation =
+      MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS);
+  stream->RegisterRequest(&request_info);
+  EXPECT_EQ(OK, stream->InitializeStream(true, DEFAULT_PRIORITY, net_log_,
+                                         CompletionOnceCallback()));
+
+  QuicChromiumClientSession* session = GetActiveSession(kDefaultDestination);
+  EXPECT_TRUE(QuicSessionPoolPeer::IsLiveSession(pool_.get(), session));
+  EXPECT_TRUE(HasActiveSession(kDefaultDestination));
+
+  HttpResponseInfo response;
+  HttpRequestHeaders request_headers;
+  EXPECT_EQ(OK, stream->SendRequest(request_headers, &response,
+                                    callback_.callback()));
+
+  EXPECT_EQ(0u, QuicSessionPoolPeer::GetNumDegradingSessions(pool_.get()));
+
+  IPEndPoint ip;
+  session->GetDefaultSocket()->GetLocalAddress(&ip);
+  quic::test::QuicConnectionPeer::SetSelfAddress(session->connection(),
+                                                 ToQuicSocketAddress(ip));
+
+  RecordingNetLogObserver net_log_observer(net_log_.net_log(),
+                                           NetLogCaptureMode::kDefault);
+
+  // Cause the connection to report path degrading to the session.
+  // Because kQuicEnablePortMigration is disabled, no port migration probe
+  // should be started even though quic_params_->allow_port_migration was true.
+  session->connection()->OnPathDegradingDetected();
+
+  EXPECT_TRUE(
+      net_log_observer
+          .GetEntriesWithType(NetLogEventType::QUIC_PORT_MIGRATION_TRIGGERED)
+          .empty());
   EXPECT_EQ(1u, QuicSessionPoolPeer::GetNumDegradingSessions(pool_.get()));
   EXPECT_TRUE(QuicSessionPoolPeer::IsLiveSession(pool_.get(), session));
   EXPECT_TRUE(HasActiveSession(kDefaultDestination));
@@ -18094,7 +18180,7 @@ void QuicSessionPoolTest::TestRequireDnsHttpsAlpn(
       kDefaultServerHostName,
       MockHostResolverBase::RuleResolver::RuleResult(
           std::move(endpoints),
-          /*aliases=*/std::set<std::string>{kDefaultServerHostName}));
+          /*aliases=*/base::flat_set<std::string>{kDefaultServerHostName}));
 
   Initialize();
   ProofVerifyDetailsChromium verify_details = DefaultProofVerifyDetails();
@@ -18126,13 +18212,13 @@ namespace {
 struct DnsAliasPoolingTestParams {
   quic::ParsedQuicVersion version;
   bool use_dns_aliases;
-  std::set<std::string> dns_aliases1;
-  std::set<std::string> dns_aliases2;
-  std::set<std::string> expected_dns_aliases1;
-  std::set<std::string> expected_dns_aliases2;
+  base::flat_set<std::string> dns_aliases1;
+  base::flat_set<std::string> dns_aliases2;
+  base::flat_set<std::string> expected_dns_aliases1;
+  base::flat_set<std::string> expected_dns_aliases2;
 };
 
-std::string PrintToString(const std::set<std::string>& set) {
+std::string PrintToString(const base::flat_set<std::string>& set) {
   std::string joined;
   for (const std::string& str : set) {
     if (!joined.empty()) {
@@ -18231,10 +18317,10 @@ class QuicSessionPoolDnsAliasPoolingTest
         expected_dns_aliases2_(GetParam().expected_dns_aliases2) {}
 
   const bool use_dns_aliases_;
-  const std::set<std::string> dns_aliases1_;
-  const std::set<std::string> dns_aliases2_;
-  const std::set<std::string> expected_dns_aliases1_;
-  const std::set<std::string> expected_dns_aliases2_;
+  const base::flat_set<std::string> dns_aliases1_;
+  const base::flat_set<std::string> dns_aliases2_;
+  const base::flat_set<std::string> expected_dns_aliases1_;
+  const base::flat_set<std::string> expected_dns_aliases2_;
 };
 
 INSTANTIATE_TEST_SUITE_P(VersionIncludeStreamDependencySequence,

@@ -165,7 +165,6 @@ HTMLFrameOwnerElement::HTMLFrameOwnerElement(const QualifiedName& tag_name,
     : HTMLElement(tag_name, document),
       should_lazy_load_children_(DoesParentAllowLazyLoadingChildren(document)) {
   SetHasCustomStyleCallbacks();
-  document.IncrementImmediateChildFrameCreationCount();
 }
 
 const QualifiedName& HTMLFrameOwnerElement::SubResourceAttributeName() const {
@@ -802,7 +801,8 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
   frame_load_request.SetIsContainerInitiated(true);
   frame_load_request.SetClientNavigationReason(
       ClientNavigationReason::kInitialFrameNavigation);
-  if (!child_frame->Loader().AllowRequestForThisFrame(frame_load_request)) {
+  if (!child_frame->Loader().AllowRequestForThisFrame(
+          frame_load_request, /*is_same_document_navigation=*/false)) {
     return false;
   }
   child_frame->Loader().StartNavigation(frame_load_request, child_load_type);

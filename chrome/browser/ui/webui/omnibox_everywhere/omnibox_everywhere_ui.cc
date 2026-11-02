@@ -23,11 +23,13 @@
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_fre_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_prefs.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere_service.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere_service_factory.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/search/most_visited_metrics_logger.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/location_bar/omnibox_popup_file_selector.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_context_menu.h"
 #include "chrome/browser/ui/views/user_education/browser_help_bubble.h"
@@ -103,25 +105,6 @@ bool IsScreenshotCommand(int command_id) {
 // and the previous dropdown implementation (320px).
 constexpr int kScreenshotMenuWidth = 320;
 
-bool IsFuseboxEligible(Profile* profile) {
-  if (!profile) {
-    return false;
-  }
-  auto* aim_eligibility_service =
-      AimEligibilityServiceFactory::GetForProfile(profile);
-  return aim_eligibility_service &&
-         aim_eligibility_service->IsFuseboxEligible();
-}
-
-bool IsFuseboxEnabled(Profile* profile) {
-  if (!IsFuseboxEligible(profile)) {
-    return false;
-  }
-  return !profile || !profile->GetPrefs() ||
-         profile->GetPrefs()->GetBoolean(
-             omnibox_everywhere::prefs::kOmniboxEverywhereShowAiMode);
-}
-
 class OmniboxEverywhereMostVisitedPrefObserver
     : public MostVisitedPrefObserver {
  public:
@@ -159,6 +142,7 @@ void AddMostVisitedSourceStrings(content::WebUIDataSource* source) {
 
   static constexpr webui::LocalizedString kMostVisitedStrings[] = {
       {"addLinkTitle", IDS_NTP_CUSTOM_LINKS_ADD_SHORTCUT_TITLE},
+      {"close", IDS_ACCNAME_CLOSE},
       {"editLinkTitle", IDS_NTP_CUSTOM_LINKS_EDIT_SHORTCUT},
       {"viewLinkTitle", IDS_NTP_CUSTOM_LINKS_SHORTCUT_DETAILS_TITLE},
       {"invalidUrl", IDS_NTP_CUSTOM_LINKS_INVALID_URL},
@@ -304,16 +288,21 @@ OmniboxEverywhereUI::OmniboxEverywhereUI(content::WebUI* web_ui)
       {"screenshotRegionLabel", IDS_OMNIBOX_EVERYWHERE_REGION},
       {"screenshotWindowLabel", IDS_OMNIBOX_EVERYWHERE_WINDOW},
       {"searchBoxHintAskOrType", IDS_NTP_SEARCH_BOX_PLACEHOLDER_ASK_OR_TYPE},
+      {"searchBoxHintDragAndDrop",
+       IDS_OMNIBOX_EVERYWHERE_PLACEHOLDER_DRAG_AND_DROP},
+      {"searchBoxHintFileOrImage",
+       IDS_OMNIBOX_EVERYWHERE_PLACEHOLDER_FILE_OR_IMAGE},
+      {"searchBoxHintLens", IDS_OMNIBOX_EVERYWHERE_PLACEHOLDER_LENS},
       {"shareScreenshotLabel", IDS_OMNIBOX_EVERYWHERE_SHARE_SCREENSHOT},
       {"switchProfileLabel", IDS_OMNIBOX_EVERYWHERE_SWITCH_PROFILE},
   };
   source->AddLocalizedStrings(kStrings);
 
-  bool fre_enabled =
-      base::FeatureList::IsEnabled(omnibox::kOmniboxEverywhereFre);
-  omnibox_everywhere::prefs::FreStage current_stage =
-      fre_enabled ? omnibox_everywhere::prefs::GetCurrentFreStage(profile_)
-                  : omnibox_everywhere::prefs::FreStage::kNone;
+  auto* service = OmniboxEverywhereServiceFactory::GetForProfile(profile_);
+  omnibox_everywhere::FreStage current_stage =
+      (service && service->fre_controller())
+          ? service->fre_controller()->GetCurrentStage()
+          : omnibox_everywhere::FreStage::kNone;
   source->AddInteger("initialFreStage", static_cast<int>(current_stage));
 
   base::ListValue initial_tokens;
@@ -477,6 +466,24 @@ OmniboxEverywhereUI::OmniboxEverywhereUI(content::WebUI* web_ui)
 
 OmniboxEverywhereUI::~OmniboxEverywhereUI() = default;
 
+// static
+bool OmniboxEverywhereUI::IsFuseboxEligible(Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+  auto* aim_eligibility_service =
+      AimEligibilityServiceFactory::GetForProfile(profile);
+  return aim_eligibility_service &&
+         aim_eligibility_service->IsFuseboxEligible();
+}
+
+// static
+bool OmniboxEverywhereUI::IsFuseboxEnabled(Profile* profile) {
+  return IsFuseboxEligible(profile) && profile->GetPrefs() &&
+         profile->GetPrefs()->GetBoolean(
+             omnibox_everywhere::prefs::kOmniboxEverywhereShowAiMode);
+}
+
 void OmniboxEverywhereUI::BindInterface(
     mojo::PendingReceiver<plural_string::mojom::PluralStringProvider>
         receiver) {
@@ -620,6 +627,14 @@ bool OmniboxEverywhereUI::CancelChromeDefaultPicker() {
 void OmniboxEverywhereUI::BindInterface(
     mojo::PendingReceiver<omnibox_everywhere_debug::mojom::PageHandlerFactory>
         receiver) {
+  // The debug page is only meant to be opened in a browser tab, never inside
+  // the floating Omnibox Everywhere popup's WebContents.
+  if (!omnibox::IsOmniboxEverywhereEnabled(profile_) ||
+      !web_ui()->GetWebContents() ||
+      !BrowserUserEducationInterface::MaybeGetForWebContentsInTab(
+          web_ui()->GetWebContents())) {
+    return;
+  }
   if (debug_page_factory_receiver_.is_bound()) {
     debug_page_factory_receiver_.reset();
   }
@@ -711,6 +726,15 @@ void OmniboxEverywhereUI::SetIsComposebox(bool is_composebox) {
     is_composebox_mode_ = true;
   } else {
     ClearContextualSessionHandle();
+  }
+}
+
+void OmniboxEverywhereUI::OnDismissMostVisited() {
+  if (profile_ && profile_->GetPrefs()) {
+    profile_->GetPrefs()->SetInteger(
+        omnibox_everywhere::prefs::kOmniboxEverywhereShowShortcuts,
+        static_cast<int>(
+            omnibox_everywhere::prefs::ShowShortcutsPrefValue::kDisabled));
   }
 }
 
@@ -924,6 +948,14 @@ void OmniboxEverywhereUI::ExecuteScreenshotCommand(
     return;
   }
 
+  // Re-check AI Mode availability: this may run after the asynchronous
+  // screenshot disclosure dialog, during which eligibility can change. Reset
+  // the page as for a cancelled capture.
+  if (!IsFuseboxEnabled(profile_)) {
+    OnScreenshotCaptureDone(std::nullopt);
+    return;
+  }
+
   screenshot_origin_was_searchbox_ = !is_composebox_mode_;
 
   // Open Composebox immediately from the Lens entry point with a pending
@@ -1014,7 +1046,11 @@ bool OmniboxEverywhereUI::IsCommandIdEnabled(int command_id) const {
     case kScreenshotEntireScreen:
     case kScreenshotWindow:
     case kScreenshotRegion:
-      return IsScreenshotCommandEnabled(GetContextualSearchboxHandler());
+      // Screenshots are shared with AI Mode, so refuse them when AI Mode is
+      // unavailable. `ExecuteCommand()` checks this before showing the
+      // screenshot disclosure dialog.
+      return IsFuseboxEnabled(profile_) &&
+             IsScreenshotCommandEnabled(GetContextualSearchboxHandler());
   }
   return true;
 }
@@ -1025,6 +1061,10 @@ bool OmniboxEverywhereUI::IsCommandIdVisible(int command_id) const {
 
 void OmniboxEverywhereUI::OpenComposebox(
     omnibox_everywhere::mojom::ComposeboxInitialStatePtr initial_state) {
+  // AI Mode eligibility can change while a native menu or file chooser is open.
+  if (!IsFuseboxEnabled(profile_)) {
+    return;
+  }
   // Clear any active autocomplete suggestions on the omnibox searchbox before
   // transitioning into Composebox mode so that stale searchbox results do not
   // linger or flash during the mode switch.
@@ -1101,6 +1141,12 @@ void OmniboxEverywhereUI::OnFileChooserClosed() {
 }
 
 void OmniboxEverywhereUI::ShowContextActionMenu(const gfx::Rect& anchor_rect) {
+  // The "+" menu's actions all open the AI Mode composebox, so don't show the
+  // menu when AI Mode is unavailable.
+  if (!IsFuseboxEnabled(profile_)) {
+    OnContextMenuClosed();
+    return;
+  }
   if (context_menu_) {
     context_menu_->Cancel();
   }

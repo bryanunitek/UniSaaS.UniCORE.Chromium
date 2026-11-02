@@ -13,8 +13,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
 
@@ -33,8 +33,9 @@ class NavigationHandle;
 
 namespace omnibox_everywhere {
 class OmniboxEverywhereController;
-class OmniboxEverywhereUIManager;
 class OmniboxEverywhereFeaturePromoController;
+class OmniboxEverywhereFreController;
+class OmniboxEverywhereUIManager;
 }
 
 class OmniboxEverywhereService : public KeyedService {
@@ -61,6 +62,10 @@ class OmniboxEverywhereService : public KeyedService {
   const user_education::FeaturePromoController* feature_promo_controller()
       const;
 
+  omnibox_everywhere::OmniboxEverywhereFreController* fre_controller();
+  const omnibox_everywhere::OmniboxEverywhereFreController* fre_controller()
+      const;
+
   virtual void HidePopup();
   virtual bool IsPopupVisible() const;
   virtual bool IsPopupVisibleForProfile() const;
@@ -85,10 +90,10 @@ class OmniboxEverywhereService : public KeyedService {
   virtual void OnHotkeyDropdownOpened();
   virtual void OnHotkeyDropdownClosed();
   void OpenUrl(const GURL& url,
-               WindowOpenDisposition disposition,
+               ui::mojom::WindowOpenDisposition disposition,
                ui::PageTransition transition);
   virtual void OpenUrl(const GURL& url,
-                       WindowOpenDisposition disposition,
+                       ui::mojom::WindowOpenDisposition disposition,
                        ui::PageTransition transition,
                        base::OnceCallback<void(content::NavigationHandle&)>
                            navigation_handle_callback);
@@ -123,7 +128,7 @@ class OmniboxEverywhereService : public KeyedService {
   void NavigateInBrowserWindow(
       BrowserWindowInterface* bwi,
       const GURL& url,
-      WindowOpenDisposition disposition,
+      ui::mojom::WindowOpenDisposition disposition,
       ui::PageTransition transition,
       base::OnceCallback<void(content::NavigationHandle&)>
           navigation_handle_callback);
@@ -133,6 +138,8 @@ class OmniboxEverywhereService : public KeyedService {
   omnibox_everywhere::OmniboxEverywhereUIManager* ui_manager() const;
 
   raw_ptr<Profile> profile_;
+  std::unique_ptr<omnibox_everywhere::OmniboxEverywhereFreController>
+      fre_controller_;
   std::unique_ptr<omnibox_everywhere::OmniboxEverywhereFeaturePromoController>
       feature_promo_controller_;
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive_;

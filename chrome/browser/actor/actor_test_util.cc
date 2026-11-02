@@ -58,7 +58,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/gfx/geometry/point.h"
 
 namespace actor {
@@ -772,8 +772,9 @@ std::unique_ptr<ToolRequest> MakeWaitRequest(TabInterface* observe_tab) {
 std::unique_ptr<ToolRequest> MakeCreateTabRequest(SessionID window_id,
                                                   bool foreground) {
   return std::make_unique<CreateTabToolRequest>(
-      window_id.id(), foreground ? WindowOpenDisposition::kNewForegroundTab
-                                 : WindowOpenDisposition::kNewBackgroundTab);
+      window_id.id(),
+      foreground ? ::ui::mojom::WindowOpenDisposition::kNewForegroundTab
+                 : ::ui::mojom::WindowOpenDisposition::kNewBackgroundTab);
 }
 
 std::unique_ptr<ToolRequest> MakeActivateTabRequest(TabHandle tab) {
@@ -1072,6 +1073,44 @@ TestTabState::TestTabState(content::WebContents* web_contents) {
 TestTabState::~TestTabState() {
   will_detach_callback_list_.Notify(&tab,
                                     tabs::TabInterface::DetachReason::kDelete);
+}
+
+ActorJournalRecorder::Entry::Entry() = default;
+
+ActorJournalRecorder::Entry::Entry(const Entry&) = default;
+
+ActorJournalRecorder::Entry& ActorJournalRecorder::Entry::operator=(
+    const Entry&) = default;
+
+ActorJournalRecorder::Entry::~Entry() = default;
+
+ActorJournalRecorder::ActorJournalRecorder(AggregatedJournal& journal) {
+  observation_.Observe(&journal);
+}
+
+ActorJournalRecorder::~ActorJournalRecorder() = default;
+
+std::vector<ActorJournalRecorder::Entry> ActorJournalRecorder::GetEntries(
+    std::string_view event) const {
+  std::vector<Entry> entries;
+  for (const Entry& entry : entries_) {
+    if (entry.event == event) {
+      entries.push_back(entry);
+    }
+  }
+  return entries;
+}
+
+void ActorJournalRecorder::WillAddJournalEntry(
+    const AggregatedJournal::Entry& entry) {
+  Entry& recorded = entries_.emplace_back();
+  recorded.type = entry.data->type;
+  recorded.event = entry.data->event;
+  recorded.task_id = entry.data->task_id;
+  recorded.track_uuid = entry.data->track_uuid;
+  for (const mojom::JournalDetailsPtr& detail : entry.data->details) {
+    recorded.details.emplace(detail->key, detail->value);
+  }
 }
 
 }  // namespace actor

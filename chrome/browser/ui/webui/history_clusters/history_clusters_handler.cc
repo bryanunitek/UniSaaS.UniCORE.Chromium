@@ -59,9 +59,9 @@
 #include "ui/actions/actions.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/time_format.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/webui/resources/cr_components/history_clusters/history_clusters.mojom.h"
@@ -134,7 +134,7 @@ class HistoryClustersSidePanelContextMenu
         }
         content::OpenURLParams params =
             content::OpenURLParams::CreateBrowserInitiated(
-                url_, WindowOpenDisposition::kNewBackgroundTab,
+                url_, ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
                 ui::PAGE_TRANSITION_AUTO_BOOKMARK);
         GetBrowserWindowInterface(interface_)
             ->OpenURL(params,
@@ -148,7 +148,7 @@ class HistoryClustersSidePanelContextMenu
         }
         content::OpenURLParams params =
             content::OpenURLParams::CreateBrowserInitiated(
-                url_, WindowOpenDisposition::kNewWindow,
+                url_, ui::mojom::WindowOpenDisposition::kNewWindow,
                 ui::PAGE_TRANSITION_AUTO_BOOKMARK);
         GetBrowserWindowInterface(interface_)
             ->OpenURL(params,
@@ -162,7 +162,7 @@ class HistoryClustersSidePanelContextMenu
         }
         content::OpenURLParams params =
             content::OpenURLParams::CreateBrowserInitiated(
-                url_, WindowOpenDisposition::kOffTheRecord,
+                url_, ui::mojom::WindowOpenDisposition::kOffTheRecord,
                 ui::PAGE_TRANSITION_AUTO_BOOKMARK);
         GetBrowserWindowInterface(interface_)
             ->OpenURL(params,
@@ -306,12 +306,12 @@ void HistoryClustersHandler::OpenHistoryUrl(
 
   // In the Side Panel, the default is the current tab. From History WebUI, the
   // default is a new foreground tab.
-  WindowOpenDisposition default_disposition =
+  ui::mojom::WindowOpenDisposition default_disposition =
       history_clusters_side_panel_embedder_
-          ? WindowOpenDisposition::kCurrentTab
-          : WindowOpenDisposition::kNewForegroundTab;
+          ? ui::mojom::WindowOpenDisposition::kCurrentTab
+          : ui::mojom::WindowOpenDisposition::kNewForegroundTab;
 
-  WindowOpenDisposition open_location = ui::DispositionFromClick(
+  ui::mojom::WindowOpenDisposition open_location = ui::DispositionFromClick(
       click_modifiers->middle_button, click_modifiers->alt_key,
       click_modifiers->ctrl_key, click_modifiers->meta_key,
       click_modifiers->shift_key, default_disposition);
@@ -362,7 +362,9 @@ void HistoryClustersHandler::StartQueryClusters(
 
 void HistoryClustersHandler::LoadMoreClusters(const std::string& query) {
   if (query_clusters_state_) {
-    CHECK_EQ(query, query_clusters_state_->query(), base::NotFatalUntil::M162);
+    // TODO(crbug.com/578093658): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
+    DCHECK_EQ(query, query_clusters_state_->query());
     query_clusters_state_->LoadNextBatchOfClusters(
         base::BindOnce(&HistoryClustersHandler::SendClustersToPage,
                        weak_ptr_factory_.GetWeakPtr()));
@@ -488,7 +490,7 @@ void HistoryClustersHandler::OpenVisitUrlsInTabGroup(
         GetBrowserWindowInterface(interface_)
             ->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
                           visit_ptr->normalized_url,
-                          WindowOpenDisposition::kNewBackgroundTab,
+                          ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
                           ui::PAGE_TRANSITION_AUTO_BOOKMARK),
                       /*navigation_handle_callback=*/{});
 

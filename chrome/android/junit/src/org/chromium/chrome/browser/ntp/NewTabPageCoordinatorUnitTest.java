@@ -25,6 +25,7 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
+import android.os.Build;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -83,7 +84,9 @@ import org.chromium.chrome.browser.ntp.search.SearchBoxCoordinator;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinatorFactory;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationTestHelper;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
+import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager;
 import org.chromium.chrome.browser.omnibox.SearchEngineService;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridgeJni;
@@ -104,6 +107,7 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabRemover;
 import org.chromium.chrome.browser.tasks.HomeSurfaceTracker;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarEducationCoordinator;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.native_page.TouchEnabledDelegate;
 import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
@@ -223,6 +227,7 @@ public class NewTabPageCoordinatorUnitTest {
     @Before
     public void setUp() {
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
+        when(mProfile.getOriginalProfile()).thenReturn(mProfile);
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
         mSearchBoxView = new View(mActivity);
         mRecyclerView = new RecyclerView(mActivity);
@@ -461,6 +466,33 @@ public class NewTabPageCoordinatorUnitTest {
         mCoordinator.setSearchProviderLogoAlpha(0.3f);
         assertEquals(1.f, mCoordinator.getSearchBoxView().getAlpha(), 0.01f);
         assertEquals(1.f, logoView.getAlpha(), 0.01f);
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.R)
+    @Features.EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
+    public void testMaybeTriggerCustomizationBottomSheet_triggersWhenEducationNotShown() {
+        var customizationCoordinator = setUpThemeTipTrigger();
+
+        mCoordinator.maybeTriggerCustomizationBottomSheet();
+
+        verify(customizationCoordinator).showBottomSheet();
+        assertTrue(NtpCustomizationUtils.isThemeTipBottomSheetShownFromSharedPreference());
+
+        NtpCustomizationUtils.resetSharedPreferenceForTesting();
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.R)
+    @Features.EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
+    public void testMaybeTriggerCustomizationBottomSheet_deferredWhenEducationShown() {
+        var customizationCoordinator = setUpThemeTipTrigger();
+        BottomBarEducationCoordinator.setEducationShownThisSessionForTesting();
+
+        mCoordinator.maybeTriggerCustomizationBottomSheet();
+
+        verify(customizationCoordinator, never()).showBottomSheet();
+        assertFalse(NtpCustomizationUtils.isThemeTipBottomSheetShownFromSharedPreference());
     }
 
     @Test
@@ -1136,15 +1168,12 @@ public class NewTabPageCoordinatorUnitTest {
         View optionalButton = mNewTabPageLayout.findViewById(R.id.optional_button);
         assertEquals(View.VISIBLE, optionalButton.getVisibility());
 
-        // The Create image strings aren't applied, so the layout's default gallery strings are
-        // kept.
+        // The Create image strings aren't applied, so the layout's default strings are kept.
         assertEquals(
-                mActivity.getString(R.string.ntp_action_chip_gallery_accessibility),
+                mActivity.getString(R.string.ntp_action_chip_add_image_accessibility),
                 optionalButton.getContentDescription());
         TextView optionalButtonText = mNewTabPageLayout.findViewById(R.id.optional_button_text);
-        assertEquals(
-                mActivity.getString(R.string.omnibox_navattach_gallery),
-                optionalButtonText.getText().toString());
+        assertEquals(mActivity.getString(R.string.add), optionalButtonText.getText().toString());
 
         // Clicking doesn't enter image generation mode.
         optionalButton.performClick();
@@ -2292,6 +2321,44 @@ public class NewTabPageCoordinatorUnitTest {
         assertEquals("", searchBoxTextView.getText().toString());
     }
 
+    @Test
+    public void testOnToEdgeChange() {
+        PropertyModel model = mCoordinator.getModelForTesting();
+        int toolbarHeightNoShadow =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.toolbar_height_no_shadow);
+        int baseTransitionStartOffset =
+                mCoordinator.getCurrentNtpFakeSearchBoxTransitionStartOffset();
+
+        mCoordinator.onToEdgeChange(/* systemTopInset= */ 50, /* supportsEdgeToEdgeOnTop= */ true);
+        assertEquals(
+                toolbarHeightNoShadow + 50, model.get(NewTabPageLayoutProperties.TOP_INSET_PX));
+        assertEquals(toolbarHeightNoShadow + 50, mNewTabPageLayout.getPaddingTop());
+        assertEquals(
+                baseTransitionStartOffset + 50,
+                mCoordinator.getCurrentNtpFakeSearchBoxTransitionStartOffset());
+
+        // When the controller is drawing to the top edge (systemTopInset = 50) but the NTP has a
+        // default background (supportsEdgeToEdgeOnTop = false), top inset should reset to
+        // toolbarHeightNoShadow.
+        mCoordinator.onToEdgeChange(/* systemTopInset= */ 50, /* supportsEdgeToEdgeOnTop= */ false);
+        assertEquals(toolbarHeightNoShadow, model.get(NewTabPageLayoutProperties.TOP_INSET_PX));
+        assertEquals(toolbarHeightNoShadow, mNewTabPageLayout.getPaddingTop());
+        assertEquals(
+                baseTransitionStartOffset,
+                mCoordinator.getCurrentNtpFakeSearchBoxTransitionStartOffset());
+
+        mCoordinator.onToEdgeChange(/* systemTopInset= */ 50, /* supportsEdgeToEdgeOnTop= */ true);
+        assertEquals(
+                toolbarHeightNoShadow + 50, model.get(NewTabPageLayoutProperties.TOP_INSET_PX));
+        assertEquals(toolbarHeightNoShadow + 50, mNewTabPageLayout.getPaddingTop());
+
+        // Resetting top inset (as done by EdgeToEdgePadAdjuster#overrideTopInset(0)) resets
+        // TOP_INSET_PX to toolbarHeightNoShadow.
+        mCoordinator.onToEdgeChange(/* systemTopInset= */ 0, /* supportsEdgeToEdgeOnTop= */ false);
+        assertEquals(toolbarHeightNoShadow, model.get(NewTabPageLayoutProperties.TOP_INSET_PX));
+        assertEquals(toolbarHeightNoShadow, mNewTabPageLayout.getPaddingTop());
+    }
+
     /**
      * Makes the {@link SideUiStateProvider} available to the coordinator created in {@link
      * #setUp()}, and returns the {@link SideUiObserver} it registers. Invocations on {@link
@@ -2306,5 +2373,25 @@ public class NewTabPageCoordinatorUnitTest {
         verify(mSideUiStateProvider).addObserver(mSideUiObserverCaptor.capture());
         clearInvocations(mUiConfig);
         return mSideUiObserverCaptor.getValue();
+    }
+
+    /**
+     * Configures and returns a mock customization coordinator for testing the theme tip trigger.
+     */
+    private NtpCustomizationCoordinator setUpThemeTipTrigger() {
+        mCoordinator.destroy();
+        createCoordinator(/* isLff= */ false);
+        NtpCustomizationTestHelper.setupEdgeToEdge(mWindowAndroid);
+        ChromeFeatureList.sNewTabPageCustomizationV2ForceShowTipBottomSheet.setForTesting(true);
+        ChromeFeatureList.sNewTabPageCustomizationV2ShowTipBottomSheet.setForTesting(true);
+        NtpCustomizationPromoManager.setEnableForTesting(true);
+        NtpCustomizationCoordinatorFactory factory = mock(NtpCustomizationCoordinatorFactory.class);
+        NtpCustomizationCoordinatorFactory.setInstanceForTesting(factory);
+        NtpCustomizationCoordinator customizationCoordinator =
+                mock(NtpCustomizationCoordinator.class);
+        when(factory.create(any(), any(), any(), anyInt(), any(), any(), any()))
+                .thenReturn(customizationCoordinator);
+        assertFalse(NtpCustomizationUtils.isThemeTipBottomSheetShownFromSharedPreference());
+        return customizationCoordinator;
     }
 }

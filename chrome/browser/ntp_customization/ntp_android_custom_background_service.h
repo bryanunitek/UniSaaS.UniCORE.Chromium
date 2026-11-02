@@ -54,14 +54,15 @@ class NtpAndroidCustomBackgroundService
   void SetThemeCollectionBridge(NtpThemeCollectionBridge* bridge);
   void SetSyncedThemeBridge(NtpSyncedThemeBridge* bridge);
 
+  // Delivers the theme stored in preferences to the synced theme bridge as if
+  // it had just arrived from sync. Sync doesn't re-emit a theme that is
+  // already stored, e.g. one delivered in a previous session or before the
+  // bridge was attached, so the bridge calls this when it attaches.
+  void GetStoredContinuousThemeAndNotify();
+
   // Returns the DataTypeControllerDelegate for the THEMES_ANDROID sync data
   // type, or nullptr if sync is disabled.
   base::WeakPtr<syncer::DataTypeControllerDelegate> GetSyncControllerDelegate();
-
-  // Exposes whether the underlying service is actively processing a sync
-  // update. This is used by observers to route UI behavior differently when
-  // syncing versus local manual updates.
-  bool IsProcessingSyncUpdate() const { return processing_sync_update_; }
 
   // NtpCustomBackgroundServiceBase:
   void SetCustomBackgroundInfo(const GURL& background_url,
@@ -72,6 +73,7 @@ class NtpAndroidCustomBackgroundService
                                const std::string& collection_id) override;
   void SelectLocalBackgroundImage(const base::FilePath& path) override;
   void ResetCustomBackgroundInfo() override;
+  void RefreshBackgroundIfNeeded() override;
   void OnNextCollectionImageAvailable() override;
   std::optional<int> GetNextRefreshTimestamp() const override;
 
@@ -154,9 +156,12 @@ class NtpAndroidCustomBackgroundService
   std::unique_ptr<ntp_customization::NtpAndroidThemeSyncBridge>
       theme_sync_bridge_;
 
-  // True while processing an incoming sync update. Used to route UI updates
-  // and prevent bouncing events back to sync.
-  bool processing_sync_update_ = false;
+  // True only while ApplyThemeCollectionFromSync() writes the custom
+  // background dictionary, so that the resulting NotifyAboutBackgrounds() is
+  // routed to the synced theme bridge as a sync update. The Java callback runs
+  // synchronously within that write, so it must not re-enter this service with
+  // a local write, which would be misrouted as a sync update too.
+  bool applying_sync_update_ = false;
 
   // True while updating the primary color in the background preference
   // dictionary. Used to suppress re-entrant NotifyAboutBackgrounds() calls

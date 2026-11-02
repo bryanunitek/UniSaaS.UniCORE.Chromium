@@ -97,6 +97,20 @@ class ClientSideDetectionHost
     kMaxValue = kDidFirstVisuallyNonEmptyPaint,
   };
 
+  // Visibility of the WebContents when a classification is dispatched. Mirrors
+  // `content::Visibility`, which cannot be recorded to UMA directly. These
+  // values are persisted to logs. Entries should not be renumbered and numeric
+  // values should never be reused.
+  //
+  // LINT.IfChange(ClassificationVisibility)
+  enum class ClassificationVisibility {
+    kHidden = 0,
+    kOccluded = 1,
+    kVisible = 2,
+    kMaxValue = kVisible,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/sb_client/enums.xml:SBClientPhishingClassificationVisibility)
+
   // A callback via which the client of this component indicates whether the
   // primary account is signed in.
   using PrimaryAccountSignedIn = base::RepeatingCallback<bool()>;
@@ -351,6 +365,14 @@ class ClientSideDetectionHost
 
   // ClientSideDetectionHostBase overrides:
   void CancelPendingRequests() override;
+  // Browser-side capture is not implemented for content platforms yet; runs
+  // `callback` with an empty image.
+  void CaptureScreenshot(ScreenshotCallback callback) override;
+  // Determines visual features extraction capabilities.
+  // `can_extract_visual_features_result` will be used to handle visual features
+  // in ClientPhishingRequest after.
+  visual_utils::CanExtractVisualFeaturesResult
+  DetermineVisualFeaturesExtraction() override;
   void ShowBlockingPage(
       GURL phishing_url,
       ClientSideDetectionType request_type,
@@ -408,6 +430,13 @@ class ClientSideDetectionHost
       std::optional<bool> did_match_high_confidence_allowlist,
       bool is_invalid_ip);
 
+  // Records whether the primary page's compositing surface could be copied
+  // right now, and the WebContents' visibility, for a classification of
+  // `request_type`. Used to size the coverage of capturing page pixels in the
+  // browser process instead of the renderer (crbug.com/454896977).
+  void RecordSurfaceAvailabilityForCopy(
+      ClientSideDetectionType request_type) const;
+
   // Note: This method has the same name as the one in the base class but
   // different parameter types (Mojo types). It converts them and calls the
   // base class method.
@@ -419,12 +448,6 @@ class ClientSideDetectionHost
       base::TimeTicks start_time,
       mojom::PhishingDetectorResult result,
       std::optional<mojo_base::ProtoWrapper> verdict);
-
-  // Determines visual features extraction capabilities.
-  // `can_extract_visual_features_result` will be used to handle visual features
-  // in ClientPhishingRequest after.
-  visual_utils::CanExtractVisualFeaturesResult
-  DetermineVisualFeaturesExtraction();
 
   // |verdict| is an encoded ClientPhishingRequest protocol message, |result| is
   // the outcome of the renderer image embedding. The verdict is passed into

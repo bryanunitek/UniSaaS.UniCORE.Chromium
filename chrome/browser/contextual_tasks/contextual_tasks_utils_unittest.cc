@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/contextual_tasks/aim_message_poster.h"
@@ -24,14 +25,20 @@
 #include "components/contextual_search/mock_contextual_search_context_controller.h"
 #include "components/contextual_search/mock_contextual_search_session_handle.h"
 #include "components/contextual_search/pref_names.h"
+#include "components/contextual_tasks/public/contextual_task.h"
+#include "components/contextual_tasks/public/contextual_task_context.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/omnibox/browser/mock_aim_eligibility_service.h"
 #include "components/omnibox/common/composebox_features.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/mock_navigation_handle.h"
+#include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/lens_server_proto/search_communication.pb.h"
 #include "ui/actions/actions.h"
 
 namespace contextual_tasks {
@@ -233,6 +240,39 @@ TEST_F(ContextualTasksUtilsTest, IsTabSharingEligible_NullProfile) {
 TEST_F(ContextualTasksUtilsTest, IsTabSharingEligible_OffTheRecord) {
   Profile* otr_profile = profile_->GetPrimaryOTRProfile(true);
   EXPECT_FALSE(IsTabSharingEligible(otr_profile));
+
+  testing::NiceMock<MockAimEligibilityService>* mock_aim_service = nullptr;
+  AimEligibilityServiceFactory::GetInstance()->SetTestingFactory(
+      otr_profile,
+      base::BindRepeating(
+          [](testing::NiceMock<MockAimEligibilityService>** mock_out,
+             content::BrowserContext* context)
+              -> std::unique_ptr<KeyedService> {
+            auto mock =
+                std::make_unique<testing::NiceMock<MockAimEligibilityService>>(
+                    *Profile::FromBrowserContext(context)->GetPrefs(), nullptr,
+                    nullptr, nullptr);
+            *mock_out = mock.get();
+            return mock;
+          },
+          &mock_aim_service));
+  AimEligibilityServiceFactory::GetForProfile(otr_profile);
+  ASSERT_TRUE(mock_aim_service);
+  ON_CALL(*mock_aim_service, IsAimEligible())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(true));
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(kContextualTasksRearchitecture);
+    EXPECT_FALSE(IsTabSharingEligible(otr_profile));
+  }
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(kContextualTasksRearchitecture);
+    EXPECT_TRUE(IsTabSharingEligible(otr_profile));
+  }
 }
 
 TEST_F(ContextualTasksUtilsTest, IsTabSharingEligible_NoAimService) {
@@ -326,6 +366,40 @@ TEST_F(ContextualTasksUtilsTest,
   EXPECT_TRUE(IsTabSharingEligible(profile_.get()));
 }
 
+TEST_F(ContextualTasksUtilsTest, IsTabSharingEligible_ContextSharingDisabled) {
+  testing::NiceMock<MockAimEligibilityService>* mock_aim_service = nullptr;
+  AimEligibilityServiceFactory::GetInstance()->SetTestingFactory(
+      profile_.get(),
+      base::BindRepeating(
+          [](testing::NiceMock<MockAimEligibilityService>** mock_out,
+             content::BrowserContext* context)
+              -> std::unique_ptr<KeyedService> {
+            auto mock =
+                std::make_unique<testing::NiceMock<MockAimEligibilityService>>(
+                    *Profile::FromBrowserContext(context)->GetPrefs(), nullptr,
+                    nullptr, nullptr);
+            *mock_out = mock.get();
+            return mock;
+          },
+          &mock_aim_service));
+
+  AimEligibilityServiceFactory::GetForProfile(profile_.get());
+  ASSERT_TRUE(mock_aim_service);
+
+  ON_CALL(*mock_aim_service, IsAimEligible())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(true));
+
+  EXPECT_TRUE(IsTabSharingEligible(profile_.get()));
+
+  profile_->GetPrefs()->SetInteger(
+      contextual_search::kSearchContentSharingSettings,
+      static_cast<int>(
+          contextual_search::SearchContentSharingSettingsValue::kDisabled));
+  EXPECT_FALSE(IsTabSharingEligible(profile_.get()));
+}
+
 TEST_F(ContextualTasksUtilsTest,
        IsTabSharingEligible_ForceEntryPointEligibility) {
   base::test::ScopedFeatureList feature_list;
@@ -341,15 +415,82 @@ TEST_F(ContextualTasksUtilsTest, CanShareTabContext_NullProfile) {
 TEST_F(ContextualTasksUtilsTest,
        CanShareTabContext_ForceEntryPointEligibility) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kContextualTasksForceEntryPointEligibility);
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kContextualTasksForceEntryPointEligibility},
+      /*disabled_features=*/{kContextualTasksRearchitecture});
   EXPECT_TRUE(CanShareTabContext(profile_.get()));
   EXPECT_FALSE(CanShareTabContext(profile_->GetPrimaryOTRProfile(true)));
+
+  {
+    base::test::ScopedFeatureList rearch_feature_list;
+    rearch_feature_list.InitAndEnableFeature(kContextualTasksRearchitecture);
+    EXPECT_TRUE(CanShareTabContext(profile_->GetPrimaryOTRProfile(true)));
+  }
 
   profile_->GetPrefs()->SetInteger(
       contextual_search::kSearchContentSharingSettings,
       static_cast<int>(
           contextual_search::SearchContentSharingSettingsValue::kDisabled));
   EXPECT_FALSE(CanShareTabContext(profile_.get()));
+}
+
+TEST_F(ContextualTasksUtilsTest, GetSearchHandshakeMessageProto_Capabilities) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kContextualTasksForceEntryPointEligibility},
+      /*disabled_features=*/{kContextualTasksRearchitecture});
+
+  // Regular profile with tab sharing enabled includes both `TABS` and `LENS`.
+  lens::ClientToSearchMessage regular_msg =
+      GetSearchHandshakeMessageProto(profile_.get());
+  ASSERT_TRUE(regular_msg.has_handshake_ping());
+  EXPECT_THAT(
+      regular_msg.handshake_ping().capabilities(),
+      testing::ElementsAre(lens::ClientToSearchMessage::HandshakePing::TABS,
+                           lens::ClientToSearchMessage::HandshakePing::LENS));
+
+  // Incognito (OTR) profile omits `TABS` when rearchitecture is disabled.
+  Profile* otr_profile = profile_->GetPrimaryOTRProfile(true);
+  lens::ClientToSearchMessage otr_msg =
+      GetSearchHandshakeMessageProto(otr_profile);
+  ASSERT_TRUE(otr_msg.has_handshake_ping());
+  EXPECT_THAT(
+      otr_msg.handshake_ping().capabilities(),
+      testing::ElementsAre(lens::ClientToSearchMessage::HandshakePing::LENS));
+
+  // Incognito (OTR) profile includes `TABS` and `LENS` when rearchitecture is
+  // enabled.
+  {
+    base::test::ScopedFeatureList rearch_feature_list;
+    rearch_feature_list.InitAndEnableFeature(kContextualTasksRearchitecture);
+    lens::ClientToSearchMessage otr_rearch_msg =
+        GetSearchHandshakeMessageProto(otr_profile);
+    ASSERT_TRUE(otr_rearch_msg.has_handshake_ping());
+    EXPECT_THAT(
+        otr_rearch_msg.handshake_ping().capabilities(),
+        testing::ElementsAre(lens::ClientToSearchMessage::HandshakePing::TABS,
+                             lens::ClientToSearchMessage::HandshakePing::LENS));
+  }
+
+  // Null profile omits `TABS` and includes only `LENS`.
+  lens::ClientToSearchMessage null_msg =
+      GetSearchHandshakeMessageProto(nullptr);
+  ASSERT_TRUE(null_msg.has_handshake_ping());
+  EXPECT_THAT(
+      null_msg.handshake_ping().capabilities(),
+      testing::ElementsAre(lens::ClientToSearchMessage::HandshakePing::LENS));
+
+  // Disabling context sharing via pref omits `TABS` and includes only `LENS`.
+  profile_->GetPrefs()->SetInteger(
+      contextual_search::kSearchContentSharingSettings,
+      static_cast<int>(
+          contextual_search::SearchContentSharingSettingsValue::kDisabled));
+  lens::ClientToSearchMessage disabled_pref_msg =
+      GetSearchHandshakeMessageProto(profile_.get());
+  ASSERT_TRUE(disabled_pref_msg.has_handshake_ping());
+  EXPECT_THAT(
+      disabled_pref_msg.handshake_ping().capabilities(),
+      testing::ElementsAre(lens::ClientToSearchMessage::HandshakePing::LENS));
 }
 
 TEST_F(ContextualTasksUtilsTest, IsUrlValidForContextSharing) {
@@ -522,8 +663,9 @@ TEST_F(ContextualTasksUtilsTest,
   EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
 }
 
-TEST_F(ContextualTasksUtilsTest,
-       AreContextualTasksUpdatedEntryPointsEnabled_SidePanelAndAimEligibility) {
+TEST_F(
+    ContextualTasksUtilsTest,
+    AreContextualTasksUpdatedEntryPointsEnabled_SidePanelAndTabSharingEligibility) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(kContextualTasksUpdatedEntryPoints);
 
@@ -554,11 +696,36 @@ TEST_F(ContextualTasksUtilsTest,
       .WillByDefault(testing::Return(true));
   EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
 
-  // Both eligible -> true.
+  // Side panel available and Aim eligible, but Fusebox ineligible -> false.
   ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
       .WillByDefault(testing::Return(true));
   ON_CALL(*mock_aim_service, IsAimEligible())
       .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(false));
+  EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
+
+  // Both eligible (side panel available and tab sharing eligible) -> true.
+  ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsAimEligible())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(true));
+  EXPECT_TRUE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
+
+  // Context sharing disabled in prefs -> false.
+  profile_->GetPrefs()->SetInteger(
+      contextual_search::kSearchContentSharingSettings,
+      static_cast<int>(
+          contextual_search::SearchContentSharingSettingsValue::kDisabled));
+  EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
+
+  // Reset pref to enabled -> true.
+  profile_->GetPrefs()->SetInteger(
+      contextual_search::kSearchContentSharingSettings,
+      static_cast<int>(
+          contextual_search::SearchContentSharingSettingsValue::kEnabled));
   EXPECT_TRUE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
 }
 
@@ -576,24 +743,46 @@ TEST_F(ContextualTasksUtilsTest,
   SetUpServices(otr_profile, &mock_eligibility_manager, &mock_aim_service);
   ASSERT_TRUE(mock_aim_service);
 
-  // When both side panel and AIM are eligible in incognito, returns true.
+  // Incognito profiles are not eligible for tab sharing, so updated entry
+  // points are disabled even when side panel and AIM are eligible.
   ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
       .WillByDefault(testing::Return(true));
   ON_CALL(*mock_aim_service, IsAimEligible())
       .WillByDefault(testing::Return(true));
-  EXPECT_TRUE(AreContextualTasksUpdatedEntryPointsEnabled(otr_profile));
-
-  // When AIM is ineligible in incognito, returns false.
-  ON_CALL(*mock_aim_service, IsAimEligible())
-      .WillByDefault(testing::Return(false));
-  EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(otr_profile));
-
-  // When side panel is unavailable in incognito, returns false.
-  ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
-      .WillByDefault(testing::Return(false));
-  ON_CALL(*mock_aim_service, IsAimEligible())
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
       .WillByDefault(testing::Return(true));
   EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(otr_profile));
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       AreContextualTasksUpdatedEntryPointsEnabled_ForceEntryPointEligibility) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{kContextualTasksUpdatedEntryPoints,
+                            kContextualTasksForceEntryPointEligibility},
+      /*disabled_features=*/{});
+
+  testing::NiceMock<MockContextualTasksEligibilityManager>
+      mock_eligibility_manager;
+  testing::NiceMock<MockAimEligibilityService>* mock_aim_service = nullptr;
+  SetUpServices(profile_.get(), &mock_eligibility_manager, &mock_aim_service);
+  ASSERT_TRUE(mock_aim_service);
+
+  // When forced, tab sharing eligibility checks are bypassed.
+  ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsAimEligible())
+      .WillByDefault(testing::Return(false));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(false));
+  EXPECT_TRUE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
+
+  // But context sharing preference is still respected.
+  profile_->GetPrefs()->SetInteger(
+      contextual_search::kSearchContentSharingSettings,
+      static_cast<int>(
+          contextual_search::SearchContentSharingSettingsValue::kDisabled));
+  EXPECT_FALSE(AreContextualTasksUpdatedEntryPointsEnabled(profile_.get()));
 }
 
 TEST_F(ContextualTasksUtilsTest,
@@ -631,14 +820,195 @@ TEST_F(ContextualTasksUtilsTest,
   EXPECT_FALSE(ShouldUseContextualTasksContextMenuSubmenu(profile_.get()));
   EXPECT_FALSE(ShouldRouteAskGoogleToOmnibox(profile_.get()));
 
+  ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsAimEligible())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(false));
+  EXPECT_FALSE(ShouldShowAskGoogleContextMenu(profile_.get()));
+  EXPECT_FALSE(ShouldUseContextualTasksContextMenuSubmenu(profile_.get()));
+  EXPECT_FALSE(ShouldRouteAskGoogleToOmnibox(profile_.get()));
+
   // When both are available, param helpers return true.
   ON_CALL(mock_eligibility_manager, IsSidePanelAvailable())
       .WillByDefault(testing::Return(true));
   ON_CALL(*mock_aim_service, IsAimEligible())
       .WillByDefault(testing::Return(true));
+  ON_CALL(*mock_aim_service, IsFuseboxEligible())
+      .WillByDefault(testing::Return(true));
   EXPECT_TRUE(ShouldShowAskGoogleContextMenu(profile_.get()));
   EXPECT_TRUE(ShouldUseContextualTasksContextMenuSubmenu(profile_.get()));
   EXPECT_TRUE(ShouldRouteAskGoogleToOmnibox(profile_.get()));
+}
+
+scoped_refptr<net::HttpResponseHeaders> CreateTestResponseHeaders(int code) {
+  return net::HttpResponseHeaders::TryToCreate(base::StrCat(
+      {"HTTP/1.1 ", base::NumberToString(code), " Message\r\n\r\n"}));
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       RecordContextualTasksNavigationMetrics_ResponseCodes) {
+  base::HistogramTester histogram_tester;
+
+  for (int status_code : {200, 404, 500}) {
+    content::MockNavigationHandle handle(
+        GURL("https://www.google.com/search?q=test"), nullptr);
+    handle.set_has_committed(true);
+    handle.set_response_headers(CreateTestResponseHeaders(status_code));
+    handle.set_net_error_code(net::OK);
+
+    RecordContextualTasksNavigationMetrics(&handle,
+                                           /*is_zero_state=*/false);
+
+    histogram_tester.ExpectBucketCount(
+        "ContextualTasks.Navigation.HttpResponseCode", status_code, 1);
+    histogram_tester.ExpectBucketCount(
+        "ContextualTasks.Navigation.HttpResponseCode.ExcludeZeroStateLoads",
+        status_code, 1);
+  }
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       RecordContextualTasksNavigationMetrics_ZeroStateLoads) {
+  base::HistogramTester histogram_tester;
+
+  content::MockNavigationHandle handle(GURL("https://www.google.com/search"),
+                                       nullptr);
+  handle.set_has_committed(true);
+  handle.set_response_headers(CreateTestResponseHeaders(200));
+  handle.set_net_error_code(net::OK);
+
+  RecordContextualTasksNavigationMetrics(&handle,
+                                         /*is_zero_state=*/true);
+
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Navigation.HttpResponseCode", 200, 1);
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Navigation.HttpResponseCode.ExcludeZeroStateLoads", 0);
+}
+
+TEST_F(ContextualTasksUtilsTest,
+       RecordContextualTasksNavigationMetrics_NetErrorCodes) {
+  base::HistogramTester histogram_tester;
+
+  // 1. Committed navigation with net::OK records 0.
+  {
+    content::MockNavigationHandle handle(
+        GURL("https://www.google.com/search?q=test"), nullptr);
+    handle.set_has_committed(true);
+    handle.set_net_error_code(net::OK);
+
+    RecordContextualTasksNavigationMetrics(&handle, /*is_zero_state=*/false);
+    histogram_tester.ExpectUniqueSample(
+        "ContextualTasks.Navigation.NetErrorCode", 0, 1);
+  }
+
+  // 2. Uncommitted navigation with net::ERR_INTERNET_DISCONNECTED records
+  // positive 106.
+  {
+    content::MockNavigationHandle handle(
+        GURL("https://www.google.com/search?q=test"), nullptr);
+    handle.set_has_committed(false);
+    handle.set_net_error_code(net::ERR_INTERNET_DISCONNECTED);
+
+    RecordContextualTasksNavigationMetrics(&handle, /*is_zero_state=*/false);
+    histogram_tester.ExpectBucketCount(
+        "ContextualTasks.Navigation.NetErrorCode",
+        std::abs(net::ERR_INTERNET_DISCONNECTED), 1);
+  }
+
+  // 3. Failed navigation with net::ERR_TIMED_OUT records positive 7.
+  {
+    content::MockNavigationHandle handle(
+        GURL("https://www.google.com/search?q=test"), nullptr);
+    handle.set_has_committed(false);
+    handle.set_net_error_code(net::ERR_TIMED_OUT);
+
+    RecordContextualTasksNavigationMetrics(&handle, /*is_zero_state=*/false);
+    histogram_tester.ExpectBucketCount(
+        "ContextualTasks.Navigation.NetErrorCode", std::abs(net::ERR_TIMED_OUT),
+        1);
+  }
+
+  // 4. Uncommitted navigation with net::ERR_ABORTED is ignored.
+  {
+    content::MockNavigationHandle handle(
+        GURL("https://www.google.com/search?q=test"), nullptr);
+    handle.set_has_committed(false);
+    handle.set_net_error_code(net::ERR_ABORTED);
+
+    RecordContextualTasksNavigationMetrics(&handle, /*is_zero_state=*/false);
+    histogram_tester.ExpectTotalCount("ContextualTasks.Navigation.NetErrorCode",
+                                      3);
+  }
+
+  // 5. Same-document or about:blank navigations are ignored.
+  {
+    content::MockNavigationHandle same_doc_handle(
+        GURL("https://www.google.com/search?q=test"), nullptr);
+    same_doc_handle.set_is_same_document(true);
+    RecordContextualTasksNavigationMetrics(&same_doc_handle,
+                                           /*is_zero_state=*/false);
+
+    content::MockNavigationHandle blank_handle(GURL("about:blank"), nullptr);
+    blank_handle.set_has_committed(true);
+    RecordContextualTasksNavigationMetrics(&blank_handle,
+                                           /*is_zero_state=*/false);
+
+    histogram_tester.ExpectTotalCount("ContextualTasks.Navigation.NetErrorCode",
+                                      3);
+    histogram_tester.ExpectTotalCount(
+        "ContextualTasks.Navigation.HttpResponseCode", 0);
+  }
+}
+
+TEST_F(ContextualTasksUtilsTest, ToRestoredTabInfos_FromContextualTaskContext) {
+  EXPECT_TRUE(
+      ToRestoredTabInfos(static_cast<const ContextualTaskContext*>(nullptr))
+          .empty());
+
+  ContextualTask task(base::Uuid::GenerateRandomV4());
+
+  SessionID tab_id = SessionID::NewUnique();
+  UrlResource valid_tab(GURL("https://example.com/1"), ResourceType::kWebpage);
+  valid_tab.title = "Valid Tab";
+  valid_tab.tab_id = tab_id;
+  valid_tab.has_chrome_tab_data = true;
+  task.AddUrlResource(valid_tab);
+
+  UrlResource non_chrome_tab(GURL("https://example.com/2"),
+                             ResourceType::kWebpage);
+  non_chrome_tab.title = "Non Chrome Tab";
+  non_chrome_tab.has_chrome_tab_data = false;
+  task.AddUrlResource(non_chrome_tab);
+
+  UrlResource empty_title_tab(GURL("https://example.com/3"),
+                              ResourceType::kWebpage);
+  empty_title_tab.title = "";
+  empty_title_tab.has_chrome_tab_data = true;
+  task.AddUrlResource(empty_title_tab);
+
+  UrlResource invalid_url_tab(GURL(), ResourceType::kWebpage);
+  invalid_url_tab.title = "Invalid URL Tab";
+  invalid_url_tab.has_chrome_tab_data = true;
+  task.AddUrlResource(invalid_url_tab);
+
+  UrlResource pdf_resource(GURL("https://example.com/4.pdf"),
+                           ResourceType::kPdf);
+  pdf_resource.title = "PDF";
+  pdf_resource.has_chrome_tab_data = true;
+  task.AddUrlResource(pdf_resource);
+
+  ContextualTaskContext context(task);
+  std::vector<contextual_search::TabInfo> restored =
+      ToRestoredTabInfos(&context);
+
+  ASSERT_EQ(restored.size(), 1u);
+  EXPECT_EQ(restored[0].tab_id, tab_id.id());
+  EXPECT_EQ(restored[0].url, GURL("https://example.com/1"));
+  EXPECT_EQ(restored[0].title, "Valid Tab");
+  EXPECT_TRUE(restored[0].submitted);
 }
 
 }  // namespace

@@ -113,6 +113,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxTabUtils.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxViewBinder.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxViewHolder.java",
+    "java/src/org/chromium/chrome/browser/omnibox/fusebox/ImageFormatSniffer.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/PopupButtonData.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/SuggestedTabInfo.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/ViewportRectProvider.java",
@@ -188,9 +189,9 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/answer/AnswerTextUtils.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/answer/CalculatorAnswerTextLayout.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionButtonView.java",
-    "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsBinder.java",
+    "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipProperties.java",
+    "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipViewBinder.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsProcessor.java",
-    "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsProperties.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsView.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/BaseSuggestionView.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/BaseSuggestionViewBinder.java",
@@ -222,6 +223,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/tail/TailSuggestionView.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/tail/TailSuggestionViewBinder.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/tail/TailSuggestionViewProperties.java",
+    "java/src/org/chromium/chrome/browser/omnibox/voice/VoicePlateIntentFactory.java",
     "java/src/org/chromium/chrome/browser/omnibox/voice/VoiceRecognitionHandler.java",
     "java/src/org/chromium/chrome/browser/omnibox/voice/VoiceRecognitionIntentHandler.java",
   ]
@@ -251,6 +253,7 @@ android_library("java") {
     "//chrome/browser/device:java",
     "//chrome/browser/feature_engagement:java",
     "//chrome/browser/flags:java",
+    "//chrome/browser/gsa:java",
     "//chrome/browser/history_clusters:java",
     "//chrome/browser/language/android:java",
     "//chrome/browser/lens:java",
@@ -379,6 +382,7 @@ android_library("util_java") {
 }
 
 generate_jni("jni_headers") {
+  deps = [ "//components/omnibox/browser:scheme_classifier_jni" ]
   sources = [
     "java/src/org/chromium/chrome/browser/omnibox/ChromeAutocompleteProviderClient.java",
     "java/src/org/chromium/chrome/browser/omnibox/ChromeAutocompleteSchemeClassifier.java",
@@ -601,6 +605,7 @@ robolectric_library("junit") {
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxPopupUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxScrollView.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxViewBinderUnitTest.java",
+    "java/src/org/chromium/chrome/browser/omnibox/fusebox/ImageFormatSnifferUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/ViewportRectProviderUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/consent/DriveConsentDialogUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/fusebox/consent/DriveConsentKitClientUnitTest.java",
@@ -645,7 +650,7 @@ robolectric_library("junit") {
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/answer/AnswerSuggestionViewBinderUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/answer/CalculatorAnswerTextLayoutUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionButtonViewUnitTest.java",
-    "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsBinderUnitTest.java",
+    "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipViewBinderUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsProcessorUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/ActionChipsViewUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/BaseSuggestionProcessorUnitTest.java",
@@ -657,6 +662,7 @@ robolectric_library("junit") {
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/SpacingRecyclerViewItemDecorationUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/base/SuggestionLayoutUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/basic/BasicSuggestionProcessorUnitTest.java",
+    "java/src/org/chromium/chrome/browser/omnibox/suggestions/basic/SuggestionViewViewBinderUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/carousel/BaseCarouselSuggestionProcessorUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/carousel/BaseCarouselSuggestionViewBinderUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/carousel/BaseCarouselSuggestionViewUnitTest.java",
@@ -671,6 +677,7 @@ robolectric_library("junit") {
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/tail/TailSuggestionProcessorUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/suggestions/tail/TailSuggestionViewBinderUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/voice/RecognitionTestHelper.java",
+    "java/src/org/chromium/chrome/browser/omnibox/voice/VoicePlateIntentFactoryUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/voice/VoiceRecognitionHandlerUnitTest.java",
     "java/src/org/chromium/chrome/browser/omnibox/voice/VoiceRecognitionUtilUnitTest.java",
   ]
@@ -694,6 +701,7 @@ robolectric_library("junit") {
     "//chrome/browser/device:java",
     "//chrome/browser/feature_engagement:java",
     "//chrome/browser/flags:java",
+    "//chrome/browser/gsa:java",
     "//chrome/browser/lens:java",
     "//chrome/browser/locale:java",
     "//chrome/browser/preferences:java",

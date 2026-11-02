@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
@@ -47,12 +48,12 @@ class RecordingObserver : public VoiceFocusedContentsTracker::Observer {
   }
 
   // Returns the changes recorded since the last call, and clears them.
-  std::vector<content::WebContents*> TakeChanges() {
+  std::vector<raw_ptr<content::WebContents>> TakeChanges() {
     return std::exchange(changes_, {});
   }
 
  private:
-  std::vector<content::WebContents*> changes_;
+  std::vector<raw_ptr<content::WebContents>> changes_;
   base::ScopedObservation<VoiceFocusedContentsTracker,
                           VoiceFocusedContentsTracker::Observer>
       observation_{this};
@@ -95,6 +96,7 @@ IN_PROC_BROWSER_TEST_F(VoiceFocusedContentsTrackerBrowserTest,
                        InitialActiveTab) {
   std::unique_ptr<VoiceFocusedContentsTracker> tracker = CreateTracker();
   EXPECT_EQ(tracker->GetActiveWebContents(), ActiveContents(browser()));
+  EXPECT_EQ(tracker->GetActiveBrowserWindow(), browser());
 }
 
 // Switching tabs within the bound window updates the active tab.
@@ -148,6 +150,7 @@ IN_PROC_BROWSER_TEST_F(VoiceFocusedContentsTrackerBrowserTest,
   content::WebContents* second_window_tab1 = ActiveContents(second_browser);
   ASSERT_NE(first_window_tab, second_window_tab1);
   EXPECT_EQ(tracker->GetActiveWebContents(), second_window_tab1);
+  EXPECT_EQ(tracker->GetActiveBrowserWindow(), second_browser);
   EXPECT_THAT(observer.TakeChanges(),
               ElementsAre(first_window_tab, second_window_tab1));
 
@@ -159,6 +162,7 @@ IN_PROC_BROWSER_TEST_F(VoiceFocusedContentsTrackerBrowserTest,
 
   ActivateBrowser(browser());
   EXPECT_EQ(tracker->GetActiveWebContents(), first_window_tab);
+  EXPECT_EQ(tracker->GetActiveBrowserWindow(), browser());
   EXPECT_THAT(observer.TakeChanges(), ElementsAre(first_window_tab));
 }
 
@@ -214,10 +218,12 @@ IN_PROC_BROWSER_TEST_F(VoiceFocusedContentsTrackerBrowserTest,
 
   CloseBrowserSynchronously(second_browser);
   EXPECT_EQ(tracker->GetActiveWebContents(), first_tab);
+  EXPECT_EQ(tracker->GetActiveBrowserWindow(), first_browser);
   EXPECT_THAT(observer.TakeChanges(), ElementsAre(first_tab));
 
   CloseBrowserSynchronously(first_browser);
   EXPECT_EQ(tracker->GetActiveWebContents(), nullptr);
+  EXPECT_EQ(tracker->GetActiveBrowserWindow(), nullptr);
   EXPECT_THAT(observer.TakeChanges(), ElementsAre(nullptr));
 }
 

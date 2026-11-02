@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
+import org.jni_zero.JniPtr;
+
 import org.chromium.base.Callback;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ThreadUtils;
@@ -399,6 +401,12 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
     }
 
     @Override
+    public void detachTabForReparenting(Tab tab) {
+        ThreadUtils.assertOnUiThread();
+        mDelegateModel.detachTabForReparenting(tab);
+    }
+
+    @Override
     public void openMostRecentlyClosedEntry() {}
 
     @Override
@@ -493,7 +501,7 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
     }
 
     @Override
-    public @Nullable TabStripCollection getTabStripCollection() {
+    public @Nullable JniPtr<TabStripCollection> getTabStripCollection() {
         return mDelegateModel.getTabStripCollection();
     }
 
@@ -577,11 +585,6 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
     @Override
     public void moveGroupToIndex(Token tabGroupId, int newIndex) {
         mDelegateModel.moveGroupToIndex(tabGroupId, newIndex);
-    }
-
-    @Override
-    public boolean willMergingCreateNewGroup(List<Tab> tabsToMerge) {
-        return mDelegateModel.willMergingCreateNewGroup(tabsToMerge);
     }
 
     @Override

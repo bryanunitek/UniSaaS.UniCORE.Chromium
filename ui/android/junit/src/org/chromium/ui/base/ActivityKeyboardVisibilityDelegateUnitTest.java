@@ -7,6 +7,7 @@ package org.chromium.ui.base;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.robolectric.Shadows.shadowOf;
@@ -28,11 +29,14 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.BaseFeatures;
 import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.ui.KeyboardVisibilityDelegate.KeyboardVisibilityListener;
 
 import java.lang.ref.WeakReference;
@@ -153,6 +157,36 @@ public class ActivityKeyboardVisibilityDelegateUnitTest {
         verify(mKeyboardVisibilityListener).keyboardVisibilityChanged(false);
     }
 
+    @Test
+    @EnableFeatures(BaseFeatures.SPLIT_SCREEN_IME_INSET_VISIBILITY)
+    public void testKeyboardInsetObserver_SplitScreenZeroKeyboardInset() {
+        mKeyboardVisibilityDelegate.setLazyKeyboardInsetSupplier(mLazyKeyboardInsetSupplier);
+        mKeyboardVisibilityDelegate.addKeyboardVisibilityListener(mKeyboardVisibilityListener);
+
+        when(mWindowInsets.isVisible(WindowInsets.Type.ime())).thenReturn(true);
+        triggerLayout();
+        verify(mKeyboardVisibilityListener).keyboardVisibilityChanged(true);
+
+        mKeyboardInsetSupplier.set(0);
+        verify(mKeyboardVisibilityListener, never()).keyboardVisibilityChanged(false);
+    }
+
+    @Test
+    @DisableFeatures(BaseFeatures.SPLIT_SCREEN_IME_INSET_VISIBILITY)
+    public void testKeyboardInsetObserver_SplitScreenZeroKeyboardInset_KillSwitchDisabled() {
+        mKeyboardVisibilityDelegate.setLazyKeyboardInsetSupplier(mLazyKeyboardInsetSupplier);
+        mKeyboardVisibilityDelegate.addKeyboardVisibilityListener(mKeyboardVisibilityListener);
+
+        setRootViewKeyboardInset(150);
+        triggerLayout();
+        verify(mKeyboardVisibilityListener).keyboardVisibilityChanged(true);
+
+        when(mWindowInsets.getInsets(WindowInsets.Type.ime())).thenReturn(Insets.of(0, 0, 0, 0));
+        when(mWindowInsets.isVisible(WindowInsets.Type.ime())).thenReturn(true);
+        mKeyboardInsetSupplier.set(0);
+        verify(mKeyboardVisibilityListener).keyboardVisibilityChanged(false);
+    }
+
     private void triggerLayout() {
         mRootView.forceLayout();
         int spec = MeasureSpec.makeMeasureSpec(100, MeasureSpec.EXACTLY);
@@ -167,5 +201,6 @@ public class ActivityKeyboardVisibilityDelegateUnitTest {
                 .thenReturn(Insets.of(0, 0, 0, 0));
         when(mWindowInsets.getInsets(WindowInsets.Type.ime()))
                 .thenReturn(Insets.of(0, 0, 0, inset));
+        when(mWindowInsets.isVisible(WindowInsets.Type.ime())).thenReturn(inset > 0);
     }
 }

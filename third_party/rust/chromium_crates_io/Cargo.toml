@@ -18,7 +18,7 @@ version = "0.1.0"
 [dependencies]
 antlr4rust = "0.5.2"
 anyhow = "1.0.98"
-base64 = "0.22"
+base64 = "0.23"
 bitflags = "2"
 bytes = "1"
 chrono = "0.4.43"
@@ -180,7 +180,7 @@ version = "0.6.0"
 # codecs specifically added in `features`. Enabling new codec support requires a
 # package configuration through gnrt vendor and gnrt gen.
 default-features = false
-features = ["flac", "mpa", "ogg", "wav", "mkv", "pcm", "isomp4", "vorbis", "opt-simd"]
+features = ["all-meta", "flac", "mpa", "ogg", "wav", "mkv", "pcm", "isomp4", "vorbis", "opt-simd"]
 
 # TODO(https://crbug.com/540235303): Remove direct dependency on syn-v2 after
 # migrating Crubit, WebRTC, and other third-party libraries to syn-v3.
@@ -219,3 +219,7 @@ features = ["std"]
 [dependencies.zune-jpeg]
 version = "=0.5.16-rc2"
 features = ["arith"]
+
+[patch.crates-io]
+harfrust = { path = "vendor/harfrust-v0_14" }
+sfv = { path = "vendor/sfv-v0_15" }

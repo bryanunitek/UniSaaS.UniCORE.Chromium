@@ -34,7 +34,6 @@ import android.content.res.Resources;
 import android.graphics.Point;
 import android.graphics.PointF;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Build.VERSION_CODES;
 import android.text.format.DateUtils;
 import android.view.DragEvent;
@@ -55,8 +54,8 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowBuild;
 import org.robolectric.shadows.ShadowToast;
-import org.robolectric.util.ReflectionHelpers;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
@@ -72,7 +71,6 @@ import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
-import org.chromium.chrome.browser.compositor.LayerTitleCache;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelper;
 import org.chromium.chrome.browser.compositor.overlays.strip.TestTabModel;
 import org.chromium.chrome.browser.dragdrop.ChromeDropDataAndroid;
@@ -143,7 +141,6 @@ public class TabStripDragHandlerTest {
     @Mock private DragAndDropDelegate mDragDropDelegate;
     @Mock private BrowserControlsStateProvider mBrowserControlsStateProvider;
     @Mock private TabContentManager mTabContentManager;
-    @Mock private LayerTitleCache mLayerTitleCache;
     @Mock private Profile mProfile;
     @Mock private TabModelSelector mTabModelSelector;
     @Mock private TestTabModel mTabModel;
@@ -223,7 +220,6 @@ public class TabStripDragHandlerTest {
         when(mWindowAndroid.getContext()).thenReturn(mWeakReferenceContext);
         when(mWeakReferenceContext.get()).thenReturn(mContext);
 
-        when(mMultiWindowUtils.hasAtMostOneTabWithHomepageEnabled(any())).thenReturn(false);
         when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(true);
         MultiWindowUtils.setInstanceForTesting(mMultiWindowUtils);
         MultiWindowTestUtils.enableMultiInstance();
@@ -245,7 +241,6 @@ public class TabStripDragHandlerTest {
                         () -> mSourceStripLayoutHelper,
                         () -> mTabStripVisible,
                         ObservableSuppliers.createNonNull(mTabContentManager),
-                        ObservableSuppliers.createNonNull(mLayerTitleCache),
                         mSourceMultiInstanceManager,
                         mDragDropDelegate,
                         mBrowserControlsStateProvider,
@@ -259,7 +254,6 @@ public class TabStripDragHandlerTest {
                         () -> mDestStripLayoutHelper,
                         () -> mTabStripVisible,
                         ObservableSuppliers.createNonNull(mTabContentManager),
-                        ObservableSuppliers.createNonNull(mLayerTitleCache),
                         mDestMultiInstanceManager,
                         mDragDropDelegate,
                         mBrowserControlsStateProvider,
@@ -391,10 +385,11 @@ public class TabStripDragHandlerTest {
     }
 
     @Test
-    public void test_startTabDragAction_withHasOneTabWithHomepage_ReturnsFalse() {
-        when(mMultiWindowUtils.hasAtMostOneTabWithHomepageEnabled(any())).thenReturn(true);
-        assertFalse(
-                "Should not startTabDragAction since last tab with homepage enabled.",
+    public void test_startTabDragAction_withOneTabInMultiWindowMode_ReturnsTrue() {
+        when(mTabModelSelector.getTotalTabCount()).thenReturn(1);
+        when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(true);
+        assertTrue(
+                "Should startTabDragAction for single tab in multi-window mode.",
                 mSourceInstance.startTabDragAction(
                         mTabsToolbarView,
                         mTabBeingDragged,
@@ -404,10 +399,12 @@ public class TabStripDragHandlerTest {
     }
 
     @Test
-    public void test_startMultiTabDragAction_withHasAllTabsSelectedWithHomepage_ReturnsFalse() {
-        when(mMultiWindowUtils.hasAllTabsSelectedWithHomepageEnabled(any())).thenReturn(true);
-        assertFalse(
-                "Should not startTabDragAction since last tab with homepage enabled.",
+    public void test_startMultiTabDragAction_withAllTabsSelectedInMultiWindowMode_ReturnsTrue() {
+        when(mTabModelSelector.getTotalTabCount()).thenReturn(2);
+        when(mTabModel.getMultiSelectedTabsCount()).thenReturn(2);
+        when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(true);
+        assertTrue(
+                "Should startMultiTabDragAction for all tabs in multi-window mode.",
                 mSourceInstance.startMultiTabDragAction(
                         mTabsToolbarView,
                         mTabsBeingDragged,
@@ -418,11 +415,12 @@ public class TabStripDragHandlerTest {
     }
 
     @Test
-    public void test_startGroupDragAction_withHasOneTabGroupWithHomepage_ReturnsFalse() {
-        when(mMultiWindowUtils.hasAtMostOneTabGroupWithHomepageEnabled(any(), any()))
-                .thenReturn(true);
-        assertFalse(
-                "Should not startGroupDragAction since last tab group with homepage enabled.",
+    public void test_startGroupDragAction_withOneGroupInMultiWindowMode_ReturnsTrue() {
+        when(mTabModelSelector.getTotalTabCount()).thenReturn(2);
+        when(mTabModel.getTabCountForGroup(TAB_GROUP_ID)).thenReturn(2);
+        when(mMultiWindowUtils.isInMultiWindowMode(mActivity)).thenReturn(true);
+        assertTrue(
+                "Should startGroupDragAction for last group in multi-window mode.",
                 mSourceInstance.startGroupDragAction(
                         mTabsToolbarView,
                         TAB_GROUP_ID,
@@ -555,7 +553,7 @@ public class TabStripDragHandlerTest {
         when(mTabModelSelector.getTotalTabCount()).thenReturn(2);
         MultiWindowUtils.setInstanceCountForTesting(5);
         MultiWindowUtils.setMaxInstancesForTesting(5);
-        ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", "samsung");
+        ShadowBuild.setManufacturer("samsung");
 
         callAndVerifyAllowDragToCreateInstance(true);
     }
@@ -568,7 +566,7 @@ public class TabStripDragHandlerTest {
         when(mTabModel.getMultiSelectedTabsCount()).thenReturn(2);
         MultiWindowUtils.setInstanceCountForTesting(5);
         MultiWindowUtils.setMaxInstancesForTesting(5);
-        ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", "samsung");
+        ShadowBuild.setManufacturer("samsung");
 
         callAndVerifyAllowMultiTabDragToCreateInstance(true);
     }

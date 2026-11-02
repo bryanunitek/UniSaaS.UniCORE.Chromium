@@ -23,6 +23,7 @@
 #include "base/containers/extend.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/linear_find.h"
 #include "base/containers/map_util.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
@@ -157,11 +158,10 @@ class AttributeTypeAssignment {
 base::optional_ref<const AutofillFieldWithAttributeType> FindField(
     base::span<const AutofillFieldWithAttributeType> haystack LIFETIME_BOUND,
     const FieldGlobalId& needle) {
-  auto it = std::ranges::find(haystack, needle,
-                              [](const AutofillFieldWithAttributeType& f) {
-                                return f.field->global_id();
-                              });
-  return it != haystack.end() ? &*it : nullptr;
+  return base::LinearFind(haystack, needle,
+                          [](const AutofillFieldWithAttributeType& f) {
+                            return f.field->global_id();
+                          });
 }
 
 DenseSet<AttributeType> FindAttributesForField(
@@ -681,6 +681,12 @@ std::optional<Suggestion> CreatePersonalContextSourceAttributionSuggestion(
   source_info.icon = Suggestion::Icon::kSpark;
   source_info.acceptability =
       Suggestion::Acceptability::kSelectableButUnacceptable;
+  // On desktop, the citation badges are links that keyboard users step through
+  // with the arrow keys. Tell screen reader users how to reach them.
+  source_info.voice_over =
+      base::StrCat({source_info.main_text.value, u". ",
+                    l10n_util::GetStringUTF16(
+                        IDS_AUTOFILL_AI_SOURCE_ATTRIBUTION_A11Y_INSTRUCTIONS)});
   source_info.payload = Suggestion::AutofillAiPayload(
       entity.guid(), std::move(attribution_data->citations));
   return source_info;

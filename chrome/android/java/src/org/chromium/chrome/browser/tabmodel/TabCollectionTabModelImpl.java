@@ -21,6 +21,8 @@ import android.util.SparseArray;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
@@ -319,6 +321,7 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
     private final @Nullable TabOpenerTrackerHelper mTabOpenerTrackerHelper;
 
     private long mNativeTabCollectionTabModelImplPtr;
+    private @Nullable JniRawPtr<TabStripCollection> mTabStripCollection;
     // Only ever true for the regular tab model. Called after tab state is initialized, before
     // broadcastSessionRestoreComplete().
     private boolean mInitializationComplete;
@@ -399,9 +402,14 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
 
         // Destroy native first to avoid any weak ptrs to TabAndroid objects from outliving the
         // tab's themselves.
+        if (mTabStripCollection != null) {
+            mTabStripCollection.release();
+            mTabStripCollection = null;
+        }
         if (mNativeTabCollectionTabModelImplPtr != 0) {
-            TabCollectionTabModelImplJni.get().destroy(mNativeTabCollectionTabModelImplPtr);
+            long nativePtr = mNativeTabCollectionTabModelImplPtr;
             mNativeTabCollectionTabModelImplPtr = 0;
+            TabCollectionTabModelImplJni.get().destroy(nativePtr);
             invalidateCache();
         }
 
@@ -814,10 +822,8 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
     }
 
     @Override
-    public @Nullable TabStripCollection getTabStripCollection() {
-        if (mNativeTabCollectionTabModelImplPtr == 0) return null;
-        return TabCollectionTabModelImplJni.get()
-                .getTabStripCollection(mNativeTabCollectionTabModelImplPtr);
+    public @Nullable JniPtr<TabStripCollection> getTabStripCollection() {
+        return mTabStripCollection;
     }
 
     // TabModelInternal overrides.
@@ -865,6 +871,25 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
     }
 
     @Override
+    public void detachTabForReparenting(Tab tab) {
+        assertOnUiThread();
+        // The native model may already be destroyed, or the tab may already have been removed.
+        if (mNativeTabCollectionTabModelImplPtr == 0 || mTabIdToTabs.indexOfKey(tab.getId()) < 0) {
+            return;
+        }
+        TabCollectionTabModelImplJni.get()
+                .removeTabRecursive(mNativeTabCollectionTabModelImplPtr, tab);
+        tab.onRemovedFromTabModel(mCurrentTabSupplier, DetachReason.INSERT_INTO_OTHER_WINDOW);
+        mTabIdToTabs.remove(tab.getId());
+        mMultiSelectedTabs.remove(tab.getId());
+        invalidateCache();
+        if (mCurrentTabSupplier.get() == tab) {
+            mCurrentTabSupplier.set(null);
+        }
+        mTabCountSupplier.set(getCount());
+    }
+
+    @Override
     public void setActive(boolean active) {
         if (mActive == active) return;
         mActive = active;
@@ -902,6 +927,9 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
         super.initializeNative(activityType, customTabProfileType, tabModelType);
         assert mNativeTabCollectionTabModelImplPtr == 0;
         mNativeTabCollectionTabModelImplPtr = TabCollectionTabModelImplJni.get().init(getProfile());
+        mTabStripCollection =
+                TabCollectionTabModelImplJni.get()
+                        .getTabStripCollection(mNativeTabCollectionTabModelImplPtr);
         invalidateCache();
     }
 
@@ -1283,12 +1311,6 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
                 groupObservers.next().onTabGroupMoved(tabGroupId, oldIndex, finalIndex);
             }
         }
-    }
-
-    @Override
-    public boolean willMergingCreateNewGroup(List<Tab> tabsToMerge) {
-        assertOnUiThread();
-        return getCandidateTabGroupIdsForMerge(tabsToMerge).isEmpty();
     }
 
     @Override
@@ -2757,8 +2779,7 @@ public class TabCollectionTabModelImpl extends TabModelJniBridge {
 
         int getIndexOfFirstNonPinnedTab(long nativeTabCollectionTabModelImpl);
 
-        @JniType("tabs::TabStripCollection*")
-        TabStripCollection getTabStripCollection(long nativeTabCollectionTabModelImpl);
+        JniRawPtr<TabStripCollection> getTabStripCollection(long nativeTabCollectionTabModelImpl);
     }
 
     List<Tab> getAllTabsFromNativeForTesting() {

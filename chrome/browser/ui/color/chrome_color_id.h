@@ -345,7 +345,8 @@
   E_CPONLY(kColorNewTabPageActionChipTextTitle) \
   E_CPONLY(kColorNewTabPageActionChipDeepSearchIcon) \
   E_CPONLY(kColorNewTabPageThreadsRailBackground) \
-  E_CPONLY(kColorNewTabPageThreadsRailIconButton) \
+  E_CPONLY(kColorNewTabPageThreadsRailPrimaryFont) \
+  E_CPONLY(kColorNewTabPageThreadsRailHoverBackground) \
   E_CPONLY(kColorNewTabPageChipBackground) \
   E_CPONLY(kColorNewTabPageChipForeground) \
   E_CPONLY(kColorNewTabPageComposeboxSubmitButtonBackground) \
@@ -474,6 +475,7 @@
   /* Omnibox colors. */ \
   E_CPONLY(kColorOmniboxActionIcon) \
   E_CPONLY(kColorOmniboxActionIconHover) \
+  E_CPONLY(kColorOmniboxActionIconInactive) \
   E_CPONLY(kColorOmniboxAnswerIconGM3Background) \
   E_CPONLY(kColorOmniboxAnswerIconGM3Foreground) \
   E_CPONLY(kColorOmniboxBubbleOutline) \
@@ -505,6 +507,7 @@
   E_CPONLY(kColorOmniboxIconBackgroundTonal) \
   E_CPONLY(kColorOmniboxIconForeground) \
   E_CPONLY(kColorOmniboxIconForegroundTonal) \
+  E_CPONLY(kColorOmniboxIconForegroundTonalInactive) \
   E_CPONLY(kColorOmniboxIconHover) \
   E_CPONLY(kColorOmniboxIconPressed) \
   E_CPONLY(kColorOmniboxIntentChipBackground) \
@@ -873,6 +876,7 @@
   E_CPONLY(kColorScreenshotCapturedImageBackground) \
   E_CPONLY(kColorScreenshotCapturedImageBorder) \
   /* Settings columned section colors. */ \
+  E_CPONLY(kColorSettingsColumnedSectionBackground) \
   E_CPONLY(kColorSettingsColumnedSectionDescriptionHeader) \
   /* Settings info card colors. */ \
   E_CPONLY(kColorSettingsInfoCardBackground) \

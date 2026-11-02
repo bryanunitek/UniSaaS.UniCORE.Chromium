@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '//resources/js/cr.js';
-
 import {BrowserControlsService} from '/shared/browser_controls_api.mojom-webui.js';
 import type {BrowserControlsServiceInterface} from '/shared/browser_controls_api.mojom-webui.js';
 import type {IconUpdate} from '/shared/icon_handle.mojom-webui.js';
@@ -61,6 +59,8 @@ export enum ToolbarStateKey {
   TOUCH_UI = 'touchUi',
   INITIAL_WEBUI_SURFACE_SYNC_ENABLED = 'initialWebUISurfaceSyncEnabled',
   IS_FALLBACK_PREWARMING = 'isFallbackPrewarming',
+  IS_PROFILE_ELIGIBLE_FOR_GLIC = 'isProfileEligibleForGlic',
+  CAN_SHOW_AVATAR_FOR_PROFILE = 'canShowAvatarForProfile',
 }
 
 /**
@@ -78,6 +78,8 @@ export interface ToolbarFlatStateSchema {
   [ToolbarStateKey.TOUCH_UI]: boolean;
   [ToolbarStateKey.INITIAL_WEBUI_SURFACE_SYNC_ENABLED]: boolean;
   [ToolbarStateKey.IS_FALLBACK_PREWARMING]: boolean;
+  [ToolbarStateKey.IS_PROFILE_ELIGIBLE_FOR_GLIC]: boolean;
+  [ToolbarStateKey.CAN_SHOW_AVATAR_FOR_PROFILE]: boolean;
 }
 
 /**
@@ -222,8 +224,7 @@ export class BrowserProxyImpl implements BrowserProxy {
    * @param maxValue The maximum value of the histogram.
    */
   recordInHistogram(histogramName: string, value: number, maxValue: number) {
-    chrome.send(
-        'metricsHandler:recordInHistogram', [histogramName, value, maxValue]);
+    chrome.histograms.recordEnumerationValue(histogramName, value, maxValue);
   }
 
   addToolbarStateListener(listener: ToolbarStateListener) {

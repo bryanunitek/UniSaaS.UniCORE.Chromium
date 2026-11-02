@@ -82,7 +82,7 @@ BASE_FEATURE(kCredentialManagementUnifiedUi, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDeviceAuthenticatorWinCancel, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
 
-BASE_FEATURE(kDeviceReauthRefactor, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDeviceReauthRefactor, base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)  // Desktop
 BASE_FEATURE(kEnablePasswordManagerMojoApiPhase2,
@@ -168,6 +168,9 @@ BASE_FEATURE(kPasswordManagerOnDeviceEncryptionMetricsReporter,
 
 BASE_FEATURE(kPasswordManualFallbackSecurityChecks,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPasswordManualFallbackSkipOpaqueOrigins,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPasswordSaveInContextErrorResolution,
              base::FEATURE_DISABLED_BY_DEFAULT);

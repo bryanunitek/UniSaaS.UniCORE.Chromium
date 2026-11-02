@@ -223,7 +223,6 @@ import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromo
 import org.chromium.chrome.browser.ntp_customization.theme.daily_refresh.NtpThemeDailyRefreshManager;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.CrossDeviceThemeTracker;
 import org.chromium.chrome.browser.offlinepages.OfflinePageUtils;
-import org.chromium.chrome.browser.omaha.inline.InAppUpdateController;
 import org.chromium.chrome.browser.paint_preview.StartupPaintPreviewHelper;
 import org.chromium.chrome.browser.paint_preview.StartupPaintPreviewHelperSupplier;
 import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizations;
@@ -980,7 +979,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                         @Override
                         public void tabRemoved(Tab tab) {
                             closeIfNoTabsAndHomepageEnabled(
-                                    false, /* shouldRemoveWindowWithZeroTabs= */ false);
+                                    false,
+                                    mSupportedProfileType == SupportedProfileType.OFF_THE_RECORD);
                         }
 
                         private void closeIfNoTabsAndHomepageEnabled(
@@ -1423,7 +1423,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                                 () -> BookmarkModel.getForProfile(profile),
                                 this,
                                 getComponentName(),
-                                /* multiInstanceManager= */ null),
+                                /* multiInstanceManager= */ null,
+                                getActivityTabProvider()),
                 new BookmarkManagerOpenerImpl(),
                 PriceDropNotificationManagerFactory::create,
                 SigninAndHistorySyncActivityLauncherImpl.get(),
@@ -1795,15 +1796,6 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
 
         // This call is not guarded by a feature flag.
         SearchEngineChoiceNotification.handleSearchEngineChoice(this, getSnackbarManager());
-
-        // TODO(crbug.com/574106939): Move in-app update resume evaluation to
-        // TabbedRootUiCoordinator or a dedicated lifecycle observer.
-        if (isWarmOnResume()) {
-            InAppUpdateController inAppUpdateController = getInAppUpdateController();
-            if (inAppUpdateController != null) {
-                inAppUpdateController.onResume();
-            }
-        }
 
         if (!isWarmOnResume()) {
             getProfileProviderSupplier()
@@ -3589,7 +3581,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                 getBottomBarHostManager(),
                 createVerticalTabsActionDelegate(),
                 mUrlBarVisibleSupplier,
-                mAppLaunchDrawBlocker::onTabLayoutAvailable);
+                mAppLaunchDrawBlocker::onTabLayoutAvailable,
+                this::isWarmOnResume);
     }
 
     @Override
@@ -4223,17 +4216,6 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
         var modalDialogManager = assertNonNull(getModalDialogManager());
         VersioningMessageBanner.maybeShow(activity, messageDispatcher, modalDialogManager, profile);
 
-        // TODO(crbug.com/574106939): Move InAppUpdateController initialization and startup flow
-        // check out of ChromeTabbedActivity and into TabbedRootUiCoordinator.
-        InAppUpdateController inAppUpdateController = getInAppUpdateController();
-        if (inAppUpdateController != null) {
-            // TODO(crbug.com/553918188): Remove logging once in-app update flow stabilizes.
-            Log.i(
-                    InAppUpdateController.TAG,
-                    "ChromeTabbedActivity.onDeferredStartup: initiating in-app update check");
-            inAppUpdateController.checkAndStartUpdateFlow();
-        }
-
         if (mAuxiliarySearchController != null) {
             mAuxiliarySearchController.onDeferredStartup();
         }
@@ -4586,25 +4568,13 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             if (currentTab == null) return true;
 
             Profile profile = assertNonNull(mTabModelProfileSupplier.get());
-            TabModel tabModel = mTabModelSelector.getCurrentModel();
             if (id == R.id.add_to_group_menu_id) {
                 TrackerFactory.getTrackerForProfile(profile)
                         .notifyEvent("menu_add_to_group_clicked");
             }
 
-            var modalDialogManager = assertNonNull(getModalDialogManager());
-            var bottomSheetController =
-                    assertNonNull(mRootUiCoordinator.getBottomSheetController());
-            TabGroupMenuActionHandler tabGroupMenuActionHandler =
-                    new TabGroupMenuActionHandler(
-                            this,
-                            tabModel,
-                            bottomSheetController,
-                            modalDialogManager,
-                            getTabGroupUiActionHandler(),
-                            profile);
             boolean existingGroupsPresent =
-                    tabGroupMenuActionHandler.handleAddToGroupAction(currentTab);
+                    createTabGroupMenuActionHandler().handleAddToGroupAction(currentTab);
             if (id == R.id.add_to_group_menu_id) {
                 RecordUserAction.record(
                         existingGroupsPresent ? "MobileMenuAddToGroup" : "MobileMenuAddToNewGroup");
@@ -4631,19 +4601,34 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                 return false;
             }
 
-            Profile profile = assertNonNull(mTabModelProfileSupplier.get());
-            var modalDialogManager = assertNonNull(getModalDialogManager());
-            var bottomSheetController =
-                    assertNonNull(mRootUiCoordinator.getBottomSheetController());
-            TabModel tabModel = mTabModelSelector.getCurrentModel();
-            return new TabGroupMenuActionHandler(
-                            this,
-                            tabModel,
-                            bottomSheetController,
-                            modalDialogManager,
-                            getTabGroupUiActionHandler(),
-                            profile)
+            return createTabGroupMenuActionHandler()
                     .handleAddToExistingGroupAction(currentTab, groupId, syncGroupId);
+        } else if (id == R.id.tab_group_open_group_menu_id
+                || id == R.id.tab_group_open_in_new_window_menu_id
+                || id == R.id.tab_group_delete_group_menu_id) {
+            if (menuItemData == null) {
+                return false;
+            }
+            if (!ChromeFeatureList.sTabGroupActionsSubmenus.isEnabled()
+                    || !mTabModelSelector.isTabStateInitialized()) {
+                return false;
+            }
+
+            Bundle groupBundle =
+                    menuItemData.getBundle(AppMenuPropertiesDelegateImpl.TAB_GROUP_ID_BUNDLE_KEY);
+            Token groupId = Token.maybeCreateFromBundle(groupBundle);
+            String syncGroupId =
+                    menuItemData.getString(AppMenuPropertiesDelegateImpl.SYNC_GROUP_ID_BUNDLE_KEY);
+
+            TabGroupMenuActionHandler handler = createTabGroupMenuActionHandler();
+            if (id == R.id.tab_group_open_group_menu_id) {
+                return handler.handleOpenGroupAction(syncGroupId);
+            } else if (id == R.id.tab_group_open_in_new_window_menu_id) {
+                return handler.handleOpenGroupInNewWindowAction(
+                        groupId, syncGroupId, mMultiInstanceManager);
+            } else {
+                return handler.handleDeleteGroupAction(groupId, syncGroupId);
+            }
         } else if (id == R.id.create_new_tab_group_menu_id) {
             RecordUserAction.record("MobileMenuCreateTabGroup");
             return handleCreateNewTabGroupAction(currentTab);
@@ -5109,6 +5094,20 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
             manager.showDialog(groupId, tabModel);
         }
         return true;
+    }
+
+    private TabGroupMenuActionHandler createTabGroupMenuActionHandler() {
+        Profile profile = assertNonNull(mTabModelProfileSupplier.get());
+        var modalDialogManager = assertNonNull(getModalDialogManager());
+        var bottomSheetController = assertNonNull(mRootUiCoordinator.getBottomSheetController());
+        TabModel tabModel = mTabModelSelector.getCurrentModel();
+        return new TabGroupMenuActionHandler(
+                this,
+                tabModel,
+                bottomSheetController,
+                modalDialogManager,
+                getTabGroupUiActionHandler(),
+                profile);
     }
 
     private @Nullable TabGroupUiActionHandler getTabGroupUiActionHandler() {

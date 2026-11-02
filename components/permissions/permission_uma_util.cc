@@ -31,7 +31,6 @@
 #include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_request.h"
-#include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_uma_constants.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/permissions_client.h"
@@ -1952,8 +1951,6 @@ std::string PermissionUmaUtil::GetPromptDispositionString(
       return "NoneVisible";
     case PermissionPromptDisposition::NOT_APPLICABLE:
       return "NotApplicable";
-    case PermissionPromptDisposition::MAC_OS_PROMPT:
-      return "MacOsPrompt";
     case PermissionPromptDisposition::MESSAGE_UI_LOUD:
       return "MessageUILoud";
     case PermissionPromptDisposition::LOCATION_BAR_LEFT_QUIET_ICON:

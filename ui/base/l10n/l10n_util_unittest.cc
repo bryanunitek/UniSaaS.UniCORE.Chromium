@@ -40,6 +40,10 @@
 #include "ui/base/l10n/l10n_util_collator.h"
 #include "ui/base/ui_base_paths.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "ui/base/l10n/l10n_util_android.h"
+#endif
+
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
 #include <cstdlib>
 #endif
@@ -305,8 +309,6 @@ TEST_F(L10nUtilTest, GetAppLocaleBasicTest) {
 TEST_F(L10nUtilTest, GetAppLocale_NoPlatformHasDefaultLocale) {
   if (!kPlatformHasDefaultLocale) {
     SetUpLocales(kDefaultLocalesOnDisk);
-    // Keep a copy of ICU's default locale before we overwrite it.
-    const std::string original_locale = base::i18n::GetConfiguredLocale();
 
     // ChromeOS & embedded use only browser prefs in GetApplicationLocale(),
     // ignoring the environment, and default to en-US. Other platforms honor
@@ -887,6 +889,24 @@ TEST_F(L10nUtilTest, AllLegacyAcceptLanguagesWork) {
     EXPECT_TRUE(l10n_util::IsPossibleAcceptLanguage(locale)) << locale;
   }
 }
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(L10nUtilTest, SetRtlForTestingInvalidatesIsLayoutRtlCache) {
+  const bool initial_rtl = l10n_util::IsLayoutRtl();
+
+  l10n_util::SetRtlForTesting(true);
+  EXPECT_TRUE(l10n_util::IsLayoutRtl());
+
+  l10n_util::SetRtlForTesting(false);
+  EXPECT_FALSE(l10n_util::IsLayoutRtl());
+
+  l10n_util::SetRtlForTesting(true);
+  EXPECT_TRUE(l10n_util::IsLayoutRtl());
+
+  l10n_util::SetRtlForTesting(initial_rtl);
+  EXPECT_EQ(initial_rtl, l10n_util::IsLayoutRtl());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 }  // namespace l10n_util

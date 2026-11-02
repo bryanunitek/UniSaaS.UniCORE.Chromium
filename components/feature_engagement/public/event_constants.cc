@@ -180,8 +180,6 @@ const char kIOSDownloadAutoDeletionIPHCriterionMet[] =
     "ios_download_auto_deletion_iph_criterion_met";
 const char kIOSScrolledOnFeed[] = "ios_scrolled_on_feed";
 const char kIOSActionOnFeed[] = "ios_action_on_feed";
-const char kIOSWelcomeBackPromoTrigger[] = "welcome_back_promo_trigger";
-const char kIOSWelcomeBackPromoUsed[] = "welcome_back_promo_used";
 const char kIOSBWGPromoTrigger[] = "bwg_half_screen_promo_trigger";
 const char kIOSBWGPromoUsed[] = "bwg_half_screen_promo_used";
 const char kIOSSafariImportRemindMeLater[] =
@@ -238,6 +236,12 @@ const char kDefaultBrowserPromoContextualGeminiUsed[] =
     "default_browser_promo_contextual_gemini_used";
 const char kGeminiSessionTerminated[] = "gemini_session_terminated";
 const char kIOSBottomOmniboxUsed[] = "ios_bottom_omnibox_used";
+const char kIOSAccountSwitchingPromoIgnored[] =
+    "ios_account_switching_promo_ignored";
+const char kIOSAccountSwitchingPromoExplicitlyDismissed[] =
+    "ios_account_switching_promo_explicitly_dismissed";
+const char kIOSAccountSwitchingPrimaryAccountChanged[] =
+    "ios_account_switching_primary_account_changed";
 #endif  // BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_ANDROID)

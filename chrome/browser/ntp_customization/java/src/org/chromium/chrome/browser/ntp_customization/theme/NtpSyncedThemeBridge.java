@@ -33,13 +33,18 @@ public class NtpSyncedThemeBridge {
     /** Observer interface for synced theme updates. */
     public interface Observer {
         /**
-         * Dispatched when a theme collection background arrives from sync or daily refresh.
+         * Dispatched when a theme collection background arrives from sync, or when the local daily
+         * refresh has pre-fetched the next image.
          *
-         * @param info The {@link CustomBackgroundInfo} of the synced background.
+         * @param info The {@link CustomBackgroundInfo} of the background.
          * @param primaryColor The synced primary color, or null if none was provided.
+         * @param isImageFromSync True if the background arrived from sync; false if it is the next
+         *     image pre-fetched for the local daily refresh.
          */
-        void onThemeCollectionSynced(
-                @Nullable CustomBackgroundInfo info, @Nullable @ColorInt Integer primaryColor);
+        void onThemeCollectionImageAvailable(
+                @Nullable CustomBackgroundInfo info,
+                @Nullable @ColorInt Integer primaryColor,
+                boolean isImageFromSync);
 
         /** Dispatched when a Chrome color arrives from sync. */
         void onChromeColorSynced(int colorId);
@@ -70,9 +75,6 @@ public class NtpSyncedThemeBridge {
      * @param observer The observer to receive synced theme changes.
      */
     public NtpSyncedThemeBridge(Profile profile, Observer observer) {
-        // Set the observer before calling native init(), since init attaches this bridge to
-        // NtpAndroidCustomBackgroundService, which may immediately notify this bridge of an
-        // already-existing synced background.
         mObserver = observer;
         mNativeNtpSyncedThemeBridge = NtpSyncedThemeBridgeJni.get().init(profile, this);
     }
@@ -90,6 +92,19 @@ public class NtpSyncedThemeBridge {
         if (mNativeNtpSyncedThemeBridge == null) return;
 
         NtpSyncedThemeBridgeJni.get().fetchNextThemeCollectionImage(mNativeNtpSyncedThemeBridge);
+    }
+
+    /**
+     * Delivers the theme stored in native preferences to the observer as if it had just arrived
+     * from sync. Sync doesn't re-emit a theme that is already stored, e.g. one delivered in a
+     * previous session or before this bridge was attached, so the observer requests it once after
+     * attaching. The observer drops a theme that this device already shows.
+     */
+    public void getStoredContinuousThemeAndNotify() {
+        if (mNativeNtpSyncedThemeBridge == null) return;
+
+        NtpSyncedThemeBridgeJni.get()
+                .getStoredContinuousThemeAndNotify(mNativeNtpSyncedThemeBridge);
     }
 
     /**
@@ -152,28 +167,26 @@ public class NtpSyncedThemeBridge {
                         isDailyRefresh);
     }
 
-    /** Exposes whether the C++ service is actively processing a sync update. */
-    public boolean isProcessingSyncUpdate() {
-        if (mNativeNtpSyncedThemeBridge == null) return false;
-        return NtpSyncedThemeBridgeJni.get().isProcessingSyncUpdate(mNativeNtpSyncedThemeBridge);
-    }
-
     /**
-     * Callback from native code, triggered when the custom background image has been successfully
-     * updated. This can occur after a new theme is selected or when a daily refresh happens.
+     * Callback from native code, triggered when the theme collection background in preferences was
+     * updated by sync, or by the local daily refresh pre-fetching the next image.
+     *
+     * @param isImageFromSync True if the update came from sync; false if it is the pre-fetched next
+     *     image.
      */
     @CalledByNative
     @VisibleForTesting
-    void onCustomBackgroundImageUpdated() {
+    void onThemeCollectionUpdated(boolean isImageFromSync) {
         if (mNativeNtpSyncedThemeBridge == null) {
             return;
         }
 
         SyncedBackgroundInfo syncedBackgroundInfo =
                 NtpSyncedThemeBridgeJni.get().getCustomBackgroundInfo(mNativeNtpSyncedThemeBridge);
-        mObserver.onThemeCollectionSynced(
+        mObserver.onThemeCollectionImageAvailable(
                 syncedBackgroundInfo != null ? syncedBackgroundInfo.info : null,
-                syncedBackgroundInfo != null ? syncedBackgroundInfo.primaryColor : null);
+                syncedBackgroundInfo != null ? syncedBackgroundInfo.primaryColor : null,
+                isImageFromSync);
     }
 
     /**
@@ -246,7 +259,7 @@ public class NtpSyncedThemeBridge {
         @Nullable SyncedBackgroundInfo getCustomBackgroundInfo(
                 JniPtr<NativeNtpSyncedThemeBridge> self);
 
-        boolean isProcessingSyncUpdate(JniPtr<NativeNtpSyncedThemeBridge> self);
+        void getStoredContinuousThemeAndNotify(JniPtr<NativeNtpSyncedThemeBridge> self);
 
         void setChromeColor(JniPtr<NativeNtpSyncedThemeBridge> self, int colorId);
 

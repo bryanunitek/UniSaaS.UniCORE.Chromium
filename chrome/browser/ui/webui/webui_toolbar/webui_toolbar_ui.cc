@@ -31,12 +31,12 @@
 #include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
 #include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
-#include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/metrics_reporter/metrics_reporter_service.h"
 #include "chrome/browser/ui/webui/searchbox/webui_omnibox_handler.h"
 #include "chrome/browser/ui/webui/theme_colors_source_manager.h"
 #include "chrome/browser/ui/webui/theme_colors_source_manager_factory.h"
 #include "chrome/browser/ui/webui/theme_source.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_user_profile.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/ui/webui/webui_toolbar/adapters/browser_controls_adapter_impl.h"
 #include "chrome/browser/ui/webui/webui_toolbar/adapters/toolbar_state_fetcher_impl.h"
@@ -101,6 +101,8 @@ constexpr char kTouchUi[] = "touchUi";
 constexpr char kInitialWebUISurfaceSyncEnabled[] =
     "initialWebUISurfaceSyncEnabled";
 constexpr char kIsFallbackPrewarming[] = "isFallbackPrewarming";
+constexpr char kIsProfileEligibleForGlic[] = "isProfileEligibleForGlic";
+constexpr char kCanShowAvatarForProfile[] = "canShowAvatarForProfile";
 
 // Retrieves the current toolbar state from the provider's fetcher
 // and populates a nested dictionary `initialState`.
@@ -179,12 +181,23 @@ void PopulateInitialState(base::DictValue& dict,
   dict.Set(kTouchUi, state->touch_ui);
 }
 
+// Adds the URL data sources of the toolbar to `profile`, the profile of the
+// WebUI. In TopChromeWebUIProfile, it is shared by the windows of all profiles.
+void AddURLDataSources(Profile* profile) {
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
+  if (features::IsWebUILocationBarEnabled()) {
+    content::URLDataSource::Add(
+        profile, std::make_unique<FaviconSource>(
+                     profile, chrome::FaviconUrlFormat::kFavicon2));
+  }
+}
+
 }  // namespace
 
 WebUIToolbarUI::WebUIToolbarUI(content::WebUI* web_ui)
-    // Sets `enable_chrome_send` to true to allow chrome.send() to be called in
-    // TypeScript to record non-timestamp histograms, which can't be done by
-    // MetricsReporter.
+    // Sets `enable_chrome_send` to true to enable
+    // `BindingsPolicyValue::kWebUi`, which is required for `SetWebUIProperty` /
+    // `chrome.getVariableValue('initialState')`.
     : TopChromeWebUIController(web_ui,
                                /*enable_chrome_send=*/true,
                                /*enable_chrome_histograms=*/true),
@@ -198,8 +211,7 @@ WebUIToolbarUI::WebUIToolbarUI(content::WebUI* web_ui)
       web_ui->GetWebContents()->GetBrowserContext(),
       chrome::kChromeUIWebUIToolbarHost);
 
-  Profile* profile = Profile::FromWebUI(web_ui);
-  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
+  AddURLDataSources(Profile::FromWebUI(web_ui));
 
   static constexpr webui::LocalizedString kStrings[] = {
       // go/keep-sorted start
@@ -258,15 +270,12 @@ WebUIToolbarUI::WebUIToolbarUI(content::WebUI* web_ui)
   source->AddBoolean("enableAppMenuButton",
                      features::IsWebUIAppMenuButtonEnabled());
 
-  // Glic button is enabled only when both the WebUI Glic flag is active and
-  // the current profile is eligible for Glic.
-  source->AddBoolean("enableGlicButton",
-                     features::IsWebUIGlicButtonEnabled() &&
-                         glic::GlicEnabling::IsProfileEligible(profile));
-  source->AddBoolean(
-      "enableAvatarButton",
-      features::IsWebUIAvatarButtonEnabled() &&
-          AvatarToolbarButtonInterface::CanShowForProfile(profile));
+  // Whether the Glic and avatar buttons are shown also depends on the profile
+  // of the window, which is set in the initial state of each frame in
+  // WebUIRenderFrameCreated().
+  source->AddBoolean("enableGlicButton", features::IsWebUIGlicButtonEnabled());
+  source->AddBoolean("enableAvatarButton",
+                     features::IsWebUIAvatarButtonEnabled());
   source->AddBoolean("enableMediaButton",
                      features::IsWebUIMediaButtonEnabled());
   source->AddBoolean("enableExtensionsContainer",
@@ -290,10 +299,6 @@ WebUIToolbarUI::WebUIToolbarUI(content::WebUI* web_ui)
     // names, e.g. charTypedToPaintMetricName, and has no dropdown, which
     // reports them.
     source->AddBoolean("reportMetrics", false);
-
-    content::URLDataSource::Add(
-        profile, std::make_unique<FaviconSource>(
-                     profile, chrome::FaviconUrlFormat::kFavicon2));
   }
 
   source->AddBoolean(
@@ -317,9 +322,6 @@ WebUIToolbarUI::WebUIToolbarUI(content::WebUI* web_ui)
   // Referenced by `chrome/browser/resources/webui_toolbar/glic_button.html.ts`.
   source->AddResourcePath("images/glic_button_alt_icon.png",
                           IDR_GLIC_BUTTON_ALT_ICON);
-
-  // Handles chrome.send() calls that records non-timestamp histograms.
-  web_ui->AddMessageHandler(std::make_unique<MetricsHandler>());
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(WebUIToolbarUI)
@@ -511,6 +513,16 @@ void WebUIToolbarUI::WebUIRenderFrameCreated(content::RenderFrameHost* rfh) {
     PopulateInitialState(values, nullptr);
     values.Set(kIsFallbackPrewarming, true);
   }
+  // These depend on the profile of the window, so they are set for each frame
+  // instead of in the WebUIDataSource, which is shared by the toolbars in the
+  // same BrowserContext. With features::kTopChromeWebUISharedRenderer, those
+  // toolbars can be for windows of different profiles.
+  Profile* user_profile = GetUserProfile();
+  values.Set(kIsProfileEligibleForGlic,
+             glic::GlicEnabling::IsProfileEligible(user_profile));
+  values.Set(kCanShowAvatarForProfile,
+             AvatarToolbarButtonInterface::CanShowForProfile(user_profile));
+
   std::string json_string;
   base::JSONWriter::Write(values, &json_string);
   rfh->SetWebUIProperty("initialState", json_string);
@@ -535,8 +547,8 @@ void WebUIToolbarUI::DidFinishNavigation(
 void WebUIToolbarUI::PopulateLocalResourceLoaderConfig(
     blink::mojom::LocalResourceLoaderConfig* config,
     const url::Origin& requesting_origin) {
-  auto* theme_colors_manager = ThemeColorsSourceManagerFactory::GetForProfile(
-      Profile::FromWebUI(web_ui()));
+  auto* theme_colors_manager =
+      ThemeColorsSourceManagerFactory::GetForProfile(GetUserProfile());
   CHECK(theme_colors_manager);
   theme_colors_manager->PopulateLocalResourceLoaderConfig(
       config, requesting_origin, web_ui()->GetWebContents());
@@ -582,16 +594,22 @@ void WebUIToolbarUI::CreatePageHandler(
   omnibox_handler_ = std::make_unique<WebuiOmniboxHandler>(
       std::move(receiver), std::move(page),
       metrics_reporter_service->metrics_reporter(), omnibox_controller_,
-      Profile::FromWebUI(web_ui()), web_ui()->GetWebContents(),
+      GetUserProfile(), web_ui()->GetWebContents(),
       base::BindRepeating(&WebUIToolbarUI::GetOrCreateContextualSessionHandle,
                           base::Unretained(this)));
+}
+
+Profile* WebUIToolbarUI::GetUserProfile() const {
+  Profile* user_profile = webui::GetUserProfile(web_ui()->GetWebContents());
+  CHECK(user_profile);
+  return user_profile;
 }
 
 contextual_search::ContextualSearchSessionHandle*
 WebUIToolbarUI::GetOrCreateContextualSessionHandle() {
   if (!session_handle_) {
-    auto* service = ContextualSearchServiceFactory::GetForProfile(
-        Profile::FromWebUI(web_ui()));
+    Profile* profile = GetUserProfile();
+    auto* service = ContextualSearchServiceFactory::GetForProfile(profile);
     if (service) {
       // TODO(http://crbug.com/529689765): This is based on what webui_browser
       // does, and that in turn has a bunch of TODOs on its own.
@@ -599,8 +617,7 @@ WebUIToolbarUI::GetOrCreateContextualSessionHandle() {
           omnibox::CreateQueryControllerConfigParams(),
           contextual_search::ContextualSearchSource::kOmnibox,
           lens::LensOverlayInvocationSource::kOmniboxContextualQuery);
-      session_handle_->CheckSearchContentSharingSettings(
-          Profile::FromWebUI(web_ui())->GetPrefs());
+      session_handle_->CheckSearchContentSharingSettings(profile->GetPrefs());
     }
   }
   return session_handle_.get();

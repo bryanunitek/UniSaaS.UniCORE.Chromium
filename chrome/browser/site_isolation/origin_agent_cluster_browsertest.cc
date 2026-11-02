@@ -15,6 +15,7 @@
 #include "chrome/browser/metrics/metrics_memory_details.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
+#include "chrome/browser/ui/tabs/organizer/organizer_panel_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -182,10 +183,12 @@ class OriginAgentClusterBrowserTest : public InProcessBrowserTest {
     // To keep the tests easier to reason about, turn off both the spare
     // renderer process and process reuse for subframes in different
     // BrowsingInstances.
+    // TODO(crbug.com/579030694): Investigate lazy loading OrganizerPanel.
     std::vector<base::test::FeatureRef> enabled_features = {
         features::kDisableProcessReuse};
     std::vector<base::test::FeatureRef> disabled_features = {
-        features::kSpareRendererForSitePerProcess};
+        features::kSpareRendererForSitePerProcess,
+        organizer_panel::kOrganizerPanel};
 
     // Origin isolation ads exclusion is enabled whenever logical OAC is enabled
     // (regardless of whether origin-keyed processes are enabled). We do this to
@@ -1022,7 +1025,7 @@ IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
   // nested_child is an ad because of its same-site ad parent. It must find the
   // uncommitted origin-keyed non_ad_url navigation and also be origin-keyed. If
   // it records a site-keyed state for other.bar.com, the non_ad_child commit
-  // below fails the CanAccessOrigin() CHECK, because its process is already
+  // below fails the CanCommitNewOrigin() CHECK, because its process is already
   // origin-keyed.
   content::TestNavigationManager nested_nav_manager(web_contents, nested_url);
   EXPECT_TRUE(content::ExecJs(
@@ -1181,7 +1184,7 @@ IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
 // While A is paused, navigation B to the same origin is an ad from the start,
 // thus it does the global walk. The walk must find the paused navigation A, and
 // B must join A's origin-keyed SiteInstance. If B records a site-keyed state
-// for the origin, A's commit fails the CanAccessOrigin() CHECK.
+// for the origin, A's commit fails the CanCommitNewOrigin() CHECK.
 IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
                        AdTagDuringWillProcessResponse) {
   base::HistogramTester histograms;
@@ -1219,7 +1222,7 @@ IN_PROC_BROWSER_TEST_F(OriginKeyedProcessByDefaultBrowserTest,
 
   // A commits after B. B's global walk recorded that other.bar.com stays
   // origin-keyed in this BrowsingInstance, so A's commit to its origin-keyed
-  // process passes the CanAccessOrigin() CHECK.
+  // process passes the CanCommitNewOrigin() CHECK.
   ASSERT_TRUE(late_ad_nav_manager.WaitForNavigationFinished());
   EXPECT_TRUE(late_ad_nav_manager.was_committed());
 

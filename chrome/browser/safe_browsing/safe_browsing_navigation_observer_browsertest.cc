@@ -426,6 +426,102 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     }
   }
 
+  void TriggerCrossOriginSubFrameDownload(const GURL& main_frame_url,
+                                          const GURL& iframe_url,
+                                          bool target_top,
+                                          bool open_in_new_tab,
+                                          bool push_state_on_click,
+                                          ReferrerChain* out_referrer_chain) {
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
+    ASSERT_TRUE(
+        content::NavigateIframeToURL(web_contents(), "test", iframe_url));
+
+    content::RenderFrameHost* subframe =
+        content::ChildFrameAt(web_contents()->GetPrimaryMainFrame(), 0);
+    ASSERT_TRUE(subframe);
+    ASSERT_TRUE(subframe->IsCrossProcessSubframe());
+
+    // Use EXECUTE_SCRIPT_NO_USER_GESTURE so script execution does not grant a
+    // synthetic user gesture before the simulated mouse click.
+    if (push_state_on_click) {
+      // Simulate a click handler that first performs a same-document state
+      // update (e.g. analytics/routing pushState), which triggers
+      // DidStartNavigation and consumes the single WebContents-level user
+      // gesture in SafeBrowsingNavigationObserverManager while Blink's
+      // transient user activation remains active.
+      ASSERT_TRUE(content::ExecJs(
+          subframe,
+          "const link = document.getElementById('iframe_direct_download');"
+          "link.addEventListener('click', () => {"
+          "  history.pushState({}, '', '#clicked');"
+          "});",
+          content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+    }
+    if (target_top) {
+      ASSERT_TRUE(content::ExecJs(
+          subframe,
+          "document.getElementById('iframe_direct_download').target = '_top';",
+          content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+    } else if (open_in_new_tab) {
+      ASSERT_TRUE(content::ExecJs(
+          subframe,
+          "const link = document.getElementById('iframe_direct_download');"
+          "link.onclick = () => {"
+          "  const w = window.open('javascript:void(0)');"
+          "  w.location.href = link.href;"
+          "  return false;"
+          "};",
+          content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+    }
+    int iframe_x =
+        content::EvalJs(web_contents(),
+                        "const iframe = document.getElementById('test');"
+                        "Math.floor(iframe.getBoundingClientRect().left + "
+                        "iframe.clientLeft)",
+                        content::EXECUTE_SCRIPT_NO_USER_GESTURE)
+            .ExtractInt();
+    int iframe_y =
+        content::EvalJs(
+            web_contents(),
+            "const iframe = document.getElementById('test');"
+            "Math.floor(iframe.getBoundingClientRect().top + iframe.clientTop)",
+            content::EXECUTE_SCRIPT_NO_USER_GESTURE)
+            .ExtractInt();
+    int link_x =
+        content::EvalJs(
+            subframe,
+            "const bounds = document.getElementById('iframe_direct_download')"
+            ".getBoundingClientRect();"
+            "Math.floor(bounds.left + bounds.width / 2)",
+            content::EXECUTE_SCRIPT_NO_USER_GESTURE)
+            .ExtractInt();
+    int link_y =
+        content::EvalJs(
+            subframe,
+            "const bounds = document.getElementById('iframe_direct_download')"
+            ".getBoundingClientRect();"
+            "Math.floor(bounds.top + bounds.height / 2)",
+            content::EXECUTE_SCRIPT_NO_USER_GESTURE)
+            .ExtractInt();
+
+    content::WaitForHitTestData(subframe);
+    content::TestNavigationObserver navigation_observer(
+        web_contents(),
+        /*expected_number_of_navigations=*/push_state_on_click ? 2 : 1);
+    if (open_in_new_tab) {
+      navigation_observer.StartWatchingNewWebContents();
+    }
+    content::SimulateMouseClickAt(
+        web_contents(), /*modifiers=*/0, blink::WebMouseEvent::Button::kLeft,
+        gfx::Point(iframe_x + link_x, iframe_y + link_y));
+    navigation_observer.Wait();
+    if (open_in_new_tab) {
+      navigation_observer.StopWatchingNewWebContents();
+    }
+
+    IdentifyReferrerChainForDownload(GetDownload(), out_referrer_chain);
+  }
+
   void IdentifyReferrerChainForWebContents(content::WebContents* web_contents,
                                            ReferrerChain* referrer_chain) {
     observer_manager_->IdentifyReferrerChainByRenderFrameHost(
@@ -2929,6 +3025,90 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_EQ(0U, nav_list->PendingNavigationEventsSize());
 }
 
+// Regression test for b/568560137.
+// Ctrl+clicking (Cmd+clicking on Mac) a link without target="_blank" opens the
+// link in a new tab via WebContentsImpl::OpenURL -> Navigate(), which starts
+// the navigation (DidStartNavigation) before firing DidOpenRequestedURL
+// (RecordNewWebContents). Verify that IdentifyReferrerChainByPendingEventURL
+// still attributes the pending new-tab navigation to the source tab.
+IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
+                       IdentifyReferrerChainByPendingEventURL_NewTabCtrlClick) {
+  GURL initial_url = embedded_test_server()->GetURL(kSingleFrameTestURL);
+  GURL target_url = embedded_test_server()->GetURL("/hung");
+  std::string test_server_ip(embedded_test_server()->host_port_pair().host());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+
+  // Point a normal link (without target="_blank") to /hung so the navigation in
+  // the new tab stays in a pending state.
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "document.getElementById('attribution_within_two_user_gestures').href = "
+      "'/hung';",
+      content::EXECUTE_SCRIPT_NO_USER_GESTURE));
+  int link_x = content::EvalJs(web_contents(),
+                               "const bounds = document.getElementById("
+                               "'attribution_within_two_user_gestures')"
+                               ".getBoundingClientRect();"
+                               "Math.floor(bounds.left + bounds.width / 2)",
+                               content::EXECUTE_SCRIPT_NO_USER_GESTURE)
+                   .ExtractInt();
+  int link_y = content::EvalJs(web_contents(),
+                               "const bounds = document.getElementById("
+                               "'attribution_within_two_user_gestures')"
+                               ".getBoundingClientRect();"
+                               "Math.floor(bounds.top + bounds.height / 2)",
+                               content::EXECUTE_SCRIPT_NO_USER_GESTURE)
+                   .ExtractInt();
+
+  content::WaitForHitTestData(web_contents()->GetPrimaryMainFrame());
+  content::WebContentsAddedObserver new_tab_observer;
+#if BUILDFLAG(IS_MAC)
+  constexpr int kNewTabModifier = blink::WebInputEvent::kMetaKey;
+#else
+  constexpr int kNewTabModifier = blink::WebInputEvent::kControlKey;
+#endif
+  content::SimulateMouseClickAt(web_contents(), kNewTabModifier,
+                                blink::WebMouseEvent::Button::kLeft,
+                                gfx::Point(link_x, link_y));
+  content::WebContents* new_tab_contents = new_tab_observer.GetWebContents();
+  ASSERT_TRUE(new_tab_contents);
+  EXPECT_NE(web_contents(), new_tab_contents);
+
+  auto* nav_list = navigation_event_list();
+  ASSERT_TRUE(nav_list);
+  ASSERT_EQ(1U, nav_list->PendingNavigationEventsSize());
+
+  ReferrerChain referrer_chain;
+  auto result = observer_manager_->IdentifyReferrerChainByPendingEventURL(
+      target_url,
+      /*user_gesture_count_limit=*/2, &referrer_chain);
+  ASSERT_EQ(SafeBrowsingNavigationObserverManager::SUCCESS_LANDING_PAGE,
+            result);
+  ASSERT_EQ(2, referrer_chain.size());
+  VerifyReferrerChainEntry(
+      target_url,                     // url
+      GURL(),                         // main_frame_url
+      ReferrerChainEntry::EVENT_URL,  // type
+      test_server_ip,                 // ip_address
+      initial_url,                    // referrer_url
+      GURL(),                         // referrer_main_frame_url
+      true,                           // is_retargeting
+      std::vector<GURL>(),            // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITH_USER_GESTURE,
+      referrer_chain.Get(0));
+  VerifyReferrerChainEntry(initial_url,                       // url
+                           GURL(),                            // main_frame_url
+                           ReferrerChainEntry::LANDING_PAGE,  // type
+                           test_server_ip,                    // ip_address
+                           GURL(),                            // referrer_url
+                           GURL(),               // referrer_main_frame_url
+                           false,                // is_retargeting
+                           std::vector<GURL>(),  // server redirects
+                           ReferrerChainEntry::BROWSER_INITIATED,
+                           referrer_chain.Get(1));
+}
+
 // Verify URLs that match the Safe Browsing allowlist domains (a.k.a
 // prefs::kSafeBrowsingAllowlistDomains) are removed from the referrer chain.
 IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
@@ -3162,7 +3342,11 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
 }
 
 // Regression test for b/568560137.
-// Click a link in a cross-origin subframe (OOPIF) and start download.
+// Click a link in a cross-origin subframe (OOPIF) and start download. Set
+// push_state_on_click=true so the click handler first performs a same-document
+// history.pushState navigation that consumes the WebContents's
+// user_gesture_map_ entry (making HasUnexpiredUserGesture() false), isolating
+// NavigationHandle::HasUserGesture() on the subsequent download navigation.
 IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
                        CrossOriginSubFrameDirectDownload) {
   GURL main_frame_url =
@@ -3174,57 +3358,12 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   GURL download_url = embedded_test_server()->GetURL("b.com", kDownloadItemURL);
   std::string test_server_ip(embedded_test_server()->host_port_pair().host());
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
-  ASSERT_TRUE(content::NavigateIframeToURL(web_contents(), "test", iframe_url));
-
-  content::RenderFrameHost* subframe =
-      content::ChildFrameAt(web_contents()->GetPrimaryMainFrame(), 0);
-  ASSERT_TRUE(subframe);
-  ASSERT_TRUE(subframe->IsCrossProcessSubframe());
-
-  // Compute the link's center coordinates in the main frame's coordinate space
-  // using EXECUTE_SCRIPT_NO_USER_GESTURE so script execution does not grant a
-  // synthetic user gesture before the simulated mouse click.
-  int iframe_x =
-      content::EvalJs(
-          web_contents(),
-          "const iframe = document.getElementById('test');"
-          "Math.floor(iframe.getBoundingClientRect().left + iframe.clientLeft)",
-          content::EXECUTE_SCRIPT_NO_USER_GESTURE)
-          .ExtractInt();
-  int iframe_y =
-      content::EvalJs(
-          web_contents(),
-          "const iframe = document.getElementById('test');"
-          "Math.floor(iframe.getBoundingClientRect().top + iframe.clientTop)",
-          content::EXECUTE_SCRIPT_NO_USER_GESTURE)
-          .ExtractInt();
-  int link_x =
-      content::EvalJs(
-          subframe,
-          "const bounds = document.getElementById('iframe_direct_download')"
-          ".getBoundingClientRect();"
-          "Math.floor(bounds.left + bounds.width / 2)",
-          content::EXECUTE_SCRIPT_NO_USER_GESTURE)
-          .ExtractInt();
-  int link_y =
-      content::EvalJs(
-          subframe,
-          "const bounds = document.getElementById('iframe_direct_download')"
-          ".getBoundingClientRect();"
-          "Math.floor(bounds.top + bounds.height / 2)",
-          content::EXECUTE_SCRIPT_NO_USER_GESTURE)
-          .ExtractInt();
-
-  content::WaitForHitTestData(subframe);
-  content::TestNavigationObserver navigation_observer(web_contents(), 1);
-  content::SimulateMouseClickAt(
-      web_contents(), /*modifiers=*/0, blink::WebMouseEvent::Button::kLeft,
-      gfx::Point(iframe_x + link_x, iframe_y + link_y));
-  navigation_observer.Wait();
-
   ReferrerChain referrer_chain;
-  IdentifyReferrerChainForDownload(GetDownload(), &referrer_chain);
+  TriggerCrossOriginSubFrameDownload(main_frame_url, iframe_url,
+                                     /*target_top=*/false,
+                                     /*open_in_new_tab=*/false,
+                                     /*push_state_on_click=*/true,
+                                     &referrer_chain);
   ASSERT_EQ(4, referrer_chain.size());
   VerifyReferrerChainEntry(
       download_url,                   // url
@@ -3246,6 +3385,195 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
       main_frame_url,                    // referrer_main_frame_url
       false,                             // is_retargeting
       std::vector<GURL>(),               // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITHOUT_USER_GESTURE,
+      referrer_chain.Get(1));
+  VerifyReferrerChainEntry(
+      initial_subframe_url,                 // url
+      main_frame_url,                       // main_frame_url
+      ReferrerChainEntry::CLIENT_REDIRECT,  // type
+      test_server_ip,                       // ip_address
+      GURL(),                               // referrer_url
+      main_frame_url,                       // referrer_main_frame_url
+      false,                                // is_retargeting
+      std::vector<GURL>(),                  // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITHOUT_USER_GESTURE,
+      referrer_chain.Get(2));
+  VerifyReferrerChainEntry(main_frame_url,  // url
+                           GURL(),          // main_frame_url
+                           ReferrerChainEntry::CLIENT_REDIRECT,  // type
+                           test_server_ip,                       // ip_address
+                           GURL(),                               // referrer_url
+                           GURL(),               // referrer_main_frame_url
+                           false,                // is_retargeting
+                           std::vector<GURL>(),  // server redirects
+                           ReferrerChainEntry::BROWSER_INITIATED,
+                           referrer_chain.Get(3));
+}
+
+// Regression test for b/568560137.
+// Click a target="_top" link in a cross-origin subframe (OOPIF) and start
+// download. Set push_state_on_click=true so the click handler first performs a
+// same-document history.pushState navigation that consumes the opener
+// WebContents's user_gesture_map_ entry (making HasUnexpiredUserGesture()
+// false). Because navigating a cross-origin top frame then goes through
+// NavigateFromFrameProxy, NavigationHandle::HasUserGesture() is also filtered
+// out to false, isolating NavigationHandle::StartedWithTransientActivation().
+IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
+                       CrossOriginSubFrameTargetTopDownload) {
+  GURL main_frame_url =
+      embedded_test_server()->GetURL("a.com", kBasicIframeURL);
+  GURL iframe_url =
+      embedded_test_server()->GetURL("b.com", kIframeDirectDownloadURL);
+  GURL download_url = embedded_test_server()->GetURL("b.com", kDownloadItemURL);
+  std::string test_server_ip(embedded_test_server()->host_port_pair().host());
+
+  ReferrerChain referrer_chain;
+  TriggerCrossOriginSubFrameDownload(main_frame_url, iframe_url,
+                                     /*target_top=*/true,
+                                     /*open_in_new_tab=*/false,
+                                     /*push_state_on_click=*/true,
+                                     &referrer_chain);
+  ASSERT_EQ(2, referrer_chain.size());
+  VerifyReferrerChainEntry(
+      download_url,                   // url
+      GURL(),                         // main_frame_url
+      ReferrerChainEntry::EVENT_URL,  // type
+      test_server_ip,                 // ip_address
+      main_frame_url,                 // referrer_url
+      GURL(),                         // referrer_main_frame_url
+      false,                          // is_retargeting
+      std::vector<GURL>(),            // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITH_USER_GESTURE,
+      referrer_chain.Get(0));
+  VerifyReferrerChainEntry(main_frame_url,                    // url
+                           GURL(),                            // main_frame_url
+                           ReferrerChainEntry::LANDING_PAGE,  // type
+                           test_server_ip,                    // ip_address
+                           GURL(),                            // referrer_url
+                           GURL(),               // referrer_main_frame_url
+                           false,                // is_retargeting
+                           std::vector<GURL>(),  // server redirects
+                           ReferrerChainEntry::BROWSER_INITIATED,
+                           referrer_chain.Get(1));
+}
+
+// Open a new tab from a cross-origin subframe (OOPIF) via
+// window.open('javascript:void(0)') and synchronously navigate the new tab to a
+// download URL via script. Even though RenderFrameHostImpl::CreateNewWindow
+// consumes the subframe's transient user activation before RecordNewWebContents
+// runs, WebContentsImpl::DidReceiveInputEvent forwards the subframe's mouse
+// click to SafeBrowsingNavigationObserver::DidGetUserInteraction(), which
+// records the user gesture in user_gesture_map_ for the opener WebContents so
+// HasUnexpiredUserGesture() returns true in RecordNewWebContents.
+IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
+                       CrossOriginSubFrameNewTabDownload) {
+  GURL main_frame_url =
+      embedded_test_server()->GetURL("a.com", kBasicIframeURL);
+  GURL initial_subframe_url =
+      embedded_test_server()->GetURL("a.com", kInitialSubframeUrl);
+  GURL iframe_url =
+      embedded_test_server()->GetURL("b.com", kIframeDirectDownloadURL);
+  GURL download_url = embedded_test_server()->GetURL("b.com", kDownloadItemURL);
+  std::string test_server_ip(embedded_test_server()->host_port_pair().host());
+
+  ReferrerChain referrer_chain;
+  TriggerCrossOriginSubFrameDownload(main_frame_url, iframe_url,
+                                     /*target_top=*/false,
+                                     /*open_in_new_tab=*/true,
+                                     /*push_state_on_click=*/false,
+                                     &referrer_chain);
+  ASSERT_EQ(4, referrer_chain.size());
+  VerifyReferrerChainEntry(
+      download_url,                   // url
+      GURL(),                         // main_frame_url
+      ReferrerChainEntry::EVENT_URL,  // type
+      test_server_ip,                 // ip_address
+      iframe_url,                     // referrer_url
+      main_frame_url,                 // referrer_main_frame_url
+      true,                           // is_retargeting
+      std::vector<GURL>(),            // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITH_USER_GESTURE,
+      referrer_chain.Get(0));
+  VerifyReferrerChainEntry(
+      iframe_url,                        // url
+      main_frame_url,                    // main_frame_url
+      ReferrerChainEntry::LANDING_PAGE,  // type
+      test_server_ip,                    // ip_address
+      initial_subframe_url,              // referrer_url
+      main_frame_url,                    // referrer_main_frame_url
+      false,                             // is_retargeting
+      std::vector<GURL>(),               // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITHOUT_USER_GESTURE,
+      referrer_chain.Get(1));
+  VerifyReferrerChainEntry(
+      initial_subframe_url,                 // url
+      main_frame_url,                       // main_frame_url
+      ReferrerChainEntry::CLIENT_REDIRECT,  // type
+      test_server_ip,                       // ip_address
+      GURL(),                               // referrer_url
+      main_frame_url,                       // referrer_main_frame_url
+      false,                                // is_retargeting
+      std::vector<GURL>(),                  // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITHOUT_USER_GESTURE,
+      referrer_chain.Get(2));
+  VerifyReferrerChainEntry(main_frame_url,  // url
+                           GURL(),          // main_frame_url
+                           ReferrerChainEntry::CLIENT_REDIRECT,  // type
+                           test_server_ip,                       // ip_address
+                           GURL(),                               // referrer_url
+                           GURL(),               // referrer_main_frame_url
+                           false,                // is_retargeting
+                           std::vector<GURL>(),  // server redirects
+                           ReferrerChainEntry::BROWSER_INITIATED,
+                           referrer_chain.Get(3));
+}
+
+// TODO(b/568560137): Attribute the user gesture when a click in a cross-origin
+// subframe (OOPIF) first triggers a same-document navigation (e.g.
+// history.pushState) before opening a new tab via
+// window.open('javascript:void(0)'). Currently, DidStartNavigation for the
+// pushState navigation consumes the WebContents user_gesture_map_ entry
+// recorded by DidGetUserInteraction(), leaving HasUnexpiredUserGesture() false
+// when RecordNewWebContents runs. As a result, the download navigation in the
+// new tab is recorded as RENDERER_INITIATED_WITHOUT_USER_GESTURE.
+IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
+                       CrossOriginSubFrameNewTabWithPushStateDownload) {
+  GURL main_frame_url =
+      embedded_test_server()->GetURL("a.com", kBasicIframeURL);
+  GURL initial_subframe_url =
+      embedded_test_server()->GetURL("a.com", kInitialSubframeUrl);
+  GURL iframe_url =
+      embedded_test_server()->GetURL("b.com", kIframeDirectDownloadURL);
+  GURL download_url = embedded_test_server()->GetURL("b.com", kDownloadItemURL);
+  std::string test_server_ip(embedded_test_server()->host_port_pair().host());
+
+  ReferrerChain referrer_chain;
+  TriggerCrossOriginSubFrameDownload(main_frame_url, iframe_url,
+                                     /*target_top=*/false,
+                                     /*open_in_new_tab=*/true,
+                                     /*push_state_on_click=*/true,
+                                     &referrer_chain);
+  ASSERT_EQ(4, referrer_chain.size());
+  VerifyReferrerChainEntry(
+      download_url,                   // url
+      GURL(),                         // main_frame_url
+      ReferrerChainEntry::EVENT_URL,  // type
+      test_server_ip,                 // ip_address
+      iframe_url,                     // referrer_url
+      main_frame_url,                 // referrer_main_frame_url
+      true,                           // is_retargeting
+      std::vector<GURL>(),            // server redirects
+      ReferrerChainEntry::RENDERER_INITIATED_WITHOUT_USER_GESTURE,
+      referrer_chain.Get(0));
+  VerifyReferrerChainEntry(
+      iframe_url,                           // url
+      main_frame_url,                       // main_frame_url
+      ReferrerChainEntry::CLIENT_REDIRECT,  // type
+      test_server_ip,                       // ip_address
+      initial_subframe_url,                 // referrer_url
+      main_frame_url,                       // referrer_main_frame_url
+      false,                                // is_retargeting
+      std::vector<GURL>(),                  // server redirects
       ReferrerChainEntry::RENDERER_INITIATED_WITHOUT_USER_GESTURE,
       referrer_chain.Get(1));
   VerifyReferrerChainEntry(

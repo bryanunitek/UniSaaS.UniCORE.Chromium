@@ -5,10 +5,12 @@
 package org.chromium.chrome.browser.tab_bottom_sheet;
 
 import static org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetUtils.isActivityInactive;
+import static org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetUtils.isEdgeToEdgeEnabled;
 import static org.chromium.ui.animation.AnimationListeners.onAnimationEnd;
 
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.graphics.Rect;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -24,6 +26,9 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.context_sharing.R;
 import org.chromium.chrome.browser.ui.side_panel.SidePanelContainerCoordinator;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.thinwebview.ThinWebView;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.animation.AnimationHandler;
@@ -31,6 +36,7 @@ import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.base.WindowAndroid.ActivityStateObserver;
 import org.chromium.ui.insets.InsetObserver;
+import org.chromium.ui.insets.InsetObserver.WindowInsetObserver;
 import org.chromium.ui.insets.InsetObserver.WindowInsetsAnimationListener;
 import org.chromium.ui.util.CommonOnLayoutChangeListeners;
 import org.chromium.ui.util.TimeoutRunnable;
@@ -86,27 +92,62 @@ public class WebViewResizingHelper {
                 }
             };
 
+    private final WindowInsetObserver mWindowInsetObserver =
+            new WindowInsetObserver() {
+                @Override
+                public void onInsetChanged() {
+                    updateBounds();
+                }
+
+                @Override
+                public void onKeyboardInsetChanged(int inset) {
+                    updateBounds();
+                }
+            };
+
+    private final BottomSheetObserver mBottomSheetObserver =
+            new BottomSheetObserver() {
+                @Override
+                public void onSheetContentChanged(@Nullable BottomSheetContent newContent) {
+                    updateBounds();
+                }
+
+                @Override
+                public void onContainerBottomMarginChanged(@Px int bottomMargin) {
+                    updateBounds();
+                }
+            };
+
     private final Context mContext;
     private final FrameLayout mResizingContainer;
-    private final @Nullable View mResizingPlaceholder;
     private final View mExpandedContentGroup;
     private final WindowAndroid mWindowAndroid;
+    private final @Nullable BottomSheetController mBottomSheetController;
     private final @Nullable InsetObserver mInsetObserver;
     private final boolean mIsSidePanel;
-    private final @Nullable ResizingPlaceholderCoordinator mPlaceholderCoordinator;
+    private final @Px int mWebUiTopMarginPx;
+    private final Rect mLastSafeAreaInsets = new Rect(0, 0, 0, -1);
     private final View.OnLayoutChangeListener mOnLayoutChangeListener;
     private final @Nullable CoBrowseComponentProvider mComponentProvider;
+    private final @ColorInt int mBackgroundColor;
+    private final @ColorInt int mPlaceholderElemColor;
 
+    private @Nullable View mResizingPlaceholder;
+    private @Nullable ResizingPlaceholderCoordinator mPlaceholderCoordinator;
+    private boolean mPlaceholderInitialized;
     private @Nullable ThinWebView mThinWebView;
     private @Nullable WebContents mWebContents;
     private boolean mIsViewportSizeFixed;
     private boolean mPauseInsetUpdates;
+    private @Nullable TimeoutRunnable mPendingTimeoutRunnable;
 
     /**
-     * Constructs a {@link WebViewResizingHelper} with a nullable {@link CoBrowseComponentProvider}.
+     * Constructs a {@link WebViewResizingHelper} with a nullable {@link BottomSheetController} and
+     * {@link CoBrowseComponentProvider}.
      *
      * @param containerView The parent view containing the bottom sheet WebUI.
      * @param windowAndroid The window hosting the sheet.
+     * @param bottomSheetController The controller for the bottom sheet, or null.
      * @param backgroundColor The background color of the placeholder.
      * @param placeholderElemColor The element color of the placeholder skeleton items.
      * @param isSidePanel Whether the container is hosted in a side panel.
@@ -115,14 +156,21 @@ public class WebViewResizingHelper {
     public WebViewResizingHelper(
             View containerView,
             WindowAndroid windowAndroid,
+            @Nullable BottomSheetController bottomSheetController,
             @ColorInt int backgroundColor,
             @ColorInt int placeholderElemColor,
             boolean isSidePanel,
             @Nullable CoBrowseComponentProvider componentProvider) {
         mContext = containerView.getContext();
         mWindowAndroid = windowAndroid;
+        mBottomSheetController = bottomSheetController;
         mIsSidePanel = isSidePanel;
         mComponentProvider = componentProvider;
+        mBackgroundColor = backgroundColor;
+        mPlaceholderElemColor = placeholderElemColor;
+        mWebUiTopMarginPx =
+                mContext.getResources()
+                        .getDimensionPixelSize(R.dimen.tab_bottom_sheet_web_ui_top_margin);
 
         mInsetObserver = windowAndroid.getInsetObserver();
         mExpandedContentGroup = containerView.findViewById(R.id.expanded_content_group);
@@ -138,19 +186,16 @@ public class WebViewResizingHelper {
                         });
         mResizingContainer.addOnLayoutChangeListener(mOnLayoutChangeListener);
 
-        mPlaceholderCoordinator =
-                mComponentProvider != null
-                        ? mComponentProvider.createResizingPlaceholderCoordinator(
-                                mContext, backgroundColor, placeholderElemColor)
-                        : null;
-        mResizingPlaceholder =
-                mPlaceholderCoordinator != null ? mPlaceholderCoordinator.getView() : null;
-        if (mResizingPlaceholder != null) {
-            mResizingContainer.addView(mResizingPlaceholder);
-        }
-
         if (mInsetObserver != null) {
             mInsetObserver.addWindowInsetsAnimationListener(mInsetAnimationListener);
+        }
+        if (isEdgeToEdgeEnabled() && !mIsSidePanel) {
+            if (mInsetObserver != null) {
+                mInsetObserver.addObserver(mWindowInsetObserver);
+            }
+            if (mBottomSheetController != null) {
+                mBottomSheetController.addObserver(mBottomSheetObserver);
+            }
         }
         mWindowAndroid.addActivityStateObserver(mActivityStateObserver);
     }
@@ -166,6 +211,21 @@ public class WebViewResizingHelper {
         }
     }
 
+    private void ensurePlaceholderCoordinator() {
+        if (mPlaceholderInitialized) {
+            return;
+        }
+        mPlaceholderInitialized = true;
+        if (mComponentProvider == null) {
+            return;
+        }
+        mPlaceholderCoordinator =
+                mComponentProvider.createResizingPlaceholderCoordinator(
+                        mContext, mBackgroundColor, mPlaceholderElemColor);
+        mResizingPlaceholder =
+                mPlaceholderCoordinator != null ? mPlaceholderCoordinator.getView() : null;
+    }
+
     /** Destroys the helper and releases the WebContents. */
     public void destroy() {
         if (mPlaceholderCoordinator != null) {
@@ -175,6 +235,10 @@ public class WebViewResizingHelper {
         mWebContents = null;
         if (mInsetObserver != null) {
             mInsetObserver.removeWindowInsetsAnimationListener(mInsetAnimationListener);
+            mInsetObserver.removeObserver(mWindowInsetObserver);
+        }
+        if (mBottomSheetController != null) {
+            mBottomSheetController.removeObserver(mBottomSheetObserver);
         }
         mWindowAndroid.removeActivityStateObserver(mActivityStateObserver);
         mResizingContainer.removeOnLayoutChangeListener(mOnLayoutChangeListener);
@@ -182,12 +246,17 @@ public class WebViewResizingHelper {
 
     /** Resets the helper to its initial state without resetting the WebContents. */
     public void reset() {
+        ensurePlaceholderCoordinator();
         resetInternal(/* reattachPlaceholder= */ true);
     }
 
     private void resetInternal(boolean reattachPlaceholder) {
         if (mPlaceholderCoordinator != null) {
             mPlaceholderCoordinator.setIsResizing(false);
+        }
+        if (mPendingTimeoutRunnable != null) {
+            mPendingTimeoutRunnable.cancel();
+            mPendingTimeoutRunnable = null;
         }
         mAnimationHandler.forceFinishAnimation();
         mResizingContainer.removeAllViews();
@@ -198,6 +267,7 @@ public class WebViewResizingHelper {
                 mResizingContainer.addView(mResizingPlaceholder);
             }
         }
+        mLastSafeAreaInsets.set(0, 0, 0, -1);
         mThinWebView = null;
         mIsViewportSizeFixed = false;
         mPauseInsetUpdates = false;
@@ -223,6 +293,27 @@ public class WebViewResizingHelper {
         mThinWebView = thinWebView;
 
         updateBounds();
+    }
+
+    private void updateSafeAreaInsets(boolean ignoreCache) {
+        if (!isEdgeToEdgeEnabled() || mIsSidePanel || mWebContents == null) {
+            return;
+        }
+
+        float dipScale = mWindowAndroid.getDisplay().getDipScale();
+        int bottomInsetDip = (int) Math.ceil(getBottomSafeAreaInsetPx() / dipScale);
+        if (!ignoreCache && mLastSafeAreaInsets.bottom == bottomInsetDip) {
+            return;
+        }
+
+        int topInsetDip = (int) Math.ceil(mWebUiTopMarginPx / dipScale);
+        mLastSafeAreaInsets.set(0, topInsetDip, 0, bottomInsetDip);
+        mWebContents.setDisplayCutoutSafeArea(mLastSafeAreaInsets);
+    }
+
+    private @Px int getBottomSafeAreaInsetPx() {
+        if (mBottomSheetController == null) return 0;
+        return mBottomSheetController.getEdgeToEdgeBottomInset();
     }
 
     private @Px int getDecorViewHeight() {
@@ -327,13 +418,13 @@ public class WebViewResizingHelper {
         webView.setVisibility(View.VISIBLE);
 
         if (sizeChanged) {
-            TimeoutRunnable timeoutRunnable =
+            mPendingTimeoutRunnable =
                     new TimeoutRunnable(
                             this::onNextFrameAfterResize,
                             this::onNextFrameAfterResize,
                             TIMEOUT_RUNNABLE_TIMEOUT_MS);
-            timeoutRunnable.startTimeout();
-            mThinWebView.runOnNextFrame(timeoutRunnable);
+            mPendingTimeoutRunnable.startTimeout();
+            mThinWebView.runOnNextFrame(mPendingTimeoutRunnable);
         } else {
             onNextFrameAfterResize();
         }
@@ -396,6 +487,8 @@ public class WebViewResizingHelper {
             return false;
         }
 
+        updateSafeAreaInsets(ignoreCache);
+
         @Px int resizingContainerWidth = mResizingContainer.getMeasuredWidth();
         @Px int resizingContainerHeight = mResizingContainer.getMeasuredHeight();
 
@@ -445,5 +538,9 @@ public class WebViewResizingHelper {
     /** Returns the {@link ResizingPlaceholderCoordinator} managing the placeholder view. */
     @Nullable ResizingPlaceholderCoordinator getPlaceholderCoordinator() {
         return mPlaceholderCoordinator;
+    }
+
+    @Nullable TimeoutRunnable getPendingTimeoutRunnableForTesting() {
+        return mPendingTimeoutRunnable;
     }
 }

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <map>
+#include <ostream>
 #include <sstream>
 #include <string_view>
 
@@ -73,13 +74,9 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/constants/chromeos_features.h"
-#include "components/sync/base/features.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace glic::test {
-
-extern const InteractiveBrowserTestApi::DeepQuery kPathToMockGlicCloseButton;
-extern const InteractiveBrowserTestApi::DeepQuery kPathToGuestPanel;
 
 enum class TargetWebContents {
   kGlicWebUi,
@@ -146,7 +143,6 @@ class InteractiveGlicTestMixin : public T {
          // it.
          {features::kGlicLiveMode, {}},
 #if BUILDFLAG(IS_CHROMEOS)
-         {syncer::kReplaceSyncPromosWithSignInPromos, {}},
          { chromeos::features::kFeatureManagementGlic,
            {} }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -197,7 +193,7 @@ class InteractiveGlicTestMixin : public T {
 
     LOG(INFO) << "InteractiveGlicTest: done setting up";
 
-    SidePanelCoordinator::From(browser())->DisableAnimationsForTesting();
+    SidePanelUI::From(browser())->DisableAnimationsForTesting();
   }
 
   void TearDownOnMainThread() override {
@@ -353,8 +349,7 @@ class InteractiveGlicTestMixin : public T {
                   Api::WaitForWebContentsReady(kGlicContentsElementId))),
               Api::WaitForState(internal::kGlicInstanceCoordinatorState,
                                 GlicPanelState::kOpen),
-              Api::StopObservingState(internal::kGlicInstanceCoordinatorState)
-              /*, WaitForElementVisible(kPathToGuestPanel)*/);
+              Api::StopObservingState(internal::kGlicInstanceCoordinatorState));
         } else {
           // In Webview mode, GlicView hosts the WebUI (kGlicHostElementId)
           // and the guest WebContents (kGlicContentsElementId) is embedded
@@ -373,8 +368,7 @@ class InteractiveGlicTestMixin : public T {
                   Api::WaitForWebContentsReady(kGlicContentsElementId))),
               Api::WaitForState(internal::kGlicInstanceCoordinatorState,
                                 GlicPanelState::kOpen),
-              Api::StopObservingState(internal::kGlicInstanceCoordinatorState)
-              /*, WaitForElementVisible(kPathToGuestPanel)*/);
+              Api::StopObservingState(internal::kGlicInstanceCoordinatorState));
         }
         break;
       case GlicInstrumentMode::kHostOnly:

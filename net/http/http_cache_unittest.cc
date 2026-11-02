@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "base/byte_size.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -725,12 +726,12 @@ class FakeWebSocketHandshakeStreamCreateHelper
   }
   std::unique_ptr<WebSocketHandshakeStreamBase> CreateHttp2Stream(
       base::WeakPtr<SpdySession> session,
-      std::set<std::string> dns_aliases) override {
+      base::flat_set<std::string> dns_aliases) override {
     NOTREACHED();
   }
   std::unique_ptr<WebSocketHandshakeStreamBase> CreateHttp3Stream(
       std::unique_ptr<QuicChromiumClientSession::Handle> session,
-      std::set<std::string> dns_aliases) override {
+      base::flat_set<std::string> dns_aliases) override {
     NOTREACHED();
   }
 };
@@ -12153,7 +12154,7 @@ TEST_F(HttpCacheTestSplitCacheFeatureEnabled,
   // differentiate it from the response we received earlier.
   NetworkIsolationKey special_partition_nik(
       site, site, /*nonce=*/std::nullopt,
-      NetworkIsolationPartition::kProtectedAudienceSellerWorklet);
+      NetworkIsolationPartition::kFedCmUncredentialedRequests);
   MockHttpRequest special_partition_request(kSimpleGET_Transaction);
   request.network_isolation_key = special_partition_nik;
   request.network_anonymization_key =
@@ -12173,7 +12174,7 @@ TEST_F(HttpCacheTestSplitCacheFeatureEnabled,
   EXPECT_EQ(base::Seconds(50000), response.headers->GetMaxAgeValue().value());
 
   // We now have a cache entry for
-  // NetworkIsolationPartition::kProtectedAudienceSellerWorklet.
+  // NetworkIsolationPartition::kFedCmUncredentialedRequests.
   RunTransactionTestWithRequest(cache.http_cache(),
                                 transaction_info_for_special_partition, request,
                                 &response);

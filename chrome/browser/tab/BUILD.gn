@@ -9,7 +9,6 @@ import("//third_party/jni_zero/jni_zero.gni")
 
 android_library("java") {
   sources = [
-    "java/src/org/chromium/chrome/browser/tab/CollectionSaveForwarder.java",
     "java/src/org/chromium/chrome/browser/tab/CollectionStorageObserverFactory.java",
     "java/src/org/chromium/chrome/browser/tab/CurrentTabObserver.java",
     "java/src/org/chromium/chrome/browser/tab/LookAheadObservableSupplier.java",
@@ -159,8 +158,8 @@ android_resources("java_resources") {
 }
 
 generate_jni("jni_headers") {
+  deps = [ "//components/tabs/public/android:jni_headers" ]
   sources = [
-    "java/src/org/chromium/chrome/browser/tab/CollectionSaveForwarder.java",
     "java/src/org/chromium/chrome/browser/tab/CollectionStorageObserverFactory.java",
     "java/src/org/chromium/chrome/browser/tab/StorageCollectionSynchronizer.java",
     "java/src/org/chromium/chrome/browser/tab/StorageLoadedData.java",
@@ -231,10 +230,10 @@ robolectric_library("junit") {
 
 source_set("tab") {
   sources = [
-    "collection_save_forwarder.h",
     "collection_storage_observer.h",
     "collection_storage_package.h",
     "media_state.h",
+    "node_hash_cache.h",
     "payload.h",
     "payload_util.h",
     "restore_entity_tracker.h",
@@ -276,9 +275,9 @@ source_set("tab") {
 
 source_set("impl") {
   sources = [
-    "collection_save_forwarder.cc",
     "collection_storage_observer.cc",
     "collection_storage_package.cc",
+    "node_hash_cache.cc",
     "payload_util.cc",
     "storage_collection_synchronizer.cc",
     "storage_id.cc",
@@ -315,6 +314,7 @@ source_set("impl") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "node_hash_cache_unittest.cc",
     "payload_util_unittest.cc",
     "storage_loaded_data_unittest.cc",
     "tab_state_storage_service_unittest.cc",
@@ -327,6 +327,8 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//chrome/browser/tab/protocol",
     "//components/tabs:public",
+    "//components/tabs:test_support",
+    "//testing/gmock",
     "//testing/gtest",
   ]
 }

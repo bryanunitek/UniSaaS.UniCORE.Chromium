@@ -54,7 +54,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/download_test_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 
 using file_manager::test::TestCase;
 
@@ -266,7 +266,7 @@ IN_PROC_BROWSER_TEST_F(QuickOfficeForceFileDownloadEnabledBrowserTest,
 
   // This call will not wait for the download to finish.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), download_url, WindowOpenDisposition::kCurrentTab,
+      browser(), download_url, ui::mojom::WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Wait for the download itself to complete.
@@ -678,9 +678,10 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("directoryTreeExpandFolderOnDelayExpansionVolume"),
         TestCase("directoryTreeExpandAndSelectedOnDragMove"),
         TestCase("directoryTreeClickDriveRootWhenMyDriveIsActive"),
-#if !defined(ADDRESS_SANITIZER) && defined(NDEBUG)
+#if !defined(ADDRESS_SANITIZER) && !defined(MEMORY_SANITIZER) && defined(NDEBUG)
         // TODO(crbug.com/339374326): Flaking on
         // "Linux Chromium OS ASan LSan Tests (1)" and on several dbg bots.
+        // TODO(crbug.com/577912018): Failing on "Linux ChromiumOS MSan Tests".
         TestCase("directoryTreeHideExpandIconWhenLastSubFolderIsRemoved"),
 #endif
         TestCase("directoryTreeKeepDriveOrderAfterReconnected")));

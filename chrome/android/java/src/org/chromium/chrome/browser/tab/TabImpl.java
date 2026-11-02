@@ -1053,7 +1053,7 @@ class TabImpl implements Tab, TabInternal {
         if (isPdf) {
             boolean preferReused =
                     (params.getTransitionType() & PageTransition.CORE_MASK) == PageTransition.TYPED;
-            pdfInfo = PdfInfo.initReuse(preferReused);
+            pdfInfo = PdfInfo.initReuse(preferReused, params.getInitiatorOrigin());
             params.setIsPdf(true);
         }
         return pdfInfo;
@@ -2073,7 +2073,10 @@ class TabImpl implements Tab, TabInternal {
         assumeNonNull(webContents);
         View view = getView();
         assumeNonNull(view);
-        switch (webContents.getCurrentBackForwardTransitionStage()) {
+        var animationManager = webContents.getBackForwardTransitionAnimationManager();
+        // This notification originates from an existing transition animation manager.
+        assert animationManager != null;
+        switch (animationManager.getCurrentAnimationStage()) {
             case AnimationStage.NONE:
                 // Native animator is destroy before animation is done.
                 // Non-null nativePageSmoothTransitionDelegate means the page is transiting to
@@ -2114,7 +2117,11 @@ class TabImpl implements Tab, TabInternal {
                                         || currentWebContents.isDestroyed()) {
                                     return;
                                 }
-                                currentWebContents.onContentForNavigationEntryShown();
+                                var currentManager =
+                                        currentWebContents
+                                                .getBackForwardTransitionAnimationManager();
+                                assert currentManager != null;
+                                currentManager.onContentForNavigationEntryShown();
                                 notifyContentChanged();
                             });
                     mNativePageSmoothTransitionDelegate = null;
@@ -2125,7 +2132,10 @@ class TabImpl implements Tab, TabInternal {
                         view.post(
                                 () -> {
                                     if (isDestroyed() || webContents.isDestroyed()) return;
-                                    webContents.onContentForNavigationEntryShown();
+                                    var currentManager =
+                                            webContents.getBackForwardTransitionAnimationManager();
+                                    assert currentManager != null;
+                                    currentManager.onContentForNavigationEntryShown();
                                 });
                     }
                 }
@@ -2196,7 +2206,7 @@ class TabImpl implements Tab, TabInternal {
                 PdfUtils.shouldOpenPdfInline(isIncognito())
                         && PdfUtils.isDownloadedPdf(url.getSpec());
         boolean preferReuse = transitionType == PageTransition.TYPED || mIsNativePageCommitPending;
-        var pdfInfo = isPdf ? PdfInfo.initReuse(preferReuse) : null;
+        var pdfInfo = isPdf ? PdfInfo.initReuse(preferReuse, initiatorOrigin) : null;
         mIsNativePageCommitPending = false;
         if (!maybeShowNativePage(url.getSpec(), isReload, pdfInfo)) {
             // This is restricted to HTTP(S) URLs specifically, as these are the only schemes that
@@ -2943,14 +2953,18 @@ class TabImpl implements Tab, TabInternal {
     }
 
     /**
-     * Initializes the {@link PrefChangeRegistrar} to observe changes to autofill preferences once
-     * the native {@link PrefService} is ready for this tab's profile.
+     * Initializes the {@link PrefChangeRegistrar} to observe changes to autofill preferences once a
+     * {@link WebContents} is attached and the native {@link PrefService} is ready for this tab's
+     * profile.
      */
-    private void initAutofillPrefObserver() {
+    @VisibleForTesting
+    void initAutofillPrefObserver() {
         if (!ChromeFeatureList.sAndroidAutofillPrefObserver.isEnabled()) {
             return;
         }
-        if (mPrefChangeRegistrar != null || !mProfile.isNativeInitialized()) {
+        if (getWebContents() == null
+                || mPrefChangeRegistrar != null
+                || !mProfile.isNativeInitialized()) {
             return;
         }
         @Nullable PrefService prefs = UserPrefs.get(mProfile);
@@ -3394,7 +3408,8 @@ class TabImpl implements Tab, TabInternal {
     @Override
     public boolean isDisplayingBackForwardAnimation() {
         if (getWebContents() == null) return false;
-        return getWebContents().getCurrentBackForwardTransitionStage() != AnimationStage.NONE;
+        var manager = getWebContents().getBackForwardTransitionAnimationManager();
+        return manager != null && manager.getCurrentAnimationStage() != AnimationStage.NONE;
     }
 
     /**

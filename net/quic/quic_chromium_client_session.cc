@@ -12,6 +12,7 @@
 
 #include "base/check_deref.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -49,6 +50,7 @@
 #include "net/cert/signed_certificate_timestamp_and_status.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
+#include "net/dns/dns_alias_utility.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/transport_security_state.h"
 #include "net/log/net_log_event_type.h"
@@ -732,12 +734,11 @@ bool QuicChromiumClientSession::Handle::WasEverUsed() const {
   return session_->WasConnectionEverUsed();
 }
 
-const std::set<std::string>&
+const base::flat_set<std::string>&
 QuicChromiumClientSession::Handle::GetDnsAliasesForSessionKey(
     const QuicSessionKey& key) const {
-  static const base::NoDestructor<std::set<std::string>> emptyset_result;
   return session_ ? session_->GetDnsAliasesForSessionKey(key)
-                  : *emptyset_result;
+                  : dns_alias_utility::EmptyDnsAliases();
 }
 
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
@@ -1102,6 +1103,11 @@ QuicChromiumClientSession::QuicChromiumClientSession(
       migrate_idle_session_(migrate_idle_session),
       allow_port_migration_(
           allow_port_migration &&
+          // Check `kQuicEnablePortMigration` here rather than using it as the
+          // default value of `QuicParams::allow_port_migration` so that
+          // embedders or callers that explicitly set `allow_port_migration`
+          // cannot enable port migration when the feature is disabled.
+          base::FeatureList::IsEnabled(features::kQuicEnablePortMigration) &&
           // If the session targets a network, we could migrate to a different
           // port onto the same network. Having said that, this is non-trivial
           // to implement. For the time being don't migrate.
@@ -1490,6 +1496,11 @@ bool QuicChromiumClientSession::WasConnectionEverUsed() {
 
 bool QuicChromiumClientSession::was_ever_used_to_create_streams() const {
   return num_total_streams_ > 0;
+}
+
+bool QuicChromiumClientSession::WasClosedByLocalCancellation() const {
+  return source_ == quic::ConnectionCloseSource::FROM_SELF &&
+         connection_close_error_ == quic::QUIC_CONNECTION_CANCELLED;
 }
 
 QuicChromiumClientStream*
@@ -2005,6 +2016,7 @@ void QuicChromiumClientSession::OnConnectionClosed(
   DCHECK(!connection()->connected());
   logger_->OnConnectionClosed(frame, source);
   source_ = source;
+  connection_close_error_ = frame.quic_error_code;
 
   UMA_HISTOGRAM_COUNTS_1000("Net.QuicSession.NumDefaultPathDegrading",
                             connection()->GetStats().num_path_degrading);
@@ -4608,12 +4620,11 @@ void QuicChromiumClientSession::SendPing() {
   return connection()->SendPing();
 }
 
-const std::set<std::string>&
+const base::flat_set<std::string>&
 QuicChromiumClientSession::GetDnsAliasesForSessionKey(
     const QuicSessionKey& key) const {
-  static const base::NoDestructor<std::set<std::string>> emptyset_result;
   return session_pool_ ? session_pool_->GetDnsAliasesForSessionKey(key)
-                       : *emptyset_result;
+                       : dns_alias_utility::EmptyDnsAliases();
 }
 
 quic::QuicPacketLength

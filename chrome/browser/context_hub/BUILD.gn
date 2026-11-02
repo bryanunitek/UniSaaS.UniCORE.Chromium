@@ -25,6 +25,24 @@ source_set("prefs") {
   ]
 }
 
+if (!is_android) {
+  source_set("memory_banks_shortcut") {
+    sources = [
+      "memory_banks_shortcut.cc",
+      "memory_banks_shortcut.h",
+    ]
+
+    deps = [
+      ":prefs",
+      "//chrome/browser/ui:accelerator_utils_headers",
+      "//components/prefs",
+      "//ui/base",
+      "//ui/events:event_constants",
+      "//ui/events:events_base",
+    ]
+  }
+}
+
 source_set("context_hub") {
   sources = [
     "context_hub_service.cc",
@@ -56,6 +74,7 @@ source_set("context_hub") {
     "//components/optimization_guide/core",
     "//components/page_content_annotations/content",
     "//components/page_content_annotations/core",
+    "//components/passage_embeddings/core",
     "//components/personal_context/core",
     "//components/personal_context/proto:personal_context_proto",
     "//components/signin/public/identity_manager",
@@ -73,6 +92,7 @@ source_set("context_hub") {
 
   deps = [
     "//chrome/browser/contextual_tasks",
+    "//chrome/browser/passage_embeddings",
     "//chrome/browser/signin",
     "//chrome/browser/sync",
     "//chrome/browser/tab_group_sync",
@@ -109,6 +129,7 @@ source_set("unit_tests") {
     "//components/optimization_guide/core:test_support",
     "//components/page_content_annotations/content",
     "//components/page_content_annotations/content:test_support",
+    "//components/passage_embeddings/core:test_support",
     "//components/personal_context/core:test_support",
     "//components/saved_tab_groups/test_support",
     "//components/signin/public/identity_manager:test_support",
@@ -122,6 +143,16 @@ source_set("unit_tests") {
   ]
 
   if (!is_android) {
-    deps += [ "//chrome/browser/ui/tabs:tab_strip_model_observer" ]
+    sources += [ "memory_banks_shortcut_unittest.cc" ]
+    deps += [
+      ":memory_banks_shortcut",
+      ":prefs",
+      "//chrome/browser/ui:accelerator_utils_headers",
+      "//chrome/browser/ui/tabs:tab_strip_model_observer",
+      "//components/prefs:test_support",
+      "//ui/base",
+      "//ui/events:event_constants",
+      "//ui/events:events_base",
+    ]
   }
 }

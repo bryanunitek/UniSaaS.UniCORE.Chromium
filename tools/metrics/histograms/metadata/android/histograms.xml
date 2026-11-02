@@ -306,6 +306,8 @@ chromium-metrics-reviews@google.com.
       summary="tabs opened from Tips Notifications"/>
   <variant name="TypeUnknown"
       summary="tabs opened from a different case than one's listed"/>
+  <variant name="UndoClosure"
+      summary="tabs restored in the background by undoing their closure"/>
   <variant name="Unset" summary="pre-warmed tabs without creation reason"/>
 </variants>
 
@@ -1103,7 +1105,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.BackPress.MinimizeAppAndCloseTab.CustomTab.{Task}"
-    enum="MinimizeAppAndCloseTabType" expires_after="2026-12-06">
+    enum="MinimizeAppAndCloseTabType" expires_after="2027-12-06">
   <owner>mschillaci@google.com</owner>
   <owner>adelm@google.com</owner>
   <owner>src/chrome/browser/back_press/android/OWNERS</owner>
@@ -1178,6 +1180,30 @@ chromium-metrics-reviews@google.com.
     the action. We track this to monitor the failure rate of this action and the
     reason of failure (null tab model, empty tab list).
   </summary>
+</histogram>
+
+<histogram name="Android.BottomBar.Education.Onboarding.{OnboardingType}.Event"
+    enum="AndroidBottomBarEducationOnboardingEvent" expires_after="2027-05-26">
+  <owner>madhavpruthi@google.com</owner>
+  <owner>ckitagawa@chromium.org</owner>
+  <owner>polardz@google.com</owner>
+  <summary>
+    Recorded when an education UI element ({OnboardingType}) is shown, accepted,
+    declined, or dismissed in the Android Bottom Bar flow. DismissedOther means
+    the UI was closed by teardown, such as the activity being destroyed or the
+    bottom bar being hidden. For a bubble, BackPressed means back closed only
+    the bubble; when back leaves Chrome instead, the bubble closes as
+    DismissedOther.
+  </summary>
+<!-- LINT.IfChange(AndroidBottomBarEducationOnboardingType) -->
+
+  <token key="OnboardingType">
+    <variant name="DefaultBubble" summary="Default education bubble"/>
+    <variant name="GeminiBubble" summary="Gemini education bubble"/>
+    <variant name="OptInDialog" summary="Opt-in dialog"/>
+  </token>
+<!-- LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMetrics.java:AndroidBottomBarEducationOnboardingType) -->
+
 </histogram>
 
 <histogram name="Android.BottomBar.EnabledState" enum="BooleanEnabled"
@@ -1273,8 +1299,11 @@ chromium-metrics-reviews@google.com.
   <owner>polardz@google.com</owner>
   <summary>
     Recorded when the {IPHType} In-Product Help (IPH) in the Android Bottom Bar
-    triggers (is shown, dismissed, or acted upon to move the address bar to the
-    bottom).
+    triggers. Glic, NewTab and TabSwitcher come from the education tour
+    tooltips, which record only Shown and Dismissed. MovedToBottom applies to
+    the AddressBar IPH only. Until the standalone Glic and New Tab IPHs were
+    removed (crbug.com/574563293), they also recorded Glic and NewTab, but only
+    while education was off.
   </summary>
 <!-- LINT.IfChange(AndroidBottomBarIphFeature) -->
 
@@ -1282,20 +1311,10 @@ chromium-metrics-reviews@google.com.
     <variant name="AddressBar" summary="Address bar move-to-bottom"/>
     <variant name="Glic" summary="Gemini button"/>
     <variant name="NewTab" summary="New Tab button"/>
+    <variant name="TabSwitcher" summary="Tab Switcher button"/>
   </token>
 <!-- LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMetrics.java:AndroidBottomBarIphFeature) -->
 
-</histogram>
-
-<histogram name="Android.BottomBar.Promo.Event"
-    enum="AndroidBottomBarPromoEvent" expires_after="2027-05-26">
-  <owner>madhavpruthi@google.com</owner>
-  <owner>ckitagawa@chromium.org</owner>
-  <owner>polardz@google.com</owner>
-  <summary>
-    Recorded when the introductory promo dialog for the Android Bottom Bar is
-    shown, accepted, or dismissed.
-  </summary>
 </histogram>
 
 <histogram name="Android.BottomControlsStacker.NumberOfVisibleLayers"
@@ -1741,7 +1760,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.ComposeboxQueryController.AddTabContextCachedDuration"
-    units="ms" expires_after="2026-12-06">
+    units="ms" expires_after="2027-04-11">
   <owner>ckitagawa@chromium.org</owner>
   <owner>clank-tab-dev@google.com</owner>
   <summary>
@@ -2210,7 +2229,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.DragDrop.Image.Size" units="KB"
-    expires_after="2026-11-29">
+    expires_after="2027-04-11">
   <owner>shuyng@google.com</owner>
   <owner>clank-large-form-factors@google.com</owner>
   <summary>
@@ -3398,7 +3417,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Messages.Enqueued" enum="MessageIdentifier"
-    expires_after="2027-02-21">
+    expires_after="2027-04-25">
   <owner>aishwaryarj@google.com</owner>
   <owner>src/components/messages/OWNERS</owner>
   <summary>
@@ -3410,7 +3429,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Messages.Enqueued.Hidden" enum="MessageIdentifier"
-    expires_after="2026-12-06">
+    expires_after="2027-02-21">
   <owner>aishwaryarj@google.com</owner>
   <owner>src/components/messages/OWNERS</owner>
   <summary>
@@ -3421,7 +3440,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.Messages.Enqueued.Visible" enum="MessageIdentifier"
-    expires_after="2027-02-21">
+    expires_after="2027-04-25">
   <owner>aishwaryarj@google.com</owner>
   <owner>src/components/messages/OWNERS</owner>
   <summary>
@@ -4402,6 +4421,55 @@ chromium-metrics-reviews@google.com.
     timeout, but is not recorded if the onPrepare method is never called.
 
     Note: There is a recording gap between: 2025.09-2026.08.
+  </summary>
+</histogram>
+
+<histogram name="Android.Omnibox.SuggestionList.KeystrokeToUiModel.First"
+    units="ms" expires_after="2027-10-01">
+  <owner>pnoland@chromium.org</owner>
+  <owner>ender@google.com</owner>
+  <summary>
+    Records time elapsed between the keystroke that triggered a typed-text
+    suggestions request and converting the first (synchronous) set of received
+    suggestions to the UI model.
+
+    Unlike Android.Omnibox.SuggestionList.RequestToUiModel.First, whose clock
+    starts when the autocomplete request is issued, this metric includes the
+    deferral between the keystroke and the start of the request, and therefore
+    reflects the latency perceived by the user.
+
+    For the complete, asynchronous iteration see the
+    Android.Omnibox.SuggestionList.KeystrokeToUiModel.Last metric.
+
+    This metric is recorded at most once per typed-text autocomplete request,
+    timed from the most recent edit before the request started: edits arriving
+    while a request is still deferred are coalesced into that request, so the
+    sample count depends on the deferral duration. It is not recorded for
+    zero-prefix suggestions requests.
+  </summary>
+</histogram>
+
+<histogram name="Android.Omnibox.SuggestionList.KeystrokeToUiModel.Last"
+    units="ms" expires_after="2027-10-01">
+  <owner>pnoland@chromium.org</owner>
+  <owner>ender@google.com</owner>
+  <summary>
+    Records time elapsed between the keystroke that triggered a typed-text
+    suggestions request and converting the final (asynchronous) set of received
+    suggestions to the UI model.
+
+    Unlike Android.Omnibox.SuggestionList.RequestToUiModel.Last, whose clock
+    starts when the autocomplete request is issued, this metric includes the
+    deferral between the keystroke and the start of the request, and therefore
+    reflects the latency perceived by the user.
+
+    For the short, synchronous iteration see the
+    Android.Omnibox.SuggestionList.KeystrokeToUiModel.First metric.
+
+    This metric is recorded at most once per typed-text request (on the first
+    reply if that reply is already final). It is not recorded for zero-prefix
+    suggestions requests, and is dropped if the request is canceled before its
+    final reply, e.g. by further input or by ending the Omnibox interaction.
   </summary>
 </histogram>
 
@@ -7056,6 +7124,35 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Android.WebView.AndroidX.Web.ApiCall"
+    enum="AndroidXWebApiCall" expires_after="never">
+<!-- expires-never: used in server pipeline to monitor WebView API usage -->
+
+  <owner>bewise@chromium.org</owner>
+  <owner>src/android_webview/OWNERS</owner>
+  <summary>
+    Records calls to WebView APIs backing the AndroidX androidx.web library
+    (e.g. WebContent). Logged each time a tracked method in
+    org.chromium.support_lib_boundary.web is called. Note that
+    androidx.web:web-compose also uses WebContent in addition to the WebSurface
+    APIs tracked by &quot;Android.WebView.AndroidX.WebCompose.ApiCall&quot;.
+  </summary>
+</histogram>
+
+<histogram name="Android.WebView.AndroidX.WebCompose.ApiCall"
+    enum="AndroidXWebComposeApiCall" expires_after="never">
+<!-- expires-never: used in server pipeline to monitor WebView API usage -->
+
+  <owner>bewise@chromium.org</owner>
+  <owner>src/android_webview/OWNERS</owner>
+  <summary>
+    Records calls to WebSurface WebView APIs backing the AndroidX
+    androidx.web:web-compose library. Logged each time a tracked
+    WebSurface-related method in org.chromium.support_lib_boundary.web is
+    called.
+  </summary>
+</histogram>
+
 <histogram name="Android.WebView.ApiCall" enum="WebViewApiCall"
     expires_after="never">
 <!-- expires-never: used in server pipeline to monitor WebView API usage -->
@@ -8106,7 +8203,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.HttpCacheQuotaApi.AbsoluteValue.{ProfileType}"
-    units="KiB" expires_after="2026-12-01">
+    units="KiB" expires_after="2027-06-01">
   <owner>ashleynewson@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8123,7 +8220,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.HttpCacheQuotaApi.ChangeHistory.{ProfileType}"
-    enum="HttpCacheQuotaChangeHistory" expires_after="2026-12-01">
+    enum="HttpCacheQuotaChangeHistory" expires_after="2027-06-01">
   <owner>ashleynewson@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8140,7 +8237,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.HttpCacheQuotaApi.RelativeValue.{ProfileType}"
-    units="%" expires_after="2026-12-01">
+    units="%" expires_after="2027-06-01">
   <owner>ashleynewson@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8160,7 +8257,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Android.WebView.HttpCacheQuotaApi.RestoredFromPrefs.{ProfileType}"
-    enum="Boolean" expires_after="2026-12-01">
+    enum="Boolean" expires_after="2027-06-01">
   <owner>ashleynewson@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8177,7 +8274,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Android.WebView.HttpCacheQuotaApi.UseDefaultQuota.{ProfileType}"
-    enum="Boolean" expires_after="2026-12-01">
+    enum="Boolean" expires_after="2027-06-01">
   <owner>ashleynewson@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8203,19 +8300,6 @@ chromium-metrics-reviews@google.com.
     This is emitted once during WebView global initialization.
 
     Only emitted for AndroidWebView.
-  </summary>
-</histogram>
-
-<histogram name="Android.WebView.InputStreamTime" units="ms"
-    expires_after="2025-06-01">
-  <owner>jam@chromium.org</owner>
-  <owner>cduvall@chromium.org</owner>
-  <owner>stefanoduo@google.com</owner>
-  <summary>
-    Measures how long InputStreams take from creation to completion. This is
-    emitted for all streams whether they succeed or fail. This metric was
-    expired between December 2023 and May 2024. Data from that period will be
-    incomplete.
   </summary>
 </histogram>
 
@@ -8655,7 +8739,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.NonEmbeddedMetrics.HistogramRecordAge"
-    units="minutes" expires_after="2027-02-21">
+    units="minutes" expires_after="2027-04-25">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8668,7 +8752,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.NonEmbeddedMetrics.NumHistograms"
-    units="histograms" expires_after="2027-02-21">
+    units="histograms" expires_after="2027-04-25">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8680,7 +8764,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Android.WebView.NonEmbeddedMetrics.ParsingLogResult"
     enum="AndroidWebViewNonEmbeddedMetricsParsingLogResult"
-    expires_after="2027-02-21">
+    expires_after="2027-04-25">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -8692,7 +8776,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Android.WebView.NonEmbeddedMetrics.TransmissionResult"
-    enum="AndroidWebViewDevUiMetricsTransmission" expires_after="2027-02-21">
+    enum="AndroidWebViewDevUiMetricsTransmission" expires_after="2027-04-25">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -9017,6 +9101,17 @@ chromium-metrics-reviews@google.com.
 
     This histogram is recorded when the task completes, which can be on either
     success, failure, or timeout.
+  </summary>
+</histogram>
+
+<histogram name="Android.WebView.RunningDuringVariationsUpdate" enum="Boolean"
+    expires_after="2027-04-20">
+  <owner>alexmitra@chromium.org</owner>
+  <owner>src/android_webview/OWNERS</owner>
+  <summary>
+    Records true if a WebView is running while the synthetic variations file is
+    modified. This metric never records false. The value is recorded after the
+    variations file is successfully modified.
   </summary>
 </histogram>
 

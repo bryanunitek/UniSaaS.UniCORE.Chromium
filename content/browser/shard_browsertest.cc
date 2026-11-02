@@ -293,6 +293,12 @@ IN_PROC_BROWSER_TEST_F(ShardBrowserTest, DataUrlSubframe) {
 // SiteInstance::ShouldAssignSiteForURL()), so it doesn't determine a shard
 // itself.
 IN_PROC_BROWSER_TEST_F(ShardBrowserTest, BrowserInitiatedAboutBlank) {
+  // TODO(crbug.com/577777639): The expectations below assume that the
+  // about:blank navigation proactively swaps BrowsingInstances, which doesn't
+  // happen when BackForwardCache is disabled (e.g. on linux-bfcache-rel).
+  if (!CanCrossSiteNavigationsProactivelySwapBrowsingInstances()) {
+    GTEST_SKIP() << "Requires proactive BrowsingInstance swaps.";
+  }
   EXPECT_TRUE(NavigateToURL(shell(), GetURL("isolated.com")));
   RenderFrameHostImpl* isolated_rfh = web_contents()->GetPrimaryMainFrame();
   EXPECT_EQ(SiteShard::kEmbedderSites, GetSiteInstanceShard(isolated_rfh));
@@ -1014,7 +1020,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedOriginShardBrowserTest,
 // origin from another shard, e.g. if it's compromised. Without shards, the
 // process isn't locked (since site isolation is disabled), so it could commit
 // any such URL and origin. With shards, the Citadel checks in
-// ChildProcessSecurityPolicyImpl::CanAccessMaybeOpaqueOrigin() only allow an
+// ChildProcessSecurityPolicyImpl::CanCommitMaybeOpaqueNewOrigin() only allow an
 // unlocked process to commit origins from its own shard.
 class KillShardBrowserTest : public ShardBrowserTest {
  protected:

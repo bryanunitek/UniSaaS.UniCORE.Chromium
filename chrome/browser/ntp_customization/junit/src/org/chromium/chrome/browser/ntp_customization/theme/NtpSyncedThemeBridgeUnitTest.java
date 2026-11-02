@@ -6,10 +6,11 @@ package org.chromium.chrome.browser.ntp_customization.theme;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -67,7 +68,7 @@ public class NtpSyncedThemeBridgeUnitTest {
     }
 
     @Test
-    public void onCustomBackgroundImageUpdated() {
+    public void testOnThemeCollectionUpdated_passesIsImageFromSyncThrough() {
         CustomBackgroundInfo info =
                 new CustomBackgroundInfo(
                         BACKGROUND_URL,
@@ -76,13 +77,33 @@ public class NtpSyncedThemeBridgeUnitTest {
                         /* isDailyRefreshEnabled= */ false);
         when(mNatives.getCustomBackgroundInfo(any()))
                 .thenReturn(new SyncedBackgroundInfo(info, /* primaryColor= */ null));
-        mNtpSyncedThemeBridge.onCustomBackgroundImageUpdated();
-        verify(mObserver).onThemeCollectionSynced(info, /* primaryColor= */ null);
+        mNtpSyncedThemeBridge.onThemeCollectionUpdated(/* isImageFromSync= */ true);
+        verify(mObserver)
+                .onThemeCollectionImageAvailable(
+                        info, /* primaryColor= */ null, /* isImageFromSync= */ true);
 
         when(mNatives.getCustomBackgroundInfo(any()))
                 .thenReturn(new SyncedBackgroundInfo(info, PRIMARY_COLOR));
-        mNtpSyncedThemeBridge.onCustomBackgroundImageUpdated();
-        verify(mObserver).onThemeCollectionSynced(info, PRIMARY_COLOR);
+        mNtpSyncedThemeBridge.onThemeCollectionUpdated(/* isImageFromSync= */ false);
+        verify(mObserver)
+                .onThemeCollectionImageAvailable(info, PRIMARY_COLOR, /* isImageFromSync= */ false);
+    }
+
+    @Test
+    public void testOnThemeCollectionUpdated_nullInfo() {
+        when(mNatives.getCustomBackgroundInfo(any())).thenReturn(null);
+        mNtpSyncedThemeBridge.onThemeCollectionUpdated(/* isImageFromSync= */ true);
+        verify(mObserver)
+                .onThemeCollectionImageAvailable(
+                        /* info= */ null, /* primaryColor= */ null, /* isImageFromSync= */ true);
+    }
+
+    @Test
+    public void testOnThemeCollectionUpdated_afterDestroy_isNoOp() {
+        mNtpSyncedThemeBridge.destroy();
+        mNtpSyncedThemeBridge.onThemeCollectionUpdated(/* isImageFromSync= */ true);
+        verify(mNatives, never()).getCustomBackgroundInfo(any());
+        verify(mObserver, never()).onThemeCollectionImageAvailable(any(), any(), anyBoolean());
     }
 
     @Test
@@ -92,15 +113,19 @@ public class NtpSyncedThemeBridgeUnitTest {
     }
 
     @Test
-    public void testIsProcessingSyncUpdate() {
-        when(mNatives.isProcessingSyncUpdate(mNativeNtpSyncedThemeBridge)).thenReturn(true);
-        assertTrue(mNtpSyncedThemeBridge.isProcessingSyncUpdate());
+    public void testGetStoredContinuousThemeAndNotify() {
+        mNtpSyncedThemeBridge.getStoredContinuousThemeAndNotify();
 
-        when(mNatives.isProcessingSyncUpdate(mNativeNtpSyncedThemeBridge)).thenReturn(false);
-        assertFalse(mNtpSyncedThemeBridge.isProcessingSyncUpdate());
+        verify(mNatives).getStoredContinuousThemeAndNotify(mNativeNtpSyncedThemeBridge);
+    }
 
+    @Test
+    public void testGetStoredContinuousThemeAndNotify_afterDestroy_isNoOp() {
         mNtpSyncedThemeBridge.destroy();
-        assertFalse(mNtpSyncedThemeBridge.isProcessingSyncUpdate());
+
+        mNtpSyncedThemeBridge.getStoredContinuousThemeAndNotify();
+
+        verify(mNatives, never()).getStoredContinuousThemeAndNotify(any());
     }
 
     @Test
@@ -116,8 +141,10 @@ public class NtpSyncedThemeBridgeUnitTest {
                         /* isDailyRefreshEnabled= */ false);
         when(mNatives.getCustomBackgroundInfo(any()))
                 .thenReturn(new SyncedBackgroundInfo(info, /* primaryColor= */ null));
-        bridge.onCustomBackgroundImageUpdated();
-        verify(observer).onThemeCollectionSynced(info, /* primaryColor= */ null);
+        bridge.onThemeCollectionUpdated(/* isImageFromSync= */ true);
+        verify(observer)
+                .onThemeCollectionImageAvailable(
+                        info, /* primaryColor= */ null, /* isImageFromSync= */ true);
 
         bridge.onChromeColorSynced(THEME_COLOR_ID);
         verify(observer).onChromeColorSynced(THEME_COLOR_ID);
@@ -173,7 +200,7 @@ public class NtpSyncedThemeBridgeUnitTest {
                         ATTRIBUTION_LINE_1,
                         ATTRIBUTION_LINE_2,
                         ATTRIBUTION_ACTION_URL,
-                        0,
+                        /* primaryColor= */ 0,
                         /* isDailyRefresh= */ true);
     }
 

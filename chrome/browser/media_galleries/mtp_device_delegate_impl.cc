@@ -1012,7 +1012,9 @@ void MTPDeviceDelegateImpl::ReadDirectoryInternal(
     ReadDirectorySuccessCallback success_callback,
     ErrorCallback error_callback) {
   CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
-  CHECK(task_in_progress_, base::NotFatalUntil::M161);
+  // TODO(crbug.com/577935716): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(task_in_progress_);
 
   std::optional<uint32_t> dir_id = CachedPathToId(root);
   if (!dir_id) {
@@ -1410,7 +1412,9 @@ void MTPDeviceDelegateImpl::EnsureInitAndRunTask(PendingTaskInfo task_info) {
 
 void MTPDeviceDelegateImpl::RunTask(PendingTaskInfo task_info) {
   CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
-  CHECK_EQ(kInitialized, init_state_, base::NotFatalUntil::M161);
+  // TODO(crbug.com/575998360): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK_EQ(kInitialized, init_state_);
   CHECK(!task_in_progress_, base::NotFatalUntil::M161);
   task_in_progress_ = true;
 
@@ -1550,7 +1554,9 @@ void MTPDeviceDelegateImpl::OnDidGetFileInfoToReadDirectory(
     ErrorCallback error_callback,
     const base::File::Info& file_info) {
   CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
-  CHECK(task_in_progress_, base::NotFatalUntil::M161);
+  // TODO(crbug.com/577201649): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(task_in_progress_);
   if (!file_info.is_directory) {
     return HandleDeviceFileError(std::move(error_callback), dir_id,
                                  base::File::FILE_ERROR_NOT_A_DIRECTORY);
@@ -1965,8 +1971,9 @@ base::FilePath MTPDeviceDelegateImpl::NextUncachedPathComponent(
     const base::FilePath& path,
     const base::FilePath& cached_path) const {
   CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
-  CHECK(cached_path.empty() || cached_path.IsParent(path),
-        base::NotFatalUntil::M161);
+  // TODO(crbug.com/575998360): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(cached_path.empty() || cached_path.IsParent(path));
 
   base::FilePath uncached_path;
   std::string device_relpath = GetDeviceRelativePath(device_path_, path);

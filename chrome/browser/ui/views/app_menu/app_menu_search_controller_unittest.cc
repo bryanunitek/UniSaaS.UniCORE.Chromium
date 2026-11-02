@@ -131,9 +131,14 @@ TEST_F(AppMenuSearchControllerTest, FlattenHierarchyFiltering) {
                           AppMenuActionItem::DisplayType::kSearch);
   menu_root_->AddChild(std::move(search_row));
 
+  // The footer container is not a result itself, but its actions are indexed.
   auto footer = actions::ActionItem::Builder().Build();
   footer->SetProperty(AppMenuActionItem::kDisplayTypeKey,
                       AppMenuActionItem::DisplayType::kFooter);
+  footer->AddChild(actions::ActionItem::Builder()
+                       .SetActionId(kActionOptions)
+                       .SetText(u"Settings")
+                       .Build());
   menu_root_->AddChild(std::move(footer));
 
   auto override_item = actions::ActionItem::Builder()
@@ -149,13 +154,46 @@ TEST_F(AppMenuSearchControllerTest, FlattenHierarchyFiltering) {
   controller_->InitializeSearchIndex();
 
   const auto& items = controller_->search_items_for_testing();
-  ASSERT_EQ(items.size(), 2u);
+  ASSERT_EQ(items.size(), 3u);
 
   EXPECT_EQ(items[0]->GetTitle(), u"New Tab");
   EXPECT_EQ(items[0]->GetType(), AppMenuSearchItem::Type::kAction);
 
-  EXPECT_EQ(items[1]->GetTitle(), u"Overridden Text");
+  EXPECT_EQ(items[1]->GetTitle(), u"Settings");
+  EXPECT_EQ(items[1]->GetSecondaryText(), u"");
   EXPECT_EQ(items[1]->GetType(), AppMenuSearchItem::Type::kAction);
+
+  EXPECT_EQ(items[2]->GetTitle(), u"Overridden Text");
+  EXPECT_EQ(items[2]->GetType(), AppMenuSearchItem::Type::kAction);
+}
+
+TEST_F(AppMenuSearchControllerTest, FlattenHierarchyExcludesNotifications) {
+  auto notification_section = actions::ActionItem::Builder().Build();
+  notification_section->SetProperty(AppMenuActionItem::kDisplayTypeKey,
+                                    AppMenuActionItem::DisplayType::kSection);
+  auto notification = actions::ActionItem::Builder()
+                          .SetActionId(kActionUpgradeDialog)
+                          .SetText(u"Update Chrome")
+                          .SetVisible(true)
+                          .SetEnabled(true)
+                          .Build();
+  notification->SetProperty(AppMenuActionItem::kDisplayTypeKey,
+                            AppMenuActionItem::DisplayType::kNotification);
+  notification_section->AddChild(std::move(notification));
+  menu_root_->AddChild(std::move(notification_section));
+
+  menu_root_->AddChild(actions::ActionItem::Builder()
+                           .SetActionId(kActionNewTab)
+                           .SetText(u"New Tab")
+                           .SetVisible(true)
+                           .SetEnabled(true)
+                           .Build());
+
+  controller_->InitializeSearchIndex();
+
+  const auto& items = controller_->search_items_for_testing();
+  ASSERT_EQ(items.size(), 1u);
+  EXPECT_EQ(items[0]->GetTitle(), u"New Tab");
 }
 
 TEST_F(AppMenuSearchControllerTest,
@@ -894,6 +932,27 @@ TEST_F(AppMenuSearchControllerTest, BackPressShowsNormalMenu) {
       .NotifyDefaultMouseClick();
   EXPECT_TRUE(search_bar_->GetText().empty());
   EXPECT_FALSE(IsBackButtonVisible());
+}
+
+TEST_F(AppMenuSearchControllerTest, OtherDeviceTabsSubmenuIndexed) {
+  auto other_device_tabs_menu = actions::ActionItem::Builder()
+                                    .SetActionId(kActionOtherDeviceTabsSubmenu)
+                                    .SetText(u"Other device tabs")
+                                    .Build();
+
+  other_device_tabs_menu->AddChild(AppMenuActionItem::CreateHeader(u"Pixel 9"));
+  other_device_tabs_menu->AddChild(
+      actions::ActionItem::Builder().SetText(u"Synced Page").Build());
+
+  menu_root_->AddChild(std::move(other_device_tabs_menu));
+
+  controller_->InitializeSearchIndex();
+
+  const auto& items = controller_->search_items_for_testing();
+  ASSERT_EQ(items.size(), 1u);
+  EXPECT_EQ(items[0]->GetTitle(), u"Synced Page");
+  EXPECT_EQ(items[0]->GetType(), AppMenuSearchItem::Type::kRecentTabs);
+  EXPECT_EQ(items[0]->GetSecondaryText(), u"Other device tabs");
 }
 
 }  // namespace

@@ -23,6 +23,7 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/hang_watcher.h"
 #include "build/build_config.h"
+#include "chrome/browser/actor/tools/file_picker_interceptor.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/platform_util.h"
@@ -655,6 +656,13 @@ void FileSelectHelper::RunFileChooser(
     content::RenderFrameHost* render_frame_host,
     scoped_refptr<content::FileSelectListener> listener,
     const FileChooserParams& params) {
+  // An actor task acting on this tab may have staged files for upload, in
+  // which case the request is answered with those files and no file picker is
+  // shown.
+  if (actor::MaybeInterceptFileChooser(*render_frame_host, listener, params)) {
+    return;
+  }
+
   Profile* profile = Profile::FromBrowserContext(
       render_frame_host->GetProcess()->GetBrowserContext());
 
@@ -893,8 +901,8 @@ void FileSelectHelper::EnumerateDirectoryImpl(
     content::WebContents* tab,
     scoped_refptr<content::FileSelectListener> listener,
     const base::FilePath& path) {
-  DCHECK(listener);
-  DCHECK(!listener_);
+  CHECK(listener, base::NotFatalUntil::M162);
+  CHECK(!listener_, base::NotFatalUntil::M162);
   dialog_type_ = ui::SelectFileDialog::SELECT_NONE;
   web_contents_ = tab;
   listener_ = std::move(listener);
@@ -983,7 +991,7 @@ void FileSelectHelper::OnVisibilityChanged(content::Visibility visibility) {
 
 void FileSelectHelper::InitLifecycleObserver(
     content::WebContents* web_contents) {
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M162);
   content::WebContentsObserver::Observe(web_contents);
 
   tabs::TabInterface* tab_interface =

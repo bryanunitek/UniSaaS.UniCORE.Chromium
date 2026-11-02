@@ -120,6 +120,9 @@ BASE_DECLARE_FEATURE(kApiProxyOverrideRulesPrivate);
 // runtime.getPlatformInfo() API.
 BASE_DECLARE_FEATURE(kApiRuntimeGetPlatformInfoNaClArch);
 
+// Controls the availability of the runtime.getDocumentId() API.
+BASE_DECLARE_FEATURE(kApiRuntimeGetDocumentId);
+
 // Controls the availability of runtime.sendNativeMessage and
 // runtime.connectNative on Desktop Android.
 BASE_DECLARE_FEATURE(kApiDesktopAndroidNativeMessaging);
@@ -206,6 +209,13 @@ BASE_DECLARE_FEATURE(kExtensionAutoRejectIncognitoConnectability);
 // See https://developer.chrome.com/blog/debugger-enterprise-policy-restrictions.
 BASE_DECLARE_FEATURE(kExtensionDebuggerStrictPolicyRestrictions);
 
+// If enabled (the default), ExtensionDownloader decides whether to require Web
+// Store publisher proof based on the update URLs of the tasks requesting a
+// download. If disabled (kill switch), it reverts to checking the CRX download
+// URL from the update manifest. Note that disabling this feature has security
+// implications.
+BASE_DECLARE_FEATURE(kExtensionDownloaderPublisherProofByUpdateUrl);
+
 // Allow e.g. .css files to use default_locale messages in WAR files via GUID.
 // TODO(crbug.com/435609878): Remove after m142. It's for safe m141 back merge.
 BASE_DECLARE_FEATURE(kExtensionLocalizationGuid);
@@ -264,6 +274,16 @@ BASE_DECLARE_FEATURE(kExperimentalOmniboxLabs);
 // extensions can be disabled at ESB opt-in time or when an extension is moved
 // out of the allowlist.
 BASE_DECLARE_FEATURE(kSafeBrowsingCrxAllowlistAutoDisable);
+
+// When enabled, `WebRequestProxyingURLLoaderFactory` moves `current_response_`
+// instead of deep-cloning it when forwarding the final `OnReceiveResponse()` to
+// `target_client_`.
+BASE_DECLARE_FEATURE(kWebRequestProxyMoveResponse);
+
+// When enabled, `WebRequestProxyingURLLoaderFactory` binds
+// `TrustedHeaderClient` and cloned `URLLoaderFactory` receivers to
+// `navigation_response_task_runner_`.
+BASE_DECLARE_FEATURE(kWebRequestProxyNavigationResponseTaskRunner);
 
 // Controls whether the component webstore hosted app is loaded.
 BASE_DECLARE_FEATURE(kWebstoreHostedApp);
@@ -384,6 +404,18 @@ BASE_DECLARE_FEATURE(kUseSha256ForExtensionHashes);
 // must be explicitly listed to be web accessible, and the generated background
 // page is never web accessible.
 BASE_DECLARE_FEATURE(kRestrictGeneratedPathsInWebAccessibleResources);
+
+// If enabled (the default), `ExtensionMessagePort` only registers a frame as a
+// message receiver for an extension if the frame's process may act for that
+// extension: a process in `ProcessMap` for the extension, or a process that has
+// run a content script or user script from the extension. The extension's own
+// pages shown in its `<webview>` (e.g. a Chrome App's webview-accessible
+// resources) are also registered, as long as the browser confirms that their
+// process committed the extension's origin. If disabled, every live frame is
+// registered. Disabling this has security implications.
+// TODO(crbug.com/578977501): Remove this flag once the change has shipped to
+// stable without issues.
+BASE_DECLARE_FEATURE(kRestrictMessagingReceiverFramesToExtensionProcesses);
 
 }  // namespace extensions_features
 

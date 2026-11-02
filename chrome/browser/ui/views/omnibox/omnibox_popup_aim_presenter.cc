@@ -4,8 +4,10 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_aim_presenter.h"
 
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 #include "base/feature_list.h"
 #include "base/task/single_thread_task_runner.h"
@@ -16,7 +18,9 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_aim_popup_webui_content.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
+#include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
 #include "chrome/browser/ui/webui/top_chrome/webui_contents_preload_manager.h"
+#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/permissions/permission_request_manager.h"
 
@@ -25,15 +29,15 @@ OmniboxPopupAimPresenter::OmniboxPopupAimPresenter(
     OmniboxController* controller,
     OmniboxPopupPresenterDelegate& presenter_delegate)
     : OmniboxPopupPresenterBase(location_bar, presenter_delegate, controller) {
-  // With `omnibox::kOmniboxAimPopupDeferCreation`, the content is created by
-  // the first `EnsureWebUIContentCreated()` call instead. It comes from the
-  // task posted after the browser window presents a frame, from `Show()`, or
-  // from the classic popup's context menu, which needs the AIM WebContents.
-  if (base::FeatureList::IsEnabled(omnibox::kOmniboxAimPopupDeferCreation)) {
-    CreateWebUIContentAfterBrowserWindowPresentation();
-  } else {
-    SetWebUIContent(CreateWebUIContent());
+  // If the content is not created here, it is created on demand by `Show()`
+  // or by the classic popup's context menu, which needs the AIM WebContents.
+  WebUIContentCreationStrategy strategy =
+      GetWebUIContentCreationStrategy(omnibox::kOmniboxAimPopupDeferCreation);
+  if (strategy == WebUIContentCreationStrategy::kAfterWindowPresentation &&
+      !omnibox::kOmniboxAimPopupCreateOnFirstPresentation.Get()) {
+    strategy = WebUIContentCreationStrategy::kOnDemand;
   }
+  ApplyWebUIContentCreationStrategy(strategy);
 }
 
 OmniboxPopupAimPresenter::~OmniboxPopupAimPresenter() = default;
@@ -64,9 +68,10 @@ std::string_view OmniboxPopupAimPresenter::GetPopupMetricPrefix() const {
 }
 
 std::unique_ptr<OmniboxPopupWebUIBaseContent>
-OmniboxPopupAimPresenter::CreateWebUIContent() {
-  return std::make_unique<OmniboxAimPopupWebUIContent>(this, location_bar(),
-                                                       controller());
+OmniboxPopupAimPresenter::CreateWebUIContent(
+    std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>> contents) {
+  return std::make_unique<OmniboxAimPopupWebUIContent>(
+      this, location_bar(), controller(), std::move(contents));
 }
 
 void OmniboxPopupAimPresenter::LogResultToContentReadyMetric(

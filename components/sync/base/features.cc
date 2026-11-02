@@ -56,9 +56,6 @@ bool IsContactInfoDataTypeForCustomPassphraseUsersEnabled() {
 BASE_FEATURE(kSyncEnableContactInfoDataTypeForDasherUsers,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSeparateLocalAndAccountSearchEngines,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kReplaceSyncPromosWithSignInPromos,
 #if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
              base::FEATURE_ENABLED_BY_DEFAULT
@@ -110,18 +107,6 @@ DEFINE_SYNC_AUTOFILL_AI_FEATURE(kSyncWalletVehicleRegistrations);
 BASE_FEATURE(kSpellcheckSeparateLocalAndAccountDictionaries,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-BASE_FEATURE(kReadingListEnableSyncTransportModeUponSignIn,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsReadingListAccountStorageEnabled() {
-  return base::FeatureList::IsEnabled(
-      syncer::kReadingListEnableSyncTransportModeUponSignIn);
-}
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
-#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
 
 BASE_FEATURE(kSeparateLocalAndAccountThemes, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -132,8 +117,6 @@ BASE_FEATURE(kSyncIncreaseNudgeDelayForSingleClient,
 BASE_FEATURE(kSyncTrustedVaultErrorMessageDuration,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
-
-BASE_FEATURE(kSyncEnableNewSyncDashboardUrl, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncUsePropagatedAccessToken, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -148,16 +131,13 @@ BASE_FEATURE(kEstimateNewSignInUsersWithFinchAvailablePopulation,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-BASE_FEATURE(kSyncFixWebSigninSessionDurationForShortLivedSessions,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kSyncDisambiguateDeviceNamesWithChannel,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncNigoriAuthenticateIV, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncMigrateFromImplicitPassphrase,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncMigrateLoopbackServerBookmarksToClientTagHash,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -175,5 +155,8 @@ BASE_FEATURE(kDeviceTabVisibilitySettings, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCrossDeviceTabsInAppMenu, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+BASE_FEATURE(kSyncRecordDeviceStatisticsMetrics,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace syncer

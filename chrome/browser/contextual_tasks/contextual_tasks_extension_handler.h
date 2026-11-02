@@ -15,7 +15,6 @@
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
-#include "chrome/browser/contextual_tasks/aim_message_poster.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks.mojom.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_types.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
@@ -28,10 +27,14 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/omnibox_proto/model_mode.pb.h"
 #include "third_party/omnibox_proto/tool_mode.pb.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
 #include "ui/webui/resources/js/tracked_element/tracked_element.mojom-forward.h"
 #include "url/gurl.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/cr_components/searchbox/contextual_searchbox_tab_favicon_helper.h"
+#endif
 
 // Handles Mojo connection requests from the Contextual Tasks extension
 // document, implementing composebox and searchbox page handler interfaces.
@@ -45,14 +48,6 @@ class ContextualSearchSessionHandle;
 class InputStateModel;
 struct TabContextState;
 }  // namespace contextual_search
-
-namespace content {
-class WebContents;
-}  // namespace content
-
-namespace lens {
-class ClientToSearchMessage;
-}  // namespace lens
 
 namespace contextual_tasks {
 class ContextualTasksWebContentsUserData;
@@ -71,24 +66,15 @@ class ContextualTasksExtensionHandler
       public composebox::mojom::PageHandlerFactory,
       public composebox::mojom::PageHandler,
       public searchbox::mojom::PageHandler,
-      public contextual_tasks::AimMessagePoster,
       public PermissionPromptObserver::Observer {
  public:
   ~ContextualTasksExtensionHandler() override;
-
-  // Returns the bound ContextualTasksExtensionHandler associated with the
-  // extension document in `web_contents`, or nullptr if not found or unbound.
-  static ContextualTasksExtensionHandler* FromWebContents(
-      content::WebContents* web_contents);
 
   void OnLensOverlayStateChanged(bool is_showing);
 
   // PermissionPromptObserver::Observer:
   void OnPermissionPromptChanged(bool is_showing,
                                  const gfx::Size& prompt_size) override;
-
-  // contextual_tasks::AimMessagePoster:
-  void PostAimMessage(const lens::ClientToAimMessage& message) override;
 
   void BindContextualTasksFactory(
       mojo::PendingReceiver<
@@ -135,16 +121,18 @@ class ContextualTasksExtensionHandler
       override;
 
   // composebox::mojom::PageHandler:
+  void HandleLensButtonClick() override;
+  void SetSmartTabSharingActive(bool active) override;
+  void GetSmartTabSharingActive(
+      GetSmartTabSharingActiveCallback callback) override;
+
+  // composebox::mojom::PageHandler stubs:
   void FocusChanged(bool focused) override;
   void StartPlatformVoiceRecognition() override;
-  void HandleLensButtonClick() override;
   void HandleFileUpload(bool is_image) override;
   void NavigateUrl(const GURL& url) override;
   void CloseLensOverlayFromWebUI(
       composebox::mojom::LensOverlayDismissalSource dismissal_source) override;
-  void SetSmartTabSharingActive(bool active) override;
-  void GetSmartTabSharingActive(
-      GetSmartTabSharingActiveCallback callback) override;
   void NotifyComposeboxQuerySubmittedWithContext() override;
   void CanShowNextboxAnimation(
       CanShowNextboxAnimationCallback callback) override;
@@ -189,9 +177,10 @@ class ContextualTasksExtensionHandler
       searchbox::mojom::SmartComposeStatsPtr smart_compose_stats) override;
   void SetPopupSelection(
       searchbox::mojom::OmniboxPopupSelectionPtr selection) override;
-  void OpenPopupSelection(uint32_t result_sequence_id,
-                          searchbox::mojom::OmniboxPopupSelectionPtr selection,
-                          WindowOpenDisposition disposition) override;
+  void OpenPopupSelection(
+      uint32_t result_sequence_id,
+      searchbox::mojom::OmniboxPopupSelectionPtr selection,
+      ui::mojom::WindowOpenDisposition disposition) override;
   void OnNavigationLikely(
       uint8_t line,
       const GURL& url,
@@ -275,6 +264,9 @@ class ContextualTasksExtensionHandler
   void OnInputStateChanged(const omnibox::InputState& state);
   base::WeakPtr<contextual_search::InputStateModel>
   GetOrCreateInputStateModel();
+  void UpdateInputStateModelContext();
+  void OnSessionChanged(
+      contextual_search::ContextualSearchSessionHandle* session_handle);
   // Updates the tab context subscription callback if there is a new session.
   // Otherwise, return early.
   void MaybeRefreshTabContextSubscription(
@@ -283,10 +275,13 @@ class ContextualTasksExtensionHandler
   // to the extension page. Duplicates are skipped.
   void SendTabContextToExtensionPage(
       const contextual_search::TabContextState& state);
+  // Notifies the extension page of the current tab context when user data
+  // changes.
+  void OnTabContextUpdatedFromUserData();
+  bool IsSmartTabSharingActive();
+  // Triggers tab embedding pre-flighting for Smart Tab Sharing.
+  void PreflightSmartTabSharingEmbeddings();
   void OnLensThumbnailCreated(const std::string& thumbnail_uri);
-  void RecordTimeToHandshakeComplete();
-  void SendSearchMessageToBoundPage(const lens::ClientToSearchMessage& message);
-  void OnHandshakeComplete();
   void OnLensCropUpdated(const GURL& data_uri);
 
   mojo::Receiver<contextual_tasks::mojom::ExtensionPageHandlerFactory>
@@ -305,6 +300,7 @@ class ContextualTasksExtensionHandler
 
   base::WeakPtr<contextual_search::InputStateModel> input_state_model_;
   base::CallbackListSubscription input_state_subscription_;
+  base::CallbackListSubscription session_changed_subscription_;
   base::WeakPtr<contextual_search::ContextualSearchSessionHandle>
       subscribed_session_handle_;
   base::CallbackListSubscription tab_context_subscription_;
@@ -317,6 +313,9 @@ class ContextualTasksExtensionHandler
   omnibox::ModelMode active_model_ = omnibox::MODEL_MODE_UNSPECIFIED;
 
   std::unique_ptr<ui::TrackedElementHandler> tracked_element_handler_;
+#if !BUILDFLAG(IS_ANDROID)
+  ContextualSearchboxTabFaviconHelper tab_favicon_helper_;
+#endif
 
   base::WeakPtrFactory<ContextualTasksExtensionHandler> weak_ptr_factory_{this};
 };

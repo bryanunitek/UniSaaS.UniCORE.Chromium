@@ -5,6 +5,7 @@
 
 import argparse
 import enum  # noqa: F401
+import itertools
 import json
 import logging as log
 import operator  # noqa: F401
@@ -12,18 +13,20 @@ import os
 import re
 import sys
 import copy
-from typing import List, Dict, Iterable, Set, Union  # noqa: F401
+from typing import List, Dict, Iterable, Set, Tuple, Union  # noqa: F401
 from pathlib import Path
 import hashlib  # noqa: F401
 import shlex  # noqa: F401
 import collections  # noqa: F401
-import gn_utils
-import targets as gn2bp_targets
-import soong_ast
-import common
-import translation_config
-import context as translation_context
-import translators
+
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+import gn_utils  # noqa: E402
+import targets as gn2bp_targets  # noqa: E402
+import soong_ast  # noqa: E402
+import common  # noqa: E402
+import translation_config  # noqa: E402
+import context as translation_context  # noqa: E402
+import translators  # noqa: E402
 
 PARENT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir)
@@ -577,6 +580,130 @@ def _get_rust_crate_root_directory_from_crate_root(crate_root: str) -> str:
     return None
 
 
+# Third-party directories referenced in the GN graph that should not be
+# imported by Copybara (e.g. host toolchains, SDKs, or dependencies replaced
+# by Android system libraries).
+COPYBARA_EXCLUDED_THIRD_PARTY_DIRS = {
+    "third_party/android_build_tools/**",
+    "third_party/android_deps/**",
+    "third_party/android_sdk/**",
+    "third_party/jdk/**",
+    "third_party/rust-toolchain/**",
+    # Cronet uses Android's libz via builtin_deps.
+    "third_party/zlib/**",
+}
+
+# Header-only third-party directories that are #included directly without a
+# corresponding GN target in the build graph.
+COPYBARA_ADDITIONAL_THIRD_PARTY_DIRS = {
+    # Included by base/rand_util_posix.cc and base/process/process_util_unittest.cc
+    # when building for Linux host.
+    "third_party/lss/**",
+}
+
+
+def extract_copybara_paths(
+    gn: gn_utils.GnParser,
+) -> Tuple[List[str], List[str]]:
+    """Extracts components/ and third_party/ glob patterns for Copybara from the GN graph."""
+    components_paths = set()
+    third_party_paths = set(COPYBARA_ADDITIONAL_THIRD_PARTY_DIRS)
+
+    def _add_path(raw_path: Union[str, None]):
+        if not raw_path or raw_path.startswith("//out/"):
+            return
+        clean_path = raw_path.removeprefix("//")
+        if clean_path.startswith(("/", "../")):
+            return
+        parts = clean_path.split("/")
+        if parts[0] == "components" and len(parts) >= 2 and parts[1]:
+            components_paths.add(f"components/{parts[1]}/**")
+        if clean_path == "third_party/rust" or clean_path.startswith(
+            "third_party/rust/"
+        ):
+            vendor_dir = _get_rust_crate_root_directory_from_crate_root(
+                clean_path
+            )
+            if vendor_dir:
+                third_party_paths.add(f"{vendor_dir}/**")
+            elif (
+                len(parts) >= 3
+                and parts[2]
+                and parts[2] != "chromium_crates_io"
+            ):
+                third_party_paths.add("/".join(parts[:3]) + "/**")
+            return
+        if "third_party" in parts:
+            idx = parts.index("third_party")
+            if idx + 1 < len(parts) and parts[idx + 1]:
+                tp_glob = "/".join(parts[: idx + 2]) + "/**"
+                if tp_glob not in COPYBARA_EXCLUDED_THIRD_PARTY_DIRS:
+                    third_party_paths.add(tp_glob)
+
+    for target in gn.all_targets.values():
+        _add_path(target.build_file_path)
+        _add_path(target.crate_root)
+        _add_path(target.rust_source_dir)
+        _add_path(target.script)
+        for src in itertools.chain(
+            target.public_headers,
+            target.common.sources,
+            target.common.inputs,
+            target.common.include_dirs,
+            target.proto_paths,
+            target.aidl_includes,
+            target.transitive_jni_java_sources,
+        ):
+            _add_path(src)
+        for arch in target.arch.values():
+            for src in itertools.chain(
+                arch.sources, arch.inputs, arch.include_dirs
+            ):
+                _add_path(src)
+
+    return sorted(components_paths), sorted(third_party_paths)
+
+
+def write_copybara_paths_file(
+    output_dir: str,
+    components_paths: Iterable[str],
+    third_party_paths: Iterable[str],
+):
+    """Writes a Starlark file listing components/ and third_party/ glob patterns for Copybara."""
+    header = f"""# Copyright (C) 2026 The Chromium Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# This file is automatically generated by {Path(__file__).name}. Do not edit.
+"""
+    formatted_components = "\n".join(
+        f'    "{path}",' for path in components_paths
+    )
+    formatted_third_party = "\n".join(
+        f'    "{path}",' for path in third_party_paths
+    )
+    content = (
+        f"{header}\n"
+        f"COMPONENTS_PATHS = [\n{formatted_components}\n]\n\n"
+        f"THIRD_PARTY_PATHS = [\n{formatted_third_party}\n]\n"
+    )
+    output_file = Path(
+        os.path.join(output_dir, "copybara_generated_paths.bara.sky")
+    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(content)
+
+
 def _locate_android_bp_destination(module: soong_ast.Module) -> str:
     """Returns the appropriate location of the generated Android.bp for the
     specified module. Sometimes it is favourable to relocate the Android.bp to
@@ -788,6 +915,11 @@ def main():
                 )
             )
         )
+
+    components_paths, third_party_paths = extract_copybara_paths(gn)
+    write_copybara_paths_file(
+        args.output_dir, components_paths, third_party_paths
+    )
 
     return 0
 

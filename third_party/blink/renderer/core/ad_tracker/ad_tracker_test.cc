@@ -3576,6 +3576,64 @@ TEST_F(AdTrackerSimTest,
   EXPECT_TRUE(ad_tracker_->last_is_ad_script_in_stack_result());
 }
 
+// Tests that the monkey-patch heuristic correctly ignores an ad script when a
+// non-ad script calls an API that has been monkey-patched by an ad script via a
+// Proxy with an `apply` trap, which in turn wraps a non-ad monkey patch (the
+// proxy's target). The target must not be mistaken for the API in the stack, as
+// the frame below it is the ad script's trap rather than the true caller.
+//
+// Flow: Non-Ad Caller -> Ad Proxy Patch (Global API) -> Non-Ad Patch -> Native
+// API
+TEST_F(AdTrackerSimTest,
+       IgnoreMonkeyPatchHeuristic_NonAdCallsAdProxyPatchOnNonAdPatch) {
+  String vanilla_patch_url = "https://example.com/patch.js";
+  String ad_patch_url = "https://example.com/patch.js?ad=true";
+  String vanilla_caller_url = "https://example.com/caller.js";
+
+  SimSubresourceRequest vanilla_patch(vanilla_patch_url, "text/javascript");
+  SimSubresourceRequest ad_patch(ad_patch_url, "text/javascript");
+  SimSubresourceRequest vanilla_caller(vanilla_caller_url, "text/javascript");
+
+  main_resource_->Complete(R"HTML(
+    <body>
+      <script src="patch.js"></script>
+      <script src="patch.js?ad=true"></script>
+      <script src="caller.js"></script>
+    </body>
+  )HTML");
+
+  // 1. Non-ad script monkeypatches history.pushState first.
+  vanilla_patch.Complete(R"SCRIPT(
+    const originalPushState = window.history.pushState;
+    window.history.pushState = function(...args) {
+      originalPushState.apply(window.history, args);
+    };
+  )SCRIPT");
+
+  // 2. Ad script monkeypatches history.pushState on top of the previous patch,
+  // using a Proxy whose `apply` trap calls the proxy's target (i.e., the
+  // previous patch).
+  ad_patch.Complete(R"SCRIPT(
+    window.history.pushState = new Proxy(window.history.pushState, {
+      apply: function(target, thisArg, argumentsList) {
+        return target.apply(thisArg, argumentsList);
+      }
+    });
+  )SCRIPT");
+
+  // 3. Non-ad script calls the API.
+  vanilla_caller.Complete(R"SCRIPT(
+    window.history.pushState({}, '', '/new-url');
+  )SCRIPT");
+
+  base::RunLoop().RunUntilIdle();
+
+  // The AdTracker heuristic finds the API function (i.e., the ad script's
+  // `apply` trap) in the stack and identifies the true caller as
+  // `vanilla_caller`, which is non-ad.
+  EXPECT_FALSE(ad_tracker_->last_is_ad_script_in_stack_result());
+}
+
 // Test that an iframe is not tagged as an ad if non-ads script created it via
 // appendChild but ad script monkeypatched it.
 TEST_F(AdTrackerSimTest, IgnoreMonkeyPatchHeuristic_AppendChild_Iframe) {
@@ -5072,6 +5130,75 @@ TEST_F(AdTrackerSimTest, FormSubmissionTriggeredByVanillaScript_IsNotAd) {
 
   // Clean up for SimTest expectations.
   dest_resource.Complete("<body></body>");
+}
+
+TEST_F(AdTrackerSimTest, AdScriptExecutionAccumulatesAdTaskTime) {
+  LocalFrame* frame = GetDocument().GetFrame();
+  WebFrameClient().reset_cpu_timing();
+  EXPECT_EQ(WebFrameClient().total_ad_cpu_time(), base::TimeDelta());
+
+  const char kAdUrl[] = "https://example.com/ad_script.js";
+  SimSubresourceRequest ad_script(kAdUrl, "text/javascript");
+  main_resource_->Complete(
+      "<body><script src=\"ad_script.js\"></script></body>");
+  test::RunPendingTasks();
+
+  ad_script.Complete("console.log('ad');");
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(IsKnownAdScript(GetDocument().GetExecutionContext(), kAdUrl));
+
+  // Trigger UpdateTaskTime by adding task time to the frame scheduler.
+  frame->GetFrameScheduler()->AddTaskTime(base::Milliseconds(100));
+  base::TimeDelta ad_time = WebFrameClient().total_ad_cpu_time();
+  EXPECT_GT(ad_time, base::TimeDelta());
+
+  // Verify that UpdateTaskTime cleared `unreported_ad_task_time_` so a
+  // subsequent flush with no new ad script execution reports zero ad time.
+  WebFrameClient().reset_cpu_timing();
+  frame->GetFrameScheduler()->AddTaskTime(base::Milliseconds(100));
+  EXPECT_EQ(WebFrameClient().total_ad_cpu_time(), base::TimeDelta());
+}
+
+TEST_F(AdTrackerSimTest, VanillaScriptDoesNotAccumulateAdTaskTime) {
+  LocalFrame* frame = GetDocument().GetFrame();
+  WebFrameClient().reset_cpu_timing();
+
+  const char kVanillaUrl[] = "https://example.com/vanilla_script.js";
+  SimSubresourceRequest vanilla_script(kVanillaUrl, "text/javascript");
+  main_resource_->Complete(
+      "<body><script src=\"vanilla_script.js\"></script></body>");
+  test::RunPendingTasks();
+
+  vanilla_script.Complete("console.log('vanilla');");
+  test::RunPendingTasks();
+
+  EXPECT_FALSE(
+      IsKnownAdScript(GetDocument().GetExecutionContext(), kVanillaUrl));
+
+  frame->GetFrameScheduler()->AddTaskTime(base::Milliseconds(100));
+  EXPECT_EQ(WebFrameClient().total_ad_cpu_time(), base::TimeDelta());
+}
+
+TEST_F(AdTrackerSimTest, AdFrameReportsFullTaskTimeAsAdTaskTime) {
+  main_resource_->Complete("<body><iframe></iframe></body>");
+  test::RunPendingTasks();
+
+  LocalFrame* child_frame =
+      To<LocalFrame>(GetDocument().GetFrame()->Tree().FirstChild());
+  ASSERT_TRUE(child_frame);
+
+  SetIsAdFrame(child_frame);
+  ASSERT_TRUE(child_frame->IsAdFrame());
+
+  frame_test_helpers::TestWebFrameClient* child_client =
+      static_cast<frame_test_helpers::TestWebFrameClient*>(
+          WebLocalFrameImpl::FromFrame(child_frame)->Client());
+  child_client->reset_cpu_timing();
+
+  child_frame->GetFrameScheduler()->AddTaskTime(base::Milliseconds(100));
+  EXPECT_EQ(child_client->total_ad_cpu_time(), child_client->total_cpu_time());
+  EXPECT_GE(child_client->total_ad_cpu_time(), base::Milliseconds(100));
 }
 
 }  // namespace blink

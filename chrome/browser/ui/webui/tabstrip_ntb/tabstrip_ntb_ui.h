@@ -5,8 +5,10 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_TABSTRIP_NTB_TABSTRIP_NTB_UI_H_
 #define CHROME_BROWSER_UI_WEBUI_TABSTRIP_NTB_TABSTRIP_NTB_UI_H_
 
+#include <optional>
 #include <string_view>
 
+#include "chrome/browser/ui/webui/tabstrip_ntb/tabstrip_ntb.mojom.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
 #include "chrome/common/webui_url_constants.h"
@@ -14,6 +16,8 @@
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 
 namespace content {
 class WebContents;
@@ -38,7 +42,8 @@ class TabStripNtbUIConfig : public DefaultTopChromeWebUIConfig<TabStripNtbUI> {
 };
 
 // WebUIController for chrome://tabstrip-ntb.top-chrome/.
-class TabStripNtbUI : public TopChromeWebUIController {
+class TabStripNtbUI : public TopChromeWebUIController,
+                      public tabstrip_ntb::mojom::PageHandlerFactory {
  public:
   explicit TabStripNtbUI(content::WebUI* web_ui);
   TabStripNtbUI(const TabStripNtbUI&) = delete;
@@ -58,12 +63,25 @@ class TabStripNtbUI : public TopChromeWebUIController {
   void BindInterface(
       mojo::PendingReceiver<tabs_api::mojom::TabStripService> receiver);
 
+  void BindInterface(
+      mojo::PendingReceiver<tabstrip_ntb::mojom::PageHandlerFactory> receiver);
+
+  void SetButtonVisible(bool visible);
+
+  // tabstrip_ntb::mojom::PageHandlerFactory:
+  void BindPage(mojo::PendingRemote<tabstrip_ntb::mojom::Page> page) override;
+
  private:
   // The page end of a pipe to the `tabs_api::TabStripService`, created at
   // construction. `BindInterface()` fuses the page's receiver with it. The
   // other end goes to the service as soon as there is one (see
   // `SetTabStripServiceForWebContents()`).
   mojo::PendingRemote<tabs_api::mojom::TabStripService> tab_strip_client_end_;
+
+  mojo::Receiver<tabstrip_ntb::mojom::PageHandlerFactory>
+      page_factory_receiver_{this};
+  mojo::Remote<tabstrip_ntb::mojom::Page> page_;
+  std::optional<bool> button_visible_;
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

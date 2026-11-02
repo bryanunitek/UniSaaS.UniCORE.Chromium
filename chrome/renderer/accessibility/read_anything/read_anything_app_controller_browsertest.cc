@@ -22,7 +22,6 @@
 #include "chrome/renderer/accessibility/ax_tree_distiller.h"
 #include "chrome/renderer/accessibility/phrase_segmentation/dependency_parser_model.h"
 #include "chrome/renderer/accessibility/read_anything/read_aloud_app_model.h"
-#include "chrome/renderer/accessibility/read_anything/read_aloud_traversal_utils.h"
 #include "chrome/renderer/accessibility/read_anything/read_anything_test_utils.h"
 #include "chrome/test/base/chrome_render_view_test.h"
 #include "components/translate/core/common/translate_features.h"
@@ -123,6 +122,7 @@ class MockReadAnythingUntrustedPageHandler
   MOCK_METHOD(void, OnFontSizeChange, (double font_size), (override));
   MOCK_METHOD(void, OnLinksEnabledChanged, (bool enabled), (override));
   MOCK_METHOD(void, OnTranslationRequested, (), (override));
+  MOCK_METHOD(void, OnSendFeedback, (), (override));
   MOCK_METHOD(void, OnImagesEnabledChanged, (bool enabled), (override));
   MOCK_METHOD(void, OnSpeechRateChange, (double rate), (override));
   MOCK_METHOD(void,
@@ -362,55 +362,11 @@ class ReadAnythingAppControllerTest : public ChromeRenderViewTest {
                                             updates, events);
   }
 
-  std::u16string MoveToNextGranularityAndGetText() {
-    controller().MovePositionToNextGranularity();
-    return controller().GetCurrentTextContent();
-  }
-
-  std::vector<ReadAloudTextSegment> MoveToNextGranularityAndGetSegments() {
-    controller().MovePositionToNextGranularity();
-    return GetCurrentTextSegments(model().GetCurrentlyVisibleNodes());
-  }
-
-  std::vector<ReadAloudTextSegment> MoveToPreviousGranularityAndGetSegments() {
-    controller().MovePositionToPreviousGranularity();
-    return GetCurrentTextSegments(model().GetCurrentlyVisibleNodes());
-  }
-
-  void ProcessDisplayNodes(const std::vector<ui::AXNodeID>& content_node_ids) {
-    model().Reset(content_node_ids);
-    model().ComputeDisplayNodeIdsForDistilledTree();
-  }
-
   void SendUpdateWithNodes(std::vector<ui::AXNodeData> nodes) {
     ui::AXTreeUpdate update;
     test::SetUpdateTreeID(&update, tree_id_);
     update.nodes = nodes;
     AccessibilityEventReceived({std::move(update)});
-  }
-
-  void SendUpdateAndDistillNodes(std::vector<ui::AXNodeData> nodes) {
-    SendUpdateWithNodes(nodes);
-
-    std::vector<int> node_ids;
-    for (const ui::AXNodeData& node : nodes) {
-      node_ids.push_back(node.id);
-    }
-
-    OnAXTreeDistilled(tree_id_, node_ids);
-    controller().InitAXPositionWithNode(nodes[0].id);
-  }
-
-  void InitializeWithAndProcessNodes(std::vector<ui::AXNodeData> nodes) {
-    SendUpdateWithNodes(nodes);
-
-    std::vector<int> node_ids;
-    for (const ui::AXNodeData& node : nodes) {
-      node_ids.push_back(node.id);
-    }
-
-    ProcessDisplayNodes(node_ids);
-    controller().InitAXPositionWithNode(nodes[0].id);
   }
 
   void EnableReadAnythingTranslateEntryPoint() {
@@ -448,41 +404,6 @@ class ReadAnythingAppControllerTest : public ChromeRenderViewTest {
 
   void IncrementLineFocusSpeechLines() {
     controller_->IncrementLineFocusSpeechLines();
-  }
-
-  void ExpectNodesMapToEntireText(std::vector<ReadAloudTextSegment> segments,
-                                  std::vector<ui::AXNodeID> node_ids,
-                                  std::vector<std::u16string> texts) {
-    EXPECT_EQ(segments.size(), node_ids.size());
-    EXPECT_EQ(segments.size(), texts.size());
-    for (size_t i = 0; i < segments.size(); i++) {
-      EXPECT_EQ(segments.at(i).id, node_ids.at(i));
-      EXPECT_EQ(segments.at(i).text_start, 0);
-      EXPECT_EQ(static_cast<size_t>(segments.at(i).text_end),
-                texts.at(i).length());
-    }
-  }
-
-  void ExpectCurrentSegments(
-      std::vector<ReadAloudTextSegment> expected_segments) {
-    std::vector<ReadAloudTextSegment> segments = GetCurrentTextSegments();
-    EXPECT_EQ(segments.size(), expected_segments.size());
-    for (size_t i = 0; i < segments.size(); i++) {
-      EXPECT_EQ(segments.at(i).id, expected_segments.at(i).id);
-      EXPECT_EQ(segments.at(i).text_start, expected_segments.at(i).text_start);
-      EXPECT_EQ(segments.at(i).text_end, expected_segments.at(i).text_end);
-    }
-  }
-
-  void MoveToNextAndAssertEmpty() {
-    EXPECT_EQ(MoveToNextGranularityAndGetText(), u"");
-  }
-
-  std::vector<ReadAloudTextSegment> GetCurrentTextSegments(
-      bool is_pdf = false,
-      bool is_docs = false) {
-    return read_aloud_model().GetCurrentTextSegments(
-        is_pdf, is_docs, model().GetCurrentlyVisibleNodes());
   }
 
   struct V8Environment {
@@ -580,7 +501,7 @@ class ReadAnythingAppControllerReadabilityTest
 };
 
 TEST_F(ReadAnythingAppControllerReadabilityTest,
-       GetDomDistillerAnchors_ReturnsCorrectMapping) {
+       GetReadabilityAnchors_ReturnsCorrectMapping) {
   std::string url = "https://www.google.com";
   std::string link_text = "Google Homepage";
   std::string title_text = "Google Search Tooltip";
@@ -623,7 +544,7 @@ TEST_F(ReadAnythingAppControllerReadabilityTest,
       v8_env->isolate, v8_env->context->GetMicrotaskQueue(),
       v8::MicrotasksScope::kDoNotRunMicrotasks);
 
-  v8::Local<v8::Value> result = controller().GetDomDistillerAnchors();
+  v8::Local<v8::Value> result = controller().GetReadabilityAnchors();
 
   // Verify that the result is a V8 object mapping URLs to arrays of anchor
   // objects extracted from the active accessibility tree.
@@ -848,6 +769,30 @@ TEST_F(
 }
 
 TEST_F(ReadAnythingAppControllerTest,
+       OnPhraseBoundariesComputed_ForwardsBoundariesToJavaScript) {
+  ExecuteJavaScriptForTests(
+      "var receivedRequestId = -1;"
+      "var receivedBoundaries = null;"
+      "chrome.readingMode.onPhraseBoundariesReady ="
+      "    (requestId, boundaries) => {"
+      "  receivedRequestId = requestId;"
+      "  receivedBoundaries = boundaries;"
+      "};");
+
+  controller().OnPhraseBoundariesComputed(/*request_id=*/7, {{0, 12}, {}});
+
+  int received_request_id = -1;
+  EXPECT_TRUE(ExecuteJavaScriptAndReturnIntValue(u"receivedRequestId",
+                                                 &received_request_id));
+  EXPECT_EQ(7, received_request_id);
+  int boundaries_match = 0;
+  EXPECT_TRUE(ExecuteJavaScriptAndReturnIntValue(
+      u"JSON.stringify(receivedBoundaries) === '[[0,12],[]]' ? 1 : 0",
+      &boundaries_match));
+  EXPECT_EQ(1, boundaries_match);
+}
+
+TEST_F(ReadAnythingAppControllerTest,
        OnTranslationStateChanged_ExecutesOnTranslationStateChanged) {
   base::test::ScopedFeatureList feature_list(translate::kEnableTranslatePdf);
   // Record how often the callback runs and the translation state that the
@@ -918,4 +863,12 @@ TEST_F(ReadAnythingAppControllerTest,
         &enabled));
     EXPECT_EQ(0, enabled);
   }
+}
+
+TEST_F(ReadAnythingAppControllerTest, OnSendFeedback_ExposedToJavaScript) {
+  base::test::ScopedFeatureList feature_list(
+      features::kReadAnythingSendFeedback);
+  EXPECT_CALL(page_handler_, OnSendFeedback()).Times(1);
+  ExecuteJavaScriptForTests("chrome.readingMode.onSendFeedback();");
+  page_handler_.FlushForTesting();
 }

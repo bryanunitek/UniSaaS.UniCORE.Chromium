@@ -85,6 +85,7 @@ class TouchToFillAutofillController;
 class ActorAutofillManager;
 class AutofillAiPersonalContextAccessManager;
 class AutofillOptimizationGuideDecider;
+class CustomFormControlScriptRunner;
 class EmailVerificationController;
 class EmailVerifierDelegate;
 class FormFieldData;
@@ -462,13 +463,15 @@ class ChromeAutofillClient : public ContentAutofillClient {
   VotesUploader votes_uploader_{this};
   std::unique_ptr<FormDataImporter> form_data_importer_;
 
-  payments::ChromePaymentsAutofillClient payments_autofill_client_{this};
+  std::unique_ptr<payments::ChromePaymentsAutofillClient>
+      payments_autofill_client_{
+          payments::ChromePaymentsAutofillClient::Create(this)};
   SingleFieldFillRouter single_field_fill_router_{
       // This call is during construction, so GetAutocompleteHistoryManager()
       // does not dispatch to more-derived classes, should there be any.
       GetAutocompleteHistoryManager(),
-      payments_autofill_client_.GetIbanManager(),
-      payments_autofill_client_.GetMerchantPromoCodeManager()};
+      payments_autofill_client_->GetIbanManager(),
+      payments_autofill_client_->GetMerchantPromoCodeManager()};
 
   base::WeakPtr<AutofillSuggestionController> suggestion_controller_;
   base::Time flow_id_date_;
@@ -503,6 +506,10 @@ class ChromeAutofillClient : public ContentAutofillClient {
   std::unique_ptr<EmailVerificationController> email_verification_controller_;
   std::unique_ptr<EmailVerifierDelegate> email_verifier_delegate_;
   std::unique_ptr<ChromeOtpPhishGuardDelegate> otp_phish_guard_delegate_;
+  // Only exists on desktop, if the browser has a
+  // `CustomFormControlScriptIndex`.
+  std::unique_ptr<CustomFormControlScriptRunner>
+      custom_form_control_script_runner_;
 
   // Removes the subscription when the `ChromeAutofillClient` is destroyed.
   base::CallbackListSubscription actor_task_state_changed_subscription_;

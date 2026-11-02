@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -39,12 +40,14 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarMetrics.EducationOnboardingEvent;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
@@ -132,6 +135,7 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
     @Test
     public void testShownAndTitleText() {
         assertTrue(mCoordinator.maybeShow(mProfile));
+        assertTrue(BottomBarEducationCoordinator.hasEducationShownThisSession());
         verify(mModalDialogManager)
                 .showDialog(
                         mModelCaptor.capture(),
@@ -155,6 +159,15 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
 
     @Test
     public void testPositiveButton() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.SHOWN)
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.ACCEPTED)
+                        .build();
         assertTrue(mCoordinator.maybeShow(mProfile));
         verify(mModalDialogManager)
                 .showDialog(
@@ -178,20 +191,27 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
         InOrder inOrder = inOrder(mTracker, mModalDialogManager);
         inOrder.verify(mTracker, times(1))
                 .notifyEvent(EventConstants.ANDROID_BOTTOM_BAR_EDUCATION_USED);
+        inOrder.verify(mTracker, times(1))
+                .notifyEvent(EventConstants.ANDROID_BOTTOM_BAR_EDUCATION_OPT_IN_ACCEPTED);
         inOrder.verify(mTracker, times(1)).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_EDUCATION);
         inOrder.verify(mModalDialogManager)
                 .dismissDialog(model, DialogDismissalCause.POSITIVE_BUTTON_CLICKED);
 
-        assertTrue(
-                ChromeSharedPreferences.getInstance()
-                        .readBoolean(
-                                ChromePreferenceKeys.BOTTOM_BAR_EDUCATION_PENDING_TOOLTIPS,
-                                /* defaultValue= */ false));
         assertTrue(BottomBarConfigUtils.isBottomBarUserEnabled());
+        histogramWatcher.assertExpected();
     }
 
     @Test
     public void testNegativeButton() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.SHOWN)
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.DECLINED)
+                        .build();
         assertTrue(mCoordinator.maybeShow(mProfile));
         verify(mModalDialogManager)
                 .showDialog(
@@ -203,15 +223,15 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
         mCoordinator.onClick(model, ModalDialogProperties.ButtonType.NEGATIVE);
 
         verify(mTracker, never()).notifyEvent(EventConstants.ANDROID_BOTTOM_BAR_EDUCATION_USED);
+        verify(mTracker, never())
+                .notifyEvent(EventConstants.ANDROID_BOTTOM_BAR_EDUCATION_OPT_IN_ACCEPTED);
         verify(mTracker, times(1)).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_EDUCATION);
-        assertFalse(
-                ChromeSharedPreferences.getInstance()
-                        .contains(ChromePreferenceKeys.BOTTOM_BAR_EDUCATION_PENDING_TOOLTIPS));
         assertFalse(
                 ChromeSharedPreferences.getInstance()
                         .contains(ChromePreferenceKeys.BOTTOM_BAR_ENABLED));
         verify(mModalDialogManager)
                 .dismissDialog(model, DialogDismissalCause.NEGATIVE_BUTTON_CLICKED);
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -232,7 +252,41 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
     }
 
     @Test
+    public void testDismissal_NavigateBackOrTouchOutside_RecordsBackPressed() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.SHOWN)
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.BACK_PRESSED)
+                        .build();
+        assertTrue(mCoordinator.maybeShow(mProfile));
+        verify(mModalDialogManager)
+                .showDialog(
+                        mModelCaptor.capture(),
+                        eq(ModalDialogManager.ModalDialogType.APP),
+                        eq(true));
+
+        PropertyModel model = mModelCaptor.getValue();
+        mCoordinator.onDismiss(model, DialogDismissalCause.NAVIGATE_BACK_OR_TOUCH_OUTSIDE);
+
+        verify(mTracker, times(1)).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_EDUCATION);
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
     public void testDestroyWhileShowing() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.SHOWN)
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.DISMISSED_OTHER)
+                        .build();
         assertTrue(mCoordinator.maybeShow(mProfile));
         verify(mModalDialogManager)
                 .showDialog(
@@ -246,6 +300,42 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
 
         verify(mModalDialogManager).dismissDialog(model, DialogDismissalCause.ACTIVITY_DESTROYED);
         verify(mTracker, times(1)).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_EDUCATION);
+        histogramWatcher.assertExpected();
+    }
+
+    @Test
+    public void testDestroyWhileShowing_ReentrantOnDismiss() {
+        HistogramWatcher histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.SHOWN)
+                        .expectIntRecord(
+                                "Android.BottomBar.Education.Onboarding.OptInDialog.Event",
+                                EducationOnboardingEvent.DISMISSED_OTHER)
+                        .build();
+        assertTrue(mCoordinator.maybeShow(mProfile));
+        verify(mModalDialogManager)
+                .showDialog(
+                        mModelCaptor.capture(),
+                        eq(ModalDialogManager.ModalDialogType.APP),
+                        eq(true));
+
+        PropertyModel model = mModelCaptor.getValue();
+        // Like the real ModalDialogManager, call back into onDismiss() synchronously.
+        doAnswer(
+                        invocation -> {
+                            mCoordinator.onDismiss(model, invocation.getArgument(1));
+                            return null;
+                        })
+                .when(mModalDialogManager)
+                .dismissDialog(any(PropertyModel.class), anyInt());
+
+        mCoordinator.destroy();
+
+        verify(mModalDialogManager).dismissDialog(model, DialogDismissalCause.ACTIVITY_DESTROYED);
+        verify(mTracker).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_EDUCATION);
+        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -273,5 +363,48 @@ public class BottomBarEducationDialogCoordinatorUnitTest {
         mCoordinator.onConfigurationChanged(config);
 
         assertEquals(View.VISIBLE, illustration.getVisibility());
+    }
+
+    @Test
+    public void testRepeatedClicksDoNothing() {
+        assertTrue(mCoordinator.maybeShow(mProfile));
+        verify(mModalDialogManager)
+                .showDialog(
+                        mModelCaptor.capture(),
+                        eq(ModalDialogManager.ModalDialogType.APP),
+                        eq(true));
+
+        PropertyModel model = mModelCaptor.getValue();
+        mCoordinator.onClick(model, ModalDialogProperties.ButtonType.POSITIVE);
+        verify(mModalDialogManager)
+                .dismissDialog(model, DialogDismissalCause.POSITIVE_BUTTON_CLICKED);
+        verify(mTracker).dismissed(FeatureConstants.ANDROID_BOTTOM_BAR_EDUCATION);
+        clearInvocations(mModalDialogManager, mTracker);
+
+        mCoordinator.onClick(model, ModalDialogProperties.ButtonType.POSITIVE);
+        mCoordinator.onClick(model, ModalDialogProperties.ButtonType.NEGATIVE);
+        verify(mModalDialogManager, never()).dismissDialog(any(), anyInt());
+        verify(mTracker, never()).dismissed(any());
+    }
+
+    @Test
+    public void testNotShownAgainAfterOutcomeRecorded() {
+        assertTrue(mCoordinator.maybeShow(mProfile));
+        verify(mModalDialogManager)
+                .showDialog(
+                        mModelCaptor.capture(),
+                        eq(ModalDialogManager.ModalDialogType.APP),
+                        eq(true));
+
+        PropertyModel model = mModelCaptor.getValue();
+        // Simulate click and dismiss.
+        mCoordinator.onClick(model, ModalDialogProperties.ButtonType.NEGATIVE);
+        mCoordinator.onDismiss(model, DialogDismissalCause.NEGATIVE_BUTTON_CLICKED);
+        clearInvocations(mModalDialogManager);
+
+        // Declining leaves the user eligible, so only OUTCOME_RECORDED blocks showing again.
+        assertTrue(BottomBarConfigUtils.isEligibleForEducationDialog(mActivity));
+        assertFalse(mCoordinator.maybeShow(mProfile));
+        verify(mModalDialogManager, never()).showDialog(any(), anyInt(), anyBoolean());
     }
 }

@@ -4,7 +4,6 @@
 
 import {NodeStore} from '../content/node_store.js';
 
-import {AudioBrowserProxyImpl} from './audio_browser_proxy.js';
 import {ReadAloudNodeStore} from './read_aloud_node_store.js';
 
 // This file contains type definitions for the data structures
@@ -28,84 +27,35 @@ const LINE_BREAKING_DISPLAY_TYPES = new Set([
   'table-footer-group',
 ]);
 
-// Wrapper class to represent a node used by read aloud. The type of node
-// could be either a DOM node or an AXNode depending on what type of text
-// segmentation method is used.
+// Wrapper class to represent a node used by read aloud.
+// TODO(b/444029483): Remove the wrapper class since DomReadAloudNode is
+// the only child.
 export abstract class ReadAloudNode {
   abstract equals(other: ReadAloudNode|undefined|null): boolean;
 
   abstract domNode(): Node|undefined;
 
-  // TODO: crbug.com/440400392: This method is a convenience method for working
-  // with AxReadAloudNodes during the refactor and should be deleted once
-  // the Phrase Highlighting flag is fully enabled.
+  // Creates a ReadAloudNode for the DOM node associated with the given
+  // AXNodeID, if there is one.
   static createFromAxNode(
       axNodeId: number, nodeStore = NodeStore.getInstance()): ReadAloudNode
       |undefined {
     const domNode: Node|undefined = nodeStore.getDomNode(axNodeId);
-    if (!domNode &&
-        AudioBrowserProxyImpl.getInstance().isPhraseHighlightingEnabled()) {
-      // If there's no DOM node yet, it might not have gotten added to the
-      // node store yet, so create an AxReadAloudNode instead.
-      // TODO: crbug.com/440400392- This shouldn't be necessary but is a
-      // fallback to help ensure that the text segmentation refactor does not
-      // impact the V8 segmentation implementation.
-      return new AxReadAloudNodeImpl(axNodeId, nodeStore);
-    }
     if (!domNode) {
       return undefined;
     }
-    return this.create(domNode, nodeStore);
+    return this.create(domNode);
   }
 
-  static create(node: Node, nodeStore = NodeStore.getInstance()): ReadAloudNode
-      |undefined {
-    if (!AudioBrowserProxyImpl.getInstance().isPhraseHighlightingEnabled()) {
-      return new DomReadAloudNodeImpl(node);
-    }
-
-    const axNodeId = nodeStore.getAxId(node);
-    if (axNodeId) {
-      return new AxReadAloudNodeImpl(axNodeId, nodeStore);
-    }
-
-    return undefined;
+  static create(node: Node): ReadAloudNode|undefined {
+    return new DomReadAloudNodeImpl(node);
   }
 }
 
-export class AxReadAloudNode extends ReadAloudNode {
-  protected constructor(
-      public readonly axNodeId: number,
-      private readonly nodeStore_ = NodeStore.getInstance()) {
-    super();
-  }
-
-  equals(other: ReadAloudNode|undefined|null): boolean {
-    if (!(other instanceof AxReadAloudNode)) {
-      return false;
-    }
-
-    return this.axNodeId === other.axNodeId;
-  }
-
-  domNode(): Node|undefined {
-    return this.nodeStore_.getDomNode(this.axNodeId);
-  }
-}
-
-// TODO: crbug.com/440400392: The Impl classes are a tool for working
+// TODO(b/444029483): The Impl class is a tool for working
 // with ReadAloudNodes during the refactor in order to enforce more strict
-// ReadAloudNode creation. These classes should be deleted once
+// ReadAloudNode creation. This class should be deleted once
 // the Phrase Highlighting flag is fully enabled and sooner, if possible.
-
-// Impl class to help enforce that AxReadAloudNode should only be constructed
-// by one of the #create methods in ReadAloudNode.
-// This class should not be exported.
-class AxReadAloudNodeImpl extends AxReadAloudNode {
-  constructor(axNodeId: number, nodeStore = NodeStore.getInstance()) {
-    super(axNodeId, nodeStore);
-  }
-}
 
 // Represents a node used by read aloud that's based entirely on the DOM.
 export class DomReadAloudNode extends ReadAloudNode {
@@ -229,6 +179,10 @@ export interface Sentence {
 export interface SegmentedSentence {
   sentenceInfo: Sentence;
   segments: Segment[];
+  // The start offsets of each phrase within sentenceInfo.text. Undefined if
+  // the phrase boundaries haven't been requested yet, and empty if they've
+  // been requested but aren't available.
+  phraseBoundaries?: number[];
 }
 
 // A representation of a node linked with its starting offset within a broader

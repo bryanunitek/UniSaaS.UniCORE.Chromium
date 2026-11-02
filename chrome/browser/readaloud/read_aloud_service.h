@@ -10,10 +10,12 @@
 #include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/readaloud/read_aloud_audio_broker.h"
+#include "chrome/browser/readaloud/read_aloud_voice_catalog.h"
 #include "chrome/common/readaloud/read_aloud.mojom.h"
 #include "components/dom_distiller/core/task_tracker.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -90,10 +92,20 @@ class ReadAloudService
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/readaloud/enums.xml:ReadAloudOverviewOutcome)
 
-  struct Voice {
-    std::string id;
-    std::string display_name;
+  // Outcome of standard (Classic mode) playback preparation in
+  // ReadAloudService. These values are persisted to logs. Entries should not be
+  // renumbered and numeric values should never be reused.
+  // LINT.IfChange(StandardPlaybackOutcome)
+  enum class StandardPlaybackOutcome {
+    kSuccess = 0,
+    kDistillationFailed = 1,
+    kEmptyContent = 2,
+    kInitialSynthesisFailed = 3,
+    kPlayOnReadyTimeout = 4,
+    kUtilityDisconnected = 5,
+    kMaxValue = kUtilityDisconnected,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/readaloud/enums.xml:ReadAloudStandardPlaybackOutcome)
 
   // Interface for dispatching events from the native service to the UI.
   // State changes are sent to the UI via this delegate.
@@ -113,9 +125,8 @@ class ReadAloudService
     virtual void OnPlaybackStateChanged(
         read_aloud::mojom::PlaybackState playback_state) = 0;
 
-    // Called when the available voices list and currently selected voice are updated.
-    virtual void OnVoicesAvailable(const std::vector<Voice>& voices,
-                                   std::string_view selected_voice_id) = 0;
+    // Called when the available voices catalog is provided to the UI.
+    virtual void OnVoicesAvailable(base::span<const VoiceInfo> voices) = 0;
 
     // Called when a new word is reached, providing offsets for UI highlighting.
     virtual void OnWordHighlightUpdated(int absolute_start_index,
@@ -218,6 +229,9 @@ class ReadAloudService
   // Initiates an asynchronous check to determine if the URL is readable.
   void CheckReadability(const GURL& url);
 
+  // Initializes and pushes the available synthesis voices to the delegate.
+  void InitVoices();
+
   // Methods called by ReadAloudPlaybackSession:
   void OnSessionSuspended();
   void OnSessionResumed();
@@ -260,8 +274,6 @@ class ReadAloudService
   // dom_distiller::ViewRequestDelegate:
   void OnArticleReady(
       const dom_distiller::DistilledArticleProto* article_proto) override;
-  void OnArticleUpdated(
-      dom_distiller::ArticleDistillationUpdate article_update) override;
   void OnDistillationFailed(
       dom_distiller::DistillationParseResult reason) override;
 
@@ -295,6 +307,15 @@ class ReadAloudService
   // Releases the media session, distillation and utility resources without
   // notifying the delegate.
   void ResetPlayback();
+  // Records successful standard playback startup and TTFA to UMA if waiting for
+  // the initial audio playback.
+  void MaybeRecordStartupSuccess();
+  // Records the outcome of the standard playback startup phase to UMA if
+  // waiting for the initial audio playback. Clears startup tracking state.
+  void MaybeRecordStartupOutcome(StandardPlaybackOutcome outcome);
+  // Clears transient startup tracking state. Does not reset
+  // `first_audio_emitted_` flag, which should persist across pause/resume.
+  void ClearStartupTrackingState();
 
   raw_ptr<Profile> profile_;
   PlaybackControllerBinder controller_binder_;
@@ -332,6 +353,13 @@ class ReadAloudService
   // Tracks explicit user playback intent in the browser process across
   // asynchronous distillation and overview generation operations.
   bool user_requested_play_ = false;
+
+  // Tracks startup lifecycle (from Play() trigger to first audio rendering).
+  // Cleared on first audio chunk or startup error to prevent re-recording
+  // across subsequent pause/resume or mid-article buffering events.
+  base::TimeTicks standard_playback_start_time_;
+  bool waiting_for_first_audio_ = false;
+  bool first_audio_emitted_ = false;
 
   base::WeakPtrFactory<ReadAloudService> weak_factory_{this};
 };

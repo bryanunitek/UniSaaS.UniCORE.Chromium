@@ -334,14 +334,6 @@ class CORE_EXPORT GridLanesLayoutAlgorithm
   // exists in the sizing tree's track collection.
   void CalculateIntrinsicTrackSizes(GridSizingTree& sizing_tree) const;
 
-  // Given a `track_collection`, return all the track sizes of an auto repeat
-  // that has intrinsic track size(s). This method assumes that such an auto
-  // repeat exists in `track_collection`. `has_items` indicates whether there
-  // are any grid-lanes items in the grid-lanes container.
-  HashMap<GridTrackSize, LayoutUnit> GetIntrinsicRepeaterTrackSizes(
-      bool has_items,
-      const GridSizingTrackCollection& track_collection) const;
-
   // If `intrinsic_repeat_track_sizes` is non-null, this indicates the track
   // size(s) to use for intrinsic sized track(s) inside a repeat() track
   // definition. If we hit an intrinsic sized track within a repeat() definition
@@ -445,15 +437,6 @@ class CORE_EXPORT GridLanesLayoutAlgorithm
       GridItemData* grid_lanes_item,
       const ConstraintSpace& space_for_measure,
       SizingConstraint sizing_constraint) const;
-
-  // `track_baseline` is the shared baseline for the track that `virtual_item`
-  // participates in, or `LayoutUnit::Min()` if the item is not
-  // baseline-aligned.
-  LayoutUnit ContributionSizeForVirtualItem(
-      const GridLayoutTrackCollection& track_collection,
-      LayoutUnit track_baseline,
-      GridItemContributionType contribution_type,
-      GridItemData* virtual_item) const;
 
   LayoutUnit ComputeIntrinsicBlockSizeIgnoringChildren();
 

@@ -54,6 +54,7 @@ struct SameSizeAsPhysicalBoxFragment : PhysicalFragment {
   LayoutUnit baseline;
   LayoutUnit last_baseline;
   Member<void*> rare;
+  Member<void*> used_position_insets;
   InkOverflow ink_overflow;
   HeapVector<PhysicalFragmentLink> children;
 };
@@ -472,6 +473,7 @@ PhysicalBoxFragment::PhysicalBoxFragment(
       bit_field_(other.bit_field_),
       first_baseline_(other.first_baseline_),
       last_baseline_(other.last_baseline_),
+      used_position_insets_(other.used_position_insets_),
       ink_overflow_(other.InkOverflowType(), other.ink_overflow_),
       children_(other.children_) {
   SetInkOverflowType(other.InkOverflowType());
@@ -553,9 +555,8 @@ PhysicalOffset PhysicalBoxFragment::OffsetFromOwnerLayoutBox() const {
 
   // When LTR, compute the offset from the first fragment. The first fragment is
   // at the left top of the |LayoutBox| regardless of the writing mode.
-  const auto* containing_block = owner_box->ContainingBlock();
-  const ComputedStyle& containing_block_style = containing_block->Style();
-  if (IsLtr(containing_block_style.Direction())) {
+  const ComputedStyle& container_style = owner_box->ContainingBox()->Style();
+  if (IsLtr(container_style.Direction())) {
     DCHECK_EQ(IsFirstForNode(), this == owner_box->GetPhysicalFragment(0));
     if (IsFirstForNode())
       return PhysicalOffset();
@@ -840,34 +841,6 @@ PhysicalFragmentRareData::RareField& PhysicalBoxFragment::EnsureRareField(
   return rare_data_->EnsureField(id);
 }
 
-PhysicalBoxFragment::MutableForStyleRecalc::MutableForStyleRecalc(
-    base::PassKey<PhysicalBoxFragment>,
-    PhysicalBoxFragment& fragment)
-    : fragment_(fragment) {}
-
-void PhysicalBoxFragment::MutableForStyleRecalc::SetScrollableOverflow(
-    const PhysicalRect& scrollable_overflow) {
-  bool has_scrollable_overflow =
-      scrollable_overflow != PhysicalRect({}, fragment_.Size());
-  if (has_scrollable_overflow) {
-    // This can be called even without rare_data_.
-    fragment_.EnsureRareField(FieldId::kScrollableOverflow)
-        .scrollable_overflow = scrollable_overflow;
-  } else if (fragment_.HasScrollableOverflow()) {
-    fragment_.rare_data_->RemoveField(FieldId::kScrollableOverflow);
-  }
-}
-
-PhysicalBoxFragment::MutableForStyleRecalc
-PhysicalBoxFragment::GetMutableForStyleRecalc() const {
-  DCHECK(layout_object_->GetDocument().Lifecycle().GetState() ==
-             DocumentLifecycle::kInStyleRecalc ||
-         layout_object_->GetDocument().Lifecycle().GetState() ==
-             DocumentLifecycle::kInPerformLayout);
-  return MutableForStyleRecalc(base::PassKey<PhysicalBoxFragment>(),
-                               const_cast<PhysicalBoxFragment&>(*this));
-}
-
 PhysicalBoxFragment::MutableForContainerLayout::MutableForContainerLayout(
     base::PassKey<PhysicalBoxFragment>,
     PhysicalBoxFragment& fragment)
@@ -965,10 +938,18 @@ void PhysicalBoxFragment::MutableForOofFragmentation::Merge(
 }
 
 void PhysicalBoxFragment::MutableForOofFragmentation::UpdateOverflow() {
-  PhysicalRect overflow =
+  const PhysicalRect scrollable_overflow =
       ScrollableOverflowCalculator::RecalculateScrollableOverflowForFragment(
           fragment_, /* has_block_fragmentation */ true);
-  fragment_.GetMutableForStyleRecalc().SetScrollableOverflow(overflow);
+  bool has_scrollable_overflow =
+      scrollable_overflow != PhysicalRect({}, fragment_.Size());
+  if (has_scrollable_overflow) {
+    // This can be called even without rare_data_.
+    fragment_.EnsureRareField(FieldId::kScrollableOverflow)
+        .scrollable_overflow = scrollable_overflow;
+  } else if (fragment_.HasScrollableOverflow()) {
+    fragment_.rare_data_->RemoveField(FieldId::kScrollableOverflow);
+  }
 }
 
 void PhysicalBoxFragment::SetInkOverflow(const PhysicalRect& self,
@@ -1979,6 +1960,7 @@ void PhysicalBoxFragment::AssertFragmentTreeChildren(
 void PhysicalBoxFragment::TraceAfterDispatch(Visitor* visitor) const {
   visitor->Trace(children_);
   visitor->Trace(rare_data_);
+  visitor->Trace(used_position_insets_);
   // |HasItems()| and |ConstHasRareData()| are const and set
   // in ctor so they do not cause TOCTOU.
   if (HasItems())

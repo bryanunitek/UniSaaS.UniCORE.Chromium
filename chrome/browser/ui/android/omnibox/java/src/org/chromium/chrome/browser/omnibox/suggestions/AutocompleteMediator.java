@@ -15,6 +15,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.view.Choreographer;
 import android.view.KeyEvent;
 import android.view.View;
 
@@ -42,6 +43,7 @@ import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.LocationBarEmbedderUiOverrides;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
+import org.chromium.chrome.browser.omnibox.OmniboxUrlUtils;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
@@ -140,7 +142,8 @@ class AutocompleteMediator
                 SideUiObserver {
 
     // Delay triggering the omnibox results upon key press to allow the location bar to repaint
-    // with the new characters.
+    // with the new characters. Only used when OmniboxFeatures.isPostFrameAutocompleteStartEnabled()
+    // is false; otherwise the request is scheduled right after the next frame instead.
     private static final long OMNIBOX_SUGGESTION_START_DELAY_MS = 30;
 
     @VisibleForTesting
@@ -189,13 +192,29 @@ class AutocompleteMediator
     private @Nullable AutocompleteController mAutocomplete;
     private @Nullable AutocompleteResult mAutocompleteResult;
     private @Nullable Runnable mCurrentAutocompleteRequest;
+    // Posts mCurrentAutocompleteRequest once the frame containing the new text has been produced.
+    // Only queued while a request is pending; cancelAutocompleteRequests() removes it before
+    // clearing the request, so the null check is defensive.
+    private final Choreographer.FrameCallback mPostAutocompleteRequestAfterFrame =
+            new Choreographer.FrameCallback() {
+                @Override
+                public void doFrame(long frameTimeNanos) {
+                    if (mCurrentAutocompleteRequest != null) {
+                        mHandler.post(mCurrentAutocompleteRequest);
+                    }
+                }
+            };
     private @Nullable PropertyModel mDeleteDialogModel;
 
-    // When set, specifies the system time of the most recent suggestion list request.
+    // When set, specifies the uptime (from TimeUtils.uptimeMillis()) of the most recent suggestion
+    // list request.
     private @Nullable Long mLastSuggestionRequestTime;
-    // When set, specifies the time when the suggestion list was shown the first time.
+    // When set, specifies the uptime when the suggestion list was shown the first time.
     // Suggestions are refreshed several times per keystroke.
     private @Nullable Long mFirstSuggestionListModelCreatedTime;
+    // When set, specifies the uptime (from TimeUtils.uptimeMillis()) of the keystroke that
+    // triggered the most recent typed suggestion list request. Null for zero-prefix requests.
+    private @Nullable Long mLastKeystrokeTime;
 
     private @Nullable Boolean mOmniboxInZeroPrefixState;
 
@@ -813,8 +832,11 @@ class AutocompleteMediator
             return;
         }
 
-        boolean openInNewTab = (modifiers & (KeyEvent.META_ALT_ON | KeyEvent.META_CTRL_ON)) != 0;
-        boolean openInNewWindow = !openInNewTab && (modifiers & KeyEvent.META_SHIFT_ON) != 0;
+        boolean isShiftPressed = (modifiers & KeyEvent.META_SHIFT_ON) != 0;
+        boolean openInNewTab =
+                (modifiers & (KeyEvent.META_ALT_ON | KeyEvent.META_CTRL_ON)) != 0
+                        || (!isShiftPressed && shouldOpenAimRequestInNewTab());
+        boolean openInNewWindow = !openInNewTab && isShiftPressed;
 
         loadUrlForOmniboxMatch(
                 matchIndex,
@@ -1215,9 +1237,12 @@ class AutocompleteMediator
                             ? mUrlBarEditingTextProvider.getSelectionStart()
                             : -1;
 
+            // Captured synchronously so the KeystrokeToUiModel metrics include the deferral below.
+            long keystrokeTimeMs = TimeUtils.uptimeMillis();
+
             postAutocompleteRequest(
                     () -> {
-                        startMeasuringSuggestionRequestToUiModelTime();
+                        startMeasuringSuggestionRequestToUiModelTime(keystrokeTimeMs);
                         if (isInInputSession()) {
                             mAutocomplete.start(
                                     mSessionState.getContextualTasksWebContents(),
@@ -1225,8 +1250,7 @@ class AutocompleteMediator
                                     cursorPosition,
                                     preventAutocomplete);
                         }
-                    },
-                    OMNIBOX_SUGGESTION_START_DELAY_MS);
+                    });
         }
     }
 
@@ -1549,7 +1573,11 @@ class AutocompleteMediator
         try (TraceEvent e = TraceEvent.scoped("AutocompleteMediator.loadTypedOmniboxText")) {
             if (!isInInputSession()) return;
             boolean openInBackground = target == NavigationTarget.NEW_BACKGROUND_TAB;
-            boolean openInNewTab = target == NavigationTarget.NEW_TAB || openInBackground;
+            boolean openInNewTab =
+                    target == NavigationTarget.NEW_TAB
+                            || openInBackground
+                            || (target == NavigationTarget.CURRENT_TAB
+                                    && shouldOpenAimRequestInNewTab());
             boolean openInNewWindow = target == NavigationTarget.NEW_WINDOW;
 
             final String urlText = mUrlBarEditingTextProvider.getTextWithAutocomplete();
@@ -1586,7 +1614,9 @@ class AutocompleteMediator
             boolean openInBackground = target == NavigationTarget.NEW_BACKGROUND_TAB;
             boolean openInNewTab =
                     target == AutocompleteCoordinator.NavigationTarget.NEW_TAB
-                            || target == NavigationTarget.NEW_BACKGROUND_TAB;
+                            || target == NavigationTarget.NEW_BACKGROUND_TAB
+                            || (target == NavigationTarget.CURRENT_TAB
+                                    && shouldOpenAimRequestInNewTab());
             boolean openInNewWindow = target == AutocompleteCoordinator.NavigationTarget.NEW_WINDOW;
 
             cancelAutocompleteRequests();
@@ -1879,14 +1909,24 @@ class AutocompleteMediator
             url = match.getUrl();
         }
 
-        adjustGurlForRequestType(url, this::finishLoadUrlFromVoice);
+        boolean openInNewTab = shouldOpenAimRequestInNewTab();
+        adjustGurlForRequestType(url, finalUrl -> finishLoadUrlFromVoice(finalUrl, openInNewTab));
     }
 
-    private void finishLoadUrlFromVoice(GURL url) {
+    private void finishLoadUrlFromVoice(GURL url, boolean openInNewTab) {
         mDelegate.loadUrl(
                 new OmniboxLoadUrlParams.Builder(url.getSpec(), PageTransition.TYPED)
-                        .setOpenInNewTab(false)
+                        .setOpenInNewTab(openInNewTab)
                         .build());
+    }
+
+    private boolean shouldOpenAimRequestInNewTab() {
+        if (!OmniboxFeatures.isAimOpenInNewTabEnabled() || !isInInputSession()) {
+            return false;
+        }
+        boolean isAimRequest = ToolModeUtils.isAimRequest(mAutocompleteInput.getRequestType());
+        boolean isNtp = OmniboxUrlUtils.isNtpUrl(mDataProvider.getCurrentGurl());
+        return isAimRequest && !isNtp;
     }
 
     /**
@@ -1923,7 +1963,7 @@ class AutocompleteMediator
         // Reset "edited" state in the omnibox if zero suggest is triggered -- new edits
         // now count as a new session.
         mNewOmniboxEditSessionTimestamp = -1;
-        startMeasuringSuggestionRequestToUiModelTime();
+        startMeasuringSuggestionRequestToUiModelTime(/* keystrokeTimeMs= */ null);
 
         if (!isInInputSession()) return;
         mAutocomplete.startZeroSuggest(
@@ -2158,18 +2198,27 @@ class AutocompleteMediator
     }
 
     /**
-     * Schedule Autocomplete action for execution. Each Autocomplete action posted here will cancel
-     * any previously posted Autocomplete action, ensuring that the actions don't compete against
-     * each other. Any action scheduled for execution before Native libraries are ready will be
-     * deferred.
+     * Schedule Autocomplete action for execution once the location bar has had a chance to repaint
+     * with the newly typed characters. Each Autocomplete action posted here will cancel any
+     * previously posted Autocomplete action, ensuring that the actions don't compete against each
+     * other and that multiple edits arriving within the deferral window are coalesced into a single
+     * request.
+     *
+     * <p>With {@link OmniboxFeatures#isPostFrameAutocompleteStartEnabled()} false, the action is
+     * deferred by a fixed {@link #OMNIBOX_SUGGESTION_START_DELAY_MS}. Otherwise the action runs
+     * right after the next frame has been produced: Choreographer frame callbacks run in the
+     * animation phase of a frame, i.e. before that frame's layout and draw traversal, so posting
+     * the request to the Handler from within the callback places it behind the traversal in the
+     * message queue. Running the action directly inside the frame callback would instead execute it
+     * before the new text is drawn and put the autocomplete work on the frame's critical path. This
+     * is equivalent to {@code View.postOnAnimation(() -> view.post(request))} without requiring a
+     * View reference.
      *
      * <p>This call should only be used for regular suggest flows. Do not post arbitrary tasks here.
      *
      * @param action Autocomplete action to execute.
-     * @param delayMillis The number of milliseconds by which the action should be delayed. Use
-     *     SCHEDULE_FOR_IMMEDIATE_EXECUTION to post action at front of the message queue.
      */
-    private void postAutocompleteRequest(Runnable action, long delayMillis) {
+    private void postAutocompleteRequest(Runnable action) {
         if (!isInInputSession()) return;
 
         // TODO(crbug.com/475620206) carefully reenable and chase down any cases where the
@@ -2181,22 +2230,36 @@ class AutocompleteMediator
         // assert !mIsExecutingAutocompleteAction : "Don't schedule recurring autocomplete action";
 
         cancelAutocompleteRequests();
-        mCurrentAutocompleteRequest =
-                () -> {
-                    // TODO(crbug.com/475620206) carefully reenable.
-                    // mIsExecutingAutocompleteAction = true;
-                    action.run();
-                    // mIsExecutingAutocompleteAction = false;
-                    // Release completed Runnable.
-                    mCurrentAutocompleteRequest = null;
+        Runnable request =
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        // TODO(crbug.com/475620206) carefully reenable.
+                        // mIsExecutingAutocompleteAction = true;
+                        action.run();
+                        // mIsExecutingAutocompleteAction = false;
+                        // Release completed Runnable, unless the action itself scheduled a new
+                        // request (re-entrantly), in which case that request now owns the slot.
+                        if (mCurrentAutocompleteRequest == this) {
+                            mCurrentAutocompleteRequest = null;
+                        }
+                    }
                 };
+        mCurrentAutocompleteRequest = request;
 
-        mHandler.postDelayed(mCurrentAutocompleteRequest, delayMillis);
+        if (OmniboxFeatures.isPostFrameAutocompleteStartEnabled()) {
+            Choreographer.getInstance().postFrameCallback(mPostAutocompleteRequestAfterFrame);
+        } else {
+            mHandler.postDelayed(request, OMNIBOX_SUGGESTION_START_DELAY_MS);
+        }
     }
 
     /** Cancel any pending autocomplete actions. */
     private void cancelAutocompleteRequests() {
         stopMeasuringSuggestionRequestToUiModelTime();
+        if (OmniboxFeatures.isPostFrameAutocompleteStartEnabled()) {
+            Choreographer.getInstance().removeFrameCallback(mPostAutocompleteRequestAfterFrame);
+        }
         if (mCurrentAutocompleteRequest != null) {
             mHandler.removeCallbacks(mCurrentAutocompleteRequest);
         }
@@ -2206,20 +2269,29 @@ class AutocompleteMediator
     /**
      * Start measuring time between - the request for suggestions and - the suggestions UI model
      * being built. This should be invoked right before we issue a request for suggestions.
+     *
+     * @param keystrokeTimeMs {@link TimeUtils#uptimeMillis()} at the time of the keystroke that
+     *     triggered this request, or null if the request was not triggered by a keystroke (e.g.
+     *     zero-prefix suggestions). When present, the KeystrokeToUiModel histograms are recorded in
+     *     addition to RequestToUiModel.
      */
-    private void startMeasuringSuggestionRequestToUiModelTime() {
-        mLastSuggestionRequestTime = SystemClock.uptimeMillis();
+    private void startMeasuringSuggestionRequestToUiModelTime(@Nullable Long keystrokeTimeMs) {
+        mLastSuggestionRequestTime = TimeUtils.uptimeMillis();
+        mLastKeystrokeTime = keystrokeTimeMs;
         mFirstSuggestionListModelCreatedTime = null;
     }
 
     /**
      * Measure the time it took to build Suggestions UI model. The time is measured since the moment
-     * suggestions were requested. Two histograms are recorded by this method:
+     * suggestions were requested and, for typed-text requests, since the triggering keystroke. Up
+     * to four histograms are recorded by this method:
      *
      * <ul>
-     *   <li>Omnibox.SuggestionList.RequestToUiModel.First for the first reply associated with the
+     *   <li>Omnibox.SuggestionList.RequestToUiModel.First and
+     *       Omnibox.SuggestionList.KeystrokeToUiModel.First for the first reply associated with the
      *       request and
-     *   <li>Omnibox.SuggestionList.RequestToUiModel.Last for the final reply associated with the
+     *   <li>Omnibox.SuggestionList.RequestToUiModel.Last and
+     *       Omnibox.SuggestionList.KeystrokeToUiModel.Last for the final reply associated with the
      *       request.
      * </ul>
      *
@@ -2232,15 +2304,25 @@ class AutocompleteMediator
         if (mLastSuggestionRequestTime == null) return;
 
         if (mFirstSuggestionListModelCreatedTime == null) {
-            mFirstSuggestionListModelCreatedTime = SystemClock.uptimeMillis();
+            mFirstSuggestionListModelCreatedTime = TimeUtils.uptimeMillis();
             OmniboxMetrics.recordSuggestionRequestToModelTime(
                     /* isFirst= */ true,
                     mFirstSuggestionListModelCreatedTime - mLastSuggestionRequestTime);
+            if (mLastKeystrokeTime != null) {
+                OmniboxMetrics.recordKeystrokeToModelTime(
+                        /* isFirst= */ true,
+                        mFirstSuggestionListModelCreatedTime - mLastKeystrokeTime);
+            }
         }
 
         if (isFinal) {
+            long now = TimeUtils.uptimeMillis();
             OmniboxMetrics.recordSuggestionRequestToModelTime(
-                    /* isFirst= */ false, SystemClock.uptimeMillis() - mLastSuggestionRequestTime);
+                    /* isFirst= */ false, now - mLastSuggestionRequestTime);
+            if (mLastKeystrokeTime != null) {
+                OmniboxMetrics.recordKeystrokeToModelTime(
+                        /* isFirst= */ false, now - mLastKeystrokeTime);
+            }
             stopMeasuringSuggestionRequestToUiModelTime();
         }
     }
@@ -2248,6 +2330,7 @@ class AutocompleteMediator
     /** Cancel any measurements related to the time it takes to build Suggestions UI model. */
     private void stopMeasuringSuggestionRequestToUiModelTime() {
         mLastSuggestionRequestTime = null;
+        mLastKeystrokeTime = null;
         mFirstSuggestionListModelCreatedTime = null;
     }
 

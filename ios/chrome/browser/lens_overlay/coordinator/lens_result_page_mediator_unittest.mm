@@ -112,6 +112,7 @@ class LensResultPageMediatorTest : public PlatformTest {
 
   ~LensResultPageMediatorTest() override {
     browser_web_state_delegate_.ClearLastProxyAuthenticationRequest();
+    fake_web_state_ = nullptr;
     [mediator_ disconnect];
     PlatformTest::TearDown();
   }
@@ -187,7 +188,7 @@ class LensResultPageMediatorTest : public PlatformTest {
   FakeLensResultPageMediatorDelegate* fake_delegate_;
 
   // Call `AttachFakeWebState()` to use `fake_web_state_`.
-  raw_ptr<web::FakeWebState, DanglingUntriaged> fake_web_state_;
+  raw_ptr<web::FakeWebState> fake_web_state_ = nullptr;
 };
 
 // Tests that the mediator starts a navigation when loadResultsURL is called.
@@ -313,6 +314,35 @@ TEST_F(LensResultPageMediatorTest,
                                initiatedByUser:YES];
   EXPECT_EQ(new_web_state, nullptr);
   EXPECT_TRUE(fake_delegate_.openInNewTabRequested);
+}
+
+// Tests that openURLWithParams: with kNewForegroundTab invokes
+// lensResultPageOpenURLInNewTabRequested: on the delegate and does not crash.
+TEST_F(LensResultPageMediatorTest, ShouldOpenURLInNewTabForNewForegroundTab) {
+  AttachFakeWebState();
+  id<CRWWebStateDelegate> web_state_delegate =
+      static_cast<id<CRWWebStateDelegate>>(mediator_);
+
+  EXPECT_FALSE(fake_delegate_.openInNewTabRequested);
+  web::WebState::OpenURLParams params(GURL("https://www.chromium.org"),
+                                      web::Referrer(),
+                                      WindowOpenDisposition::kNewForegroundTab,
+                                      ui::PAGE_TRANSITION_LINK, false);
+  web::WebState* new_web_state = [web_state_delegate webState:fake_web_state_
+                                            openURLWithParams:params];
+  EXPECT_EQ(new_web_state, nullptr);
+  EXPECT_TRUE(fake_delegate_.openInNewTabRequested);
+
+  // Non-HTTP/HTTPS URLs should not open in a new tab.
+  fake_delegate_.openInNewTabRequested = NO;
+  web::WebState::OpenURLParams non_http_params(
+      GURL("chrome://policy"), web::Referrer(),
+      WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK,
+      false);
+  new_web_state = [web_state_delegate webState:fake_web_state_
+                             openURLWithParams:non_http_params];
+  EXPECT_EQ(new_web_state, nullptr);
+  EXPECT_FALSE(fake_delegate_.openInNewTabRequested);
 }
 
 // Tests that any navigation that's not on main frame is allowed.

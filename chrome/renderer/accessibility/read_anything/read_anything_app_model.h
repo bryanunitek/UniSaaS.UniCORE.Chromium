@@ -706,7 +706,9 @@ class ReadAnythingAppModel {
 
   bool ContainsActiveTree() const;
 
-  void UnserializePendingUpdates(const ui::AXTreeID& tree_id);
+  // Returns false if a failed unserialization destroyed the tree. Callers that
+  // continue using the tree must check the return value.
+  bool UnserializePendingUpdates(const ui::AXTreeID& tree_id);
 
   void ClearPendingUpdates();
 
@@ -758,6 +760,24 @@ class ReadAnythingAppModel {
   bool is_content_translated() const { return is_content_translated_; }
   void set_is_content_translated(bool is_content_translated) {
     is_content_translated_ = is_content_translated;
+  }
+
+  // Whether the WebUI should keep content hidden behind the loading screen
+  // until translation completes.
+  bool is_awaiting_translation() const { return is_awaiting_translation_; }
+  void set_is_awaiting_translation(bool is_awaiting_translation) {
+    is_awaiting_translation_ = is_awaiting_translation;
+  }
+
+  // The UKM source of the page that the active AXTree belongs to, as reported
+  // by the browser. Unlike GetUkmSourceId(), this is independent of the active
+  // tree's lifetime: it's kept when the tree is destroyed and set even before
+  // the tree's first updates arrive.
+  ukm::SourceId active_page_ukm_source_id() const {
+    return active_page_ukm_source_id_;
+  }
+  void set_active_page_ukm_source_id(ukm::SourceId ukm_source_id) {
+    active_page_ukm_source_id_ = ukm_source_id;
   }
 
   void AddObserver(ModelObserver* observer);
@@ -896,7 +916,9 @@ class ReadAnythingAppModel {
 
   void AddPendingUpdates(const ui::AXTreeID& tree_id, Updates& updates);
 
-  void UnserializeUpdates(const Updates& updates, const ui::AXTreeID& tree_id);
+  // Returns false if a failed unserialization destroyed the tree. Callers that
+  // continue using the tree must check the return value.
+  bool UnserializeUpdates(const Updates& updates, const ui::AXTreeID& tree_id);
 
   void ProcessNonGeneratedEvents(const std::vector<ui::AXEvent>& events);
 
@@ -1034,6 +1056,20 @@ class ReadAnythingAppModel {
   // when the active tree changes: the browser only sends changes (see
   // ReadAnythingUntrustedPageHandler::SendTranslationState()).
   bool is_content_translated_ = false;
+
+  // Whether the WebUI should keep content hidden behind the loading screen
+  // until translation completes. Set when reading mode is opened to translate a
+  // PDF, and cleared once the tab is translated, the translation fails, or
+  // reading mode is hidden. Only changed through
+  // ReadAnythingAppController::SetAwaitingTranslation(), which also notifies
+  // the WebUI.
+  bool is_awaiting_translation_ = false;
+
+  // The UKM source of the page that the active AXTree belongs to, as reported
+  // by the browser with each new active tree. Several trees can belong to the
+  // same page (e.g. a PDF's content frame), so a different source means the
+  // page changed, not just the tree. Only updated with valid sources.
+  ukm::SourceId active_page_ukm_source_id_ = ukm::kInvalidSourceId;
 
   // Distillation is slow and happens out-of-process when Screen2x is running.
   // This boolean marks when distillation is in progress to avoid sending

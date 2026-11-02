@@ -85,6 +85,7 @@
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
 #import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -397,9 +398,15 @@ GeminiBrowserAgent::GeminiBrowserAgent(Browser* browser)
     }
   }
 
+  CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
   link_opening_handler_ = [[GeminiLinkOpeningHandler alloc]
-      initWithURLLoader:UrlLoadingBrowserAgent::FromBrowser(browser_)
-             dispatcher:browser_->GetCommandDispatcher()];
+      initWithURLLoader:UrlLoadingBrowserAgent::FromBrowser(browser_)];
+  // Use `static_cast` instead of `HandlerForProtocol` because command handlers
+  // have not started dispatching yet when the browser agent is created.
+  link_opening_handler_.geminiHandler =
+      static_cast<id<GeminiCommands>>(dispatcher);
+  link_opening_handler_.sceneHandler =
+      static_cast<id<SceneCommands>>(dispatcher);
   ConfigureGemini();
 
   if (IsIOSGeminiBottomSheetMigrationEnabled()) {
@@ -1624,16 +1631,19 @@ void GeminiBrowserAgent::ShowFloatyIfInvoked(
     return;
   }
 
-  // Web navigations should not be seen as a transition as an old WebState can
-  // be hidden quickly followed by a new WebState being shown where
-  // hiding/showing the floaty are valid invocations.
+  // Web navigations, context menu dismissals, and keyboard dismissals should
+  // not be treated as view transitions: these dismissals can occur quickly
+  // after presentation (e.g. rapid omnibox focus/defocus), and the floaty must
+  // be restored to avoid leaving it permanently hidden.
   bool is_web_navigation = source == gemini::FloatyUpdateSource::WebNavigation;
   bool is_context_menu = source == gemini::FloatyUpdateSource::ContextMenu;
+  bool is_keyboard = source == gemini::FloatyUpdateSource::Keyboard;
 
   GeminiTabHelper* gemini_tab_helper = GetActiveTabHelper();
   bool should_block =
       gemini_tab_helper && gemini_tab_helper->ShouldBlockFloatyFromShowing();
-  if ((!is_web_navigation && !is_context_menu && triggered_during_transition) ||
+  if ((!is_web_navigation && !is_context_menu && !is_keyboard &&
+       triggered_during_transition) ||
       should_block) {
     return;
   }
@@ -2046,19 +2056,6 @@ void GeminiBrowserAgent::OnPageContentPrefChanged() {
           prefs::kIOSBWGPageContentSetting)) {
     shared_tabs_.clear();
   }
-
-  if (IsInGeminiLiveMode() &&
-      processing_status_ == ios::provider::GeminiClientMode::kTranscribing) {
-    return;
-  }
-
-  if (is_floaty_invoked_) {
-    [gemini_container_mediator_ updateFloatyWithPartialPageContext];
-  }
-
-  // Trigger UI update for the attachment chip.
-  ios::provider::RequestUIChange(
-      ios::provider::GeminiUIElementType::kContextAttachment);
 }
 
 void GeminiBrowserAgent::OnMicrophonePrefChanged() {

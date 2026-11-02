@@ -16,6 +16,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
@@ -43,6 +44,7 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/javascript_dialogs/tab_modal_dialog_manager.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/media_session.h"
@@ -70,7 +72,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/test/draw_waiter_for_test.h"
@@ -79,6 +81,8 @@
 #include "ui/display/screen.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/select_file_dialog_factory.h"
 #include "ui/views/controls/button/image_button.h"
@@ -86,7 +90,11 @@
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
+#include "ui/views/window/client_view.h"
+#include "ui/views/window/dialog_delegate.h"
+#include "ui/views/window/frame_view.h"
 #include "ui/views/window/non_client_view.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -770,7 +778,8 @@ IN_PROC_BROWSER_TEST_P(DocumentPictureInPictureWindowControllerFrameViewTest,
       base::FilePath(base::FilePath::kCurrentDirectory),
       base::FilePath(kPictureInPictureDocumentPipPage));
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), test_page_url, WindowOpenDisposition::kNewForegroundTab,
+      browser(), test_page_url,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   EXPECT_NE(browser()->GetTabStripModel()->GetActiveWebContents(),
             opener_web_contents);
@@ -928,6 +937,63 @@ IN_PROC_BROWSER_TEST_P(DocumentPictureInPictureWindowControllerFrameViewTest,
   EXPECT_EQ(base::UTF8ToUTF16(base::StrCat(
                 {test_page_url.host(), ":", test_page_url.port()})),
             window_title->GetText());
+}
+
+// A page-authored JavaScript dialog may overlap the contents divider, but must
+// not cover the browser-owned origin/title strip or controls.
+IN_PROC_BROWSER_TEST_P(DocumentPictureInPictureWindowControllerFrameViewTest,
+                       JavaScriptDialogPlacedBelowFrameView) {
+  LoadTabAndEnterPictureInPicture(browser());
+  content::WebContents* pip_web_contents =
+      window_controller()->GetChildWebContents();
+  ASSERT_NE(nullptr, pip_web_contents);
+  WaitForPageLoad(pip_web_contents);
+
+  auto* dialog_manager =
+      javascript_dialogs::TabModalDialogManager::FromWebContents(
+          pip_web_contents);
+  ASSERT_NE(nullptr, dialog_manager);
+  base::RunLoop dialog_shown;
+  dialog_manager->SetDialogShownCallbackForTesting(dialog_shown.QuitClosure());
+  content::ExecuteScriptAsync(pip_web_contents, "alert('hello');");
+  dialog_shown.Run();
+  ASSERT_TRUE(dialog_manager->IsShowingDialogForTesting());
+
+  views::Widget* pip_widget = views::Widget::GetWidgetForNativeWindow(
+      pip_web_contents->GetTopLevelNativeWindow());
+  ASSERT_NE(nullptr, pip_widget);
+  views::Widget* dialog_widget = nullptr;
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    for (views::Widget* owned :
+         views::Widget::GetAllOwnedWidgets(pip_widget->GetNativeView())) {
+      if (owned->IsVisible() && owned->widget_delegate() &&
+          owned->widget_delegate()->AsDialogDelegate()) {
+        dialog_widget = owned;
+        return true;
+      }
+    }
+    return false;
+  }));
+  // The frame view owns the strip above the client view in both backends.
+  ASSERT_NE(nullptr, pip_widget->client_view());
+  gfx::Rect allowed_bounds = pip_widget->client_view()->GetBoundsInScreen();
+  ASSERT_GT(allowed_bounds.y(), pip_widget->GetWindowBoundsInScreen().y());
+  constexpr int kConstrainedWindowOverlap = 3;
+  allowed_bounds.Inset(gfx::Insets::TLBR(-kConstrainedWindowOverlap, 0, 0, 0));
+  gfx::Rect dialog_bounds = dialog_widget->GetWindowBoundsInScreen();
+  ASSERT_TRUE(dialog_widget->non_client_view());
+  // Compare the visible dialog, excluding its frame border and shadow.
+  dialog_bounds.Inset(
+      dialog_widget->non_client_view()->frame_view()->GetInsets());
+  EXPECT_EQ(dialog_bounds.y(), allowed_bounds.y())
+      << "dialog " << dialog_bounds.ToString() << " overlaps frame above "
+      << allowed_bounds.ToString();
+  EXPECT_TRUE(allowed_bounds.Contains(dialog_bounds))
+      << "dialog " << dialog_bounds.ToString() << " outside client area "
+      << allowed_bounds.ToString();
+
+  dialog_manager->ClickDialogButtonForTesting(/*accept=*/true,
+                                              std::u16string());
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1144,7 +1210,8 @@ IN_PROC_BROWSER_TEST_F(DocumentPictureInPictureWindowControllerBrowserTest,
       base::FilePath(base::FilePath::kCurrentDirectory),
       base::FilePath(kPictureInPictureDocumentPipPage));
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), test_page_url, WindowOpenDisposition::kNewForegroundTab,
+      browser(), test_page_url,
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
   EXPECT_NE(browser()->GetTabStripModel()->GetActiveWebContents(),
             opener_web_contents);

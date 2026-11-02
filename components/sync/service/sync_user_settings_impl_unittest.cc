@@ -217,8 +217,6 @@ TEST_F(SyncUserSettingsImplTest,
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       /*enabled_features=*/{switches::kSyncEnableBookmarksInTransportMode,
-                            kReadingListEnableSyncTransportModeUponSignIn,
-                            kSeparateLocalAndAccountSearchEngines,
                             syncer::kSeparateLocalAndAccountThemes,
                             switches::kEnablePreferencesAccountStorage},
       /*disabled_features=*/{kReplaceSyncPromosWithSignInPromos});
@@ -251,8 +249,6 @@ TEST_F(SyncUserSettingsImplTest,
       /*enabled_features=*/{switches::kSyncEnableBookmarksInTransportMode,
                             kReplaceSyncPromosWithSignInPromos,
 #if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
-                            kReadingListEnableSyncTransportModeUponSignIn,
-                            kSeparateLocalAndAccountSearchEngines,
                             syncer::kSeparateLocalAndAccountThemes,
 #endif
                             switches::kEnablePreferencesAccountStorage},

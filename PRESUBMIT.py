@@ -600,7 +600,7 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         (
             r'^base/third_party/symbolize/.*',
             r'^third_party/abseil-cpp/.*',
-            r'^third_party/grpc/source/.*',
+            r'^third_party/grpc/src/.*',
         ),
     ),
     BanRule(
@@ -978,10 +978,6 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             r'base/containers/span_unittest.cc',
             # //base/numerics can't use base or absl. So it uses std.
             r'base/numerics/.*',
-            # These files are in a separate build target and use std::span to
-            # interface with a 3P library, while avoiding a circular dependency
-            # on //base.
-            r'base/simdutf_shim.*',
 
             # The early zone registration can't use base or absl. So it uses
             # std.
@@ -1014,13 +1010,6 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             r'gpu/command_buffer/service/dawn_wire_server\.cc',
             r'third_party/blink/renderer/platform/graphics/gpu/dawn_command_serializers\.cc',
             r'third_party/blink/renderer/platform/graphics/gpu/dawn_command_serializers\.h',
-
-            # Needed to implement and use Dawn caching interfaces.
-            r'gpu/command_buffer/service/dawn_caching_interface\.cc',
-            r'gpu/command_buffer/service/dawn_caching_interface\.h',
-            r'gpu/command_buffer/service/dawn_context_provider\.cc',
-            r'gpu/command_buffer/service/gpu_persistent_cache\.cc',
-            r'gpu/command_buffer/service/gpu_persistent_cache\.h',
 
             # Clang tools do not depend on //base. Some are even emitting
             # std::span rewrite for non chromium projects.
@@ -2006,6 +1995,19 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
          'harder to mis-use. See details in base/atomicops.h.', ),
         False,
         [_THIRD_PARTY_EXCEPT_BLINK],  # Not an error in third_party folders.
+    ),
+    BanRule(
+        r'/#include\s+["<](?:third_party/icu/source/i18n/)?'
+        r'unicode/(?:smpdtfmt|dtptngen)\.h[">]',
+        ('Do not use icu::SimpleDateFormat or icu::DateTimePatternGenerator '
+         'directly. Use base::i18n::IcuBridge::date_time_formatter() (see '
+         'base/i18n/icubridge/date_time_formatter.h) or the helpers in '
+         'base/i18n/time_formatting.h instead.', ),
+        True,
+        [
+            r'^base/i18n/',
+            _THIRD_PARTY_EXCEPT_BLINK,
+        ],
     ),
     BanRule(r'CrossThreadPersistent<', (
         'Do not use blink::CrossThreadPersistent, but '
@@ -5442,6 +5444,74 @@ def CheckSetNoParent(input_api, output_api):
                 'do not include owners from build/OWNERS.setnoparent:',
                 long_text='\n\n'.join(errors)))
     return results
+
+
+def CheckSafeBrowsingOwners(input_api, output_api):
+    """Checks that safe_browsing OWNERS files do not have per-file ownership
+    for a file that doesn't exist at the specified location.
+
+    Only runs validation if safe_browsing OWNERS files are modified or if
+    safe_browsing files are deleted or moved.
+    """
+    repo_root = input_api.change.RepositoryRoot()
+    owners_file_contents = {}
+    checked_dirs = set()
+    for f in input_api.AffectedFiles(include_deletes=True):
+        path = f.LocalPath()
+        if 'safe_browsing' not in path:
+            continue
+        if f.Action() == 'D':
+            # If a safe_browsing file was deleted or moved, check OWNERS files
+            # in its ancestor safe_browsing directories in case a per-file rule
+            # became stale.
+            cur_dir = input_api.os_path.dirname(path)
+            while 'safe_browsing' in cur_dir and cur_dir not in checked_dirs:
+                checked_dirs.add(cur_dir)
+                owners_path = input_api.os_path.join(cur_dir, 'OWNERS')
+                abs_owners = input_api.os_path.join(repo_root, owners_path)
+                if (owners_path not in owners_file_contents
+                        and input_api.os_path.isfile(abs_owners)):
+                    owners_file_contents[owners_path] = input_api.ReadFile(
+                        abs_owners).splitlines()
+                cur_dir = input_api.os_path.dirname(cur_dir)
+        elif path.endswith('OWNERS'):
+            owners_file_contents[path] = f.NewContents()
+
+    if not owners_file_contents:
+        return []
+
+    per_file_pattern = input_api.re.compile(r'^per-file\s+(.+?)=.+$')
+    errors = []
+
+    for owners_path, lines in owners_file_contents.items():
+        # Strip comments and validate each comma-separated glob in `per-file`
+        # rules relative to the OWNERS file's directory.
+        owners_dir = input_api.os_path.dirname(owners_path)
+        checked_patterns = set()
+        for raw_line in lines:
+            match = per_file_pattern.match(raw_line.split('#', 1)[0].strip())
+            if not match:
+                continue
+            for pattern in match.group(1).strip().split(','):
+                if pattern in checked_patterns:
+                    continue
+                checked_patterns.add(pattern)
+                abs_pattern = input_api.os_path.normpath(
+                    input_api.os_path.join(repo_root, owners_dir, pattern))
+                if not any(
+                        input_api.os_path.isfile(p)
+                        for p in input_api.glob(abs_pattern)):
+                    errors.append(
+                        f'{owners_path}: per-file pattern "{pattern}" '
+                        'does not match any existing file.')
+
+    if not errors:
+        return []
+    return [
+        output_api.PresubmitError(
+            'Found invalid per-file entries in safe_browsing OWNERS files:',
+            items=errors)
+    ]
 
 
 def CheckUselessForwardDeclarations(input_api, output_api):

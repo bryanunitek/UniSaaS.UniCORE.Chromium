@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_op.h"
+#include "base/containers/flat_set.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -73,10 +74,10 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/themes.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/webui/web_ui_util.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/color_utils.h"
@@ -254,13 +255,13 @@ void OpenLearnMoreURL(bool is_profile_list_empty,
     return;
   }
 
-  browser->OpenURL(
-      content::OpenURLParams::CreateBrowserInitiated(
-          GURL(is_profile_list_empty
-                   ? chrome::kSigninOnDesktopLearnMoreURL
-                   : chrome::kAddNewProfileOnDesktopLearnMoreURL),
-          WindowOpenDisposition::kNewForegroundTab, ui::PAGE_TRANSITION_LINK),
-      /*navigation_handle_callback=*/{});
+  browser->OpenURL(content::OpenURLParams::CreateBrowserInitiated(
+                       GURL(is_profile_list_empty
+                                ? chrome::kSigninOnDesktopLearnMoreURL
+                                : chrome::kAddNewProfileOnDesktopLearnMoreURL),
+                       ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+                       ui::PAGE_TRANSITION_LINK),
+                   /*navigation_handle_callback=*/{});
 }
 
 }  // namespace
@@ -732,19 +733,41 @@ void ProfilePickerHandler::HandleRemoveProfile(const base::ListValue& args) {
   // Do not use `this` after this point, it may be deleted.
 }
 
+namespace {
+
+ProfileOrderUpdateType ToProfileOrderUpdateType(
+    ProfilePickerOrderUpdateType picker_update_type) {
+  switch (picker_update_type) {
+    case ProfilePickerOrderUpdateType::kDragAndDrop:
+      return ProfileOrderUpdateType::kDragAndDrop;
+    case ProfilePickerOrderUpdateType::kContextMenuButton:
+      return ProfileOrderUpdateType::kContextMenuButton;
+  }
+}
+
+}  // namespace
+
 void ProfilePickerHandler::HandleUpdateProfileOrder(
     const base::ListValue& args) {
-  CHECK_EQ(2U, args.size());
+  CHECK_EQ(3U, args.size());
   CHECK(args[0].is_int());
   CHECK(args[1].is_int());
+  CHECK(args[2].is_int());
 
   int from_index = args[0].GetInt();
   int to_index = args[1].GetInt();
+  int update_type = args[2].GetInt();
   CHECK(from_index >= 0 && to_index >= 0);
+  CHECK_GE(update_type, 0);
+  CHECK_LE(update_type,
+           static_cast<int>(ProfilePickerOrderUpdateType::kMaxValue));
 
   g_browser_process->profile_manager()
       ->GetProfileAttributesStorage()
-      .UpdateProfilesOrderPref(from_index, to_index);
+      .UpdateProfilesOrderPref(
+          from_index, to_index,
+          ToProfileOrderUpdateType(
+              static_cast<ProfilePickerOrderUpdateType>(update_type)));
 }
 
 void ProfilePickerHandler::HandleOnLearnMoreClicked(
@@ -861,6 +884,21 @@ void ProfilePickerHandler::SetProfilesOrder(
   for (const ProfileAttributesEntry* entry : entries) {
     profiles_order_[entry->GetPath()] = index++;
   }
+  CHECK(IsProfilesOrderValid());
+}
+
+bool ProfilePickerHandler::IsProfilesOrderValid() const {
+  base::flat_set<size_t> indices_set;
+  for (const auto& [path, index] : profiles_order_) {
+    if (index >= profiles_order_.size()) {
+      return false;
+    }
+    auto [_, inserted] = indices_set.insert(index);
+    if (!inserted) {
+      return false;
+    }
+  }
+  return indices_set.size() == profiles_order_.size();
 }
 
 std::vector<ProfileAttributesEntry*>
@@ -933,6 +971,7 @@ void ProfilePickerHandler::AddProfileToListAndPushUpdates(
   // `insert()` to not corrput the map in case this happens.
   // https://crbug.com/40759222
   CHECK(it_and_whether_inserted.second, base::NotFatalUntil::M162);
+  CHECK(IsProfilesOrderValid());
 
   MaybeUpdateGuestMode();
   PushProfilesList();
@@ -957,6 +996,7 @@ void ProfilePickerHandler::RemoveProfileFromListAndPushUpdates(
       --it.second;
     }
   }
+  CHECK(IsProfilesOrderValid());
   MaybeUpdateGuestMode();
   FireWebUIListener("profile-removed", base::FilePathToValue(profile_path));
 }
@@ -1050,6 +1090,13 @@ void ProfilePickerHandler::OnProfileIsGlicEligibleChanged(
 void ProfilePickerHandler::OnProfileAiSubscriptionTierUpdated(
     const base::FilePath& profile_path,
     int tier) {
+  PushProfilesList();
+}
+
+void ProfilePickerHandler::OnProfilesOrderChanged() {
+  // Reset `profiles_order_` so that `GetProfilesAttributesForDisplay()`
+  // recomputes the order from `ProfileAttributesStorage`.
+  profiles_order_.clear();
   PushProfilesList();
 }
 

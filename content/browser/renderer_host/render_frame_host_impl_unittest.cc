@@ -29,6 +29,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/fake_local_frame.h"
+#include "content/public/test/test_navigation_throttle.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/navigation_simulator_impl.h"
 #include "content/test/storage_partition_test_helpers.h"
@@ -1447,6 +1448,9 @@ class MockWebContentsDelegate : public WebContentsDelegate {
   MOCK_METHOD(void,
               OnTextCopiedToClipboard,
               (RenderFrameHost*, std::u16string));
+#if BUILDFLAG(IS_ANDROID)
+  MOCK_METHOD(void, UpdateUserGestureCarryoverInfo, (WebContents*), (override));
+#endif
 };
 
 }  // namespace
@@ -2045,6 +2049,36 @@ TEST_F(RenderFrameHostImplMimeHandlerTest,
                   .is_secure_context_root);
 }
 
+// A throttle can block the response after the commit-time policies were
+// computed, and the frame then commits an error page instead. The error page is
+// not the chrome-extension document the secure-context-root answer was
+// computed for, so it is expected not to become a secure-context root.
+TEST_F(RenderFrameHostImplMimeHandlerTest,
+       BlockedResponseErrorPageIsNotSecureContextRoot) {
+  TestRenderFrameHost* embedder = CommitEmbedder(GURL(kEmbedderUrl));
+  TestRenderFrameHost* child = AppendAndMaybeCommit(embedder, "child", GURL());
+
+  auto navigation =
+      NavigationSimulator::CreateRendererInitiated(GURL(kExtensionUrl), child);
+  navigation->Start();
+  auto& registry = navigation->GetNavigationThrottleRegistry();
+  auto throttle = std::make_unique<TestNavigationThrottle>(registry);
+  throttle->SetResponse(TestNavigationThrottle::WILL_PROCESS_RESPONSE,
+                        TestNavigationThrottle::SYNCHRONOUS,
+                        NavigationThrottle::BLOCK_RESPONSE);
+  registry.AddThrottle(std::move(throttle));
+  navigation->ReadyToCommit();
+  ASSERT_EQ(NavigationThrottle::BLOCK_RESPONSE,
+            navigation->GetLastThrottleCheckResult());
+  navigation->CommitErrorPage();
+
+  EXPECT_FALSE(
+      static_cast<RenderFrameHostImpl*>(navigation->GetFinalRenderFrameHost())
+          ->frame_tree_node()
+          ->current_replication_state()
+          .is_secure_context_root);
+}
+
 // Turns on the DBSC JS API, so that each commit computes
 // `can_use_device_bound_session_js_api`.
 class RenderFrameHostImplDeviceBoundSessionJsApiTest
@@ -2224,5 +2258,39 @@ TEST_F(RenderFrameHostImplTest,
   EXPECT_NE(initiator_policies, policies);
   EXPECT_EQ(kDefaultPolicies, policies);
 }
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(RenderFrameHostImplTest,
+       UpdateUserGestureCarryoverInfoWithoutActivation) {
+  MockWebContentsDelegate delegate;
+  contents()->SetDelegate(&delegate);
+
+  TestRenderFrameHost* rfh = contents()->GetPrimaryMainFrame();
+  EXPECT_FALSE(rfh->HasTransientUserActivation());
+  EXPECT_CALL(delegate, UpdateUserGestureCarryoverInfo(contents())).Times(0);
+
+  static_cast<mojom::FrameHost*>(rfh)->UpdateUserGestureCarryoverInfo();
+
+  EXPECT_EQ(0, rfh->GetProcess()->bad_msg_count());
+  testing::Mock::VerifyAndClearExpectations(&delegate);
+  contents()->SetDelegate(nullptr);
+}
+
+TEST_F(RenderFrameHostImplTest, UpdateUserGestureCarryoverInfoWithActivation) {
+  MockWebContentsDelegate delegate;
+  contents()->SetDelegate(&delegate);
+
+  TestRenderFrameHost* rfh = contents()->GetPrimaryMainFrame();
+  rfh->SimulateUserActivation();
+  EXPECT_TRUE(rfh->HasTransientUserActivation());
+  EXPECT_CALL(delegate, UpdateUserGestureCarryoverInfo(contents())).Times(1);
+
+  static_cast<mojom::FrameHost*>(rfh)->UpdateUserGestureCarryoverInfo();
+
+  EXPECT_EQ(0, rfh->GetProcess()->bad_msg_count());
+  testing::Mock::VerifyAndClearExpectations(&delegate);
+  contents()->SetDelegate(nullptr);
+}
+#endif
 
 }  // namespace content

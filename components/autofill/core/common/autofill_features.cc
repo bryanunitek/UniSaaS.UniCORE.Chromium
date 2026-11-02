@@ -46,20 +46,6 @@ BASE_FEATURE(kActorFormFillingServiceEnableCreditCard,
 BASE_FEATURE(kAutofillAcceptDomMutationAfterAutofillSubmission,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// LINT.IfChange(autofill_across_iframes_ios_throttling)
-// Throttles child frame extraction to a maximum number of child frames that
-// can be extracted by applying the following rules: (1) remove the child frames
-// from an individual form that busts the limit and (2) stop extracting child
-// frames on other forms once the limit is reached across forms.
-BASE_FEATURE(kAutofillAcrossIframesIosThrottling,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-// LINT.ThenChange(//components/autofill/ios/form_util/resources/autofill_form_features.ts:autofill_across_iframes_ios_throttling)
-
-// Controls whether to trigger form extraction when detecting a form activity on
-// a xframe form.
-BASE_FEATURE(kAutofillAcrossIframesIosTriggerFormExtraction,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // When enabled, the extracted APC proto includes node geometry.
 BASE_FEATURE(kAutofillActionableAIPageContent,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -188,7 +174,7 @@ DEFINE_FEATURE_WITH_MOBILE_COUNTRY_RESTRICTION(kAutofillAiDedupeEntities);
 // When enabled, the entity save/update prompt displays an edit button that
 // opens the entity editor on click.
 BASE_FEATURE(kAutofillAiEditEntitiesFromSaveUpdatePrompt,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // If enabled, no GeoIp requirements are imposed for AutofillAi.
@@ -217,12 +203,6 @@ BASE_FEATURE_PARAM(std::string,
                    &kAutofillAiIgnoreGeoIp,
                    "autofill_ai_geo_ip_blocklist",
                    "");
-
-// When enabled, the entity-specific import constraints are enforced for data
-// received through AUTOFILL_VALUABLE.
-// TODO(crbug.com/542468992): Clean up when launched.
-BASE_FEATURE(kAutofillAiImportConstraintsForSync,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // If enabled, Autofill AI suggestion width can be limited.
 BASE_FEATURE(kAutofillAiLimitSuggestionWidth,
@@ -482,12 +462,12 @@ BASE_FEATURE(kAutofillAmbientAutofillSuppression,
 // new behavior and design.
 // TODO(crbug.com/438125774): Remove when launched.
 BASE_FEATURE(kAutofillAndroidDesktopKeyboardAccessoryRevamp,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // If enabled, on Android desktop, Autofill keyboard accessory will be
 // suppressed when there are no autofill suggestions.
 BASE_FEATURE(kAutofillAndroidDesktopSuppressAccessoryOnEmpty,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls whether user tap on an element is needed to show autofill
 // suggestions. If enabled, this flag would disable android autofill suggestions
@@ -514,7 +494,7 @@ BASE_FEATURE(kAutofillAndroidHideSuggestionsOnContextMenu,
 // desktops.
 // TODO(crbug.com/438125774): Remove when launched.
 BASE_FEATURE(kAutofillAndroidKeyboardAccessoryDynamicPositioning,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_ANDROID)
 // If enabled, on Android, hovering over an Autofill suggestion in the keyboard
@@ -601,9 +581,6 @@ BASE_FEATURE(kAutofillAtMemorySupportTextAreaOnAndroid,
 BASE_FEATURE(kAutofillAtMemoryTriggerShortcut,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// If enabled, AtMemory can be triggered by typing the trigger string like "@@".
-BASE_FEATURE(kAutofillAtMemoryTriggerString, base::FEATURE_ENABLED_BY_DEFAULT);
-
 // When enabled, the placeholder is not considered a label fallback on the
 // renderer side anymore. Instead, local heuristic will match regexes against
 // either the label or the placeholder, depending on how high quality the label
@@ -623,6 +600,11 @@ BASE_FEATURE(kAutofillCheckTriggeringFieldDoesNotChangeDuringFilling,
 // When enabled, deduce country of a new address profile based on the phone
 // number if not explicitly observed.
 BASE_FEATURE(kAutofillComplementCountryUsingPhoneNumber,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// If enabled, Autofill runs site-specific scripts to detect and fill custom
+// form controls (e.g. select-like widgets that aren't <select>).
+BASE_FEATURE(kAutofillCustomFormControlScripts,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // If enabled, `FormPredictionsTracker` will wait up to 1 second
@@ -834,7 +816,7 @@ BASE_FEATURE(kAutofillExtractOnlyNonAdFrames,
 // (analogous to form control ownership) rather than the closest ancestor form
 // (analogous to form control association).
 // TODO(crbug.com/536963555): Clean up when launched.
-BASE_FEATURE(kAutofillFixIframeOwnership, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kAutofillFixIframeOwnership, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Prioritizes ADDRESS_HOME_STREET_ADDRESS over postal code in inferred labels.
 // See crbug.com/540151895.
@@ -857,6 +839,12 @@ BASE_FEATURE(kAutofillGmailOtpPreLaunchMetrics,
 
 // When enabled, Greek regexes are used for parsing in branded builds.
 BASE_FEATURE(kAutofillGreekRegexes, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Kill switch for guarding against offering an address update prompt when there
+// are no UI-visible differences (e.g. only whitespace or formatting changes
+// normalized away by `GetEnvelopeStyleAddress()`).
+BASE_FEATURE(kAutofillGuardEmptyUpdatePrompts,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // When enabled, `BrowserAutofillManager` hides suggestions as soon as the
 // renderer reports that the focus moved away from the field the suggestions
@@ -975,6 +963,8 @@ BASE_FEATURE(kAutofillPersonalizationAndTrustAutofillAiSurvey,
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kAutofillPersonalizationAndTrustCreditCardSurvey,
              base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kAutofillPersonalizationAndTrustFedCmSurvey,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kAutofillPersonalizationAndTrustOneTimePasswordSurvey,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -1059,6 +1049,14 @@ BASE_FEATURE(kAutofillServerUploadMoreData, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kAutofillShowGmailOtpSuggestions,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// When enabled, the PHONE_EXTENSION regex only matches "ext" as a token
+// (e.g. "Ext.", "phone_ext", "phoneExt") and no longer matches words that
+// merely contain it (e.g. "text-8", "next", "extra", "exterior"). Such fields
+// right after a phone number were misclassified as PHONE_HOME_EXTENSION.
+// TODO(crbug.com/417192418): Clean up when launched.
+BASE_FEATURE(kAutofillStricterPhoneExtensionRegex,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 // If this feature is enabled, the AddressFieldParser does NOT try to parse
 // address lines once it has found a street name and house number or other
 // combinations of fields that indicate that an address form uses structured
@@ -1088,7 +1086,9 @@ BASE_FEATURE(kAutofillSupportStandaloneZipCodeGlobally,
 
 // Kill switch: When enabled, AskForValuesToFill() throttling is skipped for
 // browser-initiated and explicit user triggers.
-// TODO(crbug.com/547562303): Clean up after September 15, 2026.
+// TODO(crbug.com/547562303): Clean up once crrev.com/c/8256627 (unthrottled
+// trigger source in TouchToFillAutofillDelegateAndroidImpl) has landed and
+// rolled out.
 BASE_FEATURE(kAutofillThrottleAskForValuesToFillByTriggerSource,
              base::FEATURE_ENABLED_BY_DEFAULT);
 

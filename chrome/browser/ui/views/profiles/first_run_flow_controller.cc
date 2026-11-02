@@ -46,7 +46,7 @@
 #include "chrome/browser/ui/views/profiles/feature_showcase/feature_showcase_step_eligibility_checker.h"
 #include "chrome/browser/ui/views/profiles/feature_showcase/gemini_step_eligibility_checker.h"
 #include "chrome/browser/ui/views/profiles/feature_showcase/google_lens_step_eligibility_checker.h"
-#include "chrome/browser/ui/views/profiles/feature_showcase/password_manager_feature_showcase_eligibility_checker.h"
+#include "chrome/browser/ui/views/profiles/feature_showcase/password_manager_step_eligibility_checker.h"
 #include "chrome/browser/ui/views/profiles/feature_showcase/themes_and_customization_step_eligibility_checker.h"
 #include "chrome/browser/ui/views/profiles/profile_management_flow_controller_impl.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
@@ -515,13 +515,11 @@ class FinishOrContinueStepController : public IntroBasedAnimatedStepController {
   base::WeakPtrFactory<FinishOrContinueStepController> weak_ptr_factory_{this};
 };
 
-using IdentityStepsCompletedCallback =
-    base::OnceCallback<void(PostHostClearedCallback post_host_cleared_callback,
-                            bool is_continue_callback)>;
+using IdentityStepsCompletedCallback = base::OnceCallback<void(
+    PostHostClearedCallback post_host_cleared_callback)>;
 
-// Instance allowing `TurnSyncOnHelper` (in legacy sync flow) or
-// `HistorySyncOptinHelper` (in new history sync flow) to drive the interface in
-// the `kPostSignIn` step.
+// Instance allowing `HistorySyncOptinHelper` to drive the interface in the
+// `kPostSignIn` step.
 class FirstRunPostSignInAdapter : public ProfilePickerPostSignInAdapter {
  public:
   FirstRunPostSignInAdapter(
@@ -545,7 +543,7 @@ class FirstRunPostSignInAdapter : public ProfilePickerPostSignInAdapter {
 
   void Init(StepSwitchFinishedCallback step_switch_callback) override {
     // Stop with the sign-in navigation and show a spinner instead. The spinner
-    // will be shown until the post-sign-in flow figures out whether it's a
+    // will be shown until `HistorySyncOptinHelper` figures out whether it's a
     // managed account and whether sync/policies are resolved (which in some
     // cases involves fetching policies/capabilities and can take a couple of
     // seconds).
@@ -565,11 +563,8 @@ class FirstRunPostSignInAdapter : public ProfilePickerPostSignInAdapter {
   }
 
   void FinishAndOpenBrowserInternal(
-      PostHostClearedCallback post_host_cleared_callback,
-      bool is_continue_callback) override {
-    // Do nothing if this has already been called. Note that this can get called
-    // first time from a special case handling (such as the Settings link) and
-    // than second time when the TurnSyncOnHelper finishes.
+      PostHostClearedCallback post_host_cleared_callback) override {
+    // Do nothing if this has already been called.
     if (!step_completed_callback_) {
       return;
     }
@@ -581,8 +576,7 @@ class FirstRunPostSignInAdapter : public ProfilePickerPostSignInAdapter {
     auto combined_callback =
         CombineCallbacks<PostHostClearedCallback, BrowserWindowInterface*>(
             std::move(callbacks));
-    std::move(step_completed_callback_)
-        .Run(std::move(combined_callback), is_continue_callback);
+    std::move(step_completed_callback_).Run(std::move(combined_callback));
   }
 
   void ShowSignInCelebration(base::OnceClosure celebration_finished) override {
@@ -674,7 +668,7 @@ class FeatureShowcaseStepController : public ProfileManagementStepController {
     }
     checkers.push_back(std::make_unique<GoogleLensStepEligibilityChecker>());
     checkers.push_back(
-        std::make_unique<PasswordManagerFeatureShowcaseEligibilityChecker>());
+        std::make_unique<PasswordManagerStepEligibilityChecker>());
     checkers.push_back(
         std::make_unique<ThemesAndCustomizationStepEligibilityChecker>());
 
@@ -1046,8 +1040,7 @@ void FirstRunFlowController::CancelSigninFlow() {
   // TODO(crbug.com/40067597): Look into letting the user keep their account.
   signin::ClearProfileWithManagedAccounts(profile_);
 
-  HandleIdentityStepsCompleted(profile_, PostHostClearedCallback(),
-                               /*is_continue_callback=*/false);
+  HandleIdentityStepsCompleted(profile_, PostHostClearedCallback());
 }
 
 void FirstRunFlowController::PickProfile(
@@ -1091,8 +1084,7 @@ void FirstRunFlowController::HandleIntroSigninChoice(IntroChoice choice) {
   }
 
   if (choice == IntroChoice::kContinueWithoutAccount) {
-    HandleIdentityStepsCompleted(profile_, PostHostClearedCallback(),
-                                 /*is_continue_callback=*/false);
+    HandleIdentityStepsCompleted(profile_, PostHostClearedCallback());
     return;
   }
 

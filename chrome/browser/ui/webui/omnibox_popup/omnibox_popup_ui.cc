@@ -234,8 +234,6 @@ OmniboxPopupUI::OmniboxPopupUI(content::WebUI* web_ui)
   source->AddBoolean("askGLensIconIphEnabled", omnibox::kAskGLensIconIph.Get());
   source->AddBoolean("askGComposeboxLensChipEnabled",
                      omnibox::kAskGComposeboxLensChip.Get());
-  source->AddBoolean("askGBlockAutoTabZeroStateSuggestions",
-                     omnibox::kAskGBlockAutoTabZeroStateSuggestions.Get());
   source->AddBoolean("askGComposeboxPlaceholderEnabled",
                      omnibox::kAskGComposeboxPlaceholder.Get());
   source->AddBoolean("askGSuggestionSidePanelDescription",
@@ -594,5 +592,50 @@ void OmniboxPopupUI::SetPresenterDelegate(OmniboxPopupPresenterBase* delegate) {
   // is where PEPC mojo call lives.
   if (composebox_handler_) {
     composebox_handler_->set_delegate(presenter_delegate_);
+  }
+}
+
+void OmniboxPopupUI::DetachFromWindow() {
+  if (omnibox_handler_) {
+    // The full WebUI popup's handler is bound to one window.
+    CHECK(!omnibox::ShouldUseWebUIOmniboxFullHandler());
+    static_cast<WebuiOmniboxHandler*>(omnibox_handler_.get())
+        ->DetachFromOmniboxController();
+  }
+  if (popup_handler_) {
+    popup_handler_->DetachFromOmniboxController();
+  }
+  if (composebox_handler_) {
+    static_cast<OmniboxComposeboxHandler*>(composebox_handler_.get())
+        ->DetachFromOmniboxController();
+  }
+  if (popup_aim_handler_) {
+    popup_aim_handler_->clear_cached_draft_text();
+  }
+  // Attachments and tab context in the session come from the old window.
+  ClearContextualSessionHandle();
+  // Leaves no pointer into the old window, which may close before the popup
+  // is attached to another one.
+  OmniboxPopupWebContentsHelper::GetOrCreateForWebContents(
+      web_ui()->GetWebContents())
+      ->set_omnibox_controller(nullptr);
+}
+
+void OmniboxPopupUI::AttachToWindow(OmniboxController* omnibox_controller) {
+  CHECK(omnibox_controller);
+  // The composebox handler and client read the controller from the helper.
+  OmniboxPopupWebContentsHelper::GetOrCreateForWebContents(
+      web_ui()->GetWebContents())
+      ->set_omnibox_controller(omnibox_controller);
+  if (omnibox_handler_) {
+    static_cast<WebuiOmniboxHandler*>(omnibox_handler_.get())
+        ->AttachToOmniboxController(omnibox_controller);
+  }
+  if (popup_handler_) {
+    popup_handler_->AttachToOmniboxController(omnibox_controller);
+  }
+  if (composebox_handler_) {
+    static_cast<OmniboxComposeboxHandler*>(composebox_handler_.get())
+        ->AttachToOmniboxController(omnibox_controller);
   }
 }

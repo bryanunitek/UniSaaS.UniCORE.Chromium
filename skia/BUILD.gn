@@ -87,6 +87,10 @@ config("skia_config") {
     "SK_EXIF_PARSE_WITH_RUST",
   ]
 
+  if (use_partition_alloc_as_malloc) {
+    defines += [ "SK_USE_PARTITION_ALLOC_AS_MALLOC" ]
+  }
+
   if (!allow_avx512) {
     defines += [ "SK_DISABLE_AVX512_OPTS" ]
   } else {
@@ -638,7 +642,6 @@ component("skia") {
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.
   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
-  check_includes_strict = CHECK_INCLUDES_STRICT_PUBLIC_INCLUDES_PRIVATE
 }
 
 component("skia_switches") {
@@ -748,7 +751,13 @@ source_set("rust_bmp_ffi_cpp") {
     ":skia_core_public_headers",
     "//build/rust:cxx_cppdeps",
   ]
-  deps = [ ":rust_bmp_ffi_cxx_generated_gen" ]
+
+  # Compiles private Skia files that include raw_ptr.h. ":skia" depends on
+  # partition_alloc privately, so this needs the dep directly.
+  deps = [
+    ":rust_bmp_ffi_cxx_generated_gen",
+    "//base/allocator/partition_allocator:raw_ptr",
+  ]
   check_includes =
       false  # Logically part of skia, but split out for build reasons
   configs -= [ "//build/config/compiler:chromium_code" ]
@@ -845,7 +854,13 @@ source_set("rust_jpeg_ffi_cpp") {
     ":skia_core_public_headers",
     "//build/rust:cxx_cppdeps",
   ]
-  deps = [ ":rust_jpeg_ffi_cxx_generated_gen" ]
+
+  # Compiles private Skia files that include raw_ptr.h. ":skia" depends on
+  # partition_alloc privately, so this needs the dep directly.
+  deps = [
+    ":rust_jpeg_ffi_cxx_generated_gen",
+    "//base/allocator/partition_allocator:raw_ptr",
+  ]
   check_includes =
       false  # Logically part of skia, but split out for build reasons
   configs -= [ "//build/config/compiler:chromium_code" ]

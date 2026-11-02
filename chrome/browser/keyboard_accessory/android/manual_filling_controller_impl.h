@@ -18,6 +18,7 @@
 #include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
 namespace autofill {
@@ -31,6 +32,7 @@ class PasswordAccessoryController;
 // Use ManualFillingController::GetOrCreate to obtain instances of this class.
 class ManualFillingControllerImpl
     : public ManualFillingController,
+      public content::WebContentsObserver,
       public content::WebContentsUserData<ManualFillingControllerImpl> {
  public:
   ManualFillingControllerImpl(const ManualFillingControllerImpl&) = delete;
@@ -41,7 +43,7 @@ class ManualFillingControllerImpl
 
   // ManualFillingController:
   void NotifyFocusedInputChanged(
-      autofill::FieldRendererId focused_field_id,
+      autofill::FieldGlobalId focused_field_id,
       autofill::mojom::FocusedFieldType focused_field_type) override;
   autofill::FieldGlobalId GetLastFocusedFieldId() const override;
   void UpdateSourceAvailability(FillingSource source,
@@ -116,6 +118,19 @@ class ManualFillingControllerImpl
       base::WeakPtr<AtMemoryAccessoryController> at_memory_controller,
       std::unique_ptr<ManualFillingViewInterface> view);
 
+  // content::WebContentsObserver:
+  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
+  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                              content::RenderFrameHost* new_host) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+
+  // Returns true if `rfh` is the frame containing `last_focused_field_id_`.
+  bool IsLastFocusedFrame(content::RenderFrameHost* rfh) const;
+
+  // Resets the tracked focus state and updates the UI if a field was focused.
+  void ResetFocus();
+
   // Returns true if the keyboard accessory needs to be shown for last focused
   // field type..
   bool ShouldShowAccessoryForLastFocusedFieldType() const;
@@ -149,7 +164,7 @@ class ManualFillingControllerImpl
   // This set contains sources to be shown to the user.
   base::flat_set<FillingSource> available_sources_;
 
-  // The unique renderer ID of the last known selected field.
+  // The global ID of the last known selected field.
   autofill::FieldGlobalId last_focused_field_id_;
 
   // Type of the last known selected field. Helps to determine UI visibility.

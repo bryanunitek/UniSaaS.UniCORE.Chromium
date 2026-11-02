@@ -795,7 +795,9 @@ void MediaSessionImpl::Stop(SuspendType suspend_type) {
 }
 
 void MediaSessionImpl::Seek(base::TimeDelta seek_time) {
-  CHECK(!seek_time.is_zero(), base::NotFatalUntil::M160);
+  // TODO(crbug.com/577759362): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(!seek_time.is_zero());
 
   if (seek_time.is_positive()) {
     // If the site has registered an action handler for seek forward then we
@@ -1798,16 +1800,22 @@ RenderFrameHost* MediaSessionImpl::ComputeFrameForRouting(bool ensure_service) {
   std::map<RenderFrameHost*, size_t> map_rfh_to_depth;
 
   std::set<url::Origin> highest_player_origins;
+  std::set<RenderFrameHost*> highest_player_ancestors;
   size_t min_player_depth = std::numeric_limits<size_t>::max();
 
   for (RenderFrameHost* frame : frames) {
     size_t depth = ComputeFrameDepth(frame, &map_rfh_to_depth);
     if (depth < min_player_depth) {
       highest_player_origins.clear();
+      highest_player_ancestors.clear();
       min_player_depth = depth;
     }
     if (depth == min_player_depth) {
       highest_player_origins.insert(frame->GetLastCommittedOrigin());
+      for (RenderFrameHost* ancestor = frame->GetParentOrOuterDocument();
+           ancestor; ancestor = ancestor->GetParentOrOuterDocument()) {
+        highest_player_ancestors.insert(ancestor);
+      }
     }
     if (depth >= min_depth) {
       continue;
@@ -1820,8 +1828,8 @@ RenderFrameHost* MediaSessionImpl::ComputeFrameForRouting(bool ensure_service) {
   }
 
   // If we cannot find a suitable frame, take the top-most frame with an active
-  // MediaSessionService (and same-origin with the highest-level active player
-  // if one exists).
+  // MediaSessionService (that is either same-origin with or an ancestor of the
+  // highest-level active player if one exists).
   if (!best_frame) {
     // `FrameTree::Nodes()` iterates in breadth-first order, so this is
     // guaranteed to find the topmost (or tied topmost) frame with an active
@@ -1831,7 +1839,8 @@ RenderFrameHost* MediaSessionImpl::ComputeFrameForRouting(bool ensure_service) {
                                    .Nodes()) {
       RenderFrameHost* rfh = node->current_frame_host();
       if (!highest_player_origins.empty() &&
-          !highest_player_origins.contains(rfh->GetLastCommittedOrigin())) {
+          !highest_player_origins.contains(rfh->GetLastCommittedOrigin()) &&
+          !highest_player_ancestors.contains(rfh)) {
         continue;
       }
       if (IsServiceActiveForRenderFrameHost(rfh)) {

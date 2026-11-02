@@ -17,6 +17,7 @@
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_service/web_contents_app_id_utils.h"
@@ -45,6 +46,8 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+#include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
+#include "chrome/browser/ui/waap/waap_utils.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/navigation_capturing_process.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_navigation_handle_user_data.h"
@@ -145,6 +148,27 @@ bool WindowCanOpenTabs(const NavigateParams& params) {
          params.browser->tab_strip_model()->empty();
 }
 
+// Creates a new normal Browser window for |profile| if allowed, and records
+// its creation source as `waap::NewWindowCreationSource::kNavigation`.
+BrowserWindowInterface* CreateNormalBrowserForNavigation(
+    Profile* profile,
+    bool user_gesture,
+    bool should_trigger_session_restore) {
+  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+      BrowserWindowInterface::CreationStatus::kOk) {
+    return nullptr;
+  }
+  BrowserWindowCreateParams params(profile, user_gesture);
+  params.should_trigger_session_restore = should_trigger_session_restore;
+  base::TimeTicks now = base::TimeTicks::Now();
+  BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
+  if (auto* manager = InitialWebUIWindowMetricsManager::From(browser)) {
+    manager->SetWindowCreationInfo(waap::NewWindowCreationSource::kNavigation,
+                                   now);
+  }
+  return browser;
+}
+
 // Finds an existing Browser compatible with |profile|, making a new one if no
 // such Browser is located.
 BrowserWindowInterface* GetOrCreateBrowser(
@@ -153,14 +177,9 @@ BrowserWindowInterface* GetOrCreateBrowser(
     bool should_trigger_session_restore) {
   BrowserWindowInterface* browser =
       ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser();
-
-  if (!browser && GetBrowserWindowCreationStatusForProfile(*profile) ==
-                      BrowserWindowInterface::CreationStatus::kOk) {
-    BrowserWindowCreateParams params(profile, user_gesture);
-    params.should_trigger_session_restore = should_trigger_session_restore;
-    browser = CreateBrowserWindow(std::move(params));
-  }
-  return browser;
+  return browser ? browser
+                 : CreateNormalBrowserForNavigation(
+                       profile, user_gesture, should_trigger_session_restore);
 }
 
 bool IncognitoModeForced(const Profile* profile) {
@@ -459,18 +478,11 @@ std::tuple<BrowserWindowInterface*, int> GetBrowserAndTabForDisposition(
           should_trigger_session_restore;
       return {CreateBrowserWindow(std::move(browser_params)), -1};
     }
-    case WindowOpenDisposition::kNewWindow: {
+    case WindowOpenDisposition::kNewWindow:
       // Make a new normal browser window.
-      BrowserWindowInterface* browser = nullptr;
-      if (GetBrowserWindowCreationStatusForProfile(*profile) ==
-          BrowserWindowInterface::CreationStatus::kOk) {
-        BrowserWindowCreateParams browser_params(profile, params.user_gesture);
-        browser_params.should_trigger_session_restore =
-            should_trigger_session_restore;
-        browser = CreateBrowserWindow(std::move(browser_params));
-      }
-      return {browser, -1};
-    }
+      return {CreateNormalBrowserForNavigation(profile, params.user_gesture,
+                                               should_trigger_session_restore),
+              -1};
     case WindowOpenDisposition::kOffTheRecord:
       // Make or find an incognito window.
       return {GetOrCreateBrowser(
@@ -490,14 +502,18 @@ std::tuple<BrowserWindowInterface*, int> GetBrowserAndTabForDisposition(
 // conditions.
 void NormalizeDisposition(NavigateParams* params) {
   // Calculate the WindowOpenDisposition if necessary.
-  if (params->browser->GetTabStripModel()->empty() &&
+  if (params->browser && params->browser->GetTabStripModel()->empty() &&
       (params->disposition == WindowOpenDisposition::kNewBackgroundTab ||
        params->disposition == WindowOpenDisposition::kCurrentTab ||
        params->disposition == WindowOpenDisposition::kSingletonTab ||
        params->disposition == WindowOpenDisposition::kNewSplitView)) {
     params->disposition = WindowOpenDisposition::kNewForegroundTab;
   }
-  if (params->browser->GetProfile()->IsOffTheRecord() &&
+  if (params->disposition == WindowOpenDisposition::kNewSplitView &&
+      (!params->user_gesture || !params->original_user_gesture)) {
+    params->disposition = WindowOpenDisposition::kNewForegroundTab;
+  }
+  if (params->browser && params->browser->GetProfile()->IsOffTheRecord() &&
       params->disposition == WindowOpenDisposition::kOffTheRecord) {
     params->disposition = WindowOpenDisposition::kNewForegroundTab;
   }
@@ -995,31 +1011,52 @@ base::WeakPtr<content::NavigationHandle> NavigateImpl(
   // tab.
   if (!contents_to_navigate_or_insert) {
     DCHECK(!params->url.is_empty());
-    if (params->disposition != WindowOpenDisposition::kCurrentTab) {
-      tab_to_insert = std::make_unique<tabs::TabModel>(
-          CreateTargetContents(*params, params->url),
-          params->browser->GetTabStripModel());
-      if (params->source_contents &&
-          ((params->tabstrip_add_types & AddTabTypes::ADD_INHERIT_OPENER) ||
-           params->user_gesture)) {
-        tab_to_insert->set_opener(
-            tabs::TabInterface::MaybeGetFromContents(params->source_contents));
+    if (params->disposition == WindowOpenDisposition::kNewSplitView &&
+        params->source_contents) {
+      tabs::TabInterface* const source_tab =
+          tabs::TabInterface::MaybeGetFromContents(params->source_contents);
+      if (source_tab && source_tab->IsSplit()) {
+        const split_tabs::SplitTabId split_id = source_tab->GetSplit().value();
+        if (params->browser->GetTabStripModel()->ContainsSplit(split_id)) {
+          split_tabs::SplitTabData* const split_data =
+              params->browser->GetTabStripModel()->GetSplitData(split_id);
+          for (tabs::TabInterface* tab : split_data->ListTabs()) {
+            if (tab != source_tab) {
+              contents_to_navigate_or_insert = tab->GetContents();
+              break;
+            }
+          }
+        }
       }
-      contents_to_navigate_or_insert = tab_to_insert->GetContents();
+    }
 
-      apps::SetAppIdForWebContents(params->browser->GetProfile(),
-                                   contents_to_navigate_or_insert,
-                                   params->app_id);
+    if (!contents_to_navigate_or_insert) {
+      if (params->disposition != WindowOpenDisposition::kCurrentTab) {
+        tab_to_insert = std::make_unique<tabs::TabModel>(
+            CreateTargetContents(*params, params->url),
+            params->browser->GetTabStripModel());
+        if (params->source_contents &&
+            ((params->tabstrip_add_types & AddTabTypes::ADD_INHERIT_OPENER) ||
+             params->user_gesture)) {
+          tab_to_insert->set_opener(tabs::TabInterface::MaybeGetFromContents(
+              params->source_contents));
+        }
+        contents_to_navigate_or_insert = tab_to_insert->GetContents();
+
+        apps::SetAppIdForWebContents(params->browser->GetProfile(),
+                                     contents_to_navigate_or_insert,
+                                     params->app_id);
 #if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
-      captive_portal::CaptivePortalTabHelper::FromWebContents(
-          contents_to_navigate_or_insert)
-          ->set_window_type(params->captive_portal_window_type);
+        captive_portal::CaptivePortalTabHelper::FromWebContents(
+            contents_to_navigate_or_insert)
+            ->set_window_type(params->captive_portal_window_type);
 #endif
-    } else {
-      // ... otherwise if we're loading in the current tab, the target is the
-      // same as the source.
-      DCHECK(params->source_contents);
-      contents_to_navigate_or_insert = params->source_contents;
+      } else {
+        // ... otherwise if we're loading in the current tab, the target is the
+        // same as the source.
+        DCHECK(params->source_contents);
+        contents_to_navigate_or_insert = params->source_contents;
+      }
     }
 
     // Try to handle non-navigational URLs that popup dialogs and such, these
@@ -1066,89 +1103,90 @@ base::WeakPtr<content::NavigationHandle> NavigateImpl(
                                      params->transition, params->window_action,
                                      user_initiated);
   } else if (singleton_index == -1) {
-    if (source_browser != params->browser) {
-      params->tabstrip_index = params->browser->GetTabStripModel()->count();
-    }
-
-    // If some non-default value is set for the index, we should tell the
-    // TabStripModel to respect it.
-    if (params->tabstrip_index != -1) {
-      params->tabstrip_add_types |= AddTabTypes::ADD_FORCE_INDEX;
-    }
-
-    // Maybe notify that an open operation has been done from a gesture.
-    // TODO(crbug.com/40719979): preferably pipe this information through the
-    // TabStripModel instead. See bug for deeper discussion.
-    if (params->user_gesture && source_browser == params->browser) {
-      BrowserWindow::FromBrowser(params->browser)
-          ->LinkOpeningFromGesture(params->disposition);
-    }
-
-    DCHECK(tab_to_insert);
-    std::optional<tab_groups::TabGroupId> group = params->group;
-    if (!(params->tabstrip_add_types & AddTabTypes::ADD_PINNED)) {
-      if (!group.has_value()) {
-        group = params->browser->GetTabStripModel()->GetFocusedGroup();
+    if (tab_to_insert) {
+      if (source_browser != params->browser) {
+        params->tabstrip_index = params->browser->GetTabStripModel()->count();
       }
-    }
-    // The navigation should insert a new tab into the target Browser.
-    params->browser->GetTabStripModel()->AddTab(
-        std::move(tab_to_insert), params->tabstrip_index, params->transition,
-        params->tabstrip_add_types, group);
 
-    // For NEW_SPLIT_VIEW, pair the new tab with the active tab. The
-    // "already split" case is handled in
-    // BrowserWebContentsDelegate::OpenURLFromTab().
-    if (params->disposition == WindowOpenDisposition::kNewSplitView &&
-        contents_to_navigate_or_insert) {
-      TabStripModel* const tab_strip_model =
-          params->browser->GetTabStripModel();
-      tabs::TabInterface* const new_tab =
-          tabs::TabInterface::MaybeGetFromContents(
-              contents_to_navigate_or_insert);
-      const int new_tab_index = tab_strip_model->GetIndexOfTab(new_tab);
-      tabs::TabInterface* const active_tab = tab_strip_model->GetActiveTab();
-      tabs::TabInterface* const source_tab =
-          params->source_contents ? tabs::TabInterface::MaybeGetFromContents(
-                                        params->source_contents)
-                                  : active_tab;
-      if (new_tab_index != TabStripModel::kNoTab && active_tab &&
-          active_tab != new_tab && !active_tab->IsSplit() &&
-          (!source_tab || !source_tab->IsSplit())) {
-        // For window.open() split tab requests, apply the position and size
-        // hints. Otherwise, use the default visual data.
-        split_tabs::SplitTabVisualData visual_data;
-        bool new_tab_first = false;
-        if (params->window_features.is_split) {
-          CHECK(base::FeatureList::IsEnabled(
-              blink::features::kWindowOpenSplitTab));
-          visual_data = GetWindowOpenSplitTabVisualData(params->window_features,
-                                                        new_tab_first);
-        }
-        const split_tabs::SplitTabId split_id = tab_strip_model->AddToNewSplit(
-            {new_tab_index}, visual_data,
-            split_tabs::SplitTabCreatedSource::kLinkClick);
-        // AddToNewSplit() orders the split by tab strip index, which normally
-        // puts the new tab second. For window.open() split tab requests,
-        // reverse the split if the new tab should be first. The ratio in
-        // `visual_data` already accounts for this order.
-        if (params->window_features.is_split &&
-            new_tab_first !=
-                (tab_strip_model->GetSplitData(split_id)->ListTabs()[0] ==
-                 new_tab)) {
-          tab_strip_model->ReverseTabsInSplit(split_id);
+      // If some non-default value is set for the index, we should tell the
+      // TabStripModel to respect it.
+      if (params->tabstrip_index != -1) {
+        params->tabstrip_add_types |= AddTabTypes::ADD_FORCE_INDEX;
+      }
+
+      // Maybe notify that an open operation has been done from a gesture.
+      // TODO(crbug.com/40719979): preferably pipe this information through the
+      // TabStripModel instead. See bug for deeper discussion.
+      if (params->user_gesture && source_browser == params->browser) {
+        BrowserWindow::FromBrowser(params->browser)
+            ->LinkOpeningFromGesture(params->disposition);
+      }
+
+      std::optional<tab_groups::TabGroupId> group = params->group;
+      if (!(params->tabstrip_add_types & AddTabTypes::ADD_PINNED)) {
+        if (!group.has_value()) {
+          group = params->browser->GetTabStripModel()->GetFocusedGroup();
         }
       }
-      if (new_tab) {
-        // AddToNewSplit() makes the split contiguous and gives the new tab the
-        // active tab's pinned state and group, moving the new tab next to the
-        // active tab if it is not already there. In particular, when the
-        // active tab is pinned, the new (unpinned) tab was inserted after the
-        // pinned tabs, so after the move `new_tab_index` refers to whichever
-        // tab was shifted into its old slot, e.g. the pinned tab to the right
-        // of the split. Activate by tab rather than by index so that tab can
-        // never be focused instead of the new split tab.
-        tab_strip_model->ActivateTab(new_tab);
+      // The navigation should insert a new tab into the target Browser.
+      params->browser->GetTabStripModel()->AddTab(
+          std::move(tab_to_insert), params->tabstrip_index, params->transition,
+          params->tabstrip_add_types, group);
+
+      // For NEW_SPLIT_VIEW, pair the new tab with the active tab. The
+      // "already split" case is handled above by navigating the partner pane.
+      if (params->disposition == WindowOpenDisposition::kNewSplitView &&
+          contents_to_navigate_or_insert) {
+        TabStripModel* const tab_strip_model =
+            params->browser->GetTabStripModel();
+        tabs::TabInterface* const new_tab =
+            tabs::TabInterface::MaybeGetFromContents(
+                contents_to_navigate_or_insert);
+        const int new_tab_index = tab_strip_model->GetIndexOfTab(new_tab);
+        tabs::TabInterface* const active_tab = tab_strip_model->GetActiveTab();
+        tabs::TabInterface* const source_tab =
+            params->source_contents ? tabs::TabInterface::MaybeGetFromContents(
+                                          params->source_contents)
+                                    : active_tab;
+        if (new_tab_index != TabStripModel::kNoTab && active_tab &&
+            active_tab != new_tab && !active_tab->IsSplit() &&
+            (!source_tab || !source_tab->IsSplit())) {
+          // For window.open() split tab requests, apply the position and size
+          // hints. Otherwise, use the default visual data.
+          split_tabs::SplitTabVisualData visual_data;
+          bool new_tab_first = false;
+          if (params->window_features.is_split) {
+            CHECK(base::FeatureList::IsEnabled(
+                blink::features::kWindowOpenSplitTab));
+            visual_data = GetWindowOpenSplitTabVisualData(
+                params->window_features, new_tab_first);
+          }
+          const split_tabs::SplitTabId split_id =
+              tab_strip_model->AddToNewSplit(
+                  {new_tab_index}, visual_data,
+                  split_tabs::SplitTabCreatedSource::kLinkClick);
+          // AddToNewSplit() orders the split by tab strip index, which normally
+          // puts the new tab second. For window.open() split tab requests,
+          // reverse the split if the new tab should be first. The ratio in
+          // `visual_data` already accounts for this order.
+          if (params->window_features.is_split &&
+              new_tab_first !=
+                  (tab_strip_model->GetSplitData(split_id)->ListTabs()[0] ==
+                   new_tab)) {
+            tab_strip_model->ReverseTabsInSplit(split_id);
+          }
+        }
+        if (new_tab) {
+          // AddToNewSplit() makes the split contiguous and gives the new tab
+          // the active tab's pinned state and group, moving the new tab next to
+          // the active tab if it is not already there. In particular, when the
+          // active tab is pinned, the new (unpinned) tab was inserted after the
+          // pinned tabs, so after the move `new_tab_index` refers to whichever
+          // tab was shifted into its old slot, e.g. the pinned tab to the right
+          // of the split. Activate by tab rather than by index so that tab can
+          // never be focused instead of the new split tab.
+          tab_strip_model->ActivateTab(new_tab);
+        }
       }
     }
   }

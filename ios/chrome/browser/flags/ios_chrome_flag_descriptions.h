@@ -70,7 +70,8 @@ inline constexpr char kAimButtonRefactorDescription[] =
 
 inline constexpr char kAimCobrowseName[] = "AimCobrowse";
 inline constexpr char kAimCobrowseDescription[] =
-    "Enables the AimCobrowse feature.";
+    "Enables the AimCobrowse feature (including the Add Tab entrypoint by "
+    "default).";
 
 inline constexpr char kAimCobrowseWebSelectionSearchName[] =
     "AIM Cobrowse Web Selection Search";
@@ -1353,6 +1354,12 @@ inline constexpr char kLensOverlayNavigationHistoryDescription[] =
     "When enabled, web navigation in the Lens overlay are recorded in browser "
     "history.";
 
+inline constexpr char kLensSendDriveTabUrlsInComposeboxesName[] =
+    "Lens Send Drive Tab URLs in Composeboxes";
+inline constexpr char kLensSendDriveTabUrlsInComposeboxesDescription[] =
+    "Enables sending Google Drive / Docs tab URLs as unresolved URLs in "
+    "composeboxes.";
+
 inline constexpr char kLensStreamServiceWebChannelTransportEnabledName[] =
     "Lens stream service web channel transport";
 inline constexpr char
@@ -1650,6 +1657,12 @@ inline constexpr char kOmniboxPrerenderOnTouchDownDescription[] =
     "Prerenders compatible omnibox suggestions when touching down on the "
     "suggestion row.";
 
+inline constexpr char kOmniboxTruncateSearchUrlName[] =
+    "Omnibox Truncate Search URL";
+inline constexpr char kOmniboxTruncateSearchUrlDescription[] =
+    "Truncates search URLs for the original query ('oq') and query ('q') "
+    "parameters across various length limits.";
+
 inline constexpr char kOmniboxUIMaxAutocompleteMatchesName[] =
     "Omnibox UI Max Autocomplete Matches";
 inline constexpr char kOmniboxUIMaxAutocompleteMatchesDescription[] =
@@ -1806,13 +1819,6 @@ inline constexpr char kRefactorToolbarsSizeName[] = "Refactor toolbars size";
 inline constexpr char kRefactorToolbarsSizeDescription[] =
     "When enabled, the toolbars size does not use broadcaster but observers.";
 
-inline constexpr char kRemoteActorCredentialSharingName[] =
-    "Enable password sharing with remote actors";
-inline constexpr char kRemoteActorCredentialSharingDescription[] =
-    "Enables remote actors to request passwords from the signed in Google "
-    "account. When requested, the user will be prompted to select a password "
-    "and authenticate.";
-
 inline constexpr char kRemoveExcessNTPsExperimentName[] =
     "Remove extra New Tab Pages";
 inline constexpr char kRemoveExcessNTPsExperimentDescription[] =
@@ -1876,12 +1882,6 @@ inline constexpr char kShowAutofillTypePredictionsDescription[] =
     "Annotates web forms with Autofill field type predictions as placeholder "
     "text.";
 
-inline constexpr char kSkipDefaultBrowserPromoInFirstRunName[] =
-    "Skip the FRE Default Browser Promo in EEA";
-inline constexpr char kSkipDefaultBrowserPromoInFirstRunDescription[] =
-    "When enabled, users in the EEA will not see a Default Browser Promo in "
-    "the FRE.";
-
 inline constexpr char kSmartTabGroupingName[] = "Enable Smart Tab Grouping";
 inline constexpr char kSmartTabGroupingDescription[] =
     "When enabled, users will have access to use the smart tab grouping "
@@ -1913,7 +1913,7 @@ inline constexpr char kSnapshotConcurrentAccessDescription[] =
 inline constexpr char kSnapshotDownsampleImageName[] =
     "Snapshot Downsample Image";
 inline constexpr char kSnapshotDownsampleImageDescription[] =
-    "Downsamples tab snapshots to half resolution before writing to disk, "
+    "Downsamples tab snapshots to 70% resolution before writing to disk, "
     "reducing storage and I/O while keeping full resolution in memory.";
 
 inline constexpr char kStartSurfaceUserSettingName[] =
@@ -1925,6 +1925,11 @@ inline constexpr char kSupportGoogleOneDeepLinkName[] =
     "Support Google One Deep Link";
 inline constexpr char kSupportGoogleOneDeepLinkDescription[] =
     "Enables deep linking to Google One management screen on startup.";
+
+inline constexpr char kSuspiciousSiteWarningsName[] =
+    "Suspicious Site Warnings";
+inline constexpr char kSuspiciousSiteWarningsDescription[] =
+    "Enables warnings on sites that Safe Browsing deem to be suspicious.";
 
 inline constexpr char kSyncAIThreadsName[] = "Sync AI Threads";
 inline constexpr char kSyncAIThreadsDescription[] =
@@ -2080,10 +2085,6 @@ inline constexpr char kWebPageAlternativeTextZoomDescription[] =
 inline constexpr char kWebPageTextZoomIPadName[] = "Enable text zoom on iPad";
 inline constexpr char kWebPageTextZoomIPadDescription[] =
     "When enabled, text zoom works on iPad";
-
-inline constexpr char kWelcomeBackName[] = "Enable Welcome Back screen";
-inline constexpr char kWelcomeBackDescription[] =
-    "When enabled, returning users will see the Welcome Back screen.";
 
 inline constexpr char kYourSavedInfoSettingsPageIosName[] =
     "Enable Autofill and passwords settings redesign on iOS";

@@ -14,7 +14,6 @@ import android.graphics.drawable.Drawable;
 import android.text.SpannableString;
 import android.text.TextUtils;
 
-import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.DeviceInfo;
@@ -61,6 +60,7 @@ import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.AccountConsistencyPromoAction;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
+import org.chromium.components.signin.metrics.SigninFunnelEvent;
 import org.chromium.components.signin.metrics.SignoutReason;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.sync.UserSelectableType;
@@ -72,8 +72,6 @@ import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.util.ColorUtils;
 import org.chromium.ui.util.TokenHolder;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -86,27 +84,6 @@ public class FullscreenSigninMediator
 
     private static final int SIGNIN_ANIMATION_DELAY_MS = 600;
     private static boolean sAnimationsEnabled = true;
-
-    // LINT.IfChange(LoadPoint)
-    /** Used for MobileFre.SlowestLoadPoint histogram. Should be treated as append-only. */
-    @VisibleForTesting
-    @IntDef({
-        LoadPoint.NATIVE_INITIALIZATION,
-        LoadPoint.POLICY_LOAD,
-        LoadPoint.CHILD_STATUS_LOAD,
-        LoadPoint.ACCOUNT_FETCHING,
-        LoadPoint.MAX
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface LoadPoint {
-        int NATIVE_INITIALIZATION = 0;
-        int POLICY_LOAD = 1;
-        int CHILD_STATUS_LOAD = 2;
-        int ACCOUNT_FETCHING = 3;
-        int MAX = 4;
-    }
-
-    // LINT.ThenChange(//tools/metrics/histograms/metadata/mobile/enums.xml:LoadPoint)
 
     private final Context mContext;
     private final ModalDialogManager mModalDialogManager;
@@ -246,11 +223,18 @@ public class FullscreenSigninMediator
         mDestroyed = true;
     }
 
+    /**
+     * Resets the sign-in progress and animation state of the model. Must only be called when the
+     * user navigates back to the sign-in screen with the back button, as it also notifies the
+     * delegate that the promo is shown again (see {@link
+     * FullscreenSigninCoordinator.Delegate#logPromoShownFunnelEventOnBackPress}).
+     */
     void reset() {
         mModel.set(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT, false);
         mModel.set(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER, false);
         mModel.set(FullscreenSigninProperties.ANIMATOR_LISTENER, null);
         mModel.set(FullscreenSigninProperties.START_ANIMATION, false);
+        logPromoShownFunnelEvent(/* isBackPress= */ true);
     }
 
     private void onNativeLoaded() {
@@ -262,19 +246,19 @@ public class FullscreenSigninMediator
         if (mContinueButtonProfileDataCache == null) {
             initializeProfileDataCache();
         }
-        checkWhetherInitialLoadCompleted(LoadPoint.NATIVE_INITIALIZATION);
+        checkWhetherInitialLoadCompleted(FullscreenSigninLoadPoint.NATIVE_INITIALIZATION);
     }
 
     private void onChildAccountStatusAvailable() {
-        checkWhetherInitialLoadCompleted(LoadPoint.CHILD_STATUS_LOAD);
+        checkWhetherInitialLoadCompleted(FullscreenSigninLoadPoint.CHILD_STATUS_LOAD);
     }
 
     private void onPolicyLoad() {
-        checkWhetherInitialLoadCompleted(LoadPoint.POLICY_LOAD);
+        checkWhetherInitialLoadCompleted(FullscreenSigninLoadPoint.POLICY_LOAD);
     }
 
     /** Checks the initial load status. See {@link #onInitialLoadCompleted} for details. */
-    private void checkWhetherInitialLoadCompleted(@LoadPoint int slowestLoadPoint) {
+    private void checkWhetherInitialLoadCompleted(@FullscreenSigninLoadPoint int slowestLoadPoint) {
         // This happens asynchronously, so this check is necessary to ensure we don't interact with
         // the delegate after the mediator is destroyed. See https://crbug.com/40214143.
         if (mDestroyed) return;
@@ -380,10 +364,35 @@ public class FullscreenSigninMediator
         AccountUtils.checkIsSubjectToParentalControls(
                 mAccountManagerFacade, accounts, this::onChildAccountStatusReady);
 
+        logPromoShownFunnelEvent(/* isBackPress= */ false);
         // Directly start the flow to add a selected account if it is specified in the config for
         // signin and does not already exist on the device.
         maybeStartAddingSelectedAccount();
         mDelegate.onInitialLoadCompleted();
+    }
+
+    /**
+     * Logs the Signin.SigninFunnel.{AccessPoint} promo shown event, with or without an account
+     * depending on whether an account is currently selected and if sign-in is allowed.
+     *
+     * @param isBackPress Whether the promo is shown again because the user navigated back to the
+     *     sign-in screen. In that case, logging is delegated to {@link
+     *     FullscreenSigninCoordinator.Delegate#logPromoShownFunnelEventOnBackPress}.
+     */
+    private void logPromoShownFunnelEvent(boolean isBackPress) {
+        if (mDestroyed || !mInitialLoadCompleted || !mIsSigninSupported) return;
+        @SigninFunnelEvent
+        int event =
+                mSelectedAccount != null
+                        ? SigninFunnelEvent.PROMO_SHOWN_WITH_ACCOUNT
+                        : SigninFunnelEvent.PROMO_SHOWN_NO_ACCOUNT;
+        if (isBackPress) {
+            // Only flows that reuse the FullscreenSigninCoordinator on back press (e.g. the FRE)
+            // should log another promo shown event.
+            mDelegate.logPromoShownFunnelEventOnBackPress(mAccessPoint, event);
+        } else {
+            SigninMetricsUtils.logSigninFunnelEvent(mAccessPoint, event);
+        }
     }
 
     /**
@@ -497,6 +506,8 @@ public class FullscreenSigninMediator
     }
 
     void onAccountAdded(String accountEmail) {
+        if (mDestroyed) return;
+        SigninMetricsUtils.logSigninFunnelEvent(mAccessPoint, SigninFunnelEvent.ACCOUNT_ADDED);
         var accounts = getAccountsIfLoadedOrEmpty();
         mAddedAccount = AccountUtils.findAccountByEmail(accounts, accountEmail);
         if (mAddedAccount == null) {
@@ -547,11 +558,24 @@ public class FullscreenSigninMediator
 
     private void updateAccountsAndCheck(List<AccountInfo> accounts) {
         updateAccounts(accounts);
-        checkWhetherInitialLoadCompleted(LoadPoint.ACCOUNT_FETCHING);
+        checkWhetherInitialLoadCompleted(FullscreenSigninLoadPoint.ACCOUNT_FETCHING);
     }
 
     @Override
     public void onAccountSelected(CoreAccountInfo account) {
+        // An account was selected in the account picker.
+        if (mDefaultAccount != null && account.getId().equals(mDefaultAccount.getId())) {
+            SigninMetricsUtils.logSigninFunnelEvent(
+                    mAccessPoint, SigninFunnelEvent.DEFAULT_ACCOUNT_SELECTED);
+        } else {
+            SigninMetricsUtils.logSigninFunnelEvent(
+                    mAccessPoint, SigninFunnelEvent.NON_DEFAULT_ACCOUNT_SELECTED);
+        }
+        selectAccount(account);
+    }
+
+    /** Selects {@code account} and closes the account picker if it is open. */
+    private void selectAccount(CoreAccountInfo account) {
         if (mPendingSelectedAccountEmail != null) {
             // If the user manually selects an account before the pending selection is available in
             // the account list, clear the pending email to prevent it from overriding the user's
@@ -562,8 +586,19 @@ public class FullscreenSigninMediator
         if (mDialogCoordinator != null) mDialogCoordinator.dismissDialog();
     }
 
+    /** Called when the account picker dialog is dismissed without selecting an account. */
+    @VisibleForTesting
+    void onAccountPickerDismissed() {
+        if (mDestroyed) return;
+        SigninMetricsUtils.logSigninFunnelEvent(
+                mAccessPoint, SigninFunnelEvent.ACCOUNT_PICKER_DISMISSED);
+    }
+
     @Override
     public void addAccount() {
+        // "Add account to device" was clicked in the account picker.
+        SigninMetricsUtils.logSigninFunnelEvent(
+                mAccessPoint, SigninFunnelEvent.ACCOUNT_PICKER_ADD_ACCOUNT_CLICKED);
         mDelegate.addAccount(mConfig.selectedAccountEmail);
     }
 
@@ -583,6 +618,8 @@ public class FullscreenSigninMediator
      */
     private void onSelectedAccountClicked() {
         if (isContinueOrDismissClicked()) return;
+        SigninMetricsUtils.logSigninFunnelEvent(
+                mAccessPoint, SigninFunnelEvent.CHOOSE_OTHER_ACCOUNT_CLICKED);
 
         IdentityManager identityManager =
                 IdentityServicesProvider.get()
@@ -591,7 +628,13 @@ public class FullscreenSigninMediator
                                         .getOriginalProfile());
         mDialogCoordinator =
                 new AccountPickerDialogCoordinator(
-                        mContext, this, mModalDialogManager, assertNonNull(identityManager));
+                        mContext,
+                        this,
+                        this::onAccountPickerDismissed,
+                        mModalDialogManager,
+                        assertNonNull(identityManager));
+        SigninMetricsUtils.logSigninFunnelEvent(
+                mAccessPoint, SigninFunnelEvent.ACCOUNT_PICKER_SHOWN);
     }
 
     /** Callback for the PropertyKey {@link FullscreenSigninProperties#ON_CONTINUE_AS_CLICKED}. */
@@ -607,10 +650,15 @@ public class FullscreenSigninMediator
             return;
         }
         if (mSelectedAccount == null) {
+            // Without an account, the button starts the add account flow instead of signing in.
+            SigninMetricsUtils.logSigninFunnelEvent(
+                    mAccessPoint, SigninFunnelEvent.ADD_ACCOUNT_CLICKED);
             mDelegate.addAccount(mConfig.selectedAccountEmail);
             return;
         }
 
+        SigninMetricsUtils.logSigninFunnelEvent(
+                mAccessPoint, SigninFunnelEvent.SIGNIN_BUTTON_CLICKED);
         if (DeviceInfo.isAutomotive()) {
             mDelegate.displayDeviceLockPage(mSelectedAccount.getId());
             return;
@@ -839,6 +887,8 @@ public class FullscreenSigninMediator
 
         assert mDelegate.getNativeInitializationPromise().isFulfilled();
 
+        SigninMetricsUtils.logSigninFunnelEvent(
+                mAccessPoint, SigninFunnelEvent.SIGNIN_DECLINED_BUTTON_CLICKED);
         dismiss();
     }
 
@@ -927,11 +977,8 @@ public class FullscreenSigninMediator
                 mAddedAccount = pendingSelectedAccount;
             }
             mPendingSelectedAccountEmail = null;
-            onAccountSelected(pendingSelectedAccount);
-            return;
-        }
-
-        if (accounts.isEmpty()) {
+            selectAccount(pendingSelectedAccount);
+        } else if (accounts.isEmpty()) {
             mDefaultAccount = null;
             mSelectedAccount = null;
             mModel.set(FullscreenSigninProperties.BOTTOM_GROUP_ACCOUNT_DATA, null);

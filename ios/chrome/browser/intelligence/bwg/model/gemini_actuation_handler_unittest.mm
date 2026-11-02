@@ -15,6 +15,7 @@
 #import "ios/chrome/browser/intelligence/actor/model/actor_service_factory.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_task_updates_observer.h"
 #import "ios/chrome/browser/intelligence/actor/test/fake_actor_task_intervention_delegate.h"
+#import "ios/chrome/browser/intelligence/actor/util/actor_test_utils.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_actuation_data_types.h"
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_chat_message_data_types.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
@@ -90,13 +91,14 @@ class GeminiActuationHandlerTest : public PlatformTest {
     };
   }
 
-  void TestInterruptReason(GeminiYieldReason reason) {
+  // Dispatches a yield with `reason` and expects it to be rejected, leaving the
+  // task untouched.
+  void TestYieldReasonRejected(GeminiYieldReason reason) {
     GeminiActuationHandler* handler = CreateHandler();
     actor::ActorTaskId task_id = [handler createTaskWithTitle:@"Test Task"];
 
     GeminiYieldAction* yield_action =
         [[GeminiYieldAction alloc] initWithReason:reason];
-    yield_action.messageToUser = @"User intervention needed.";
     GeminiActuationRequest* request =
         [[GeminiActuationRequest alloc] initWithActionProtos:nil
                                                   taskUpdate:nil
@@ -109,7 +111,13 @@ class GeminiActuationHandlerTest : public PlatformTest {
 
     GeminiActuationResponse* response = future.Get();
     ASSERT_NE(nil, response);
-    EXPECT_EQ(actor::mojom::ActionResultCode::kOk, response.resultCode);
+    EXPECT_EQ(actor::mojom::ActionResultCode::kNotImplemented,
+              response.resultCode);
+    // Drain any posted `ActorService` command, as none is observable when the
+    // task is left untouched.
+    actor::FlushCurrentSequence();
+    EXPECT_EQ(actor::ActorTaskState::kInit,
+              actor_service_->GetActiveTaskState());
   }
 
   // Returns a `kConfirmation` yield request carrying `message`.
@@ -840,18 +848,18 @@ TEST_F(
   ExpectConfirmedResponse(future1.Get());
 }
 
-// Tests that `dispatchActuationRequest` routes `kClarification`
-// and responds with `kOk`.
+// Tests that `dispatchActuationRequest` responds with `kNotImplemented` to the
+// unsupported `kClarification` reason.
 TEST_F(GeminiActuationHandlerTest,
        DispatchGeminiActuationRequest_Yield_Clarification) {
-  TestInterruptReason(GeminiYieldReason::kClarification);
+  TestYieldReasonRejected(GeminiYieldReason::kClarification);
 }
 
-// Tests that `dispatchActuationRequest` routes `kUserTakeover`
-// and responds with `kOk`.
+// Tests that `dispatchActuationRequest` responds with `kNotImplemented` to the
+// unsupported `kUserTakeover` reason.
 TEST_F(GeminiActuationHandlerTest,
        DispatchGeminiActuationRequest_Yield_UserTakeover) {
-  TestInterruptReason(GeminiYieldReason::kUserTakeover);
+  TestYieldReasonRejected(GeminiYieldReason::kUserTakeover);
 }
 
 // Tests that `dispatchActuationRequest` with `kTaskComplete` stops the
@@ -922,28 +930,11 @@ TEST_F(GeminiActuationHandlerTest,
             subsequent_response.resultCode);
 }
 
-// Tests that `dispatchActuationRequest` with `kUnknownReason` pauses the
-// task.
+// Tests that `dispatchActuationRequest` responds with `kNotImplemented` to the
+// unsupported `kUnknownReason` (pause) reason.
 TEST_F(GeminiActuationHandlerTest,
-       DispatchGeminiActuationRequest_Pause_UnknownReason) {
-  GeminiActuationHandler* handler = CreateHandler();
-  actor::ActorTaskId task_id = [handler createTaskWithTitle:@"Test Task"];
-
-  GeminiYieldAction* yield_action = [[GeminiYieldAction alloc]
-      initWithReason:GeminiYieldReason::kUnknownReason];
-  GeminiActuationRequest* request =
-      [[GeminiActuationRequest alloc] initWithActionProtos:nil
-                                                taskUpdate:nil
-                                               yieldAction:yield_action];
-
-  base::test::TestFuture<GeminiActuationResponse*> future;
-  [handler dispatchActuationRequest:request
-                          forTaskID:task_id
-                    completionBlock:GetCompletionBlock(future)];
-
-  GeminiActuationResponse* response = future.Get();
-  ASSERT_NE(nil, response);
-  EXPECT_EQ(actor::mojom::ActionResultCode::kOk, response.resultCode);
+       DispatchGeminiActuationRequest_Yield_UnknownReason) {
+  TestYieldReasonRejected(GeminiYieldReason::kUnknownReason);
 }
 
 // Tests that `disconnect` cancels in-flight requests with `kExecutorDestroyed`.
@@ -976,7 +967,8 @@ TEST_F(GeminiActuationHandlerTest, Disconnect_CancelsInFlightRequest) {
   ASSERT_NE(nil, response);
   EXPECT_EQ(actor::mojom::ActionResultCode::kExecutorDestroyed,
             response.resultCode);
-  EXPECT_FALSE(actor_service_->GetActiveTaskState().has_value());
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !actor_service_->GetActiveTaskState().has_value(); }));
 }
 
 // Tests that an external task stop cancels in-flight requests with

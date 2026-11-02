@@ -30,8 +30,8 @@
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "url/origin.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
@@ -167,6 +167,8 @@ void AndroidNotificationHandler::DisplayNewEntries(
   content::WebContents* const target_web_contents = GetActiveWebContents(
       /*require_visible=*/!base::FeatureList::IsEnabled(
           kSendTabToSelfSupportAutoOpenInTabGrid));
+  RecordAutoOpenedImmediately(target_web_contents != nullptr,
+                              new_entries.size());
 
   if (target_web_contents) {
     // If there is a target tab (i.e. Chrome is active / in the foreground),
@@ -178,7 +180,6 @@ void AndroidNotificationHandler::DisplayNewEntries(
     // Chrome is *not* in the foreground, so show notifications for the entries.
     for (const SendTabToSelfEntry* entry : new_entries) {
       ShowNotification(*entry);
-      RecordAutoOpenOutcome(AutoOpenOutcome::kUnopenedImmediately);
     }
   }
 }
@@ -328,7 +329,7 @@ void AndroidNotificationHandler::OpenEntryInBackground(
       Profile::FromBrowserContext(target_web_contents.GetBrowserContext()),
       entry.GetURL(), ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
   nav_params->source_contents = &target_web_contents;
-  nav_params->disposition = WindowOpenDisposition::kNewBackgroundTab;
+  nav_params->disposition = ui::mojom::WindowOpenDisposition::kNewBackgroundTab;
   nav_params->window_action = NavigateParams::WindowAction::kNoAction;
   nav_params->tabstrip_index = tabstrip_index;
   nav_params->internal_scroll_to_text_fragment =

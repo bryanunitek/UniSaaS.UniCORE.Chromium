@@ -101,11 +101,7 @@ class SingleClientStandaloneTransportSyncTest : public SyncTest {
             syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers,
 #endif  // BUILDFLAG(IS_CHROMEOS)
             switches::kSyncEnableBookmarksInTransportMode,
-#if !BUILDFLAG(IS_ANDROID)
-            syncer::kReadingListEnableSyncTransportModeUponSignIn,
-#endif  // !BUILDFLAG(IS_ANDROID)
             syncer::kReplaceSyncPromosWithSignInPromos,
-            syncer::kSeparateLocalAndAccountSearchEngines,
             syncer::kSeparateLocalAndAccountThemes,
         },
         /*disabled_features=*/{});
@@ -440,14 +436,7 @@ class ReplaceSyncWithSigninMigrationSyncTest : public SyncTest {
     // Various features that are required for types to be supported in transport
     // mode are unconditionally enabled.
     std::vector<base::test::FeatureRef> enabled_features = {
-        // This feature would not be needed on mobile, but on desktop it is a
-        // prerequisite to account storage for preferences.
-        syncer::kSeparateLocalAndAccountSearchEngines,
         switches::kSyncEnableBookmarksInTransportMode};
-#if !BUILDFLAG(IS_ANDROID)
-    enabled_features.push_back(
-        syncer::kReadingListEnableSyncTransportModeUponSignIn);
-#endif
     default_features_.InitWithFeatures(enabled_features,
                                        /*disabled_features=*/{});
 

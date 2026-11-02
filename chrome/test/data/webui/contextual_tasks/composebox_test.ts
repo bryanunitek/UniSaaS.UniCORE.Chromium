@@ -6,10 +6,9 @@ import 'chrome://contextual-tasks/app.js';
 
 import type {ContextualTasksAppElement} from 'chrome://contextual-tasks/app.js';
 import {BrowserProxyImpl} from 'chrome://contextual-tasks/contextual_tasks_browser_proxy.js';
-import {ComposeboxFile, GlifAnimationState} from 'chrome://resources/cr_components/composebox/common.js';
+import {ComposeboxFile, GlifAnimationState, SubmitButtonIconType} from 'chrome://resources/cr_components/composebox/common.js';
 import {PageHandlerRemote as ComposeboxPageHandlerRemote} from 'chrome://resources/cr_components/composebox/composebox.mojom-webui.js';
 import type {ComposeboxDropdownElement} from 'chrome://resources/cr_components/composebox/composebox_dropdown.js';
-import {SubmitButtonIconType} from 'chrome://resources/cr_components/composebox/composebox_mixin.js';
 import {ComposeboxProxyImpl} from 'chrome://resources/cr_components/composebox/composebox_proxy.js';
 import {InputType, ToolMode} from 'chrome://resources/cr_components/composebox/composebox_query.mojom-webui.js';
 import type {ComposeboxToolChipElement} from 'chrome://resources/cr_components/composebox/composebox_tool_chip.js';
@@ -59,6 +58,25 @@ function pressEnter(element: HTMLElement) {
     bubbles: true,
     composed: true,
   }));
+}
+
+function disableAnimationsRecursively(element: Element) {
+  const noAnimation = document.createElement('style');
+  noAnimation.textContent = `
+    :host, * {
+      transition: none !important;
+      animation: none !important;
+      transition-duration: 0s !important;
+      animation-duration: 0s !important;
+    }
+  `;
+
+  if (element.shadowRoot) {
+    element.shadowRoot.appendChild(noAnimation);
+
+    const children = element.shadowRoot.querySelectorAll('*');
+    children.forEach(child => disableAnimationsRecursively(child));
+  }
 }
 
 suite('ContextualTasksComposeboxTest', () => {
@@ -1359,7 +1377,7 @@ suite('ContextualTasksComposeboxTest', () => {
       });
 
       searchboxCallbackRouterRemote.updateAutoSuggestedTabContext(
-          tabInfo, 'AppMenu');
+          tabInfo, 'FindInPage');
       await searchboxCallbackRouterRemote.$.flushForTesting();
       await microtasksFinished();
 
@@ -1369,6 +1387,34 @@ suite('ContextualTasksComposeboxTest', () => {
       assertEquals(1, args[0]);  // tabId
       assertTrue(args[1]);       // delayUpload
     });
+
+    for (const source
+             of ['ContentAreaContextMenuPage',
+                 'AppMenu',
+                 'HomeworkActionChip',
+    ]) {
+      test(`ImmediateUploadWhen${source}`, async () => {
+        loadTimeData.overrideValues({
+          webUIOmniboxAskGAboutThisPageEnabled: true,
+          contextualTasksUpdatedEntryPointsEnabled: true,
+        });
+
+        searchboxCallbackRouterRemote.updateAutoSuggestedTabContext(
+            tabInfo, source);
+        await searchboxCallbackRouterRemote.$.flushForTesting();
+        await microtasksFinished();
+
+        // Verify addTabContext was called with delay_upload = false
+        assertEquals(1, mockSearchboxPageHandler.getCallCount('addTabContext'));
+        const args = mockSearchboxPageHandler.getArgs('addTabContext')[0];
+        assertEquals(1, args[0]);  // tabId
+        assertFalse(args[1]);      // delayUpload
+
+        const innerComposebox = contextualTasksApp.$.composebox.$.composebox;
+        await innerComposebox.updateComplete;
+        assertEquals(1, innerComposebox.attachedContext.size);
+      });
+    }
   });
 });
 
@@ -1465,6 +1511,20 @@ suite('ContextualTasksComposeboxForkSmokeTest', () => {
     innerComposebox.dispatchEvent(new CustomEvent('composebox-focus-out'));
     await microtasksFinished();
     assertFalse(wrapper.isComposeboxFocusedForTesting);
+  });
+
+  test('applies contextual tasks padding to the input', () => {
+    const composeboxInput = parts.innerComposebox.getInputElement();
+    disableAnimationsRecursively(composeboxInput);
+    const textContainer =
+        composeboxInput.shadowRoot.querySelector('#textContainer');
+    const input = composeboxInput.shadowRoot.querySelector('#input');
+    assertTrue(!!textContainer);
+    assertTrue(!!input);
+    assertEquals(
+        '80px', window.getComputedStyle(textContainer).paddingInlineEnd);
+    assertEquals('12px', window.getComputedStyle(input).paddingBlock);
+    assertEquals('0px', window.getComputedStyle(input).paddingInline);
   });
 });
 
@@ -3686,7 +3746,9 @@ function createVoiceResults(transcripts: string[]): SpeechRecognitionEvent {
                   assertTrue(animatedGlow.hasAttribute(
                       'showing-only-carousel-on-top-of-input'));
                 });
+          });
 
+          suite('CoherenceCarouselAndToolChips', () => {
             test(
                 'toolchip and image added, then removed in voice search',
                 async () => {

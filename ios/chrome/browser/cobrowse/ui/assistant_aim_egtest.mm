@@ -17,6 +17,7 @@
 #import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/composebox/shared/ui/composebox_ui_constants.h"
 #import "ios/chrome/browser/scene/ui/scene_ui_constants.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_constants.h"
 #import "ios/chrome/browser/start_surface/ui_bundled/home_surface_egtest_utils.h"
@@ -106,6 +107,8 @@ void OpenCoBrowse(const GURL& url) {
   [ComposeboxAppInterface enableAllTools];
   [ComposeboxAppInterface setFuseboxEligible:YES];
   [ComposeboxAppInterface setTabUploadAutoSucceed:YES];
+  [ChromeEarlGrey setBoolValue:YES
+                   forUserPref:prefs::kCobrowseTabSharingConsentAccepted];
 
   [ChromeEarlGrey loadURL:url];
   [ChromeEarlGrey waitForPageToFinishLoading];
@@ -213,10 +216,10 @@ void VerifySharedTabs(NSArray<NSString*>* expectedTitles,
     }
 
     if (dismissAfterVerification) {
-      id<GREYMatcher> sharedTabsCloseButton =
-          grey_allOf(grey_accessibilityLabel(@"Close"),
-                     grey_ancestor(grey_kindOfClassName(@"UINavigationBar")),
-                     grey_sufficientlyVisible(), nil);
+      id<GREYMatcher> sharedTabsCloseButton = grey_allOf(
+          grey_accessibilityID(
+              kComposeboxSharedTabsCloseButtonAccessibilityIdentifier),
+          grey_sufficientlyVisible(), nil);
       [ChromeEarlGrey
           waitForUIElementToAppearWithMatcher:sharedTabsCloseButton];
       [[EarlGrey selectElementWithMatcher:sharedTabsCloseButton]
@@ -274,8 +277,8 @@ void RemoveSharedTab(NSString* title) {
     [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:removeActionMatcher];
     [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:cellMatcher];
     id<GREYMatcher> sharedTabsCloseButton =
-        grey_allOf(grey_accessibilityLabel(@"Close"),
-                   grey_ancestor(grey_kindOfClassName(@"UINavigationBar")),
+        grey_allOf(grey_accessibilityID(
+                       kComposeboxSharedTabsCloseButtonAccessibilityIdentifier),
                    grey_sufficientlyVisible(), nil);
     [ChromeEarlGrey waitForUIElementToAppearWithMatcher:sharedTabsCloseButton];
     [[EarlGrey selectElementWithMatcher:sharedTabsCloseButton]
@@ -390,7 +393,9 @@ void RemoveSharedTab(NSString* title) {
     }
     // Also explicitly clear the session active map preference in case the
     // UI tap failed or the async preference write didn't complete.
-    [ChromeEarlGrey clearUserPrefWithName:"ios.cobrowse.session_active_map"];
+    [ChromeEarlGrey clearUserPrefWithName:prefs::kCobrowseSessionActiveMap];
+    [ChromeEarlGrey
+        clearUserPrefWithName:prefs::kCobrowseTabSharingConsentAccepted];
     [ChromeEarlGrey commitPendingUserPrefsWrite];
     [ComposeboxAppInterface setAllToolsEnabled:NO];
     [ComposeboxAppInterface setFuseboxEligible:NO];
@@ -399,7 +404,9 @@ void RemoveSharedTab(NSString* title) {
   [super setUp];
   // Clear the pref at the beginning of the test as well to ensure a clean
   // slate, especially for tests that immediately relaunch the app.
-  [ChromeEarlGrey clearUserPrefWithName:"ios.cobrowse.session_active_map"];
+  [ChromeEarlGrey clearUserPrefWithName:prefs::kCobrowseSessionActiveMap];
+  [ChromeEarlGrey setBoolValue:YES
+                   forUserPref:prefs::kCobrowseTabSharingConsentAccepted];
   [ChromeEarlGrey commitPendingUserPrefsWrite];
 
   ResetMakeHomeSurfaceOpenImmediately();
@@ -1089,7 +1096,7 @@ void RemoveSharedTab(NSString* title) {
 // triggered and not in other windows on iPad.
 - (void)testAssistantOnlyInTriggeringWindowOniPad {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
-    EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
+    EARL_GREY_TEST_SKIPPED(@"Multiple windows can't be opened.");
   }
 
   OpenCoBrowse(_defaultURL);

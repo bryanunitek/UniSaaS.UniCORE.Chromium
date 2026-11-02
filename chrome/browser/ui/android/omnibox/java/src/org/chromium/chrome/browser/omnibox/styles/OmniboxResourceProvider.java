@@ -28,7 +28,6 @@ import androidx.annotation.IntDef;
 import androidx.annotation.Px;
 import androidx.annotation.StringRes;
 import androidx.annotation.StyleRes;
-import androidx.core.content.ContextCompat;
 
 import com.google.android.material.color.MaterialColors;
 
@@ -374,13 +373,12 @@ public class OmniboxResourceProvider implements ComponentCallbacks2 {
         return mCache.getColor(res);
     }
 
-    /**
-     * Get standard suggestion background color.
-     *
-     * @see #getStandardSuggestionBackgroundColor(Context, ...)
-     */
+    /** Get standard suggestion background color. */
     public @ColorInt int getStandardSuggestionBackgroundColor() {
-        return getStandardSuggestionBackgroundColor(mContext, getBrandedColorScheme());
+        return mCache.getColor(
+                isIncognito()
+                        ? R.color.search_suggestion_bg_color_incognito
+                        : R.color.search_suggestion_bg_color);
     }
 
     /** Returns a stateful suggestion background with the select default state. */
@@ -416,13 +414,12 @@ public class OmniboxResourceProvider implements ComponentCallbacks2 {
         return ColorUtils.overlayColor(baseColor, hoverColor, fraction);
     }
 
-    /**
-     * Get suggestions dropdown background color.
-     *
-     * @see #getSuggestionsDropdownBackgroundColor(Context, ...)
-     */
+    /** Get suggestions dropdown background color. */
     public @ColorInt int getSuggestionsDropdownBackgroundColor() {
-        return getSuggestionsDropdownBackgroundColor(mContext, getBrandedColorScheme());
+        return mCache.getColor(
+                isIncognito()
+                        ? R.color.omnibox_dropdown_bg_incognito
+                        : R.color.omnibox_suggestion_dropdown_bg);
     }
 
     /** Get suggestion background color for the instance context and color scheme. */
@@ -435,8 +432,8 @@ public class OmniboxResourceProvider implements ComponentCallbacks2 {
                             : R.color.omnibox_popover_suggestion_bg_color);
         }
         return isDropdownContainer
-                ? getSuggestionsDropdownBackgroundColor(mContext, getBrandedColorScheme())
-                : getStandardSuggestionBackgroundColor(mContext, getBrandedColorScheme());
+                ? getSuggestionsDropdownBackgroundColor()
+                : getStandardSuggestionBackgroundColor();
     }
 
     /**
@@ -447,6 +444,17 @@ public class OmniboxResourceProvider implements ComponentCallbacks2 {
         return mCache.getColor(
                 isIncognito()
                         ? R.color.toolbar_text_box_background_incognito
+                        : R.color.toolbar_text_box_bg_color);
+    }
+
+    /**
+     * Returns the toolbar background color when the omnibox is focused and the suggestions dropdown
+     * list is scrolled.
+     */
+    public @ColorInt int getScrolledOmniboxBackgroundColor() {
+        return mCache.getColor(
+                isIncognito()
+                        ? R.color.omnibox_scrolled_bg_incognito
                         : R.color.toolbar_text_box_bg_color);
     }
 
@@ -644,6 +652,17 @@ public class OmniboxResourceProvider implements ComponentCallbacks2 {
     /** Resolves the secondary icon tint color. */
     public ColorStateList getSecondaryIconTintList() {
         return mCache.getColorStateList(ChromeColors.getSecondaryIconTintRes(isIncognito()));
+    }
+
+    /**
+     * Resolves the background tint for Omnibox action chips. This is the only visual property that
+     * differs between the regular and incognito chip presentations, so chips share a single theme
+     * overlay and are themed from this value when bound (including recycled ChipViews bound to a
+     * new chip model).
+     */
+    public ColorStateList getActionChipBackgroundTintList() {
+        return mCache.getColorStateList(
+                isIncognito() ? R.color.default_bg_color_dark : R.color.chip_background_color);
     }
 
     /**
@@ -945,25 +964,6 @@ public class OmniboxResourceProvider implements ComponentCallbacks2 {
             colorId = R.color.default_green;
         }
         return context.getColor(colorId);
-    }
-
-    /** Returns the background color for suggestions in the given color scheme and context. */
-    public static @ColorInt int getStandardSuggestionBackgroundColor(
-            Context context, @BrandedColorScheme int colorScheme) {
-        return colorScheme == BrandedColorScheme.INCOGNITO
-                ? context.getColor(R.color.search_suggestion_bg_color_incognito)
-                : ContextCompat.getColor(context, R.color.search_suggestion_bg_color);
-    }
-
-    /**
-     * Returns the background color for the suggestions dropdown for the given {@link
-     * BrandedColorScheme} with the given context.
-     */
-    public static @ColorInt int getSuggestionsDropdownBackgroundColor(
-            Context context, @BrandedColorScheme int brandedColorScheme) {
-        return brandedColorScheme == BrandedColorScheme.INCOGNITO
-                ? context.getColor(R.color.omnibox_dropdown_bg_incognito)
-                : ContextCompat.getColor(context, R.color.omnibox_suggestion_dropdown_bg);
     }
 
     /**

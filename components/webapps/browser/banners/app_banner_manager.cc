@@ -45,9 +45,9 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
 #include "third_party/blink/public/mojom/installation/installation.mojom.h"
-#include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace webapps {
@@ -308,9 +308,9 @@ AppBannerManager::UrlType AppBannerManager::GetUrlType(
 }
 
 bool AppBannerManager::ShouldDeferToRelatedNonWebApp(
-    const blink::mojom::Manifest& manifest) const {
-  for (const auto& related_app : manifest.related_applications) {
-    if (manifest.prefer_related_applications &&
+    const blink::Manifest& manifest) const {
+  for (const auto& related_app : manifest.related_applications()) {
+    if (manifest.prefer_related_applications() &&
         delegate_->IsSupportedNonWebAppPlatform(
             related_app.platform.value_or(std::u16string()))) {
       return true;
@@ -357,20 +357,20 @@ void AppBannerManager::OnDidGetManifest(const InstallableData& data) {
   }
 
   // An empty manifest indicates some kind of unrecoverable error occurred.
-  if (blink::IsEmptyManifest(*data.manifest)) {
+  if (!data.manifest) {
     CHECK(!data.errors.empty());
     Stop(data.GetFirstError());
     return;
   }
 
   std::optional<webapps::ManifestId> manifest_id =
-      webapps::ManifestId::Create(data.manifest->id);
+      webapps::ManifestId::Create(data.manifest->id());
   CHECK(manifest_id.has_value());
 
-  web_app_data_.emplace(*manifest_id, data.manifest->Clone(),
+  web_app_data_.emplace(*manifest_id, *data.manifest,
                         data.web_page_metadata->Clone(), *(data.manifest_url));
   WebappsClient::Get()->OnManifestSeen(web_contents()->GetBrowserContext(),
-                                       *data.manifest);
+                                       web_app_data_->manifest());
 
   PerformInstallableChecks();
 }
@@ -456,13 +456,7 @@ void AppBannerManager::OnDidPerformInstallableWebAppCheck(
     return;
   }
 
-  std::optional<webapps::ManifestId> manifest_id =
-      webapps::ManifestId::Create(data.manifest->id);
-  if (!manifest_id.has_value()) {
-    return;
-  }
-
-  delegate_->OnWebAppInstallableCheckedNoErrors(*manifest_id);
+  delegate_->OnWebAppInstallableCheckedNoErrors(web_app_data_->manifest_id);
 
   UpdateState(State::PENDING_CONFLICTING_INSTALLATION_CHECK);
 
@@ -482,8 +476,9 @@ void AppBannerManager::OnDidPerformInstallableWebAppCheck(
                      weak_factory_for_this_navigation_.GetWeakPtr());
 
   client->DoesNewWebAppConflictWithExistingInstallation(
-      web_contents()->GetBrowserContext(), web_app_data_->manifest().start_url,
-      web_app_data_->manifest_id, std::move(callback));
+      web_contents()->GetBrowserContext(),
+      web_app_data_->manifest().start_url(), web_app_data_->manifest_id,
+      std::move(callback));
 }
 
 void AppBannerManager::PostInstallableWebAppCheckValidation(
@@ -591,7 +586,7 @@ void AppBannerManager::SetInstallableWebAppCheckResult(
       CHECK(web_app_data_);
       install_animation_pending_ =
           AppBannerSettingsHelper::CanShowInstallTextAnimation(
-              web_contents(), web_app_data_->manifest().scope);
+              web_contents(), web_app_data_->manifest().scope());
       break;
     case InstallableWebAppCheckResult::kNo_AlreadyInstalled:
     case InstallableWebAppCheckResult::kYes_ByUserRequest:
@@ -837,7 +832,7 @@ std::string AppBannerManager::GetInstallableWebAppManifestId(
     case InstallableWebAppCheckResult::kYes_ByUserRequest:
     case InstallableWebAppCheckResult::kYes_Promotable:
       CHECK(manager->web_app_data_);
-      return manager->web_app_data_->manifest().id.spec();
+      return manager->web_app_data_->manifest().id().spec();
   }
 }
 
@@ -862,7 +857,7 @@ bool AppBannerManager::IsProbablyPromotableWebApp(
   }
   bool last_result_overlaps_current_url =
       base::StartsWith(web_contents()->GetLastCommittedURL().spec(),
-                       last_known_result_->first->manifest().scope.spec(),
+                       last_known_result_->first->manifest().scope().spec(),
                        base::CompareCase::SENSITIVE);
   if (!last_result_overlaps_current_url) {
     return false;
@@ -900,7 +895,7 @@ bool AppBannerManager::MaybeConsumeInstallAnimation() {
     return false;
   }
   AppBannerSettingsHelper::RecordInstallTextAnimationShown(
-      web_contents(), last_known_result_->first->manifest().scope);
+      web_contents(), last_known_result_->first->manifest().scope());
   install_animation_pending_ = false;
   return true;
 }
@@ -933,7 +928,6 @@ void AppBannerManager::ShowBannerForCurrentPageState() {
 
   DCHECK(web_app_data_);
   DCHECK(!web_app_data_->manifest_url.is_empty());
-  DCHECK(!blink::IsEmptyManifest(web_app_data_->manifest()));
   switch (mode_) {
     case AppBannerMode::kNativeApp:
       DCHECK(native_app_data_);

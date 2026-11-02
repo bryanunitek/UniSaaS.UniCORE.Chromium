@@ -24,6 +24,7 @@
 #include "chrome/browser/readaloud/audio_generation/speech_synthesis_broker.h"
 #include "chrome/browser/readaloud/read_aloud_audio_broker.h"
 #include "chrome/browser/readaloud/read_aloud_playback_session.h"
+#include "chrome/browser/readaloud/read_aloud_voice_catalog.h"
 #include "chrome/browser/readaloud/voice_preview_controller.h"
 #include "chrome/common/readaloud/read_aloud_constants.h"
 #include "components/dom_distiller/content/browser/distiller_page_web_contents.h"
@@ -71,6 +72,12 @@ std::string SanitizeMetadata(std::string_view value) {
 }
 
 constexpr char kOverviewOutcomeHistogram[] = "ReadAloud.Overview.Outcome";
+constexpr char kOverviewTotalDurationHistogram[] =
+    "ReadAloud.Overview.TotalDuration";
+constexpr char kStandardPlaybackOutcomeHistogram[] =
+    "ReadAloud.StandardPlayback.Outcome";
+constexpr char kStandardPlaybackTimeToFirstAudioHistogram[] =
+    "ReadAloud.StandardPlayback.TimeToFirstAudio";
 
 }  // namespace
 
@@ -125,9 +132,11 @@ void ReadAloudService::Play(content::WebContents* new_web_contents) {
 
   user_requested_play_ = true;
 
-  // Start or resume audio playback.
-  CHECK(media_session_);
-  media_session_->NotifyPlaybackStarted();
+  if (playback_mode_ == PlaybackMode::kClassic && !waiting_for_first_audio_ &&
+      !first_audio_emitted_) {
+    standard_playback_start_time_ = base::TimeTicks::Now();
+    waiting_for_first_audio_ = true;
+  }
 
   // In overview mode, the utility Play() is deferred until
   // OnOverviewGenerated() has loaded the script, so the utility play-on-ready
@@ -139,19 +148,10 @@ void ReadAloudService::Play(content::WebContents* new_web_contents) {
 
 void ReadAloudService::Pause() {
   user_requested_play_ = false;
-
-  if (media_session_) {
-    media_session_->NotifyPlaybackPaused();
-  }
+  ClearStartupTrackingState();
 
   if (utility_player_.is_bound()) {
     utility_player_->Pause();
-  }
-
-  // TODO(b/562011435): Handle late kPlaying updates arriving from utility
-  // after Pause() is called.
-  if (media_session_ && media_session_->is_playback_in_progress()) {
-    NotifyPlaybackStateChanged(read_aloud::mojom::PlaybackState::kPaused);
   }
 }
 
@@ -163,6 +163,8 @@ void ReadAloudService::Stop() {
 
 void ReadAloudService::ResetPlayback() {
   user_requested_play_ = false;
+  ClearStartupTrackingState();
+  first_audio_emitted_ = false;
 
   // Detach observer since tracking is only needed during active playback.
   Observe(nullptr);
@@ -265,6 +267,10 @@ void ReadAloudService::ResetVoicePreview() {
   }
 }
 void ReadAloudService::SetPlaybackMode(PlaybackMode mode) {
+  if (playback_mode_ != mode) {
+    ClearStartupTrackingState();
+    first_audio_emitted_ = false;
+  }
   playback_mode_ = mode;
 }
 void ReadAloudService::SetHighlightingEnabled(bool enabled) {}
@@ -273,6 +279,12 @@ void ReadAloudService::CheckReadability(const GURL& url) {
   if (delegate_) {
     bool is_readable = dom_distiller::url_utils::IsUrlDistillable(url);
     delegate_->OnReadabilityResult(url, is_readable);
+  }
+}
+
+void ReadAloudService::InitVoices() {
+  if (delegate_) {
+    delegate_->OnVoicesAvailable(kAvailableVoices);
   }
 }
 
@@ -353,6 +365,7 @@ void ReadAloudService::OnArticleReady(
   viewer_handle_.reset();
 
   if (!distillation_succeeded) {
+    MaybeRecordStartupOutcome(StandardPlaybackOutcome::kDistillationFailed);
     HandlePlaybackError("Distillation failed");
     return;
   }
@@ -377,6 +390,17 @@ void ReadAloudService::OnArticleReady(
   if (playback_mode_ == PlaybackMode::kOverview) {
     RequestOverviewGeneration(page_texts);
     return;
+  }
+
+  bool has_content = false;
+  for (std::string_view text : page_texts) {
+    if (!text.empty()) {
+      has_content = true;
+      break;
+    }
+  }
+  if (!has_content) {
+    MaybeRecordStartupOutcome(StandardPlaybackOutcome::kEmptyContent);
   }
 
   // Rule of Two Enforcement: Distilled webpage text originates from untrusted
@@ -471,9 +495,15 @@ void ReadAloudService::OnOverviewContentSet(bool success,
         current_publisher_);
   }
 
+  // overview_generation_start_time_ is set in RequestOverviewGeneration(). It
+  // may only be null if the request was cancelled (e.g., via
+  // InvalidatePendingRequests() or a state reset during navigation) before the
+  // callback fired, or in isolated unit test setups where
+  // OnOverviewContentSet() is invoked directly without prior overview
+  // generation.
   if (!overview_generation_start_time_.is_null()) {
     base::UmaHistogramMediumTimes(
-        "ReadAloud.Overview.TotalDuration",
+        kOverviewTotalDurationHistogram,
         base::TimeTicks::Now() - overview_generation_start_time_);
     overview_generation_start_time_ = base::TimeTicks();
   }
@@ -485,9 +515,6 @@ void ReadAloudService::OnOverviewContentSet(bool success,
 bool ReadAloudService::IsWaitingForOverviewContent() const {
   return playback_mode_ == PlaybackMode::kOverview && !overview_script_loaded_;
 }
-
-void ReadAloudService::OnArticleUpdated(
-    dom_distiller::ArticleDistillationUpdate article_update) {}
 
 void ReadAloudService::Initialize(content::WebContents* new_web_contents) {
   if (!new_web_contents) {
@@ -612,6 +639,7 @@ void ReadAloudService::OnAudioStreamCreated(
 }
 
 void ReadAloudService::OnUtilityDisconnect() {
+  MaybeRecordStartupOutcome(StandardPlaybackOutcome::kUtilityDisconnected);
   HandlePlaybackError("Utility process disconnected");
 }
 
@@ -620,6 +648,40 @@ void ReadAloudService::HandlePlaybackError(std::string_view error_message) {
   if (delegate_) {
     delegate_->OnPlaybackError(error_message);
   }
+}
+
+void ReadAloudService::MaybeRecordStartupSuccess() {
+  if (!waiting_for_first_audio_) {
+    // Startup is not in progress or startup has already completed.
+    return;
+  }
+  // Note: This is an acceptable proxy for TTFA. It measures the time
+  // until the browser receives the 'playing' signal from the utility
+  // process. It underestimates the physical latency by the audio
+  // hardware buffer duration (~20-100ms) but includes IPC delay. Given
+  // distillation/synthesis is the bottleneck, this is close enough for
+  // our purpose.
+  base::UmaHistogramMediumTimes(
+      kStandardPlaybackTimeToFirstAudioHistogram,
+      base::TimeTicks::Now() - standard_playback_start_time_);
+  base::UmaHistogramEnumeration(kStandardPlaybackOutcomeHistogram,
+                                StandardPlaybackOutcome::kSuccess);
+  ClearStartupTrackingState();
+  first_audio_emitted_ = true;
+}
+
+void ReadAloudService::MaybeRecordStartupOutcome(
+    StandardPlaybackOutcome outcome) {
+  if (!waiting_for_first_audio_) {
+    return;
+  }
+  base::UmaHistogramEnumeration(kStandardPlaybackOutcomeHistogram, outcome);
+  ClearStartupTrackingState();
+}
+
+void ReadAloudService::ClearStartupTrackingState() {
+  waiting_for_first_audio_ = false;
+  standard_playback_start_time_ = base::TimeTicks();
 }
 
 void ReadAloudService::ResetUtilityConnection() {
@@ -641,17 +703,31 @@ void ReadAloudService::OnPlaybackStateChanged(
   switch (state) {
     case read_aloud::mojom::PlaybackState::kEndOfStream:
       user_requested_play_ = false;
+      if (media_session_) {
+        media_session_->NotifyPlaybackPaused();
+      }
       NotifyPlaybackStateChanged(state);
       return;
     case read_aloud::mojom::PlaybackState::kPaused:
+      MaybeRecordStartupOutcome(StandardPlaybackOutcome::kPlayOnReadyTimeout);
+      if (media_session_) {
+        media_session_->NotifyPlaybackPaused();
+      }
+      NotifyPlaybackStateChanged(state);
+      return;
     case read_aloud::mojom::PlaybackState::kBuffering:
+      NotifyPlaybackStateChanged(state);
+      return;
     case read_aloud::mojom::PlaybackState::kPlaying:
-      // TODO(b/562011435): Utility-initiated pauses do not reach MediaSession.
-      // media_session_->NotifyPlaybackPaused() should be called so the OS
-      // notification reflects the paused state.
+      MaybeRecordStartupSuccess();
+      if (media_session_) {
+        media_session_->NotifyPlaybackStarted();
+      }
       NotifyPlaybackStateChanged(state);
       return;
     case read_aloud::mojom::PlaybackState::kError:
+      MaybeRecordStartupOutcome(
+          StandardPlaybackOutcome::kInitialSynthesisFailed);
       HandlePlaybackError("Playback error reported by utility process");
       return;
     case read_aloud::mojom::PlaybackState::kStopped:

@@ -114,6 +114,9 @@ bool CdmStorageDatabase::WriteFile(const blink::StorageKey& storage_key,
          "cdm_storage(storage_key,cdm_type,file_name,data,file_size,last_modified) "
          "VALUES(?,?,?,?,?,?) ";
   // clang-format on
+  // TODO(crbug.com/577198003): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(db_.IsSQLValid(kInsertSql));
 
   sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE, kInsertSql));
   statement.BindString(0, storage_key.Serialize());
@@ -332,26 +335,6 @@ bool CdmStorageDatabase::ClearDatabase() {
   }
 
   return sql::Database::Delete(path_);
-}
-
-uint64_t CdmStorageDatabase::GetDatabaseSize() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  static constexpr char kPageCountSql[] = "PRAGMA page_count";
-  sql::Statement statement_count(
-      db_.GetCachedStatement(SQL_FROM_HERE, kPageCountSql));
-  statement_count.Step();
-
-  uint64_t page_count = statement_count.ColumnInt(0);
-
-  static constexpr char kPageSizeSql[] = "PRAGMA page_size";
-  sql::Statement statement_size(
-      db_.GetCachedStatement(SQL_FROM_HERE, kPageSizeSql));
-  statement_size.Step();
-
-  uint64_t page_size = statement_size.ColumnInt(0);
-
-  return page_count * page_size;
 }
 
 void CdmStorageDatabase::CloseDatabaseForTesting() {

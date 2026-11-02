@@ -8,6 +8,8 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 
+import org.jni_zero.JniPtr;
+
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ObserverList;
@@ -430,6 +432,14 @@ public abstract class TabModelSelectorBase
     }
 
     @Override
+    public void detachTabForReparenting(Tab tab) {
+        assert mReparentingInProgress;
+        int index = getModelIndex(tab.isIncognito());
+        if (index == MODEL_NOT_FOUND) return;
+        mTabModelInternals.get(index).detachTabForReparenting(tab);
+    }
+
+    @Override
     public void addIncognitoTabModelObserver(IncognitoTabModelObserver incognitoObserver) {
         mIncognitoObservers.addObserver(incognitoObserver);
     }
@@ -461,9 +471,9 @@ public abstract class TabModelSelectorBase
 
     @Override
     public @Nullable TabModel getTabModelForTabStripCollection(
-            TabStripCollection tabStripCollection) {
+            JniPtr<TabStripCollection> tabStripCollection) {
         for (TabModel tabModel : getModels()) {
-            TabStripCollection modelCollection = tabModel.getTabStripCollection();
+            JniPtr<TabStripCollection> modelCollection = tabModel.getTabStripCollection();
             if (!Objects.equals(modelCollection, tabStripCollection)) continue;
             return tabModel;
         }

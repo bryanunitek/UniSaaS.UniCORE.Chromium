@@ -62,8 +62,8 @@
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
@@ -94,6 +94,7 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/chromeos/policy/dlp/dlp_content_tab_helper.h"
 #include "chrome/browser/extensions/api/file_handlers/non_native_file_system_delegate_chromeos.h"
 #include "chrome/browser/extensions/api/file_system/chrome_file_system_delegate_ash.h"
 #include "chrome/browser/extensions/api/file_system/consent_provider_impl.h"
@@ -137,6 +138,9 @@ void ChromeExtensionsAPIClient::AttachWebContentsHelpers(
   favicon::CreateContentFaviconDriverForWebContents(web_contents);
 #if BUILDFLAG(ENABLE_PRINTING)
   printing::InitializePrintingForWebContents(web_contents);
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+  policy::DlpContentTabHelper::MaybeCreateForWebContents(web_contents);
 #endif
 }
 
@@ -344,7 +348,7 @@ void ChromeExtensionsAPIClient::OpenFileUrlForTesting(
   // Open the file URL in the current tab.
   content::OpenURLParams params =
       content::OpenURLParams::CreateBrowserInitiated(
-          file_url, WindowOpenDisposition::kCurrentTab,
+          file_url, ui::mojom::WindowOpenDisposition::kCurrentTab,
           ui::PAGE_TRANSITION_FROM_API);
   web_contents->OpenURL(params, /*navigation_handle_callback=*/{});
 }

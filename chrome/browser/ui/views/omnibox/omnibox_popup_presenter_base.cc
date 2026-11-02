@@ -4,7 +4,9 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
 
+#include <memory>
 #include <optional>
+#include <utility>
 
 #include "base/auto_reset.h"
 #include "base/check_is_test.h"
@@ -20,13 +22,16 @@
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_webui_creation.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_delegate.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_base_content.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_content.h"
 #include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
 #include "chrome/browser/ui/views/theme_copying_widget.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_web_contents_helper.h"
+#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/omnibox/common/omnibox_metrics_utils.h"
 #include "content/public/browser/render_frame_host.h"
@@ -46,7 +51,19 @@ const void* kOmniboxWebUIPopupWidgetId = &kOmniboxWebUIPopupWidgetId;
 
 namespace {
 
-bool g_ignore_browser_window_presentation_for_testing = false;
+std::string_view CreationReasonToString(
+    OmniboxPopupPresenterBase::CreationReason reason) {
+  switch (reason) {
+    case OmniboxPopupPresenterBase::CreationReason::kEager:
+      return "Eager";
+    case OmniboxPopupPresenterBase::CreationReason::kShow:
+      return "Show";
+    case OmniboxPopupPresenterBase::CreationReason::kContextMenu:
+      return "ContextMenu";
+    case OmniboxPopupPresenterBase::CreationReason::kAfterWindowPresentation:
+      return "AfterWindowPresentation";
+  }
+}
 
 }  // namespace
 
@@ -74,7 +91,7 @@ OmniboxPopupPresenterBase::~OmniboxPopupPresenterBase() {
 }
 
 void OmniboxPopupPresenterBase::Show() {
-  EnsureWebUIContentCreated();
+  GetOrCreateWebUIContent(CreationReason::kShow);
   if (IsShown()) {
     // If a re-entrant `Show()` occurs while the widget is still visible but
     // WebContents was set to hidden by a preceding `Hide()`, ensure it is woken
@@ -123,17 +140,13 @@ void OmniboxPopupPresenterBase::Show() {
     auto timeout = ShouldDeferUntilVisualStateReady();
     base::TimeTicks result_ready_time =
         controller()->autocomplete_controller()->result().result_ready_time();
-    if (timeout.has_value()) {
-      is_deferred_ = true;
-      content->GetWebContents()
-          ->GetPrimaryMainFrame()
-          ->InsertVisualStateCallback(
-              base::BindOnce(&OmniboxPopupPresenterBase::OnVisualStateReady,
-                             visual_state_weak_factory_.GetWeakPtr(),
-                             show_request_time,
-                             result_ready_time,
-                             /*from_fallback=*/false));
-
+    is_deferred_ = timeout.has_value();
+    content->GetWebContents()->GetPrimaryMainFrame()->InsertVisualStateCallback(
+        base::BindOnce(&OmniboxPopupPresenterBase::OnVisualStateReady,
+                       visual_state_weak_factory_.GetWeakPtr(),
+                       show_request_time, result_ready_time,
+                       /*from_fallback=*/false));
+    if (is_deferred_) {
       // Add a backup timer in case the visual state callback is never called.
       // The visual state callback should always be called, but this fallback
       // ensures that if that assumption is ever broken, the UI will eventually
@@ -148,14 +161,6 @@ void OmniboxPopupPresenterBase::Show() {
                          /*success=*/false),
           timeout.value());
     } else {
-      content->GetWebContents()
-          ->GetPrimaryMainFrame()
-          ->InsertVisualStateCallback(
-              base::BindOnce(&OmniboxPopupPresenterBase::OnVisualStateReady,
-                             visual_state_weak_factory_.GetWeakPtr(),
-                             show_request_time,
-                             result_ready_time,
-                             /*from_fallback=*/false));
       ShowWidget(show_request_time);
     }
   }
@@ -442,43 +447,100 @@ void OmniboxPopupPresenterBase::SetWebUIContent(
   }
 }
 
-void OmniboxPopupPresenterBase::EnsureWebUIContentCreated() {
-  if (GetWebUIContent()) {
-    return;
+OmniboxPopupWebUIBaseContent*
+OmniboxPopupPresenterBase::GetOrCreateWebUIContent(CreationReason reason) {
+  if (auto* content = GetWebUIContent()) {
+    return content;
   }
   // Covers `CreateWebUIContent()`, which creates the WebContents and starts
   // its navigation.
-  TRACE_EVENT("omnibox", "OmniboxPopupPresenterBase::EnsureWebUIContentCreated",
-              "prefix", GetPopupMetricPrefix());
-  std::unique_ptr<OmniboxPopupWebUIBaseContent> content = CreateWebUIContent();
+  TRACE_EVENT("omnibox", "OmniboxPopupPresenterBase::GetOrCreateWebUIContent",
+              "prefix", GetPopupMetricPrefix(), "reason",
+              CreationReasonToString(reason));
+  std::unique_ptr<OmniboxPopupWebUIBaseContent> content =
+      CreateWebUIContent(/*contents=*/nullptr);
   if (!content) {
     // Every production presenter either sets its content in its constructor
     // or overrides `CreateWebUIContent()`. Only unit-test presenters without
     // WebUI content get here.
     CHECK_IS_TEST();
-    return;
+    return nullptr;
   }
   SetWebUIContent(std::move(content));
+  return GetWebUIContent();
 }
 
-std::unique_ptr<OmniboxPopupWebUIBaseContent>
-OmniboxPopupPresenterBase::CreateWebUIContent() {
-  return nullptr;
+std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>>
+OmniboxPopupPresenterBase::ReleaseWebUIContents() {
+  OmniboxPopupWebUIBaseContent* content = GetWebUIContent();
+  CHECK(content);
+  CHECK(!IsShown());
+  TRACE_EVENT("omnibox", "OmniboxPopupPresenterBase::ReleaseWebUIContents",
+              "prefix", GetPopupMetricPrefix());
+  Observe(nullptr);
+  permission_observation_.Reset();
+  std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>> contents =
+      content->ReleaseContentsWrapper();
+  omnibox_popup_webui_content_ = nullptr;
+  content->parent()->RemoveChildViewT(content);
+  return contents;
+}
+
+OmniboxPopupWebUIBaseContent* OmniboxPopupPresenterBase::AdoptWebUIContents(
+    std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>> contents) {
+  CHECK(contents);
+  CHECK(!GetWebUIContent());
+  TRACE_EVENT("omnibox", "OmniboxPopupPresenterBase::AdoptWebUIContents",
+              "prefix", GetPopupMetricPrefix());
+  std::unique_ptr<OmniboxPopupWebUIBaseContent> content =
+      CreateWebUIContent(std::move(contents));
+  CHECK(content);
+  SetWebUIContent(std::move(content));
+  return GetWebUIContent();
 }
 
 // static
-base::AutoReset<bool>
-OmniboxPopupPresenterBase::IgnoreBrowserWindowPresentationForTesting() {
-  return base::AutoReset<bool>(
-      &g_ignore_browser_window_presentation_for_testing, true);
+OmniboxPopupPresenterBase::WebUIContentCreationStrategy
+OmniboxPopupPresenterBase::GetWebUIContentCreationStrategy(
+    const base::Feature& defer_creation_feature) {
+  if (omnibox::ShouldCreatePopupWebUIOnDemand()) {
+    return WebUIContentCreationStrategy::kOnDemand;
+  }
+  if (base::FeatureList::IsEnabled(defer_creation_feature)) {
+    return WebUIContentCreationStrategy::kAfterWindowPresentation;
+  }
+  return WebUIContentCreationStrategy::kEager;
 }
 
-void OmniboxPopupPresenterBase::
-    CreateWebUIContentAfterBrowserWindowPresentation() {
+void OmniboxPopupPresenterBase::ApplyWebUIContentCreationStrategy(
+    WebUIContentCreationStrategy strategy) {
+  switch (strategy) {
+    case WebUIContentCreationStrategy::kEager:
+      GetOrCreateWebUIContent(CreationReason::kEager);
+      return;
+    case WebUIContentCreationStrategy::kAfterWindowPresentation:
+      CreateWebUIContentAfterWindowPresentation();
+      return;
+    case WebUIContentCreationStrategy::kOnDemand:
+      return;
+  }
+}
+
+std::unique_ptr<OmniboxPopupWebUIBaseContent>
+OmniboxPopupPresenterBase::CreateWebUIContent(
+    std::unique_ptr<WebUIContentsWrapperT<OmniboxPopupUI>> contents) {
+  return nullptr;
+}
+
+void OmniboxPopupPresenterBase::CreateWebUIContentAfterWindowPresentation() {
+  // Presenters are built with the browser window, before its first paint, so
+  // the next frame the location bar's widget presents is the window's first
+  // frame. A presenter built later, e.g. when the profile becomes eligible for
+  // AI Mode, gets the next frame instead.
   views::Widget* widget = delegate().GetLocationBarWidget();
   ui::Compositor* compositor = widget ? widget->GetCompositor() : nullptr;
   if (!compositor) {
-    // `Show()` and the other callers of `EnsureWebUIContentCreated()` still
+    // `Show()` and the other callers of `GetOrCreateWebUIContent()` still
     // create the content when they need it.
     return;
   }
@@ -494,8 +556,7 @@ void OmniboxPopupPresenterBase::
 }
 
 void OmniboxPopupPresenterBase::OnBrowserWindowPresented() {
-  if (g_ignore_browser_window_presentation_for_testing ||
-      deferred_creation_scheduled_ || GetWebUIContent()) {
+  if (deferred_creation_scheduled_ || GetWebUIContent()) {
     return;
   }
   deferred_creation_scheduled_ = true;
@@ -503,8 +564,10 @@ void OmniboxPopupPresenterBase::OnBrowserWindowPresented() {
   // inside the presentation feedback callback.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
-      base::BindOnce(&OmniboxPopupPresenterBase::EnsureWebUIContentCreated,
-                     weak_factory_.GetWeakPtr()));
+      base::BindOnce(base::IgnoreResult(
+                         &OmniboxPopupPresenterBase::GetOrCreateWebUIContent),
+                     weak_factory_.GetWeakPtr(),
+                     CreationReason::kAfterWindowPresentation));
 }
 
 bool OmniboxPopupPresenterBase::ShouldDestroyWidgetOnHide() const {

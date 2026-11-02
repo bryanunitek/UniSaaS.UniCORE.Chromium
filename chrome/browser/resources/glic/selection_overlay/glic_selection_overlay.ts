@@ -86,10 +86,12 @@ export class GlicSelectionOverlayElement extends
       suggestedActions: {type: Array},
       enableSelectionOverlayPrompt: {type: Boolean},
       enableSelectionOverlayPromptBox: {type: Boolean},
+      enableSelectionOverlayDogfoodFeedback: {type: Boolean},
       hideHandles: {type: Boolean},
       disableMultiSelect: {type: Boolean, reflect: true},
       skipIntroAnimation: {type: Boolean, reflect: true},
       hasPromptText: {type: Boolean},
+      sidePanelOpen: {type: Boolean, reflect: true},
     };
   }
 
@@ -105,12 +107,20 @@ export class GlicSelectionOverlayElement extends
       loadTimeData.getBoolean('enableSelectionOverlayPrompt');
   accessor enableSelectionOverlayPromptBox: boolean =
       loadTimeData.getBoolean('enableSelectionOverlayPromptBox');
+  accessor enableSelectionOverlayDogfoodFeedback: boolean =
+      loadTimeData.getBoolean('enableSelectionOverlayDogfoodFeedback');
   accessor hideHandles: boolean = false;
   accessor disableMultiSelect: boolean = false;
   accessor skipIntroAnimation: boolean = false;
   // Whether the prompt input has non-whitespace text, which shows the submit
   // button.
   accessor hasPromptText: boolean = false;
+  // Whether the Glic side panel is open for this tab: showing, or backgrounded
+  // and showing again once the tab is in front. Kept live by the browser for
+  // the length of the session. Separate from the base class's
+  // `sidePanelOpened`, which applies the Lens side panel margins; the Glic
+  // overlay is tab-scoped and never applies them.
+  accessor sidePanelOpen: boolean = false;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -120,6 +130,10 @@ export class GlicSelectionOverlayElement extends
           this.hideHandles = options.hideHandles;
           this.disableMultiSelect = options.disableMultiSelect;
           this.skipIntroAnimation = options.skipIntroAnimation;
+        }));
+    this.listenerIds.push(
+        handlerImpl.addSetSidePanelOpenListener((open: boolean) => {
+          this.sidePanelOpen = open;
         }));
   }
 
@@ -198,6 +212,9 @@ export class GlicSelectionOverlayElement extends
         this.skipIntroAnimation) {
       this.selectionElements.regionSelectionLayer
           .handlePostSelectionDragGestureEnd();
+    }
+    if (changedProperties.has('showFloatingPrompt')) {
+      this.focusPromptInput_();
     }
   }
 
@@ -406,23 +423,16 @@ export class GlicSelectionOverlayElement extends
       // When the prompt box is not shown, anchor the bottom-left of the row at
       // the region's top-right corner (selRight, selTop). When an inline
       // fulfillment card replaces the row, keep the card's top-left corner at
-      // the row's top-left corner so it expands downward.
-      const idealCenterX = selRight + effectiveWidth / 2;
-      let clampedCenterX: number;
-      if (effectiveWidth >= maxAvailableWidth) {
-        clampedCenterX = viewportWidth / 2;
-      } else {
-        const minCenter = effectiveWidth / 2 + margin;
-        const maxCenter = viewportWidth - effectiveWidth / 2 - margin;
-        clampedCenterX = Math.max(minCenter, Math.min(idealCenterX, maxCenter));
-      }
+      // the row's top-left corner so it expands downward. The row is positioned
+      // by its left edge so the chips grow out of the spark's spot.
+      const clampedLeft = Math.max(
+          margin, Math.min(selRight, viewportWidth - effectiveWidth - margin));
 
       const idealTop = selTop -
           (this.shownInlineAction_ ? this.replacedChipsRowHeight_ : height);
       const targetTop = Math.max(
           margin, Math.min(idealTop, viewportHeight - height - margin));
-      return `left: ${clampedCenterX}px; top: ${
-          targetTop}px; transform: translateX(-50%);`;
+      return `left: ${clampedLeft}px; top: ${targetTop}px;`;
     };
 
     const container =
@@ -572,8 +582,17 @@ export class GlicSelectionOverlayElement extends
     }
   }
 
-  protected onSubmitPromptClick() {
+  protected onSubmitPromptClick(event: Event) {
+    event.stopPropagation();
     this.submitPromptInput_();
+  }
+
+  protected onSearchboxPillClick() {
+    this.focusPromptInput_();
+  }
+
+  private focusPromptInput_() {
+    this.shadowRoot.querySelector<HTMLInputElement>('#promptInput')?.focus();
   }
 
   private submitPromptInput_() {
@@ -609,13 +628,20 @@ export class GlicSelectionOverlayElement extends
     // `show()` sends the channel only if the card loaded and no newer click or
     // selection replaced it. Otherwise nothing is sent, since the browser
     // rejects an inline action without a channel.
-    await host.show(inlineFulfillment.resourceName, channel => {
-      this.replacedChipsRowHeight_ =
-          this.shadowRoot.querySelector<HTMLElement>(
-                             '.action-chips-row')!.offsetHeight;
+    //
+    // The state is updated only once the card shows: if it doesn't, e.g. the
+    // user declined its consent prompt, the chips (or the current card) stay,
+    // and the chip can be clicked again.
+    const chipsRowHeight = this.shownInlineAction_ ?
+        this.replacedChipsRowHeight_ :
+        this.shadowRoot.querySelector<HTMLElement>(
+                           '.action-chips-row')!.offsetHeight;
+    if (await host.show(inlineFulfillment.resourceName, channel => {
+          handler.executeSuggestedAction(action.id, channel);
+        })) {
+      this.replacedChipsRowHeight_ = chipsRowHeight;
       this.shownInlineAction_ = action;
-      handler.executeSuggestedAction(action.id, channel);
-    });
+    }
   }
 
   protected onInlineFulfillmentCloseClick() {
@@ -635,6 +661,11 @@ export class GlicSelectionOverlayElement extends
 
   protected onSettingsClick(event: Event) {
     (this.baseHandler as SelectionOverlayBaseHandlerImpl).openSettings();
+    event.stopPropagation();
+  }
+
+  protected onDogfoodFeedbackClick(event: Event) {
+    (this.baseHandler as SelectionOverlayBaseHandlerImpl).openDogfoodFeedback();
     event.stopPropagation();
   }
 

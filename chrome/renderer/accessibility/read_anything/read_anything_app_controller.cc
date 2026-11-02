@@ -18,11 +18,13 @@
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/language_tag.h"
 #include "base/i18n/tag_converters.h"
+#include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
@@ -32,7 +34,6 @@
 #include "chrome/common/read_anything/read_anything_util.h"
 #include "chrome/renderer/accessibility/ax_tree_distiller.h"
 #include "chrome/renderer/accessibility/phrase_segmentation/dependency_parser_model.h"
-#include "chrome/renderer/accessibility/read_anything/read_aloud_traversal_utils.h"
 #include "chrome/renderer/accessibility/read_anything/read_anything_app_model.h"
 #include "chrome/renderer/accessibility/read_anything/read_anything_distiller.h"
 #include "chrome/renderer/accessibility/read_anything/read_anything_distiller_factory.h"
@@ -60,7 +61,6 @@
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/ax_serializable_tree.h"
-#include "ui/accessibility/ax_text_utils.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/ax_tree_id.h"
 #include "ui/accessibility/ax_tree_serializer.h"
@@ -91,17 +91,6 @@ const double kPostInputDistillSeconds = 1.5;
 
 // The amount of time after a distillation for a PDF to wait before drawing.
 const int kPdfDrawDebounceMs = 500;
-
-SkBitmap CorrectColorOfBitMap(SkBitmap& originalBitmap) {
-  SkBitmap converted;
-  converted.allocPixels(SkImageInfo::Make(
-      originalBitmap.width(), originalBitmap.height(),
-      SkColorType::kRGBA_8888_SkColorType, originalBitmap.alphaType()));
-
-  originalBitmap.readPixels(converted.info(), converted.getPixels(),
-                            converted.rowBytes(), 0, 0);
-  return converted;
-}
 
 template <typename T>
   requires(std::is_enum_v<T> &&
@@ -368,7 +357,9 @@ void ReadAnythingAppController::ProcessPendingUpdatesIfAllowed(
     return;
   }
 
-  model_.UnserializePendingUpdates(model_.active_tree_id());
+  if (!model_.UnserializePendingUpdates(model_.active_tree_id())) {
+    return;
+  }
   ProcessModelUpdates();
 }
 
@@ -459,6 +450,9 @@ void ReadAnythingAppController::ProcessModelUpdates() {
     } else {
       PrepareForNewContentDistillation();
       if (features::IsReadAnythingDistillerRefactorEnabled()) {
+        SetDistillationState(
+            read_anything::mojom::ReadAnythingDistillationState::
+                kDistillationInProgress);
         DistillationRequest request;
         request.reason = ReadabilityDistillationReason::kRedistill;
         ExecuteDistillation(request);
@@ -510,15 +504,8 @@ void ReadAnythingAppController::SetDistillationState(
 
   page_handler_->OnDistillationStateChanged(state);
   model_.set_distillation_state(state);
-  // Ensure that we always clear the AXTree anchors when a new
-  // distillation occurs.
   if (state == read_anything::mojom::ReadAnythingDistillationState::
-                   kDistillationInProgress) {
-    model_.set_should_extract_anchors_from_tree_for_readability(false);
-    model_.set_should_map_rendered_text_to_tree_for_readability(false);
-    model_.ResetAXTreeAnchors();
-  } else if (state == read_anything::mojom::ReadAnythingDistillationState::
-                          kDistillationWithContent) {
+                   kDistillationWithContent) {
     model_.set_page_start_time(base::TimeTicks::Now());
   }
 }
@@ -532,6 +519,20 @@ void ReadAnythingAppController::OnActiveAXTreeIDChanged(
     return;
   }
   VLOG(1) << "On active tree changed with new id: " << tree_id;
+
+  // The browser cancels a pending PDF translation when the page changes (see
+  // ContentTranslateDriver::DidFinishNavigation()), so stop waiting for it.
+  // Usually reading mode is closed then, which also stops waiting, but don't
+  // rely on that to avoid keeping the new page behind the loading screen.
+  if (ukm_source_id != ukm::kInvalidSourceId) {
+    const ukm::SourceId previous_page_ukm_source_id =
+        model_.active_page_ukm_source_id();
+    if (previous_page_ukm_source_id != ukm::kInvalidSourceId &&
+        ukm_source_id != previous_page_ukm_source_id) {
+      SetAwaitingTranslation(false);
+    }
+    model_.set_active_page_ukm_source_id(ukm_source_id);
+  }
 
   ax_tree_ready_for_current_active_tree_measured_ = false;
   ax_tree_ready_for_current_active_tree_recorded_ = false;
@@ -618,11 +619,15 @@ void ReadAnythingAppController::PrepareForNewContentDistillation() {
   // TODO: crbug.com/526701545: Show Loading screen when re-distilling.
 
   // Clear any stale distillation content.
-  dom_distiller_title_.clear();
-  dom_distiller_content_html_.clear();
+  readability_title_.clear();
+  readability_content_html_.clear();
 
-  // Reset mapping state for the new page. Since no readability distillation is
-  // displayed yet, the mapping algorithm is not yet in progress.
+  // Reset anchor and mapping state for the new distillation. Since no
+  // readability distillation is displayed yet, the mapping algorithm is not
+  // yet in progress.
+  model_.set_should_extract_anchors_from_tree_for_readability(false);
+  model_.set_should_map_rendered_text_to_tree_for_readability(false);
+  model_.ResetAXTreeAnchors();
   model_.set_is_readability_mapping_in_progress(false);
   model_.set_has_logged_early_selection(false);
 }
@@ -938,7 +943,6 @@ void ReadAnythingAppController::OnAXTreeDistilled(
   // Reset state, including the current side panel selection so we can update
   // it based on the new main panel selection in PostProcessSelection below.
   model_.Reset(content_node_ids);
-  read_aloud_model_.ResetReadAloudState();
 
   if (!model_.content_node_ids().empty()) {
     // If there are content_node_ids, this means the AXTree was successfully
@@ -1080,14 +1084,10 @@ bool ReadAnythingAppController::PostProcessSelection() {
     return false;
   }
 
-  // TODO(b/574644874): Align Readability selection / hidden lifecycle with
-  // Screen2x so `PostProcessSelection()` is not called while hidden.
-  // On pages distilled via Readability, a selection can change what the side
-  // panel shows. Update the selection endpoints, but leave the selection
-  // pending until reading mode is shown.
-  if (model_.is_readability_next_distillation_method() && IsHidden()) {
-    model_.UpdateSelectionEndpoints();
-    model_.set_requires_post_process_selection(true);
+  // Don't process the selection while reading mode is hidden, since the side
+  // panel can't be redrawn. The selection stays pending until reading mode is
+  // shown.
+  if (IsHidden()) {
     return false;
   }
 
@@ -1098,10 +1098,6 @@ bool ReadAnythingAppController::PostProcessSelection() {
     if (model_.is_empty()) {
       DrawEmptyState();
     } else if (model_.is_readability_next_distillation_method()) {
-      // Reset Read Aloud when switching between the readability distillation
-      // and selection mode or when changing the selected content in selection
-      // mode, since the displayed content is changing.
-      read_aloud_model_.ResetReadAloudState();
       if (IsInSelectionMode()) {
         Draw(/*recompute_display_nodes=*/false);
       } else {
@@ -1150,11 +1146,6 @@ void ReadAnythingAppController::Draw(bool recompute_display_nodes) {
 
   if (recompute_display_nodes && !model_.content_node_ids().empty()) {
     model_.ComputeDisplayNodeIdsForDistilledTree();
-
-    // If we need to recompute which nodes are displayed, reset read aloud as
-    // we previously preprocessed the previous nodes and should re-process the
-    // new ones.
-    read_aloud_model_.ResetReadAloudState();
   } else {
     VLOG(1) << "Not recomputing display nodes, content node size: "
             << model_.content_node_ids().size();
@@ -1171,14 +1162,6 @@ void ReadAnythingAppController::Draw(bool recompute_display_nodes) {
 }
 
 void ReadAnythingAppController::DrawSelection() {
-  // Reset read aloud state if a selection has been made in case the selected
-  // nodes weren't previously distilled. Resetting isn't necessary if the
-  // selection nodes were included in the distilled content.
-  if (!model_.selection_node_ids().empty() &&
-      !model_.SelectionNodesContainedInDistilledContent()) {
-    read_aloud_model_.ResetReadAloudState();
-  }
-
   // This call should check that the active tree isn't in an undistilled state
   // -- that is, it is awaiting distillation or never requested distillation.
   ExecuteJavaScript("chrome.readingMode.updateSelection();");
@@ -1334,8 +1317,6 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
           "engineErrorStopSource")
       .SetProperty<&ReadAnythingAppController::ContentFinishedStopSource>(
           "contentFinishedStopSource")
-      .SetProperty<&ReadAnythingAppController::IsSpeechTreeInitialized>(
-          "isSpeechTreeInitialized")
       .SetProperty<
           &ReadAnythingAppController::UnexpectedUpdateContentStopSource>(
           "unexpectedUpdateContentStopSource")
@@ -1371,6 +1352,8 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
       .SetProperty<&ReadAnythingAppController::IsPdf>("isPdf")
       .SetProperty<&ReadAnythingAppController::IsContentTranslated>(
           "isContentTranslated")
+      .SetProperty<&ReadAnythingAppController::IsAwaitingTranslation>(
+          "isAwaitingTranslation")
       .SetProperty<&ReadAnythingAppController::IsImprovedReadAloudEnabled>(
           "isImprovedReadAloudEnabled")
       .SetProperty<&ReadAnythingAppController::IsReadAnythingImprovedUiEnabled>(
@@ -1400,12 +1383,12 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
           "defaultLanguageForSpeech")
       .SetProperty<&ReadAnythingAppController::IsPhraseHighlightingEnabled>(
           "isPhraseHighlightingEnabled")
-      .SetProperty<&ReadAnythingAppController::GetDomDistillerTitle>(
+      .SetProperty<&ReadAnythingAppController::GetReadabilityTitle>(
           "htmlTitle")
       .SetProperty<&ReadAnythingAppController::GetDocumentUrl>("documentUrl")
-      .SetProperty<&ReadAnythingAppController::GetDomDistillerContentHtml>(
+      .SetProperty<&ReadAnythingAppController::GetReadabilityContentHtml>(
           "htmlContent")
-      .SetProperty<&ReadAnythingAppController::GetDomDistillerAnchors>(
+      .SetProperty<&ReadAnythingAppController::GetReadabilityAnchors>(
           "axTreeAnchors")
       .SetProperty<&ReadAnythingAppController::DistillationTypeScreen2x>(
           "distillationTypeScreen2x")
@@ -1443,6 +1426,7 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
           "onLinksEnabledToggled")
       .SetMethod<&ReadAnythingAppController::OnTranslationRequested>(
           "onTranslationRequested")
+      .SetMethod<&ReadAnythingAppController::OnSendFeedback>("onSendFeedback")
       .SetMethod<&ReadAnythingAppController::OnScroll>("onScroll")
       .SetMethod<&ReadAnythingAppController::OnLinkClicked>("onLinkClicked")
       .SetMethod<&ReadAnythingAppController::OnLetterSpacingChange>(
@@ -1477,12 +1461,6 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
       .SetProperty<&ReadAnythingAppController::GetSupportedFonts>(
           "supportedFonts")
       .SetProperty<&ReadAnythingAppController::GetAllFonts>("allFonts")
-      .SetMethod<&ReadAnythingAppController::InitAXPositionWithNode>(
-          "initAxPositionWithNode")
-      .SetMethod<&ReadAnythingAppController::ResetGranularityIndex>(
-          "resetGranularityIndex")
-      .SetMethod<&ReadAnythingAppController::GetCurrentTextContent>(
-          "getCurrentTextContent")
       .SetMethod<&ReadAnythingAppController::ShouldShowUI>("shouldShowUi")
       .SetMethod<&ReadAnythingAppController::GetOriginalPageMetrics>(
           "getOriginalPageMetrics")
@@ -1494,12 +1472,6 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
           "onIsAudioCurrentlyPlayingChanged")
       .SetMethod<&ReadAnythingAppController::OnAiPlaybackStateChanged>(
           "onAiPlaybackStateChanged")
-      .SetMethod<&ReadAnythingAppController::GetAccessibleBoundary>(
-          "getAccessibleBoundary")
-      .SetMethod<&ReadAnythingAppController::MovePositionToNextGranularity>(
-          "movePositionToNextGranularity")
-      .SetMethod<&ReadAnythingAppController::MovePositionToPreviousGranularity>(
-          "movePositionToPreviousGranularity")
       .SetMethod<&ReadAnythingAppController::RequestImageData>(
           "requestImageData")
       .SetMethod<&ReadAnythingAppController::GetImageBitmap>("getImageBitmap")
@@ -1526,11 +1498,8 @@ gin::ObjectTemplateBuilder ReadAnythingAppController::GetObjectTemplateBuilder(
           "sendInstallVoicePackRequest")
       .SetMethod<&ReadAnythingAppController::SendUninstallVoiceRequest>(
           "sendUninstallVoiceRequest")
-      .SetMethod<&ReadAnythingAppController::GetCurrentTextSegments>(
-          "getCurrentTextSegments")
-      .SetMethod<
-          &ReadAnythingAppController::GetHighlightForCurrentSegmentIndex>(
-          "getHighlightForCurrentSegmentIndex")
+      .SetMethod<&ReadAnythingAppController::RequestPhraseBoundaries>(
+          "requestPhraseBoundaries")
       .SetMethod<&ReadAnythingAppController::GetValidatedFontName>(
           "getValidatedFontName")
       .SetMethod<&ReadAnythingAppController::SendGetPresentationStateRequest>(
@@ -2002,7 +1971,7 @@ void ReadAnythingAppController::OnGetPresentationState(
   // while reading mode was hidden.
   bool has_distilled_readability_content =
       model_.is_readability_next_distillation_method() &&
-      !dom_distiller_content_html_.empty();
+      !readability_content_html_.empty();
   if (is_opening && !has_logged_distillation_status_ &&
       has_distilled_readability_content) {
     RecordDistillationStatus(
@@ -2242,19 +2211,26 @@ v8::Local<v8::Value> ReadAnythingAppController::GetImageBitmap(
     SkBitmap bitmap = std::move(itr->second);
     // Remove the downloaded image from the map.
     downloaded_images_.erase(node_id);
-    // Ensure that the bitmap is in the correct color format.
-    if (bitmap.colorType() != SkColorType::kRGBA_8888_SkColorType) {
-      bitmap = CorrectColorOfBitMap(bitmap);
+    ui::AXNode* node = model_.GetAXNode(node_id);
+    DUMP_WILL_BE_CHECK(node);
+    if (bitmap.empty() || !node) {
+      return v8::Undefined(isolate);
     }
 
-    // Get the pixmap to compute the bytes.
-    auto pixmap = std::move(bitmap.pixmap());
-    auto size = pixmap.computeByteSize();
+    // Convert to RGBA and copy into the array buffer in a single pass.
+    SkImageInfo rgba_info =
+        bitmap.info().makeColorType(SkColorType::kRGBA_8888_SkColorType);
+    size_t size = rgba_info.computeMinByteSize();
+    if (SkImageInfo::ByteSizeOverflowed(size)) {
+      return v8::Undefined(isolate);
+    }
     // Create an array buffer with the image bytes.
     v8::Local<v8::ArrayBuffer> buffer = v8::ArrayBuffer::New(isolate, size);
     // Copy the memory in.
-    pixmap.readPixels(pixmap.info(), buffer->GetBackingStore()->Data(),
-                      pixmap.rowBytes());
+    if (!bitmap.readPixels(rgba_info, buffer->GetBackingStore()->Data(),
+                           rgba_info.minRowBytes(), 0, 0)) {
+      return v8::Undefined(isolate);
+    }
     // Create a clamped array so we can create an ImageData object on the
     // javascript side.
     v8::Local<v8::Uint8ClampedArray> array =
@@ -2262,11 +2238,6 @@ v8::Local<v8::Value> ReadAnythingAppController::GetImageBitmap(
 
     // Create an object with the image data and height, as well as a scale
     // factor.
-    ui::AXNode* node = model_.GetAXNode(node_id);
-    DUMP_WILL_BE_CHECK(node);
-    if (!node) {
-      return v8::Undefined(isolate);
-    }
     int width = bitmap.width();
     int height = bitmap.height();
     float scale = (node->data().relative_bounds.bounds.width()) / width;
@@ -2333,7 +2304,7 @@ int ReadAnythingAppController::GetDistillationMethod() const {
 }
 
 bool ReadAnythingAppController::RequiresDistillation() {
-  // DOM distiller distillation doesn't queue distillations so return false.
+  // Readability distillation doesn't queue distillations so return false.
   if (model_.is_readability_next_distillation_method()) {
     return false;
   }
@@ -2462,6 +2433,13 @@ void ReadAnythingAppController::OnTranslationRequested() {
     return;
   }
   page_handler_->OnTranslationRequested();
+}
+
+void ReadAnythingAppController::OnSendFeedback() {
+  if (!IsReadAnythingSendFeedbackEnabled()) {
+    return;
+  }
+  page_handler_->OnSendFeedback();
 }
 
 void ReadAnythingAppController::OnImagesEnabledToggled() {
@@ -2696,42 +2674,6 @@ void ReadAnythingAppController::OnSelectionRequestHandled(bool applied) {
   }
 }
 
-void ReadAnythingAppController::ResetGranularityIndex() {
-  read_aloud_model_.ResetGranularityIndex();
-}
-void ReadAnythingAppController::InitAXPositionWithNode(
-    const ui::AXNodeID& starting_node_id) {
-  ui::AXNode* ax_node = model_.GetAXNode(starting_node_id);
-  read_aloud_model_.InitAXPositionWithNode(ax_node, model_.active_tree_id());
-  // TODO: crbug.com/411198154: This should only be called if the ax position
-  // is not already initialized.
-  PreprocessTextForSpeech();
-}
-
-bool ReadAnythingAppController::IsSpeechTreeInitialized() {
-  return read_aloud_model_.speech_tree_initialized();
-}
-
-std::u16string ReadAnythingAppController::GetCurrentTextContent() {
-  return read_aloud_model_
-      .GetCurrentText(IsPdf(), model_.IsDocs(),
-                      model_.GetCurrentlyVisibleNodes())
-      .text;
-}
-
-void ReadAnythingAppController::PreprocessTextForSpeech() {
-  read_aloud_model_.PreprocessTextForSpeech(IsPdf(), model_.IsDocs(),
-                                            model_.GetCurrentlyVisibleNodes());
-}
-
-void ReadAnythingAppController::MovePositionToNextGranularity() {
-  read_aloud_model_.MovePositionToNextGranularity();
-}
-
-void ReadAnythingAppController::MovePositionToPreviousGranularity() {
-  read_aloud_model_.MovePositionToPreviousGranularity();
-}
-
 void ReadAnythingAppController::SetLanguageForTesting(
     const std::string& language_code) {
   SetLanguageCode(language_code);
@@ -2775,6 +2717,10 @@ void ReadAnythingAppController::OnReadingModeHidden(bool tab_active) {
   // speech was not stopped. If the tab is still active and RM is hidden, then
   // RM was closed, so log the speech stopped.
   if (tab_active) {
+    // Only stop awaiting translation when RM is actually closed. A pending
+    // translation still starts after switching tabs and returning, so keep the
+    // content behind the loading screen until then.
+    SetAwaitingTranslation(false);
     ReadingModeWillClose();
     if (read_aloud_model_.speech_playing()) {
       read_aloud_model_.LogSpeechStop(
@@ -2802,6 +2748,19 @@ void ReadAnythingAppController::OnReadingModeShown(
   if (open_trigger == read_anything::mojom::ReadAnythingOpenTrigger::
                           kListenToThisPageContextMenu) {
     ExecuteJavaScript("chrome.readingMode.setPlayOnOpen(true);");
+  }
+
+  // Reading mode is opened with this trigger right after a PDF translation is
+  // requested. The browser starts the translation once the content is
+  // distilled, or right away if it already is (see
+  // ReadAnythingUntrustedPageHandler::OnDistillationStateChanged() and
+  // ReadAnythingUntrustedPageHandler::Activate()). Keep the content behind the
+  // loading screen until it's translated so the user doesn't see the
+  // untranslated text first.
+  if (open_trigger ==
+          read_anything::mojom::ReadAnythingOpenTrigger::kPdfTranslation &&
+      IsTranslatePdfEnabled() && !model_.is_content_translated()) {
+    SetAwaitingTranslation(true);
   }
 
   if (ax_tree_ready_for_current_active_tree_measured_) {
@@ -2851,14 +2810,33 @@ void ReadAnythingAppController::OnTranslationStateChanged(bool is_translated) {
   CHECK(IsTranslatePdfEnabled());
   model_.set_is_content_translated(is_translated);
   ExecuteJavaScript("chrome.readingMode.onTranslationStateChanged();");
+  if (is_translated) {
+    SetAwaitingTranslation(false);
+  }
 }
 
 void ReadAnythingAppController::OnTranslationFailed() {
   // The browser only reports translation failures when PDF translation is
   // enabled. See ReadAnythingTranslateObserver::OnPageTranslated().
   CHECK(IsTranslatePdfEnabled());
-  // TODO(crbug.com/564944482): Notify the WebUI so it can stop waiting for the
-  // translation and show an error.
+  // The content won't be translated, so stop hiding it behind the loading
+  // screen.
+  SetAwaitingTranslation(false);
+}
+
+void ReadAnythingAppController::SetAwaitingTranslation(bool awaiting) {
+  if (model_.is_awaiting_translation() == awaiting) {
+    return;
+  }
+  model_.set_is_awaiting_translation(awaiting);
+  // The WebUI may not have registered its handler yet if this happens very
+  // early; in that case it reads `isAwaitingTranslation` when it draws.
+  ExecuteJavaScript("chrome.readingMode.onAwaitingTranslationChanged?.(" +
+                    base::ToString(awaiting) + ")");
+}
+
+bool ReadAnythingAppController::IsAwaitingTranslation() const {
+  return model_.is_awaiting_translation();
 }
 
 void ReadAnythingAppController::SetDefaultLanguageCode(
@@ -2910,89 +2888,6 @@ void ReadAnythingAppController::OnIsAudioCurrentlyPlayingChanged(
 
 void ReadAnythingAppController::OnAiPlaybackStateChanged(bool enabled) {
   page_handler_->OnAiPlaybackStateChanged(enabled);
-}
-
-int ReadAnythingAppController::GetAccessibleBoundary(const std::u16string& text,
-                                                     int max_text_length) {
-  std::vector<int> offsets;
-  const std::u16string shorter_string = text.substr(0, max_text_length);
-  size_t sentence_ends_short = ui::FindAccessibleTextBoundary(
-      shorter_string, offsets, ax::mojom::TextBoundary::kSentenceStart, 0,
-      ax::mojom::MoveDirection::kForward,
-      ax::mojom::TextAffinity::kDefaultValue);
-  size_t sentence_ends_long = ui::FindAccessibleTextBoundary(
-      text, offsets, ax::mojom::TextBoundary::kSentenceStart, 0,
-      ax::mojom::MoveDirection::kForward,
-      ax::mojom::TextAffinity::kDefaultValue);
-
-  // Compare the index result for the sentence of maximum text length and of
-  // the longer text string. If the two values are the same, the index is
-  // correct. If they are different, the maximum text length may have
-  // incorrectly spliced a word (e.g. returned "this is a sen" instead of
-  // "this is a" or "this is a sentence"), so if this is the case, we'll want
-  // to use the last word boundary instead.
-  if (sentence_ends_short == sentence_ends_long) {
-    return sentence_ends_short;
-  }
-
-  size_t word_ends = ui::FindAccessibleTextBoundary(
-      shorter_string, offsets, ax::mojom::TextBoundary::kWordStart,
-      shorter_string.length() - 1, ax::mojom::MoveDirection::kBackward,
-      ax::mojom::TextAffinity::kDefaultValue);
-  return word_ends;
-}
-
-v8::Local<v8::Value> ReadAnythingAppController::GetCurrentTextSegments() {
-  v8::Isolate* isolate =
-      render_frame()->GetWebFrame()->GetAgentGroupScheduler()->Isolate();
-  auto context = isolate->GetCurrentContext();
-
-  std::vector<ReadAloudTextSegment> nodes =
-      read_aloud_model_.GetCurrentTextSegments(
-          IsPdf(), model_.IsDocs(), model_.GetCurrentlyVisibleNodes());
-
-  v8::Local<v8::Array> highlight_array = v8::Array::New(isolate, nodes.size());
-  for (int i = 0; i < (int)nodes.size(); i++) {
-    v8::Local<v8::Object> obj = v8::Object::New(isolate);
-    auto checked = obj->DefineOwnProperty(
-        context, v8::String::NewFromUtf8(isolate, "nodeId").ToLocalChecked(),
-        v8::Number::New(isolate, nodes[i].id));
-    checked = obj->DefineOwnProperty(
-        context, v8::String::NewFromUtf8(isolate, "start").ToLocalChecked(),
-        v8::Number::New(isolate, nodes[i].text_start));
-    checked = obj->DefineOwnProperty(
-        context, v8::String::NewFromUtf8(isolate, "length").ToLocalChecked(),
-        v8::Number::New(isolate, (nodes[i].text_end - nodes[i].text_start)));
-    checked = highlight_array->Set(isolate->GetCurrentContext(), i, obj);
-  }
-  return highlight_array;
-}
-
-v8::Local<v8::Value>
-ReadAnythingAppController::GetHighlightForCurrentSegmentIndex(int index,
-                                                              bool phrases) {
-  v8::Isolate* isolate =
-      render_frame()->GetWebFrame()->GetAgentGroupScheduler()->Isolate();
-  auto context = isolate->GetCurrentContext();
-
-  std::vector<ReadAloudTextSegment> nodes =
-      read_aloud_model_.GetHighlightForCurrentSegmentIndex(index, phrases);
-
-  v8::Local<v8::Array> highlight_array = v8::Array::New(isolate, nodes.size());
-  for (int i = 0; i < (int)nodes.size(); i++) {
-    v8::Local<v8::Object> obj = v8::Object::New(isolate);
-    auto checked = obj->DefineOwnProperty(
-        context, v8::String::NewFromUtf8(isolate, "nodeId").ToLocalChecked(),
-        v8::Number::New(isolate, nodes[i].id));
-    checked = obj->DefineOwnProperty(
-        context, v8::String::NewFromUtf8(isolate, "start").ToLocalChecked(),
-        v8::Number::New(isolate, nodes[i].text_start));
-    checked = obj->DefineOwnProperty(
-        context, v8::String::NewFromUtf8(isolate, "length").ToLocalChecked(),
-        v8::Number::New(isolate, (nodes[i].text_end - nodes[i].text_start)));
-    checked = highlight_array->Set(isolate->GetCurrentContext(), i, obj);
-  }
-  return highlight_array;
 }
 
 void ReadAnythingAppController::IncrementMetricCount(
@@ -3125,6 +3020,46 @@ void ReadAnythingAppController::UpdateDependencyParserModel(
       .WithArgs(std::move(model_file));
 }
 
+void ReadAnythingAppController::RequestPhraseBoundaries(
+    int request_id,
+    const std::vector<std::u16string>& sentences) {
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled() ||
+      sentences.empty()) {
+    return;
+  }
+
+  // If the model isn't available yet, this returns an empty list of
+  // boundaries for each sentence.
+  read_aloud_model_.GetDependencyParserModel()
+      .AsyncCall(&DependencyParserModel::GetPhraseBoundariesForSentences)
+      .WithArgs(sentences)
+      .Then(
+          base::BindOnce(&ReadAnythingAppController::OnPhraseBoundariesComputed,
+                         weak_ptr_factory_.GetWeakPtr(), request_id));
+}
+
+void ReadAnythingAppController::OnPhraseBoundariesComputed(
+    int request_id,
+    std::vector<std::vector<int>> boundaries) {
+  base::ListValue boundaries_list;
+  boundaries_list.reserve(boundaries.size());
+  for (const std::vector<int>& sentence_boundaries : boundaries) {
+    base::ListValue sentence_list;
+    sentence_list.reserve(sentence_boundaries.size());
+    for (int boundary : sentence_boundaries) {
+      sentence_list.Append(boundary);
+    }
+    boundaries_list.Append(std::move(sentence_list));
+  }
+
+  std::optional<std::string> json = base::WriteJson(boundaries_list);
+  if (!json) {
+    return;
+  }
+  ExecuteJavaScript("chrome.readingMode.onPhraseBoundariesReady(" +
+                    base::NumberToString(request_id) + ", " + *json + ");");
+}
+
 base::SequenceBound<DependencyParserModel>&
 ReadAnythingAppController::GetDependencyParserModelForTesting() {
   return read_aloud_model_.GetDependencyParserModel();
@@ -3148,15 +3083,15 @@ void ReadAnythingAppController::OnTreeRemoved(ui::AXTree* tree) {
   }
 }
 
-std::string ReadAnythingAppController::GetDomDistillerTitle() const {
-  return dom_distiller_title_;
+std::string ReadAnythingAppController::GetReadabilityTitle() const {
+  return readability_title_;
 }
 
-std::string ReadAnythingAppController::GetDomDistillerContentHtml() const {
-  return dom_distiller_content_html_;
+std::string ReadAnythingAppController::GetReadabilityContentHtml() const {
+  return readability_content_html_;
 }
 
-v8::Local<v8::Value> ReadAnythingAppController::GetDomDistillerAnchors() const {
+v8::Local<v8::Value> ReadAnythingAppController::GetReadabilityAnchors() const {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   if (!IsReadabilityEnabled() || !isolate) {
     return v8::Undefined(isolate);
@@ -3213,12 +3148,12 @@ void ReadAnythingAppController::UpdateContent(const std::string& title,
     return;
   }
 
-  dom_distiller_title_ = title;
-  dom_distiller_content_html_ = content;
+  readability_title_ = title;
+  readability_content_html_ = content;
 
   // If readability distillation returns empty content, consider distillation as
   // failure and default to Screen2X distillation.
-  if (dom_distiller_content_html_.empty()) {
+  if (readability_content_html_.empty()) {
     model_.set_readability_content_drawn(false);
 
     // Immediately attempt distillation. If there's not yet an active tree,
@@ -3239,6 +3174,10 @@ void ReadAnythingAppController::UpdateContent(const std::string& title,
   // executed.
   if (features::IsReadAnythingImprovedUiEnabled() &&
       read_aloud_model_.speech_playing()) {
+    if (features::IsReadAnythingDistillerRefactorEnabled()) {
+      SetDistillationState(read_anything::mojom::ReadAnythingDistillationState::
+                               kDistillationWithContent);
+    }
     model_.set_requires_readability_distillation(true);
     VLOG(1) << "Distillation terminated because speech is playing";
     return;
@@ -3263,6 +3202,11 @@ void ReadAnythingAppController::UpdateContent(const std::string& title,
   // selections or log a successful Readability distillation in that case.
   if (!model_.is_readability_next_distillation_method()) {
     return;
+  }
+
+  if (features::IsReadAnythingDistillerRefactorEnabled()) {
+    SetDistillationState(read_anything::mojom::ReadAnythingDistillationState::
+                             kDistillationWithContent);
   }
 
   if (!IsUpdateProcessingPaused() && model_.ContainsActiveTree()) {

@@ -65,8 +65,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "ui/base/base_window.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/range/range.h"
 #include "url/gurl.h"
 
@@ -169,7 +169,9 @@ void SavedTabGroupUtils::RemoveGroupFromTabstrip(
   BrowserWindowInterface* const browser_with_local_group_id =
       browser ? browser
               : SavedTabGroupUtils::GetBrowserWithTabGroupId(local_group);
-  CHECK(browser_with_local_group_id, base::NotFatalUntil::M162);
+  // TODO(crbug.com/577226586): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(browser_with_local_group_id);
   if (!browser_with_local_group_id) {
     return;
   }
@@ -431,7 +433,7 @@ void SavedTabGroupUtils::OpenUrlInNewUngroupedTab(
     BrowserWindowInterface* browser,
     const GURL& url) {
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  params.disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
   params.started_from_context_menu = true;
   Navigate(&params);
 }
@@ -532,7 +534,7 @@ content::NavigationHandle* SavedTabGroupUtils::OpenTabInBrowser(
     const GURL& url,
     BrowserWindowInterface* browser,
     Profile* profile,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     std::optional<int> tabstrip_index,
     std::optional<tab_groups::TabGroupId> local_group_id) {
   NavigateParams params(profile, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);

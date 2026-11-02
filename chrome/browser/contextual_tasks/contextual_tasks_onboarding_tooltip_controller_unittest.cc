@@ -28,7 +28,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_test_util.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/styled_label.h"
@@ -165,7 +165,7 @@ TEST_F(ContextualTasksOnboardingTooltipControllerTest,
   ASSERT_NE(bubble_view, nullptr);
   EXPECT_CALL(mock_browser_window_,
               OpenGURL(GURL(GetContextualTasksOnboardingTooltipHelpUrl()),
-                       WindowOpenDisposition::kNewForegroundTab))
+                       ui::mojom::WindowOpenDisposition::kNewForegroundTab))
       .Times(1);
   bubble_view->body_label_for_testing()->ClickFirstLinkForTesting();
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
@@ -351,6 +351,50 @@ TEST_F(ContextualTasksOnboardingTooltipControllerTest,
   EXPECT_TRUE(controller()->IsBubbleShowing());
   EXPECT_EQ(controller()->active_variant_for_testing(),
             ContextualTasksOnboardingBubbleView::Variant::kAskGoogle);
+}
+
+TEST_F(ContextualTasksOnboardingTooltipControllerTest,
+       IsAskGoogleEntryPointEligible) {
+  controller()->SetEntryPoint(
+      omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_COBROWSE_OMNIBOX_ACTION);
+  EXPECT_TRUE(controller()->is_ask_google_entry_point_eligible_for_testing());
+
+  controller()->SetEntryPoint(
+      omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_COBROWSE_OMNIBOX_TAB_SEARCH);
+  EXPECT_TRUE(controller()->is_ask_google_entry_point_eligible_for_testing());
+
+  controller()->SetEntryPoint(
+      omnibox::ChromeAimEntryPoint::
+          DESKTOP_CHROME_COBROWSE_OMNIBOX_CONTEXTUAL_SUGGESTION);
+  EXPECT_TRUE(controller()->is_ask_google_entry_point_eligible_for_testing());
+
+  controller()->SetEntryPoint(omnibox::ChromeAimEntryPoint::
+                                  DESKTOP_CHROME_COBROWSE_OMNIBOX_POPUP_BUTTON);
+  EXPECT_TRUE(controller()->is_ask_google_entry_point_eligible_for_testing());
+
+  // Without UpdatedEntryPoints enabled, updated entry points are ineligible.
+  controller()->SetEntryPoint(omnibox::ChromeAimEntryPoint::
+                                  DESKTOP_CHROME_PAGE_CONTEXT_MENU_ASK_GOOGLE);
+  EXPECT_FALSE(controller()->is_ask_google_entry_point_eligible_for_testing());
+
+  controller()->SetEntryPoint(
+      omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_APP_MENU_ASK_GOOGLE);
+  EXPECT_FALSE(controller()->is_ask_google_entry_point_eligible_for_testing());
+
+  controller()->SetEntryPoint(
+      omnibox::ChromeAimEntryPoint::
+          DESKTOP_CHROME_CHROMNIENT_HOMEWORK_ACTION_CHIP);
+  EXPECT_FALSE(controller()->is_ask_google_entry_point_eligible_for_testing());
+}
+
+TEST_F(ContextualTasksOnboardingTooltipControllerTest,
+       IsAskGoogleEntryPointEligible_OmniboxDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(omnibox::kWebUIOmniboxAskGAboutThisPage);
+
+  controller()->SetEntryPoint(
+      omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_COBROWSE_OMNIBOX_ACTION);
+  EXPECT_FALSE(controller()->is_ask_google_entry_point_eligible_for_testing());
 }
 
 }  // namespace contextual_tasks

@@ -114,6 +114,7 @@
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
 #include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -181,11 +182,6 @@ void LogFetchLaterMetric(const FetchLaterRendererMetricType& type) {
   base::UmaHistogramEnumeration("FetchLater.Renderer.Metrics", type);
 }
 
-void RecordBlobFetchNetErrorCode(int net_error_code) {
-  base::UmaHistogramSparse("Net.BlobFetch.ResponseNetErrorCode",
-                           net_error_code);
-}
-
 // Tells whether the FetchLater request should use BackgroundSync permission to
 // decide whether it should send out deferred requests on entering
 // BackForwardCache.
@@ -204,11 +200,12 @@ bool IsFetchLaterSendOnEnterBackForwardCacheEnabled() {
                                                  "send_on_enter_bfcache", true);
 }
 
-bool HasNonEmptyLocationHeader(const FetchHeaderList* headers) {
-  String value;
-  if (!headers->Get(http_names::kLocation, value))
-    return false;
-  return !value.empty();
+// Several Location headers are joined with ", ", so any other character comes
+// from a non-empty value.
+bool HasNonEmptyLocationValue(const ResourceResponse& response) {
+  return response.HttpHeaderField(http_names::kLocation).Find([](UChar c) {
+    return c != ',' && !IsAsciiSpace(c);
+  }) != kNotFound;
 }
 
 const char* SerializeTrustTokenOperationType(
@@ -548,8 +545,7 @@ class FetchManager::Loader final
           IntegrityReport integrity_report;
           IntegrityMetadataSet metadata_set;
           SubresourceIntegrity::ParseIntegrityAttribute(
-              integrity_metadata_, metadata_set, loader_->GetExecutionContext(),
-              &integrity_report);
+              integrity_metadata_, metadata_set, &integrity_report);
 
           const FetchResponseData* data = response_->GetResponse();
           String raw_headers = data->InternalHeaderList()->GetAsRawString(
@@ -558,7 +554,7 @@ class FetchManager::Loader final
               !updater_ ? FetchResponseType::kError : data->GetType();
           integrity_failed = !SubresourceIntegrity::CheckSubresourceIntegrity(
               metadata_set, &buffer_, url_, type, raw_headers,
-              loader_->GetExecutionContext(), integrity_report);
+              integrity_report);
           integrity_report.SendReports(loader_->GetExecutionContext());
           error_message = "SRI's integrity checks failed.";
         }
@@ -721,12 +717,6 @@ void FetchManager::Loader::DidReceiveResponse(
     const ResourceResponse& response) {
   received_response_headers_ = true;
 
-  // Record the blob fetch request status.
-  if (GetFetchRequestData() &&
-      GetFetchRequestData()->Url().ProtocolIs("blob")) {
-    RecordBlobFetchNetErrorCode(net::OK);
-  }
-
   // Verify that we're dealing with the URL we expect (which could be an
   // HTTPS-upgraded variant of `url_list_.back()`.
   DCHECK(
@@ -739,6 +729,12 @@ void FetchManager::Loader::DidReceiveResponse(
 
   auto response_type = response.GetType();
   DCHECK_NE(response_type, FetchResponseType::kError);
+
+  // //net only reports a redirect when a Location value is non-empty, so
+  // outside "manual" mode a Location header here has only empty values.
+  DCHECK(!(network_utils::IsRedirectResponseCode(response.HttpStatusCode()) &&
+           HasNonEmptyLocationValue(response) &&
+           GetFetchRequestData()->Redirect() != RedirectMode::kManual));
 
   LogIfKeepalive("Succeeded");
 
@@ -772,9 +768,6 @@ void FetchManager::Loader::DidReceiveResponse(
   }
 
   DCHECK_EQ(response_type, response.GetType());
-  DCHECK(!(network_utils::IsRedirectResponseCode(response_http_status_code_) &&
-           HasNonEmptyLocationHeader(response_data->HeaderList()) &&
-           GetFetchRequestData()->Redirect() != RedirectMode::kManual));
 
   if (network_utils::IsRedirectResponseCode(response_http_status_code_) &&
       GetFetchRequestData()->Redirect() == RedirectMode::kManual) {
@@ -895,12 +888,6 @@ void FetchManager::Loader::DidFail(uint64_t identifier,
   if (GetExecutionContext()) {
     GetExecutionContext()->MaybeRecordFetchError(error.ErrorCode(),
                                                  GetFetchRequestData());
-  }
-
-  // Record the failures for blob fetch request.
-  if (GetFetchRequestData() &&
-      GetFetchRequestData()->Url().ProtocolIs("blob")) {
-    RecordBlobFetchNetErrorCode(-error.ErrorCode());
   }
 
   if (GetFetchRequestData() && GetFetchRequestData()->TrustTokenParams()) {
@@ -1199,8 +1186,7 @@ void FetchLoaderBase::PerformHTTPFetch(ExceptionState& exception_state) {
   }
   request.SetCacheMode(fetch_request_data_->CacheMode());
   request.SetRedirectMode(fetch_request_data_->Redirect());
-  request.SetFetchIntegrity(fetch_request_data_->Integrity(),
-                            execution_context_);
+  request.SetFetchIntegrity(fetch_request_data_->Integrity());
   request.SetFetchPriorityHint(fetch_request_data_->FetchPriorityHint());
   request.SetPriority(fetch_request_data_->Priority());
   request.SetUseStreamOnResponse(true);

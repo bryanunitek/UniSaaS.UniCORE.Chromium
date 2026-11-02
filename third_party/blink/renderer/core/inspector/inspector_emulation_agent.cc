@@ -9,7 +9,6 @@
 #include "base/feature_list.h"
 #include "third_party/blink/public/common/buildflags.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/common/loader/network_utils.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -441,11 +440,9 @@ protocol::Response InspectorEmulationAgent::setTouchEmulationEnabled(
   if (!response.IsSuccess())
     return response;
   int max_points = max_touch_points.value_or(1);
-  if (max_points < 1 || max_points > WebTouchEvent::kTouchesLengthCap) {
-    String msg = StrCat({"Touch points must be between 1 and ",
-                         String::Number(static_cast<uint16_t>(
-                             WebTouchEvent::kTouchesLengthCap))});
-    return protocol::Response::InvalidParams(msg.Utf8());
+  if (max_points < 1) {
+    return protocol::Response::InvalidParams(
+        "Touch points must be greater than 0");
   }
   touch_event_emulation_enabled_.Set(enabled);
   max_touch_points_.Set(max_points);

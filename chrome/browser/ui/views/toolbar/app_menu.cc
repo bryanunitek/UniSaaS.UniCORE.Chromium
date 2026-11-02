@@ -84,10 +84,10 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/themed_vector_icon.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -885,6 +885,13 @@ class AppMenu::ZoomView : public AppMenuView, public views::WidgetObserver {
       if (zoom_controller) {
         zoom = zoom_controller->GetZoomPercent();
       }
+    }
+    if (!on_construction && zoom_percent_ == zoom) {
+      return;
+    }
+    zoom_percent_ = zoom;
+
+    if (contents) {
       increment_button_->SetEnabled(zoom < contents->GetMaximumZoomPercent());
       decrement_button_->SetEnabled(zoom > contents->GetMinimumZoomPercent());
     }
@@ -959,6 +966,9 @@ class AppMenu::ZoomView : public AppMenuView, public views::WidgetObserver {
   // instead. This value is cached because is depends on multiple calls to
   // gfx::GetStringWidth(...) which are expensive.
   mutable std::optional<int> zoom_label_max_width_;
+
+  // Current zoom percent for the active tab.
+  std::optional<int> zoom_percent_;
 };
 
 BEGIN_METADATA(AppMenu, ZoomView)
@@ -1484,7 +1494,7 @@ bool AppMenu::ShouldExecuteCommandWithoutClosingMenu(int command_id,
                                                      const ui::Event& event) {
   return (IsRecentTabsCommand(command_id) && event.IsMouseEvent() &&
           (ui::DispositionFromEventFlags(event.flags()) ==
-           WindowOpenDisposition::kNewBackgroundTab)) ||
+           ui::mojom::WindowOpenDisposition::kNewBackgroundTab)) ||
          (IsBookmarkCommand(command_id) &&
           bookmark_menu_delegate_->ShouldExecuteCommandWithoutClosingMenu(
               command_id, event)) ||
@@ -1713,6 +1723,13 @@ void AppMenu::PopulateMenu(MenuItemView* parent, MenuModel* model) {
         CHECK(!recent_tabs_menu_model_delegate_.get(),
               base::NotFatalUntil::M162);
         recent_tabs_menu_model_delegate_ =
+            std::make_unique<RecentTabsMenuModelDelegate>(
+                this, model->GetSubmenuModelAt(i), item);
+        break;
+      case AppMenuModel::kOtherDeviceTabsMenuPlaceholder:
+        // Forwards async favicon updates and dynamic menu rebuilds to the view.
+        CHECK(!other_device_tabs_menu_model_delegate_);
+        other_device_tabs_menu_model_delegate_ =
             std::make_unique<RecentTabsMenuModelDelegate>(
                 this, model->GetSubmenuModelAt(i), item);
         break;

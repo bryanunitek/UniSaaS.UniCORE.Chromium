@@ -107,7 +107,6 @@
 #include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/omnibox/common/input_state.h"
-#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/prefs/pref_service.h"
@@ -797,28 +796,16 @@ void LocationBarView::Layout(PassKey) {
   //  - The popup is open, and it isn't the full WebUI popup.
   //  - The location icon view does *not* display a label.
   //  - The selected keyword view is *not* visible.
-  const bool should_indent = (ShouldUsePopupOpenAppearance() ||
-                              omnibox_feature_configs::AdjustOmniboxIndent()
-                                  .Get()
-                                  .indent_input_when_popup_closed) &&
+  const bool should_indent = ShouldUsePopupOpenAppearance() &&
                              !location_icon_view_->ShouldShowLabel() &&
                              !ShouldShowKeywordBubble();
   if (should_indent) {
     icon_left += GetLayoutConstant(LayoutConstant::kLocationBarInputIconIndent);
-    icon_left += omnibox_feature_configs::AdjustOmniboxIndent()
-                     .Get()
-                     .input_icon_indent_offset;
     text_left += GetLayoutConstant(LayoutConstant::kLocationBarInputTextIndent);
-    text_left += omnibox_feature_configs::AdjustOmniboxIndent()
-                     .Get()
-                     .input_text_indent_offset;
   } else if (ShouldShowKeywordBubble()) {
     // Otherwise, if in keyword mode, adjust indentation to align the icon and
     // the text with the suggestion icons & texts.
-    icon_left += 9; /*icon_indent_keyword_mode*/
-    icon_left += omnibox_feature_configs::AdjustOmniboxIndent()
-                     .Get()
-                     .input_icon_indent_offset;
+    icon_left += 9;  /*icon_indent_keyword_mode*/
     text_left += -9; /*text_indent_keyword_mode*/
   }
 
@@ -1052,19 +1039,32 @@ bool LocationBarView::HasSecurityStateChanged() {
 void LocationBarView::Update(WebContents* contents) {
   TRACE_EVENT("omnibox", "LocationBarView::Update");
 
+  const bool skip_redundant_updates = base::FeatureList::IsEnabled(
+      omnibox::kOmniboxSkipRedundantLocationBarUpdates);
+  if (skip_redundant_updates && !is_initialized_ && browser_ && !contents &&
+      !GetWebContents()) {
+    OnChangedImpl(/*suppress_animations=*/true);
+    return;
+  }
+
   RefreshContentSettingViews();
   RefreshPageActionIconViews();
-  location_icon_view_->Update(/*suppress_animations=*/contents,
-                              ShouldUsePopupOpenAppearance());
+  if (!skip_redundant_updates) {
+    location_icon_view_->Update(/*suppress_animations=*/contents,
+                                ShouldUsePopupOpenAppearance());
+  }
 
-  if (contents) {
-    omnibox_view_->OnTabChanged(contents);
-    if (is_full_webui_omnibox_ &&
-        !omnibox::IsWebUIOmniboxInBrowserViewEnabled()) {
-      omnibox_popup_view_->OnTabChanged(contents);
+  {
+    base::AutoReset<bool> in_update(&in_update_, skip_redundant_updates);
+    if (contents) {
+      omnibox_view_->OnTabChanged(contents);
+      if (is_full_webui_omnibox_ &&
+          !omnibox::IsWebUIOmniboxInBrowserViewEnabled()) {
+        omnibox_popup_view_->OnTabChanged(contents);
+      }
+    } else {
+      omnibox_view_->Update();
     }
-  } else {
-    omnibox_view_->Update();
   }
 
   // Ensures that the page action updates is performed after the omnibox update.
@@ -1072,7 +1072,8 @@ void LocationBarView::Update(WebContents* contents) {
   RefreshPageActionContainerViewAndIconsVisibility(
       /*should_hide_page_actions=*/ShouldHidePageActionIcons());
 
-  OnChanged();  // NOTE: Triggers layout.
+  OnChangedImpl(/*suppress_animations=*/skip_redundant_updates &&
+                contents != nullptr);  // NOTE: Triggers layout.
 
   // A permission prompt may be suspended due to an invalid state (empty or
   // editing location bar). Restore the suspended prompt if possible.
@@ -2101,11 +2102,18 @@ void LocationBarView::OnChildViewRemoved(View* observed_view, View* child) {
 }
 
 void LocationBarView::OnChanged() {
+  if (in_update_) {
+    return;
+  }
+  OnChangedImpl(/*suppress_animations=*/false);
+}
+
+void LocationBarView::OnChangedImpl(bool suppress_animations) {
   TRACE_EVENT("omnibox", "LocationBarView::OnChanged");
   // Ensure that background colors get updated on tab-switch.
   RefreshBackground();
 
-  location_icon_view_->Update(/*suppress_animations=*/false,
+  location_icon_view_->Update(suppress_animations,
                               ShouldUsePopupOpenAppearance());
   clear_all_button_->SetVisible(
       omnibox_view_ &&

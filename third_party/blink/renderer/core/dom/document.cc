@@ -94,7 +94,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_convert_coordinate_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_document_ready_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_element_creation_options.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_element_registration_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_focus_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_import_node_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_observable_array_css_style_sheet.h"
@@ -3777,6 +3776,9 @@ bool Document::InitiateStyleOrLayoutDependentLoadForPrint() {
     GetStyleEngine().UpdateViewportSize();
     UpdateStyleAndLayout(DocumentUpdateReason::kPrinting);
 
+    if (RuntimeEnabledFeatures::HTMLPlugInDeferStyleRecalcImageLoadEnabled()) {
+      return fetcher_->BlockingRequestCount() > 0 || IsDelayingLoadEvent();
+    }
     return fetcher_->BlockingRequestCount() > 0;
   }
 
@@ -4228,8 +4230,8 @@ void Document::WillInsertBody() {
 
   // Clear the last natural size of the owner `<iframe>` if this document isn't
   // opted-in to responsive iframes.
-  if (RuntimeEnabledFeatures::ResponsiveIframesEnabled() && GetFrame() &&
-      GetFrame()->Tree().Parent() && !responsive_embedded_sizing_) {
+  if (GetFrame() && GetFrame()->Tree().Parent() &&
+      !responsive_embedded_sizing_) {
     if (FrameOwner* owner = GetFrame()->Owner()) {
       owner->ClearLastNaturalSizingInfo();
     }
@@ -4412,9 +4414,7 @@ void Document::DispatchLoadEventAndFinalize() {
   if (SvgExtensions())
     AccessSVGExtensions().StartAnimations();
 
-  if (RuntimeEnabledFeatures::ResponsiveIframesEnabled()) {
-    RequestResizeResponsiveIframe();
-  }
+  RequestResizeResponsiveIframe();
 }
 
 static bool AllDescendantsAreComplete(Document* document) {
@@ -6665,10 +6665,6 @@ EventListener* Document::GetWindowAttributeEventListener(
   return dom_window->GetAttributeEventListener(event_type);
 }
 
-void Document::EnqueueDisplayLockActivationTask(base::OnceClosure task) {
-  scripted_animation_controller_->EnqueueTask(std::move(task));
-}
-
 void Document::EnqueueAnimationFrameTask(base::OnceClosure task) {
   scripted_animation_controller_->EnqueueTask(std::move(task));
 }
@@ -7963,10 +7959,6 @@ SVGDocumentExtensions& Document::AccessSVGExtensions() {
   return *svg_extensions_;
 }
 
-bool Document::HasSVGRootNode() const {
-  return IsA<SVGSVGElement>(documentElement());
-}
-
 HTMLCollection* Document::images() {
   return EnsureCachedCollection<HTMLCollection>(kDocImages);
 }
@@ -8011,14 +8003,6 @@ DocumentNameCollection* Document::DocumentNamedItems(const AtomicString& name) {
 HTMLCollection* Document::DocumentAllNamedItems(const AtomicString& name) {
   return EnsureCachedCollection<DocumentAllNameCollection>(
       kDocumentAllNamedItems, name);
-}
-
-void Document::IncrementImmediateChildFrameCreationCount() {
-  data_->immediate_child_frame_creation_count_++;
-}
-
-int Document::GetImmediateChildFrameCreationCount() const {
-  return data_->immediate_child_frame_creation_count_;
 }
 
 DOMWindow* Document::defaultView() const {
@@ -8194,9 +8178,7 @@ void Document::FinishedParsing() {
       }
     }
 
-    if (RuntimeEnabledFeatures::ResponsiveIframesEnabled()) {
-      RequestResizeResponsiveIframe();
-    }
+    RequestResizeResponsiveIframe();
 
     BeginLifecycleUpdatesIfRenderingReady();
 
@@ -8414,7 +8396,6 @@ void Document::ColorSchemeMetaChanged() {
 }
 
 void Document::RequestResizeResponsiveIframe(ExceptionState* exception_state) {
-  DCHECK(RuntimeEnabledFeatures::ResponsiveIframesEnabled());
   if (!IsHTMLDocument() || !responsive_embedded_sizing_) {
     if (exception_state) {
       exception_state->ThrowDOMException(
@@ -9647,7 +9628,6 @@ void Document::Trace(Visitor* visitor) const {
   visitor->Trace(popover_pointerdown_target_);
   visitor->Trace(dialog_pointerdown_target_);
   visitor->Trace(popover_picker_pointerdown_info_);
-  visitor->Trace(popovers_waiting_to_hide_);
   visitor->Trace(all_open_popovers_);
   visitor->Trace(all_open_dialogs_);
   visitor->Trace(elements_with_interest_);
@@ -10549,6 +10529,30 @@ void Document::RemoveOverscrollCommandInvoker(Element& invoker) {
   if (overscroll_command_invokers_.Contains(&invoker)) {
     overscroll_command_invokers_.erase(&invoker);
     MarkOverscrollCommandTargetsDirty();
+  }
+}
+
+void Document::DidHaveFormEdit() {
+  // Value changes caused by `document.execCommand` calls should not be
+  // interpreted as a user edit. See https://crbug.com/764760.
+  if (had_form_edit_ || IsRunningExecCommand()) {
+    return;
+  }
+  had_form_edit_ = true;
+  if (GetFrame()) {
+    GetFrame()->GetLocalFrameHostRemote().DidHaveFormEdit();
+  }
+}
+
+void Document::DidHaveUserEdit() {
+  // Value changes caused by `document.execCommand` calls should not be
+  // interpreted as a user edit. See https://crbug.com/764760.
+  if (had_user_edit_ || IsRunningExecCommand()) {
+    return;
+  }
+  had_user_edit_ = true;
+  if (GetFrame()) {
+    GetFrame()->GetLocalFrameHostRemote().DidHaveUserEdit();
   }
 }
 

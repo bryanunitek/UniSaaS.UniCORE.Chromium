@@ -347,12 +347,6 @@ extern const char kIOSScrolledOnFeed[];
 // The user has taken action on the feed.
 extern const char kIOSActionOnFeed[];
 
-// The Welcome Back promo was triggered.
-extern const char kIOSWelcomeBackPromoTrigger[];
-
-// The Welcome Back promo was used.
-extern const char kIOSWelcomeBackPromoUsed[];
-
 // The BWG promo was triggered.
 extern const char kIOSBWGPromoTrigger[];
 
@@ -471,6 +465,17 @@ extern const char kGeminiSessionTerminated[];
 
 // Event fired when the omnibox is moved to the bottom position.
 extern const char kIOSBottomOmniboxUsed[];
+
+// Event fired when the Account Switching promo is ignored without an explicit
+// accept or cancel action.
+extern const char kIOSAccountSwitchingPromoIgnored[];
+
+// Event fired when the Account Switching promo is explicitly dismissed via
+// the secondary action button ("Not now").
+extern const char kIOSAccountSwitchingPromoExplicitlyDismissed[];
+
+// Event fired when the user signs into or switches the primary account.
+extern const char kIOSAccountSwitchingPrimaryAccountChanged[];
 
 #endif  // BUILDFLAG(IS_IOS)
 

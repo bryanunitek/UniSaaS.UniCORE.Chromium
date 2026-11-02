@@ -26,6 +26,7 @@
 #include "chrome/browser/ui/webui/cr_components/searchbox/searchbox_handler.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_dogfood_feedback.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_web_contents_helper.h"
+#include "components/bookmarks/browser/bookmark_model.h"
 #include "components/omnibox/browser/omnibox_logging_utils.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 #include "components/omnibox/browser/suggest_template_info_mojo_utils.h"
@@ -56,6 +57,22 @@ OmniboxPopupHandler::OmniboxPopupHandler(
 }
 
 OmniboxPopupHandler::~OmniboxPopupHandler() = default;
+
+void OmniboxPopupHandler::DetachFromOmniboxController() {
+  controller_ = nullptr;
+  // These describe the text in the old window's omnibox. The page reports new
+  // values on its next edit in the new window.
+  latest_selection_ = gfx::Range();
+  show_full_url_ = false;
+  can_undo_ = false;
+  can_redo_ = false;
+}
+
+void OmniboxPopupHandler::AttachToOmniboxController(
+    OmniboxController* controller) {
+  CHECK(controller);
+  controller_ = controller;
+}
 
 void OmniboxPopupHandler::ShowContextMenu(const gfx::Point& point) {
   if (embedder_) {
@@ -245,6 +262,20 @@ void OmniboxPopupHandler::SetInputState(
     mojom_match->allowed_to_be_default_match =
         current_match.allowed_to_be_default_match;
     mojom_match->icon_url = current_match.icon_url;
+    const bookmarks::BookmarkModel* bookmark_model =
+        controller_->client()->GetBookmarkModel();
+    const bool is_bookmarked =
+        bookmark_model &&
+        bookmark_model->IsBookmarked(current_match.destination_url);
+    const TemplateURLService* turl_service =
+        controller_->client()->GetTemplateURLService();
+    const TemplateURL* associated_keyword_turl =
+        (turl_service && !current_match.associated_keyword.empty())
+            ? turl_service->GetTemplateURLForKeyword(
+                  current_match.associated_keyword)
+            : nullptr;
+    mojom_match->icon_path = SearchboxHandler::VectorIconToResourceName(
+        current_match.GetVectorIcon(is_bookmarked, associated_keyword_turl));
     state->current_match = std::move(mojom_match);
   }
   // Extract active tab ID if in a Chrome browser window context.

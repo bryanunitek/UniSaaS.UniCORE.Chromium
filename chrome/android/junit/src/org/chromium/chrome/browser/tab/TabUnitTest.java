@@ -79,6 +79,8 @@ import org.chromium.components.autofill.AutofillProviderJni;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridgeJni;
+import org.chromium.components.prefs.PrefChangeRegistrar;
+import org.chromium.components.prefs.PrefChangeRegistrarJni;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.security_state.SecurityStateModel;
@@ -89,6 +91,7 @@ import org.chromium.components.user_prefs.UserPrefsJni;
 import org.chromium.content.browser.selection.SelectionPopupControllerImpl;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.NavigationResult;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
@@ -126,6 +129,7 @@ public class TabUnitTest {
     @Mock private SecurityStateModel.Natives mSecurityStateModelNatives;
     @Mock private SelectionPopupControllerImpl mSelectionPopupController;
     @Mock private WebsitePreferenceBridge.Natives mWebsitePreferenceBridgeJniMock;
+    @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJniMock;
 
     private final SettableLookAheadObservableSupplier<Tab> mTabSupplier =
             new SettableLookAheadObservableSupplier<>();
@@ -146,6 +150,7 @@ public class TabUnitTest {
         SecurityStateModelJni.setInstanceForTesting(mSecurityStateModelNatives);
         AutofillProviderJni.setInstanceForTesting(mAutofillProviderNatives);
         WebsitePreferenceBridgeJni.setInstanceForTesting(mWebsitePreferenceBridgeJniMock);
+        PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJniMock);
         TabImplJni.setInstanceForTesting(mNativeMock);
         when(mUserPrefsNatives.get(mProfile)).thenReturn(mPrefs);
         when(mWebContents.getOrSetUserData(eq(SelectionPopupControllerImpl.class), any()))
@@ -1140,6 +1145,33 @@ public class TabUnitTest {
     }
 
     @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_AUTOFILL_PREF_OBSERVER)
+    public void testAutofillPrefObserver_frozenTab_defersRegistrarUntilWebContentsReady() {
+        when(mProfile.isNativeInitialized()).thenReturn(true);
+
+        TabImpl tab =
+                new TabImpl(TAB1_ID, mProfile, TabLaunchType.FROM_RESTORE) {
+                    @Override
+                    public boolean isInitialized() {
+                        return true;
+                    }
+                };
+        assertNull(tab.getWebContents());
+
+        tab.updateWindowAndroid(mWindowAndroid);
+        assertNull(tab.getPrefChangeRegistrarForTesting());
+        verify(mPrefChangeRegistrarJniMock, never()).init(any(), any());
+        verify(mPrefChangeRegistrarJniMock, never()).add(anyLong(), any());
+
+        tab.setWebContentsForTesting(mWebContents);
+        tab.initAutofillPrefObserver();
+        assertNotNull(tab.getPrefChangeRegistrarForTesting());
+        verify(mPrefChangeRegistrarJniMock).init(any(), eq(mPrefs));
+        verify(mPrefChangeRegistrarJniMock)
+                .add(anyLong(), eq(TabImpl.AUTOFILL_PREF_USES_VIRTUAL_STRUCTURE));
+    }
+
+    @Test
     public void testDefaultInvalidTimestamp() {
         Tab tab = new TabImpl(1, mProfile, TabLaunchType.FROM_LINK);
         assertThat(tab.getTimestampMillis(), equalTo(TabImpl.INVALID_TIMESTAMP));
@@ -1554,6 +1586,54 @@ public class TabUnitTest {
         assertFalse(mTab.getNativePage().isFrozen());
     }
 
+    @Test
+    @EnableFeatures(ChromeFeatureList.SKIP_DUPLICATE_ON_URL_UPDATED)
+    @DisableFeatures(ChromeFeatureList.ANDROID_SETTINGS_URL)
+    public void testDidFinishNavigationInPrimaryMainFrame_DoesNotFireRedundantOnUrlUpdated() {
+        mTab.setNativePtrForTesting(1);
+        mTab.updateAttachment(mWindowAndroid, mDelegateFactory);
+        when(mWebContents.getNavigationController()).thenReturn(mNavigationController);
+        mTab.setWebContentsForTesting(mWebContents);
+        TabWebContentsObserver.from(mTab).initWebContents(mWebContents);
+
+        NavigationHandle navigation = mock(NavigationHandle.class);
+        when(navigation.hasCommitted()).thenReturn(true);
+        when(navigation.getUrl()).thenReturn(new GURL("https://example.com"));
+        when(navigation.isInPrimaryMainFrame()).thenReturn(true);
+        when(navigation.isSameDocument()).thenReturn(false);
+
+        TabWebContentsObserver.from(mTab)
+                .getWebContentsObserverForTesting()
+                .didFinishNavigationInPrimaryMainFrame(navigation);
+
+        verify(mObserver, never()).onUrlUpdated(mTab);
+    }
+
+    @Test
+    @DisableFeatures({
+        ChromeFeatureList.ANDROID_SETTINGS_URL,
+        ChromeFeatureList.SKIP_DUPLICATE_ON_URL_UPDATED
+    })
+    public void testDidFinishNavigationInPrimaryMainFrame_FiresOnUrlUpdatedWhenFlagDisabled() {
+        mTab.setNativePtrForTesting(1);
+        mTab.updateAttachment(mWindowAndroid, mDelegateFactory);
+        when(mWebContents.getNavigationController()).thenReturn(mNavigationController);
+        mTab.setWebContentsForTesting(mWebContents);
+        TabWebContentsObserver.from(mTab).initWebContents(mWebContents);
+
+        NavigationHandle navigation = mock(NavigationHandle.class);
+        when(navigation.hasCommitted()).thenReturn(true);
+        when(navigation.getUrl()).thenReturn(new GURL("https://example.com"));
+        when(navigation.isInPrimaryMainFrame()).thenReturn(true);
+        when(navigation.isSameDocument()).thenReturn(false);
+
+        TabWebContentsObserver.from(mTab)
+                .getWebContentsObserverForTesting()
+                .didFinishNavigationInPrimaryMainFrame(navigation);
+
+        verify(mObserver).onUrlUpdated(mTab);
+    }
+
     private void handleDidFinishNavigation(TabImpl tab, GURL url) {
         handleDidFinishNavigation(
                 tab, url, /* isRendererInitiated= */ false, /* initiatorOrigin= */ null);
@@ -1844,6 +1924,36 @@ public class TabUnitTest {
         assertTrue(secondParams.getIsPdf());
         verify(mNavigationController)
                 .loadUrl(argThat(params -> pdfUrl.equals(params.getUrl()) && params.getIsPdf()));
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    public void testLoadUrl_PdfPassesInitiatorOriginInPdfInfo() {
+        doReturn(new WeakReference<>(mActivity)).when(mWindowAndroid).getContext();
+        setUpTabWithWebContents();
+        doReturn(mNativePage)
+                .when(mDelegateFactory)
+                .createNativePage(any(String.class), any(), eq(mTab), any());
+        doReturn(new View(mActivity)).when(mNativePage).getView();
+
+        String pdfUrl = PdfUtils.encodePdfPageUrl("https://example.com/test.pdf");
+        Origin initiatorOrigin = JUnitTestOrigins.createTuple("https", "initiator.example", 443);
+        LoadUrlParams params = new LoadUrlParams(pdfUrl);
+        params.setIsPdf(true);
+        params.setInitiatorOrigin(initiatorOrigin);
+
+        mTab.loadUrl(params);
+
+        verify(mDelegateFactory)
+                .createNativePage(
+                        eq(pdfUrl),
+                        any(),
+                        eq(mTab),
+                        argThat(
+                                pdfInfo ->
+                                        pdfInfo != null
+                                                && initiatorOrigin.equals(
+                                                        pdfInfo.initiatorOrigin)));
     }
 
     @Test

@@ -21,6 +21,7 @@ import androidx.fragment.app.FragmentActivity;
 
 import org.jni_zero.CalledByNative;
 
+import org.chromium.base.ContentUriOwner;
 import org.chromium.base.ContentUriUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
@@ -304,7 +305,8 @@ public class PdfUtils {
         return new PdfInfo(
                 nativePage.getTitle(),
                 nativePage.getCanonicalFilepath(),
-                nativePage.isDownloadSafe());
+                nativePage.isDownloadSafe(),
+                nativePage.getInitiatorOrigin());
     }
 
     static String getFileNameFromUrl(@Nullable String url, String defaultTitle) {
@@ -427,7 +429,7 @@ public class PdfUtils {
                 return null;
             }
         } catch (IllegalArgumentException | NullPointerException e) {
-            Log.e(TAG, "Couldn't generate Uri: " + e);
+            Log.e(TAG, "Couldn't generate Uri", e);
             return null;
         }
     }
@@ -476,7 +478,7 @@ public class PdfUtils {
             return pdfPageUrl;
         } catch (UnsupportedEncodingException e) {
             recordIsPdfDownloadUrlEncoded(false);
-            Log.e(TAG, "Unsupported encoding: " + e.getMessage());
+            Log.e(TAG, "Unsupported encoding", e);
             return null;
         }
     }
@@ -504,7 +506,7 @@ public class PdfUtils {
             // #getQueryParameter has already decoded the url.
             return uri.getQueryParameter(UrlConstants.PDF_URL_QUERY_PARAM);
         } catch (UnsupportedOperationException | NullPointerException e) {
-            Log.e(TAG, "Unsupported encoding: " + e.getMessage());
+            Log.e(TAG, "Unsupported encoding", e);
             return null;
         }
     }
@@ -823,7 +825,9 @@ public class PdfUtils {
             return false;
         }
 
-        if (!ContentUriUtils.isUriFromThisApp(uri, context)) {
+        @ContentUriOwner int owner = ContentUriUtils.resolveContentUriOwner(uri);
+        if (owner != ContentUriOwner.EXPORTED_FROM_CURRENT_APP
+                && owner != ContentUriOwner.NON_EXPORTED_FROM_CURRENT_APP) {
             return true;
         }
 

@@ -6,6 +6,8 @@ package org.chromium.chrome.browser.tabmodel;
 
 import androidx.annotation.IntDef;
 
+import org.jni_zero.JniPtr;
+
 import org.chromium.base.Token;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.LazyOneshotSupplier;
@@ -350,7 +352,7 @@ public interface TabModel extends TabList {
      * Returns the {@link TabStripCollection} associated with this {@link TabModel} if tab
      * collections are enabled. Otherwise, returns null.
      */
-    @Nullable TabStripCollection getTabStripCollection();
+    @Nullable JniPtr<TabStripCollection> getTabStripCollection();
 
     /** Returns {@link ActivityType} of the this tab model. */
     default int getActivityTypeForTesting() {
@@ -488,13 +490,6 @@ public interface TabModel extends TabList {
      * @param newIndex The new index in TabModel that the group is being moved to.
      */
     void moveGroupToIndex(Token tabGroupId, int newIndex);
-
-    /**
-     * This method checks if an impending group merge action will result in a new group creation.
-     *
-     * @param tabsToMerge The list of tabs to be merged including all source and destination tabs.
-     */
-    boolean willMergingCreateNewGroup(List<Tab> tabsToMerge);
 
     /**
      * Creates a tab group containing a single tab.

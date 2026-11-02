@@ -358,7 +358,7 @@
 #include "content/browser/host_zoom_map_impl.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(ENABLE_SMART_CARD)
 #include "content/browser/smart_card/smart_card_service.h"
 #endif
 
@@ -2713,6 +2713,9 @@ RenderFrameHostImpl::RenderFrameHostImpl(
     CHECK(frame_tree_node_->is_on_initial_empty_document());
   }
 
+  RecordNewDocumentInInitiatorTokenHistory(document_token);
+  RecordInitiatorStateTokenInHistory(current_initiator_state_token_);
+
   InitializePolicyContainerHost(renderer_initiated_creation_of_main_frame);
 
   InitializeLocalNetworkAccessRequestPolicy();
@@ -4599,6 +4602,7 @@ void RenderFrameHostImpl::SetPolicyContainerHost(
   CHECK(parent_ || !IsCredentialless());
 
   current_initiator_state_token_ = new_initiator_state_token;
+  RecordInitiatorStateTokenInHistory(current_initiator_state_token_);
 
   // Update the InitiatorNavigationState to store the new PolicyContainerHost's
   // policies. This is a browser process driven update of the initiator state
@@ -4629,6 +4633,7 @@ void RenderFrameHostImpl::DidUpdateInitiatorStateToken(
         GetProcess(), bad_message::RFHI_INVALID_INITIATOR_STATE_TOKEN_UPDATE);
     return;
   }
+  RecordInitiatorStateTokenInHistory(current_initiator_state_token_);
 }
 
 bool RenderFrameHostImpl::UpdateCurrentInitiatorNavigationState(
@@ -4660,6 +4665,114 @@ bool RenderFrameHostImpl::UpdateCurrentInitiatorNavigationState(
   }
   current_navigation_state_ = std::move(new_initiator_navigation_state);
   return true;
+}
+
+RenderFrameHostImpl::DocumentInitiatorTokenHistory::
+    DocumentInitiatorTokenHistory(
+        const blink::DocumentToken& document_token,
+        std::vector<blink::InitiatorStateToken> state_tokens)
+    : document_token(document_token), state_tokens(std::move(state_tokens)) {}
+
+RenderFrameHostImpl::DocumentInitiatorTokenHistory::
+    ~DocumentInitiatorTokenHistory() = default;
+
+RenderFrameHostImpl::DocumentInitiatorTokenHistory::
+    DocumentInitiatorTokenHistory(const DocumentInitiatorTokenHistory&) =
+        default;
+
+RenderFrameHostImpl::DocumentInitiatorTokenHistory&
+RenderFrameHostImpl::DocumentInitiatorTokenHistory::operator=(
+    const DocumentInitiatorTokenHistory&) = default;
+
+RenderFrameHostImpl::DocumentInitiatorTokenHistory::
+    DocumentInitiatorTokenHistory(DocumentInitiatorTokenHistory&&) = default;
+
+RenderFrameHostImpl::DocumentInitiatorTokenHistory&
+RenderFrameHostImpl::DocumentInitiatorTokenHistory::operator=(
+    DocumentInitiatorTokenHistory&&) = default;
+
+void RenderFrameHostImpl::RecordNewDocumentInInitiatorTokenHistory(
+    const blink::DocumentToken& document_token) {
+  if (document_token_history_.size() >=
+      DocumentInitiatorTokenHistory::kMaxDocuments) {
+    document_token_history_.erase(document_token_history_.begin());
+  }
+  document_token_history_.emplace_back(
+      document_token, std::vector<blink::InitiatorStateToken>());
+}
+
+void RenderFrameHostImpl::RecordInitiatorStateTokenInHistory(
+    const blink::InitiatorStateToken& state_token) {
+  CHECK(!document_token_history_.empty());
+  auto& state_tokens = document_token_history_.back().state_tokens;
+  if (state_tokens.empty() || state_tokens.back() != state_token) {
+    if (state_tokens.size() >=
+        DocumentInitiatorTokenHistory::kMaxStateTokensPerDocument) {
+      state_tokens.erase(state_tokens.begin());
+    }
+    state_tokens.push_back(state_token);
+  }
+}
+
+std::string RenderFrameHostImpl::GetInitiatorStateTokenStatusForCrashKey(
+    const blink::InitiatorStateToken& state_token) const {
+  if (state_token == current_initiator_state_token_) {
+    return "current_state_of_current_doc";
+  }
+  CHECK(!document_token_history_.empty());
+  if (std::ranges::contains(document_token_history_.back().state_tokens,
+                            state_token)) {
+    return "past_state_of_current_doc";
+  }
+  for (size_t i = 0; i + 1 < document_token_history_.size(); ++i) {
+    const auto& state_tokens = document_token_history_[i].state_tokens;
+    size_t prev_doc_index = document_token_history_.size() - 1 - i;
+    if (!state_tokens.empty() && state_tokens.back() == state_token) {
+      return base::StrCat(
+          {"last_state_of_prev_doc_", base::NumberToString(prev_doc_index)});
+    }
+    if (std::ranges::contains(state_tokens, state_token)) {
+      return base::StrCat(
+          {"past_state_of_prev_doc_", base::NumberToString(prev_doc_index)});
+    }
+  }
+  return "unknown_state";
+}
+
+std::string RenderFrameHostImpl::GetInitiatorDocTokenStatusForCrashKey(
+    const blink::DocumentToken& doc_token) const {
+  CHECK(!document_token_history_.empty());
+  if (document_token_history_.back().document_token == doc_token) {
+    return "current_doc";
+  }
+  for (size_t i = 0; i + 1 < document_token_history_.size(); ++i) {
+    if (document_token_history_[i].document_token == doc_token) {
+      size_t prev_doc_index = document_token_history_.size() - 1 - i;
+      return base::StrCat(
+          {"prev_doc_in_rfh_", base::NumberToString(prev_doc_index)});
+    }
+  }
+  return "unknown_doc";
+}
+
+std::string_view RenderFrameHostImpl::GetInitiatorDocAndStateMatchForCrashKey(
+    const blink::DocumentToken& doc_token,
+    const blink::InitiatorStateToken& state_token) const {
+  std::optional<size_t> doc_index;
+  std::optional<size_t> state_doc_index;
+  for (size_t i = 0; i < document_token_history_.size(); ++i) {
+    if (document_token_history_[i].document_token == doc_token) {
+      doc_index = i;
+    }
+    if (std::ranges::contains(document_token_history_[i].state_tokens,
+                              state_token)) {
+      state_doc_index = i;
+    }
+  }
+  if (!doc_index.has_value() || !state_doc_index.has_value()) {
+    return "not_both_in_rfh";
+  }
+  return *doc_index == *state_doc_index ? "same_doc" : "different_docs_in_rfh";
 }
 
 void RenderFrameHostImpl::InitializeLocalNetworkAccessRequestPolicy() {
@@ -4699,7 +4812,7 @@ void RenderFrameHostImpl::RenderProcessGone(
   // `RenderFrameDeleted()` destroy descendant frames (and expire their
   // reporting sources in `~RenderFrameHostImpl()`).
   ForEachRenderFrameHostImpl([&](RenderFrameHostImpl* rfh) {
-    if (rfh->site_instance_->group() == site_instance_group) {
+    if (rfh->GetProcess() == GetProcess()) {
       rfh->MaybeGenerateCrashReport(info);
     }
   });
@@ -6041,11 +6154,18 @@ void RenderFrameHostImpl::SetOriginDependentStateOfNewFrame(
   url::Origin creator_origin =
       creator_frame ? creator_frame->GetLastCommittedOrigin() : url::Origin();
 
-  // Calculate and set |new_frame_origin|.
+  // Calculate and set |new_frame_origin|, based on the initial empty
+  // document's sandbox flags (`active_sandbox_flags()`). These include both
+  // the browsing context's sandbox flags
+  // (`browsing_context_state_->active_sandbox_flags()`, e.g. from an iframe's
+  // sandbox attribute) and the CSP sandbox inherited from the creator. The
+  // latter matters for popups opened from CSP-sandboxed documents with
+  // allow-popups-to-escape-sandbox: the popup's browsing context isn't
+  // sandboxed, but its initial empty document is, and the renderer gives it an
+  // opaque origin (crbug.com/486082219).
   bool new_frame_should_be_sandboxed =
       network::mojom::WebSandboxFlags::kOrigin ==
-      (browsing_context_state_->active_sandbox_flags() &
-       network::mojom::WebSandboxFlags::kOrigin);
+      (active_sandbox_flags() & network::mojom::WebSandboxFlags::kOrigin);
 
   url::Origin new_frame_origin;
   if (base::FeatureList::IsEnabled(
@@ -7739,13 +7859,29 @@ void RenderFrameHostImpl::RunBeforeUnloadConfirm(
     }
   }
 
+  PageImpl::UserEditScope form_edit_scope =
+      GetPage().GetFormEditScope(GetLastCommittedOrigin());
+  PageImpl::UserEditScope user_edit_scope =
+      GetPage().GetUserEditScope(GetLastCommittedOrigin());
+  RecordBeforeUnloadUserEditMetrics(form_edit_scope, user_edit_scope,
+                                    BeforeUnloadDialogEvent::kShown);
+
   auto ipc_callback_wrapper = base::BindOnce(
-      [](RunBeforeUnloadConfirmCallback response_callback, bool success,
+      [](base::WeakPtr<RenderFrameHostImpl> rfh,
+         PageImpl::UserEditScope form_edit_scope,
+         PageImpl::UserEditScope user_edit_scope,
+         RunBeforeUnloadConfirmCallback response_callback, bool success,
          const std::u16string& response) {
+        if (!success && rfh) {
+          rfh->RecordBeforeUnloadUserEditMetrics(
+              form_edit_scope, user_edit_scope,
+              BeforeUnloadDialogEvent::kBlockedUnload);
+        }
         // The response string is unused but we use a generic mechanism for
         // closing the javascript dialog that returns two arguments.
         std::move(response_callback).Run(success);
       },
+      weak_ptr_factory_.GetWeakPtr(), form_edit_scope, user_edit_scope,
       std::move(ipc_response_callback));
   auto dialog_closed_callback = base::BindOnce(
       &RenderFrameHostImpl::JavaScriptDialogClosed,
@@ -9064,6 +9200,14 @@ void RenderFrameHostImpl::SuppressXSLTDeprecationBanner() {
   GetContentClient()->browser()->SuppressXSLTDeprecationBanner(this);
 }
 
+void RenderFrameHostImpl::DidHaveFormEdit() {
+  GetPage().DidHaveFormEdit(GetLastCommittedOrigin());
+}
+
+void RenderFrameHostImpl::DidHaveUserEdit() {
+  GetPage().DidHaveUserEdit(GetLastCommittedOrigin());
+}
+
 void RenderFrameHostImpl::RegisterProtocolHandler(const std::string& scheme,
                                                   const GURL& url,
                                                   bool user_gesture) {
@@ -9155,8 +9299,10 @@ void RenderFrameHostImpl::SetVirtualKeyboardMode(
 #if BUILDFLAG(IS_ANDROID)
 void RenderFrameHostImpl::UpdateUserGestureCarryoverInfo() {
   // This should not occur for prerenders but may occur for pages in
-  // the BackForwardCache depending on timing.
-  if (!IsActive()) {
+  // the BackForwardCache depending on timing. It should also only occur
+  // when transient user activation is known to be available (as compromised
+  // renderers could otherwise use this mechanism to spoof a gesture).
+  if (!IsActive() || !HasTransientUserActivation()) {
     return;
   }
   delegate_->UpdateUserGestureCarryoverInfo();
@@ -11059,21 +11205,16 @@ void RenderFrameHostImpl::CreateNewWindow(
   // initiating frame, which is what new_rwh is constructed with.
   visual_properties.screen_infos = new_rwh->GetScreenInfos();
 
-  // Sandbox origin token handling for popups:
-  // Normally sandboxed popups token is generated by
-  // `SetOriginDependentStateOfNewFrame()`. Popups that escape sandbox (CSP
-  // "sandbox" + "allow-popups-to-escape-sandbox"):
-  //   - Browser sees no sandbox flags, so
-  //     `GetPage().TakeSandboxOriginTokenForPopup()` is null
-  //   - Renderer still inherits CSP sandbox flags and will create opaque origin
-  //   - So generate a new token here as fallback
-  //
-  // TODO(crbug.com/486082219): Remove this fallback logic and only set
-  // sandbox_origin_token when the window is actually sandboxed.
+  // Sandbox origin token handling for popups: if the popup's initial empty
+  // document is sandboxed, `SetOriginDependentStateOfNewFrame()` generates a
+  // token and derives the browser-side origin from it. Send it to the renderer
+  // so it derives the same opaque origin. This includes popups that escape the
+  // sandbox (CSP "sandbox" + "allow-popups-to-escape-sandbox"), whose browsing
+  // context isn't sandboxed but whose initial empty document still inherits
+  // the opener's CSP sandbox. Otherwise, there's no token.
   auto token = new_main_rfh->GetPage().TakeSandboxOriginTokenForPopup();
   std::optional<base::UnguessableToken> sandbox_origin_token =
-      token ? std::make_optional(*token)
-            : std::make_optional(base::UnguessableToken::Create());
+      base::OptionalFromPtr(token.get());
 
   mojom::CreateNewWindowReplyPtr reply = mojom::CreateNewWindowReply::New(
       new_main_rfh->GetFrameToken(), new_main_rfh->GetRoutingID(),
@@ -11215,6 +11356,11 @@ void RenderFrameHostImpl::IssueKeepAliveHandle(
   // TODO(crbug.com/510258191): Investigate why this happens and re-enable
   // renderer process termination upon having the wrong token.
   if (initiator_state_token != current_initiator_state_token_) {
+    SCOPED_CRASH_KEY_STRING32(
+        "IssueKeepAlive", "state_token_status",
+        GetInitiatorStateTokenStatusForCrashKey(initiator_state_token));
+    base::debug::DumpWithoutCrashing();
+
     // Attempt to find a matching InitiatorNavigationState.
     auto initiator_navigation_state =
         browser_context->GetInitiatorNavigationState(GetDocumentToken(),
@@ -11484,6 +11630,15 @@ void RenderFrameHostImpl::RequestUnboundedSurface(
   }
   RenderWidgetHostViewBase* parent_view = nullptr;
   if (auto* root_view = GetUnboundedSurfaceRootView(&parent_view)) {
+    // Reject requests when the WebContents, this frame's widget (e.g. a hidden
+    // OOPIF), or the root widget is hidden. Dropping `client` disconnects
+    // `UnboundedSurfaceClient` in the renderer, which dismisses the element and
+    // rejects `showUnboundedElement()` with `AbortError`.
+    if (delegate()->GetVisibility() != Visibility::VISIBLE ||
+        GetRenderWidgetHost()->IsHidden() ||
+        (root_view->host() && root_view->host()->IsHidden())) {
+      return;
+    }
     if (UnboundedSurfaceHostImpl::GetForCurrentDocument(this)) {
       UnboundedSurfaceHostImpl::DeleteForCurrentDocument(this);
     }
@@ -11676,6 +11831,30 @@ void RenderFrameHostImpl::BeginNavigation(
   // TODO(crbug.com/510258191): Investigate why this happens and re-enable
   // renderer process termination upon having the wrong token.
   if (!initiator_navigation_state) {
+    RenderFrameHostImpl* initiator_rfh =
+        begin_params->initiator_frame_token
+            ? RenderFrameHostImpl::FromFrameToken(
+                  GetProcess()->GetID(),
+                  begin_params->initiator_frame_token.value())
+            : this;
+    SCOPED_CRASH_KEY_STRING32(
+        "BeginNavigation", "doc_token_status",
+        initiator_rfh ? initiator_rfh->GetInitiatorDocTokenStatusForCrashKey(
+                            begin_params->initiator_document_token.value())
+                      : "destroyed_initiator_rfh");
+    SCOPED_CRASH_KEY_STRING32(
+        "BeginNavigation", "state_token_status",
+        initiator_rfh ? initiator_rfh->GetInitiatorStateTokenStatusForCrashKey(
+                            begin_params->initiator_state_token.value())
+                      : "destroyed_initiator_rfh");
+    SCOPED_CRASH_KEY_STRING32(
+        "BeginNavigation", "doc_and_state_match",
+        initiator_rfh ? initiator_rfh->GetInitiatorDocAndStateMatchForCrashKey(
+                            begin_params->initiator_document_token.value(),
+                            begin_params->initiator_state_token.value())
+                      : "not_both_in_rfh");
+    base::debug::DumpWithoutCrashing();
+
     // As a fallback, use the current InitiatorNavigationState.
     initiator_navigation_state = GetCurrentInitiatorNavigationState();
   }
@@ -13131,10 +13310,8 @@ void RenderFrameHostImpl::CommitNavigation(
       ProcessLock::FromSiteInfo(GetSiteInstance()->GetSiteInfo());
   auto browser_calc_origin_to_commit = navigation_request->GetOriginToCommit();
   if (!process_lock.is_error_page() && !is_mhtml_subframe &&
-      !policy->CanAccessOrigin(
-          GetProcess()->GetDeprecatedID(),
-          browser_calc_origin_to_commit.value(),
-          ChildProcessSecurityPolicyImpl::AccessType::kCanCommitNewOrigin)) {
+      !policy->CanCommitNewOrigin(GetProcess()->GetID(),
+                                  browser_calc_origin_to_commit.value())) {
     SCOPED_CRASH_KEY_STRING64("CommitNavigation", "lock_url",
                               process_lock.ToString());
     SCOPED_CRASH_KEY_STRING64(
@@ -13724,8 +13901,8 @@ void RenderFrameHostImpl::DiscardFrame(base::OnceClosure on_discarded_cb) {
           // terminated dedicated renderer processes after running unload
           // handlers.
           self->GetProcess()->FastShutdownIfPossible(
-              0u, /*skip_unload_handlers=*/true,
-              /*ignore_workers=*/false,
+              /*page_count=*/0u, /*skip_unload_handlers=*/true,
+              /*ignore_workers=*/true,
               /*ignore_keep_alive=*/false,
               /*ignore_pending_reuse=*/false,
               /*use_outermost_main_frame_check=*/true);
@@ -13754,6 +13931,110 @@ void RenderFrameHostImpl::CreateBroadcastChannelProvider(
 void RenderFrameHostImpl::LogWebFeatureForCurrentPage(
     blink::mojom::WebFeature feature) {
   GetContentClient()->browser()->LogWebFeatureForCurrentPage(this, feature);
+}
+
+void RenderFrameHostImpl::RecordBeforeUnloadUserEditMetrics(
+    PageImpl::UserEditScope form_edit_scope,
+    PageImpl::UserEditScope user_edit_scope,
+    BeforeUnloadDialogEvent event) {
+  const bool blocked_unload = event == BeforeUnloadDialogEvent::kBlockedUnload;
+  switch (form_edit_scope) {
+    case PageImpl::UserEditScope::kNoEdit:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithoutFormEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithoutFormEdit);
+      break;
+    case PageImpl::UserEditScope::kSameOrigin:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithFormEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithFormEdit);
+      LogWebFeatureForCurrentPage(
+          blocked_unload
+              ? blink::mojom::WebFeature::
+                    kBeforeUnloadDialogBlockedUnloadWithSameOriginFormEdit
+              : blink::mojom::WebFeature::
+                    kBeforeUnloadShowedDialogWithSameOriginFormEdit);
+      break;
+    case PageImpl::UserEditScope::kSameSite:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithFormEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithFormEdit);
+      LogWebFeatureForCurrentPage(
+          blocked_unload
+              ? blink::mojom::WebFeature::
+                    kBeforeUnloadDialogBlockedUnloadWithSameSiteFormEdit
+              : blink::mojom::WebFeature::
+                    kBeforeUnloadShowedDialogWithSameSiteFormEdit);
+      break;
+    case PageImpl::UserEditScope::kCrossSite:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithFormEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithFormEdit);
+      LogWebFeatureForCurrentPage(
+          blocked_unload
+              ? blink::mojom::WebFeature::
+                    kBeforeUnloadDialogBlockedUnloadWithCrossSiteFormEdit
+              : blink::mojom::WebFeature::
+                    kBeforeUnloadShowedDialogWithCrossSiteFormEdit);
+      break;
+  }
+
+  switch (user_edit_scope) {
+    case PageImpl::UserEditScope::kNoEdit:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithoutUserEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithoutUserEdit);
+      break;
+    case PageImpl::UserEditScope::kSameOrigin:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithUserEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithUserEdit);
+      LogWebFeatureForCurrentPage(
+          blocked_unload
+              ? blink::mojom::WebFeature::
+                    kBeforeUnloadDialogBlockedUnloadWithSameOriginUserEdit
+              : blink::mojom::WebFeature::
+                    kBeforeUnloadShowedDialogWithSameOriginUserEdit);
+      break;
+    case PageImpl::UserEditScope::kSameSite:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithUserEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithUserEdit);
+      LogWebFeatureForCurrentPage(
+          blocked_unload
+              ? blink::mojom::WebFeature::
+                    kBeforeUnloadDialogBlockedUnloadWithSameSiteUserEdit
+              : blink::mojom::WebFeature::
+                    kBeforeUnloadShowedDialogWithSameSiteUserEdit);
+      break;
+    case PageImpl::UserEditScope::kCrossSite:
+      LogWebFeatureForCurrentPage(
+          blocked_unload ? blink::mojom::WebFeature::
+                               kBeforeUnloadDialogBlockedUnloadWithUserEdit
+                         : blink::mojom::WebFeature::
+                               kBeforeUnloadShowedDialogWithUserEdit);
+      LogWebFeatureForCurrentPage(
+          blocked_unload
+              ? blink::mojom::WebFeature::
+                    kBeforeUnloadDialogBlockedUnloadWithCrossSiteUserEdit
+              : blink::mojom::WebFeature::
+                    kBeforeUnloadShowedDialogWithCrossSiteUserEdit);
+      break;
+  }
 }
 
 void RenderFrameHostImpl::ReportBlockingCrossPartitionBlobURL(
@@ -14478,7 +14759,7 @@ void RenderFrameHostImpl::UpdatePermissionsForNavigation(
   // CanAccessDataForOrigin while setting up storage interfaces.
   //
   // Note that GetOriginToCommit() internally CHECKs that the origin to commit
-  // is valid for this process, using CanAccessOrigin() to perform jail and
+  // is valid for this process, using CanCommitNewOrigin() to perform jail and
   // citadel process lock checks, so this origin should to be safe to add.
   ChildProcessSecurityPolicyImpl::GetInstance()->AddCommittedOrigin(
       GetProcess()->GetDeprecatedID(), request->GetOriginToCommit().value());
@@ -15291,7 +15572,7 @@ void RenderFrameHostImpl::GetHidService(
   HidService::Create(this, std::move(receiver));
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(ENABLE_SMART_CARD)
 void RenderFrameHostImpl::GetSmartCardService(
     mojo::PendingReceiver<blink::mojom::SmartCardService> receiver) {
   SmartCardService::Create(this, std::move(receiver));
@@ -16860,6 +17141,8 @@ bool RenderFrameHostImpl::DidCommitNavigationInternal(
       // URL.
       document_associated_data_.emplace(*this,
                                         navigation_request->GetDocumentToken());
+      RecordNewDocumentInInitiatorTokenHistory(
+          navigation_request->GetDocumentToken());
 
       // The old Reporting API configuration is no longer valid, as a new
       // document is being loaded into the frame. Inform the network service
@@ -17436,14 +17719,25 @@ void RenderFrameHostImpl::MaybeGenerateCrashReport(
 
   // All frames in the same renderer process share the main thread and V8
   // isolate, so if one frame hangs, every frame in the process is blocked and
-  // killed together. An "unresponsive" report is generated for each frame in
-  // the process, however, only the frame whose `FrameToken` was executing when
-  // the hang occurred will have the actual call stack attached below.
-  const bool is_unresponsive =
+  // killed together. A single `RenderProcessHost` can host multiple
+  // `RenderWidgetHostImpl`s (e.g. sibling cross-origin subframes from the same
+  // site, an A1 -> B -> A2 frame tree, or multiple tabs/popups sharing a
+  // process), and input ack or commit timeouts only mark the single targeted
+  // `RenderWidgetHostImpl` as unresponsive. Check whether any widget in the
+  // process is unresponsive so that all active frames in the hung process
+  // receive `reason: "unresponsive"`.
+  bool is_unresponsive =
       exit_code == RESULT_CODE_HUNG ||
-      (GetRenderWidgetHost() &&
-       GetRenderWidgetHost()->IsCurrentlyUnresponsive()) ||
       !GetProcess()->GetUnresponsiveDocumentJavascriptCallStack().empty();
+  if (!is_unresponsive) {
+    GetProcess()->ForEachRenderFrameHost(
+        [&is_unresponsive](RenderFrameHost* rfh) {
+          if (rfh->GetRenderWidgetHost() &&
+              rfh->GetRenderWidgetHost()->IsCurrentlyUnresponsive()) {
+            is_unresponsive = true;
+          }
+        });
+  }
 
   // Check the termination status to see if a crash occurred (and potentially
   // determine the |reason| for the crash). Note: |is_oom| takes precedence over
@@ -19712,6 +20006,7 @@ void RenderFrameHostImpl::ReinitializeDocumentAssociatedDataForReuseAfterCrash(
   // - a) the new state set in RenderFrameCreated doesn't get deleted.
   // - b) the old state is not leaked to a new RenderFrameHost.
   document_associated_data_.emplace(*this, blink::DocumentToken());
+  RecordNewDocumentInInitiatorTokenHistory(document_associated_data_->token());
 }
 
 void RenderFrameHostImpl::ReinitializeInitiatorStateTokenAfterCrash(
@@ -19719,10 +20014,12 @@ void RenderFrameHostImpl::ReinitializeInitiatorStateTokenAfterCrash(
   CHECK(is_main_frame());
   CHECK_EQ(RenderFrameState::kDeleted, render_frame_state_);
   current_initiator_state_token_ = blink::InitiatorStateToken();
+  RecordInitiatorStateTokenInHistory(current_initiator_state_token_);
 }
 
 void RenderFrameHostImpl::ReinitializeDocumentAssociatedDataForTesting() {
   document_associated_data_.emplace(*this, blink::DocumentToken());
+  RecordNewDocumentInInitiatorTokenHistory(document_associated_data_->token());
 }
 
 void RenderFrameHostImpl::IsClipboardPasteAllowedByPolicy(

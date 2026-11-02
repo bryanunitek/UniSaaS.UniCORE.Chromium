@@ -12,6 +12,7 @@
 
 #include "base/callback_list.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -38,6 +39,7 @@
 #include "components/lens/contextual_input.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
 #include "components/omnibox/composebox/composebox_query.mojom.h"
+#include "components/sessions/core/session_id.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
@@ -45,6 +47,7 @@
 #include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
 #include "third_party/omnibox_proto/model_mode.pb.h"
 #include "third_party/omnibox_proto/tool_mode.pb.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -189,11 +192,14 @@ class ContextualSearchboxHandler
                    bool is_voice_search) override;
 
   // Returns recent tabs from the tab list associated with
-  // `browser_window_interface` sorted by recency. If `max_tab_suggestions` > 0,
-  // the result is capped to that number of tabs.
+  // `browser_window_interface` sorted by recency. If `max_tab_suggestions` is
+  // set, the result is capped to that number of tabs. Tabs whose `SessionID` is
+  // in `always_include_tab_ids` are included even if they are internal pages
+  // (e.g. an NTP tab attached via Lens Overlay).
   static std::vector<searchbox::mojom::TabInfoPtr> GetRecentTabInfos(
       BrowserWindowInterface* browser_window_interface,
-      int max_tab_suggestions = -1);
+      std::optional<int> max_tab_suggestions = std::nullopt,
+      const base::flat_set<SessionID>& always_include_tab_ids = {});
 
   void GetRecentTabs(GetRecentTabsCallback callback) override;
   void GetTabPreview(int32_t tab_id, GetTabPreviewCallback callback) override;
@@ -341,6 +347,19 @@ class ContextualSearchboxHandler
 
   // Resets `input_state_model_`.
   void ResetInputStateModel();
+
+  // Drops the state tied to the browser window that embeds the WebUI: its tab
+  // observations, tab underlines and pending tab context, the Drive picker,
+  // and the input state model of its active tab. Called before the WebUI's
+  // WebContents moves to another browser window, while the old window still
+  // embeds it.
+  void DetachFromBrowserWindow();
+
+  // Observes the tabs of the browser window that now embeds the WebUI and
+  // creates the input state model for its active tab. Called after the WebUI's
+  // WebContents moved to that window.
+  void AttachToBrowserWindow();
+
   void OnAimEligibilityChanged();
   void SetActiveToolMode(omnibox::ToolMode tool, bool is_set_by_aim) override;
   void RecordToolSelectionAction(omnibox::ToolMode tool) override;
@@ -374,10 +393,10 @@ class ContextualSearchboxHandler
 
   virtual void ProcessContextAndOpenUrl(
       GURL url,
-      const WindowOpenDisposition disposition);
+      const ui::mojom::WindowOpenDisposition disposition);
 
   virtual void OpenUrl(GURL url,
-                       const WindowOpenDisposition disposition,
+                       const ui::mojom::WindowOpenDisposition disposition,
                        base::OnceCallback<void(content::NavigationHandle&)>
                            navigation_handle_callback);
 
@@ -386,14 +405,14 @@ class ContextualSearchboxHandler
 
   void ContextualizeQueryAndOpenUrl(
       const std::string& query_text,
-      WindowOpenDisposition disposition,
+      ui::mojom::WindowOpenDisposition disposition,
       omnibox::ChromeAimEntryPoint aim_entry_point,
       std::map<std::string, std::string> additional_params,
       bool is_voice_search);
 
   void ComputeAndOpenQueryUrl(
       const std::string& query_text,
-      WindowOpenDisposition disposition,
+      ui::mojom::WindowOpenDisposition disposition,
       omnibox::ChromeAimEntryPoint aim_entry_point,
       std::map<std::string, std::string> additional_params,
       bool is_voice_search);
@@ -504,7 +523,7 @@ class ContextualSearchboxHandler
 
   void ContextualizeQueryWithRelevantTabsAndOpenUrl(
       const std::string& query_text,
-      WindowOpenDisposition disposition,
+      ui::mojom::WindowOpenDisposition disposition,
       omnibox::ChromeAimEntryPoint aim_entry_point,
       std::map<std::string, std::string> additional_params,
       std::vector<base::WeakPtr<content::WebContents>> relevant_tabs);
@@ -526,6 +545,9 @@ class ContextualSearchboxHandler
 
   class AllTabNavigationObserver;
   std::vector<std::unique_ptr<AllTabNavigationObserver>> all_tab_nav_observers_;
+  // Observes the tab list and the active tab of the browser window that
+  // embeds the WebUI, if any.
+  void ObserveEmbeddingWindowTabs();
   void UpdateAllTabNavigationObservers();
   void OnAnyTabNavigated(content::WebContents* web_contents);
 

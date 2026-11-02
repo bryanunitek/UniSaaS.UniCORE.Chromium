@@ -32,7 +32,6 @@
 #include "chrome/browser/ui/signin/signin_view_controller_delegate.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-#include "chrome/browser/ui/webui/signin/signin_url_utils.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -55,8 +54,8 @@
 #include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -107,6 +106,10 @@
 #include "chrome/browser/extensions/sync/extension_sync_util.h"
 #include "extensions/common/extension.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/webui/signin/signin_ui_error.h"
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
@@ -216,7 +219,7 @@ void ShowTabOverwritingNTP(BrowserWindowInterface* browser,
                            TabStripModel* tab_strip_model,
                            const GURL& url) {
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  params.disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
   params.window_action = NavigateParams::WindowAction::kShowWindow;
   params.user_gesture = false;
   params.tabstrip_add_types |= AddTabTypes::ADD_INHERIT_OPENER;
@@ -226,7 +229,7 @@ void ShowTabOverwritingNTP(BrowserWindowInterface* browser,
     const GURL& contents_url = contents->GetVisibleURL();
     if (contents_url == chrome::ChromeUINewTabURLAsGURL() ||
         search::IsInstantNTP(contents) || contents_url == url::kAboutBlankURL) {
-      params.disposition = WindowOpenDisposition::kCurrentTab;
+      params.disposition = ui::mojom::WindowOpenDisposition::kCurrentTab;
     }
   }
 
@@ -541,7 +544,7 @@ void SigninViewController::MaybeShowChromeSigninDialogForExtensions(
   // Create a new tab page and wait for the navigation to complete.
   NavigateParams params(&browser_.get(), chrome::ChromeUINewTabURLAsGURL(),
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  params.disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
   params.window_action = NavigateParams::WindowAction::kShowWindow;
   params.user_gesture = false;
   params.tabstrip_add_types |= AddTabTypes::ADD_INHERIT_OPENER;
@@ -669,19 +672,6 @@ void SigninViewController::OnBubbleClosed(views::Widget::ClosedReason reason) {
   }
 }
 
-void SigninViewController::ShowModalSyncConfirmationDialog(
-    bool is_signin_intercept,
-    bool is_sync_promo) {
-  CloseModalSignin();
-  dialog_ = std::make_unique<SigninModalDialogImpl>(
-      SigninViewControllerDelegate::CreateSyncConfirmationDelegate(
-          &browser_.get(),
-          is_signin_intercept ? SyncConfirmationStyle::kSigninInterceptModal
-                              : SyncConfirmationStyle::kDefaultModal,
-          is_sync_promo),
-      GetOnModalDialogClosedCallback());
-}
-
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 void SigninViewController::ShowModalHistorySyncOptInDialog(
     bool should_close_modal_dialog,
@@ -710,12 +700,20 @@ void SigninViewController::ShowModalManagedUserNoticeDialog(
 #endif
 }
 
-void SigninViewController::ShowModalSigninErrorDialog() {
+#if !BUILDFLAG(IS_CHROMEOS)
+void SigninViewController::ShowModalSigninErrorDialog(
+    const SigninUIError& error) {
+  // TODO(crbug.com/40225985): Check if the condition should be `!error.IsOk()`.
+  if (error.message().empty()) {
+    return;
+  }
   CloseModalSignin();
   dialog_ = std::make_unique<SigninModalDialogImpl>(
-      SigninViewControllerDelegate::CreateSigninErrorDelegate(&browser_.get()),
+      SigninViewControllerDelegate::CreateSigninErrorDelegate(&browser_.get(),
+                                                              error),
       GetOnModalDialogClosedCallback());
 }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 bool SigninViewController::ShowsModalDialog() {
   return dialog_ != nullptr;

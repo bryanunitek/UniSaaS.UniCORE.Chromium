@@ -569,7 +569,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   bool should_restrict_chrome_search_scheme =
       !command_line->HasSwitch(switches::kInstantProcess);
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(ENABLE_WEBUI_NTP)
   // If the feature is enabled, the `kInstantProcess` command line switch is
   // replaced by the `is_instant_process` flag, which is set later. As a result,
   // we cannot perform chrome-search scheme registration at this stage. This
@@ -579,7 +579,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   if (base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
     should_restrict_chrome_search_scheme = false;
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(ENABLE_WEBUI_NTP)
   if (should_restrict_chrome_search_scheme) {
     WebSecurityPolicy::RegisterURLSchemeAsDisplayIsolated(chrome_search_scheme);
   }
@@ -701,7 +701,7 @@ void ChromeContentRendererClient::RenderFrameCreated(
   TabContextDecryptionTokenExtension::Create(render_frame);
   TrustedVaultEncryptionKeysExtension::Create(render_frame);
 #if !BUILDFLAG(IS_ANDROID)
-  if (features::RemoteActorCredentialSharingEnabled() &&
+  if (password_manager::features::RemoteActorCredentialSharingEnabled() &&
       render_frame->IsMainFrame()) {
     RemoteActorCredentialSharingExtension::Create(render_frame);
   }
@@ -944,6 +944,10 @@ bool ChromeContentRendererClient::IsDomStorageDisabled() const {
   // opaque origins). This avoids a renderer kill by the browser process which
   // isn't expecting PDF renderer processes to ever use DOM storage
   // interfaces. See https://crbug.com/357014503.
+  //
+  // TODO(crbug.com/559567801): Remove this once `features::kPdfOpaqueOrigin`
+  // ships, since PDF documents will then have opaque origins, for which DOM
+  // storage access already throws a SecurityError.
   return pdf::IsPdfRenderer();
 #else
   return false;
@@ -958,6 +962,10 @@ bool ChromeContentRendererClient::AreDedicatedWorkersDisabled() const {
   // throws a SecurityError DOMException. This avoids a renderer kill by the
   // browser process which isn't expecting PDF renderer processes to ever create
   // dedicated workers. See https://crbug.com/553118313.
+  //
+  // TODO(crbug.com/559567801): Remove this once `features::kPdfOpaqueOrigin`
+  // ships, since PDF documents will then have opaque origins, for which
+  // creating a dedicated worker already throws a SecurityError.
   return pdf::IsPdfRenderer();
 #else
   return false;

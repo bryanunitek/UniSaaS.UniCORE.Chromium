@@ -4,6 +4,7 @@
 
 #include "chrome/browser/contextual_tasks/contextual_tasks_extension_service_worker_handler.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/feature_list.h"
@@ -14,10 +15,15 @@
 #include "components/contextual_tasks/public/features.h"
 #include "components/omnibox/common/logger.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/service_worker_external_request_timeout_type.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/activity.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/process_manager.h"
+#include "extensions/browser/service_worker/service_worker_keepalive.h"
+#include "extensions/common/constants.h"
 #include "mojo/public/cpp/base/proto_wrapper.h"
-#include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "third_party/lens_server_proto/search_communication.pb.h"
 
 namespace contextual_tasks {
@@ -86,6 +92,7 @@ void ContextualTasksExtensionServiceWorkerHandler::Clear() {
   factory_receiver_.reset();
   handler_receiver_.reset();
   page_.reset();
+  service_worker_keepalives_.clear();
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
@@ -94,28 +101,67 @@ void ContextualTasksExtensionServiceWorkerHandler::CreateExtensionPageHandler(
     mojo::PendingReceiver<mojom::ExtensionPageHandler> receiver) {
   page_.reset();
   page_.Bind(std::move(page));
+  page_.set_disconnect_handler(base::BindOnce(
+      &ContextualTasksExtensionServiceWorkerHandler::OnMojoPipeDisconnected,
+      weak_ptr_factory_.GetWeakPtr()));
   handler_receiver_.reset();
   handler_receiver_.Bind(std::move(receiver));
+  handler_receiver_.set_disconnect_handler(base::BindOnce(
+      &ContextualTasksExtensionServiceWorkerHandler::OnMojoPipeDisconnected,
+      weak_ptr_factory_.GetWeakPtr()));
+  AcquireServiceWorkerKeepalive();
+}
+
+void ContextualTasksExtensionServiceWorkerHandler::
+    AcquireServiceWorkerKeepalive() {
+  service_worker_keepalives_.clear();
+  auto* registry = extensions::ExtensionRegistry::Get(&profile_.get());
+  auto* process_manager = extensions::ProcessManager::Get(&profile_.get());
+  if (!registry || !process_manager ||
+      !registry->enabled_extensions().Contains(
+          extension_misc::kContextualTasksExtensionId)) {
+    return;
+  }
+  for (const extensions::WorkerId& worker_id :
+       process_manager->GetServiceWorkersForExtension(
+           extension_misc::kContextualTasksExtensionId)) {
+    service_worker_keepalives_.push_back(
+        std::make_unique<extensions::ServiceWorkerKeepalive>(
+            &profile_.get(), worker_id,
+            content::ServiceWorkerExternalRequestTimeoutType::kDoesNotTimeout,
+            extensions::Activity::MOJO, mojom::ExtensionPageHandler::Name_));
+  }
+}
+
+void ContextualTasksExtensionServiceWorkerHandler::OnMojoPipeDisconnected() {
+  handler_receiver_.reset();
+  page_.reset();
+  service_worker_keepalives_.clear();
 }
 
 void ContextualTasksExtensionServiceWorkerHandler::GetHandshakeMessage(
     const std::optional<std::string>& document_id,
     GetHandshakeMessageCallback callback) {
+  if (service_worker_keepalives_.empty() && page_.is_bound()) {
+    AcquireServiceWorkerKeepalive();
+  }
   if (!base::FeatureList::IsEnabled(
           contextual_tasks::kContextualTasksRearchitecture)) {
     OMNIBOX_LOG(kPostServiceWorkerMessageTag)
         << "HandshakePing rejected: feature disabled (document_id="
         << document_id.value_or("") << ")";
     std::move(callback).Run(
-        mojo_base::ProtoWrapper(lens::ClientToAimMessage()));
+        mojo_base::ProtoWrapper(lens::ClientToSearchMessage()));
     return;
   }
 
   if (!document_id.has_value() || document_id->empty()) {
     OMNIBOX_LOG(kPostServiceWorkerMessageTag)
         << "HandshakePing rejected: missing document_id";
+    RecordExtensionHandshakeStatus(
+        ExtensionHandshakeStatus::kInvalidDocumentId);
     std::move(callback).Run(
-        mojo_base::ProtoWrapper(lens::ClientToAimMessage()));
+        mojo_base::ProtoWrapper(lens::ClientToSearchMessage()));
     return;
   }
 
@@ -125,8 +171,10 @@ void ContextualTasksExtensionServiceWorkerHandler::GetHandshakeMessage(
     OMNIBOX_LOG(kPostServiceWorkerMessageTag)
         << "HandshakePing rejected: invalid frame (document_id=" << *document_id
         << ")";
+    RecordExtensionHandshakeStatus(
+        ExtensionHandshakeStatus::kInvalidDocumentId);
     std::move(callback).Run(
-        mojo_base::ProtoWrapper(lens::ClientToAimMessage()));
+        mojo_base::ProtoWrapper(lens::ClientToSearchMessage()));
     return;
   }
 
@@ -136,8 +184,10 @@ void ContextualTasksExtensionServiceWorkerHandler::GetHandshakeMessage(
     OMNIBOX_LOG(kPostServiceWorkerMessageTag)
         << "HandshakePing rejected: missing WebContents (document_id="
         << *document_id << ")";
+    RecordExtensionHandshakeStatus(
+        ExtensionHandshakeStatus::kInvalidDocumentId);
     std::move(callback).Run(
-        mojo_base::ProtoWrapper(lens::ClientToAimMessage()));
+        mojo_base::ProtoWrapper(lens::ClientToSearchMessage()));
     return;
   }
 
@@ -150,9 +200,10 @@ void ContextualTasksExtensionServiceWorkerHandler::GetHandshakeMessage(
           &ContextualTasksExtensionServiceWorkerHandler::DispatchSearchMessage,
           weak_ptr_factory_.GetWeakPtr(), *document_id));
 
-  lens::ClientToAimMessage handshake_message = GetHandshakeMessageProto();
+  lens::ClientToSearchMessage handshake_message =
+      GetSearchHandshakeMessageProto(&profile_.get());
   OMNIBOX_LOG_WITH_PROTO(kPostServiceWorkerMessageTag, handshake_message,
-                         std::string("lens.chrome.ClientToAimMessage"))
+                         std::string("lens.chrome.ClientToSearchMessage"))
       << "HandshakePing (document_id=" << *document_id << ")";
   std::move(callback).Run(
       mojo_base::ProtoWrapper(std::move(handshake_message)));
@@ -162,6 +213,9 @@ void ContextualTasksExtensionServiceWorkerHandler::OnWebviewMessage(
     const std::vector<uint8_t>& message,
     const std::optional<std::string>& document_id) {
   static constexpr char kOnServiceWorkerMessageTag[] = "OnServiceWorkerMessage";
+  if (service_worker_keepalives_.empty() && page_.is_bound()) {
+    AcquireServiceWorkerKeepalive();
+  }
   if (!base::FeatureList::IsEnabled(
           contextual_tasks::kContextualTasksRearchitecture)) {
     OMNIBOX_LOG(kOnServiceWorkerMessageTag)
@@ -173,6 +227,8 @@ void ContextualTasksExtensionServiceWorkerHandler::OnWebviewMessage(
   if (!document_id.has_value() || document_id->empty()) {
     OMNIBOX_LOG(kOnServiceWorkerMessageTag)
         << "SearchToClientMessage dropped: missing document_id";
+    RecordExtensionPostMessageError(
+        ExtensionPostMessageError::kInvalidDocumentId);
     return;
   }
 
@@ -180,6 +236,9 @@ void ContextualTasksExtensionServiceWorkerHandler::OnWebviewMessage(
     OMNIBOX_LOG(kOnServiceWorkerMessageTag)
         << "SearchToClientMessage dropped: invalid size=" << message.size()
         << " (document_id=" << *document_id << ")";
+    RecordExtensionPostMessageError(
+        message.empty() ? ExtensionPostMessageError::kUnexpectedDataType
+                        : ExtensionPostMessageError::kMessageTooLarge);
     return;
   }
 
@@ -189,6 +248,8 @@ void ContextualTasksExtensionServiceWorkerHandler::OnWebviewMessage(
     OMNIBOX_LOG(kOnServiceWorkerMessageTag)
         << "SearchToClientMessage dropped: invalid frame (document_id="
         << *document_id << ")";
+    RecordExtensionPostMessageError(
+        ExtensionPostMessageError::kInvalidDocumentId);
     return;
   }
 
@@ -198,6 +259,8 @@ void ContextualTasksExtensionServiceWorkerHandler::OnWebviewMessage(
     OMNIBOX_LOG(kOnServiceWorkerMessageTag)
         << "SearchToClientMessage dropped: missing WebContents (document_id="
         << *document_id << ")";
+    RecordExtensionPostMessageError(
+        ExtensionPostMessageError::kInvalidDocumentId);
     return;
   }
 
@@ -206,6 +269,8 @@ void ContextualTasksExtensionServiceWorkerHandler::OnWebviewMessage(
     OMNIBOX_LOG(kOnServiceWorkerMessageTag)
         << "SearchToClientMessage dropped: failed to parse proto (document_id="
         << *document_id << ")";
+    RecordExtensionPostMessageError(
+        ExtensionPostMessageError::kProtoParseFailed);
     return;
   }
 
@@ -267,6 +332,8 @@ void ContextualTasksExtensionServiceWorkerHandler::DispatchSearchMessage(
     OMNIBOX_LOG(kPostServiceWorkerMessageTag)
         << "ClientToSearchMessage dropped: failed to parse proto (document_id="
         << document_id << ")";
+    RecordExtensionPostMessageError(
+        ExtensionPostMessageError::kProtoParseFailed);
     return;
   }
   if (!page_) {
@@ -274,6 +341,7 @@ void ContextualTasksExtensionServiceWorkerHandler::DispatchSearchMessage(
                            std::string("lens.chrome.ClientToSearchMessage"))
         << GetClientToSearchMessageName(proto)
         << " dropped: page remote unbound (document_id=" << document_id << ")";
+    RecordExtensionPostMessageError(ExtensionPostMessageError::kMojoPipeClosed);
     return;
   }
   OMNIBOX_LOG_WITH_PROTO(kPostServiceWorkerMessageTag, proto,

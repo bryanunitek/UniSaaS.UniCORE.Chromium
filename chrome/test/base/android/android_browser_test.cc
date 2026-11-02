@@ -46,10 +46,12 @@ AndroidBrowserTest::AndroidBrowserTest() {
 
   CreateTestServer(base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
 
-  // Match InProcessBrowserTest's default disabled background features and IPH
-  // blocklist to avoid unnecessary startup overhead and non-deterministic
-  // background work.
-  block_all_iph_feature_list_.InitWithNoFeaturesAllowed();
+  // Match InProcessBrowserTest's default disabled background features to avoid
+  // unnecessary startup overhead and non-deterministic background work. Note:
+  // Do not block all IPH via ScopedIphFeatureList::InitWithNoFeaturesAllowed()
+  // here; on tablet and desktop Android, suppressing IPH queries during
+  // TabbedRootUiCoordinator.initializeIph() alters deferred startup and omnibox
+  // focus timing, breaking WebUI focus and bottom sheet tests.
   scoped_feature_list_.InitWithFeatures(
       /*enabled_features=*/{},
       /*disabled_features=*/{

@@ -19,18 +19,48 @@ import java.lang.annotation.RetentionPolicy;
 /** Utility class for recording Android Bottom Bar metrics. */
 @NullMarked
 public class BottomBarMetrics {
-    // LINT.IfChange(AndroidBottomBarPromoEvent)
-    /** Events associated with the display of the bottom bar promo dialog. */
-    @IntDef({PromoEvent.SHOWN, PromoEvent.ACCEPTED, PromoEvent.DISMISSED})
+    // LINT.IfChange(AndroidBottomBarEducationOnboardingEvent)
+    /** Events associated with the bottom bar education bubble and opt-in dialog. */
+    @IntDef({
+        EducationOnboardingEvent.SHOWN,
+        EducationOnboardingEvent.ACCEPTED,
+        EducationOnboardingEvent.DECLINED,
+        EducationOnboardingEvent.SETTINGS_CLICKED,
+        EducationOnboardingEvent.DISMISSED_OTHER,
+        EducationOnboardingEvent.TAPPED_SCRIM,
+        EducationOnboardingEvent.TAPPED_BOTTOM_BAR,
+        EducationOnboardingEvent.BACK_PRESSED
+    })
     @Retention(RetentionPolicy.SOURCE)
-    public @interface PromoEvent {
+    public @interface EducationOnboardingEvent {
         int SHOWN = 0;
         int ACCEPTED = 1;
-        int DISMISSED = 2;
-        int COUNT = 3;
+        int DECLINED = 2;
+        int SETTINGS_CLICKED = 3;
+        int DISMISSED_OTHER = 4;
+        int TAPPED_SCRIM = 5;
+        int TAPPED_BOTTOM_BAR = 6;
+        int BACK_PRESSED = 7;
+        int COUNT = 8;
     }
 
-    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarPromoEvent)
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarEducationOnboardingEvent)
+
+    // LINT.IfChange(AndroidBottomBarEducationOnboardingType)
+    /** The education UI that recorded the event; the {OnboardingType} histogram variant. */
+    @StringDef({
+        EducationOnboardingType.DEFAULT_BUBBLE,
+        EducationOnboardingType.GEMINI_BUBBLE,
+        EducationOnboardingType.OPT_IN_DIALOG
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface EducationOnboardingType {
+        String DEFAULT_BUBBLE = "DefaultBubble";
+        String GEMINI_BUBBLE = "GeminiBubble";
+        String OPT_IN_DIALOG = "OptInDialog";
+    }
+
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/histograms.xml:AndroidBottomBarEducationOnboardingType)
 
     // LINT.IfChange(AndroidBottomBarIphEvent)
     /** Events representing showing, dismissing, or acting on Bottom Bar In-Product Helps (IPH). */
@@ -46,12 +76,18 @@ public class BottomBarMetrics {
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidBottomBarIphEvent)
 
     // LINT.IfChange(AndroidBottomBarIphFeature)
-    @StringDef({IphFeature.ADDRESS_BAR, IphFeature.GLIC, IphFeature.NEW_TAB})
+    @StringDef({
+        IphFeature.ADDRESS_BAR,
+        IphFeature.GLIC,
+        IphFeature.NEW_TAB,
+        IphFeature.TAB_SWITCHER
+    })
     @Retention(RetentionPolicy.SOURCE)
     public @interface IphFeature {
         String ADDRESS_BAR = "AddressBar";
         String GLIC = "Glic";
         String NEW_TAB = "NewTab";
+        String TAB_SWITCHER = "TabSwitcher";
     }
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/histograms.xml:AndroidBottomBarIphFeature)
@@ -175,13 +211,17 @@ public class BottomBarMetrics {
     }
 
     /**
-     * Records introductory promo dialog events.
+     * Records education dialog and bubble events.
      *
-     * @param event The promo event (Shown, Accepted, or Dismissed).
+     * @param onboardingType The onboarding type (e.g. "DefaultBubble", "OptInDialog").
+     * @param event The event type.
      */
-    public static void recordPromoEvent(@PromoEvent int event) {
+    public static void recordEducationOnboardingEvent(
+            @EducationOnboardingType String onboardingType, @EducationOnboardingEvent int event) {
         RecordHistogram.recordEnumeratedHistogram(
-                "Android.BottomBar.Promo.Event", event, PromoEvent.COUNT);
+                "Android.BottomBar.Education.Onboarding." + onboardingType + ".Event",
+                event,
+                EducationOnboardingEvent.COUNT);
     }
 
     /**

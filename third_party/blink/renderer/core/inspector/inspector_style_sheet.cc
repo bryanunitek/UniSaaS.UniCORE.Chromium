@@ -2395,6 +2395,16 @@ InspectorStyleSheet::BuildObjectForRuleUsage(CSSRule* rule, bool was_used) {
       type == CSSRule::kScopeRule || type == CSSRule::kContainerRule ||
       type == CSSRule::kStartingStyleRule || type == CSSRule::kNavigationRule) {
     whole_rule_range.end = source_data->rule_header_range.end + 1;
+  } else if (type == CSSRule::kStyleRule) {
+    if (!source_data->child_rules.empty()) {
+      whole_rule_range.end = source_data->property_data.empty()
+                                 ? source_data->rule_header_range.end + 1
+                                 : source_data->rule_declarations_range.end;
+    } else if (source_data->rule_header_range.length() == 0) {
+      // CSSNestedDeclarations rules have no prelude or `{}` braces, so
+      // `rule_declarations_range.end` is already the exclusive end offset.
+      whole_rule_range.end = source_data->rule_declarations_range.end;
+    }
   }
 
   std::unique_ptr<protocol::CSS::RuleUsage> result =
@@ -2731,14 +2741,15 @@ String InspectorStyleSheet::SourceMapURL() {
     return String();
   }
 
-  if (String style_sheet_text; GetText(&style_sheet_text)) {
-    String comment_value =
-        FindMagicComment(style_sheet_text, "sourceMappingURL");
-    if (!comment_value.empty()) {
-      return comment_value;
-    }
+  String header_source_map_url = page_style_sheet_->Contents()->SourceMapURL();
+  if (!header_source_map_url.empty()) {
+    return header_source_map_url;
   }
-  return page_style_sheet_->Contents()->SourceMapURL();
+
+  if (String style_sheet_text; GetText(&style_sheet_text)) {
+    return FindMagicComment(style_sheet_text, "sourceMappingURL");
+  }
+  return String();
 }
 
 const Document* InspectorStyleSheet::GetDocument() {

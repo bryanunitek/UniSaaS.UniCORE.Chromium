@@ -59,6 +59,7 @@ import org.chromium.base.TimeUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
@@ -426,7 +427,8 @@ public class ToolbarPhone extends ToolbarLayout
             ThemeColorProvider themeColorProvider,
             IncognitoStateProvider incognitoStateProvider,
             @Nullable Supplier<Integer> incognitoWindowCountSupplier,
-            WindowAndroid windowAndroid) {
+            WindowAndroid windowAndroid,
+            OmniboxResourceProvider omniboxResourceProvider) {
         assert tabSwitcherButtonCoordinator != null;
         super.initialize(
                 toolbarDataProvider,
@@ -446,7 +448,8 @@ public class ToolbarPhone extends ToolbarLayout
                 themeColorProvider,
                 incognitoStateProvider,
                 /* incognitoWindowCountSupplier= */ null,
-                windowAndroid);
+                windowAndroid,
+                omniboxResourceProvider);
         mUserEducationHelper = userEducationHelper;
         mTrackerSupplier = trackerSupplier;
         mBackButtonCoordinator = backButtonCoordinator;
@@ -632,13 +635,9 @@ public class ToolbarPhone extends ToolbarLayout
      */
     private @ColorInt int getToolbarDefaultColor(boolean shouldUseFocusColor) {
         if (urlHasFocus() || shouldUseFocusColor) {
-            if (mDropdownListScrolled) {
-                return isIncognitoBranded()
-                        ? getContext().getColor(R.color.omnibox_scrolled_bg_incognito)
-                        : ContextCompat.getColor(getContext(), R.color.toolbar_text_box_bg_color);
-            }
-            return OmniboxResourceProvider.getSuggestionsDropdownBackgroundColor(
-                    getContext(), mThemeColorProvider.getBrandedColorScheme());
+            return mDropdownListScrolled
+                    ? mOmniboxResourceProvider.getScrolledOmniboxBackgroundColor()
+                    : mOmniboxResourceProvider.getSuggestionsDropdownBackgroundColor();
         }
         return ChromeColors.getDefaultThemeColor(getContext(), isIncognitoBranded());
     }
@@ -657,8 +656,7 @@ public class ToolbarPhone extends ToolbarLayout
         if (urlHasFocus() || shouldUseFocusColor) {
 
             // Omnibox has same background as the Omnibox suggestion.
-            return OmniboxResourceProvider.getStandardSuggestionBackgroundColor(
-                    getContext(), mThemeColorProvider.getBrandedColorScheme());
+            return mOmniboxResourceProvider.getStandardSuggestionBackgroundColor();
         }
         return getLocationBarColorForToolbarColor(toolbarColor);
     }
@@ -2052,7 +2050,7 @@ public class ToolbarPhone extends ToolbarLayout
         return new PhoneCaptureStateToken(
                 getButtonTintList().getDefaultColor(),
                 mToolbarBackground.getColor(),
-                mTabCountSupplier == null ? 0 : mTabCountSupplier.get(),
+                SupplierUtils.getOr(mTabCountSupplier, 0),
                 mButtonData,
                 mVisualState,
                 visibleUrlText,

@@ -379,10 +379,6 @@ void SlowlyTypeText(NSString* text) {
     config.features_enabled.push_back(
         autofill::features::kAutofillAiReauthRequired);
   }
-  if ([self isRunningTest:@selector(testFillXframeCreditCardFormThrottled)]) {
-    config.features_enabled.push_back(
-        autofill::features::kAutofillAcrossIframesIosThrottling);
-  }
   if ([self isRunningTest:@selector(testAddressHomeAndWorkIPH)]) {
     config.iph_feature_enabled =
         feature_engagement::kIPHAutofillHomeWorkProfileSuggestionFeature.name;
@@ -943,6 +939,7 @@ TAG_SMOKE_TEST(FormInputAccessoryEGTest, testFillCreditCardFieldsOnForm);
 
   // Tap on another address field, below the first address field, and verify
   // that the keyboard pops up and offers address suggestions.
+  [ChromeEarlGrey scrollWebStateElementIntoViewWithID:"city"];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:chrome_test_util::TapWebElementWithId("city")];
   id<GREYMatcher> address_chip =
@@ -953,6 +950,7 @@ TAG_SMOKE_TEST(FormInputAccessoryEGTest, testFillCreditCardFieldsOnForm);
   // credit card fields.
 
   // Tap a credit card field to open the bottom sheet.
+  [ChromeEarlGrey scrollWebStateElementIntoViewWithID:kFormCardName];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:chrome_test_util::TapWebElementWithId(kFormCardName)];
   id<GREYMatcher> useKeyboardButton = PaymentsBottomSheetUseKeyboardButton();
@@ -1000,9 +998,7 @@ TAG_SMOKE_TEST(FormInputAccessoryEGTest, testFillAddressFieldsOnForm);
 - (void)testFillAddressFieldsOnForm {
   [self loadAddressPage];
 
-  [ChromeEarlGrey
-      evaluateJavaScriptForSideEffect:@"document.getElementById('form_zip')."
-                                      @"scrollIntoView();"];
+  [ChromeEarlGrey scrollWebStateElementIntoViewWithID:kFormZip];
 
   [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
       performAction:chrome_test_util::TapWebElementWithId(kFormZip)];

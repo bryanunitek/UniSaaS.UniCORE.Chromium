@@ -166,7 +166,6 @@ chromium-metrics-reviews@google.com.
   <variant name="ClientSidePhishing" summary="Client Side Phishing"/>
   <variant name="ClientSidePhishingImageEmbedder"
       summary="Client Side Phishing Image Embedder"/>
-  <variant name="Compose" summary="Weights for On-Device Compose"/>
   <variant name="ContextualPageActionPriceTracking"
       summary="Contextual Page Action: Show price tracking"/>
   <variant name="ContextualTasksMultiTurnTabRelevance"
@@ -187,22 +186,6 @@ chromium-metrics-reviews@google.com.
   <variant name="LanguageDetection" summary="Language detection"/>
   <variant name="ModelExecutionFeatureAiEmbeddings"
       summary="Model Execution Feature: AI Embeddings"/>
-  <variant name="ModelExecutionFeatureHistoryQueryIntent"
-      summary="Model Execution Feature: History Query Intent"/>
-  <variant name="ModelExecutionFeatureHistorySearch"
-      summary="Model Execution Feature: History Search"/>
-  <variant name="ModelExecutionFeaturePermissionsAi"
-      summary="Model Execution Feature: Permissions AI"/>
-  <variant name="ModelExecutionFeaturePromptAPI"
-      summary="Model Execution Feature: Prompt API"/>
-  <variant name="ModelExecutionFeatureProofreaderApi"
-      summary="Model Execution Feature: Proofreader API"/>
-  <variant name="ModelExecutionFeatureScamDetection"
-      summary="Model Execution Feature: Scam Detection"/>
-  <variant name="ModelExecutionFeatureSummarize"
-      summary="Model Execution Feature: Summarize"/>
-  <variant name="ModelExecutionFeatureWritingAssistanceApi"
-      summary="Model Execution Feature: Writing Assistance APIs"/>
   <variant name="ModelValidation" summary="Model validation triggered via CLI"/>
   <variant name="NewTabPageHistoryClustersModuleRanking"
       summary="New Tab Page History Clusters Module Ranking"/>
@@ -277,8 +260,6 @@ chromium-metrics-reviews@google.com.
       summary="Segmentation: Tablet Productivity user"/>
   <variant name="SegmentationVoice" summary="Segmentation: Voice user"/>
   <variant name="ShoppingClassifier" summary="Shopping classifier"/>
-  <variant name="SpeechRecognitionSmallExpertModel"
-      summary="Speech Recognition Small Expert Model (TinyGemma)"/>
   <variant name="TextClassifier" summary="Smart text selection"/>
   <variant name="TextEmbedder" summary="Generic Text Embedding"/>
   <variant name="TextSafety" summary="Classifies safety of the text"/>
@@ -596,6 +577,9 @@ chromium-metrics-reviews@google.com.
   <variant name="PrivacyPolicyAnnotation"
       summary="Provides information about whether a URL is a privacy policy
                page."/>
+  <variant name="QuickAnswers"
+      summary="Provides information about whether the page is eligible for
+               Quick Answers."/>
   <variant name="ReaderModeEligible"
       summary="Provides information about the eligibility of a URL for
                Reading Mode."/>
@@ -1270,19 +1254,6 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
-    name="OptimizationGuide.ModelExecution.OnDeviceAdaptationModelAvailability.{ModelExecutionFeature}"
-    enum="OnDeviceModelAdaptationAvailability" expires_after="2027-04-14">
-  <owner>holte@chromium.org</owner>
-  <owner>wittman@chromium.org</owner>
-  <summary>
-    Records the availability of adaptation model for {ModelExecutionFeature}.
-    Recorded each time an update to the base model or the foundation model is
-    triggered.
-  </summary>
-  <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
-</histogram>
-
-<histogram
     name="OptimizationGuide.ModelExecution.OnDeviceAddContextResult.{ModelExecutionFeature}"
     enum="OptimizationGuideOnDeviceAddContextResult" expires_after="2027-04-14">
   <owner>holte@chromium.org</owner>
@@ -1345,6 +1316,22 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
+    name="OptimizationGuide.ModelExecution.OnDeviceExecuteModelResult.{ModelExecutionFeature}.{BaseModel}"
+    enum="OptimizationGuideOnDeviceExecuteModelResult"
+    expires_after="2027-04-14">
+  <owner>zekunjiang@google.com</owner>
+  <owner>holte@chromium.org</owner>
+  <owner>wittman@chromium.org</owner>
+  <summary>
+    Records the result of an on-device model execution attempt for
+    {ModelExecutionFeature} using {BaseModel}. Recorded every time an on-device
+    model execution concludes.
+  </summary>
+  <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
+  <token key="BaseModel" variants="BaseModel"/>
+</histogram>
+
+<histogram
     name="OptimizationGuide.ModelExecution.OnDeviceFirstResponseTime.{ModelExecutionFeature}"
     units="ms" expires_after="2027-04-14">
   <owner>cduvall@chromium.org</owner>
@@ -1354,6 +1341,33 @@ chromium-metrics-reviews@google.com.
     Records time to the first response after an execute call to the on device
     model. Recorded for every execute call to the on device model that returns a
     response.
+  </summary>
+  <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
+</histogram>
+
+<histogram name="OptimizationGuide.ModelExecution.OnDeviceModelCompleted"
+    enum="InstalledModel" expires_after="2027-04-14">
+  <owner>zekunjiang@google.com</owner>
+  <owner>holte@chromium.org</owner>
+  <owner>wittman@chromium.org</owner>
+  <summary>
+    Records the relevant base model when an on-device model execution completes
+    response generation. Recorded on every successful completion of an on-device
+    model execution.
+  </summary>
+</histogram>
+
+<histogram
+    name="OptimizationGuide.ModelExecution.OnDeviceModelCompleted.{ModelExecutionFeature}"
+    enum="InstalledModel" expires_after="2027-04-14">
+  <owner>zekunjiang@google.com</owner>
+  <owner>holte@chromium.org</owner>
+  <owner>wittman@chromium.org</owner>
+  <summary>
+    Records the relevant base model when an on-device model execution for
+    {ModelExecutionFeature} completes response generation. Recorded on every
+    successful completion of an on-device model execution for
+    {ModelExecutionFeature}.
   </summary>
   <token key="ModelExecutionFeature" variants="ModelExecutionFeature"/>
 </histogram>
@@ -2097,18 +2111,6 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
-    name="OptimizationGuide.PageContentAnnotationsService.RelatedSearchesExtracted"
-    enum="BooleanAnnotated" expires_after="M155">
-  <owner>mahmadi@chromium.org</owner>
-  <owner>sophiechang@chromium.org</owner>
-  <summary>
-    Records whether related searches were successfully extracted from Google
-    SRP, if requested. This will be recorded approximately once per page load
-    after the page has finished loading.
-  </summary>
-</histogram>
-
-<histogram
     name="OptimizationGuide.PageContentAnnotationsService.VisibilityScoreOfGoogleSRP"
     units="score" expires_after="2026-04-26">
   <owner>robertogden@chromium.org</owner>
@@ -2735,6 +2737,16 @@ chromium-metrics-reviews@google.com.
   <summary>
     Records the time taken inside PageContentStore to fetch and decrypt the page
     context for a tab on the background thread.
+  </summary>
+</histogram>
+
+<histogram name="OptimizationGuide.PageContentStore.UpdateTabIdLatency"
+    units="ms" expires_after="2027-06-01">
+  <owner>alexmt@chromium.org</owner>
+  <owner>chrome-intelligence-core@google.com</owner>
+  <summary>
+    Records the time taken inside PageContentStore to execute the database query
+    to update a tab ID on the background thread.
   </summary>
 </histogram>
 

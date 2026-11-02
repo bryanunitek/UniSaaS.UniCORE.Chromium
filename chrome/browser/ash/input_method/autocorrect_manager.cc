@@ -21,7 +21,6 @@
 #include "chrome/browser/ash/input_method/autocorrect_enums.h"
 #include "chrome/browser/ash/input_method/autocorrect_prefs.h"
 #include "chrome/browser/ash/input_method/suggestion_enums.h"
-#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
@@ -957,8 +956,9 @@ void AutocorrectManager::UndoAutocorrect() {
     // This will not quite work properly if there is text actually highlighted,
     // and cursor is at end of the highlight block, but no easy way around it.
     // First delete everything before cursor.
-    CHECK(surrounding_text.selection_range.IsBoundedBy(autocorrect_range),
-          base::NotFatalUntil::M160);
+    // TODO(crbug.com/577658118): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
+    DCHECK(surrounding_text.selection_range.IsBoundedBy(autocorrect_range));
     const uint32_t before =
         surrounding_text.selection_range.start() - autocorrect_range.start();
     const uint32_t after =

@@ -113,6 +113,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   // Boolean pref for enabling shake trigger.
   registry->RegisterBooleanPref(prefs::kGlicShakeTriggerEnabled, false);
 
+  // Boolean pref set once the Quick Answers FRE is accepted.
+  registry->RegisterBooleanPref(prefs::kGlicQuickAnswersFreAccepted, false);
+
   // Boolean pref that enables or disables experimental triggering.
   registry->RegisterBooleanPref(prefs::kGlicExperimentalTriggeringEnabled,
                                 false);
@@ -152,6 +155,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(prefs::kGlicMarketingAutoOpenCount, 0);
   registry->RegisterStringPref(prefs::kGlicPromotionSourceCohort,
                                std::string());
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(prefs::kGlicLastCanActuateInBackground, false);
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {

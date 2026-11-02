@@ -311,6 +311,11 @@ constexpr CGFloat kThresholdForCompleteVisibility = 0.3;
                       object:nil];
 
   [defaultCenter addObserver:self
+                    selector:@selector(keyboardDidShow:)
+                        name:UIKeyboardDidShowNotification
+                      object:nil];
+
+  [defaultCenter addObserver:self
                     selector:@selector(keyboardDidHide:)
                         name:UIKeyboardDidHideNotification
                       object:nil];
@@ -579,7 +584,7 @@ constexpr CGFloat kThresholdForCompleteVisibility = 0.3;
   UIViewAnimationCurve curve = static_cast<UIViewAnimationCurve>(
       [userInfo[UIKeyboardAnimationCurveUserInfoKey] integerValue]);
   [self.delegate assistantAIMViewController:self
-                didShowKeyboardWithDuration:duration
+               willShowKeyboardWithDuration:duration
                                       curve:curve];
 }
 
@@ -600,6 +605,11 @@ constexpr CGFloat kThresholdForCompleteVisibility = 0.3;
       CGRectGetHeight(_keyboardFrameInWindow) == 0) {
     [self keyboardWillShow:notification];
   }
+}
+
+// Called when the keyboard has finished showing.
+- (void)keyboardDidShow:(NSNotification*)notification {
+  [self.delegate assistantAIMViewControllerDidShowKeyboard:self];
 }
 
 // Called when the keyboard is hidden.

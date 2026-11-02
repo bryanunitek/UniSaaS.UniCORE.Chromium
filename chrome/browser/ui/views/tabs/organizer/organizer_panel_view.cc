@@ -23,6 +23,7 @@
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/buildflags/buildflags.h"
 #include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
@@ -82,10 +83,12 @@ class OrganizerPanelViewImpl : public OrganizerPanelView,
         std::make_unique<OrganizerPanelWebView>(browser.GetProfile()));
     web_view_->SetAcceleratorHandling(
         views::WebContentsAcceleratorHandling::kEnabled);
-    webui::SetBrowserWindowInterface(web_view_->GetWebContents(), &browser);
-    web_view_->GetWebContents()->SetSupportsDraggableRegions(true);
+    content::WebContents* const web_contents =
+        web_view_->GetWebContents(GURL(chrome::kChromeUIOrganizerPanelURL));
+    webui::SetBrowserWindowInterface(web_contents, &browser);
+    web_contents->SetSupportsDraggableRegions(true);
     views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
-        web_view_->GetWebContents(), SK_ColorTRANSPARENT);
+        web_contents, SK_ColorTRANSPARENT);
     web_view_->LoadInitialURL(GURL(chrome::kChromeUIOrganizerPanelURL));
     web_view_->SetProperty(
         views::kFlexBehaviorKey,
@@ -146,6 +149,12 @@ class OrganizerPanelViewImpl : public OrganizerPanelView,
     return web_view_->IsPositionInWindowCaption(point_in_webview);
   }
 
+  void ClearFocusedElement() override {
+    if (web_view_ && web_view_->web_contents()) {
+      web_view_->web_contents()->ClearFocusedElement();
+    }
+  }
+
  private:
   const raw_ref<BrowserWindowInterface> browser_;
   raw_ptr<OrganizerPanelWebView> web_view_ = nullptr;
@@ -200,6 +209,8 @@ bool OrganizerPanelView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
   return false;
 }
+
+void OrganizerPanelView::ClearFocusedElement() {}
 
 BEGIN_METADATA(OrganizerPanelView)
 END_METADATA

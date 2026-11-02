@@ -732,11 +732,23 @@ extern const base::FeatureParam<base::TimeDelta>
 // Whether the Soft Lock feature is enabled.
 bool IsIOSSoftLockEnabled();
 
-// Enables the AimCobrowse feature.
+// Enables the AimCobrowse feature. Intended to be used with the Add Tab
+// entrypoint in Composebox enabled by default; see
+// `kAimCobrowseAddTabEntrypoint` to disable that entrypoint while keeping other
+// Cobrowse entrypoints (such as `kAimCobrowseWebSelectionSearch`) enabled.
 BASE_DECLARE_FEATURE(kAimCobrowse);
+
+// Parameter to enable or disable the Add Tab entrypoint for AimCobrowse
+// (defaults to true).
+inline constexpr char kAimCobrowseAddTabEntrypointParam[] =
+    "add_tab_entrypoint_enabled";
+BASE_DECLARE_FEATURE_PARAM(bool, kAimCobrowseAddTabEntrypoint);
 
 // Returns true if the AimCobrowse feature is enabled.
 bool IsAimCobrowseEnabled();
+
+// Returns true if the Add Tab entrypoint for AimCobrowse is enabled.
+bool IsAimCobrowseAddTabEntrypointEnabled();
 
 // Enables Cobrowse automatically opening when the user taps on an AIM SRP link.
 BASE_DECLARE_FEATURE(kEnableCobrowseOnAimSrpTap);
@@ -1060,11 +1072,5 @@ BASE_DECLARE_FEATURE(kAppBarDisableLongPress);
 
 // Returns true if the AppBarDisableLongPress feature is enabled.
 bool IsAppBarDisableLongPressEnabled();
-
-// Enables the RemoteActorCredentialSharing feature.
-BASE_DECLARE_FEATURE(kRemoteActorCredentialSharing);
-
-// Returns true if the RemoteActorCredentialSharing feature is enabled.
-bool IsRemoteActorCredentialSharingEnabled();
 
 #endif  // IOS_CHROME_BROWSER_SHARED_PUBLIC_FEATURES_FEATURES_H_

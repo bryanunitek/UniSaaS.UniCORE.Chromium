@@ -5,7 +5,10 @@
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 
 #include <algorithm>
+#include <string>
+#include <string_view>
 
+#include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -28,6 +31,7 @@
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_state_manager.h"
+#include "chrome/browser/ui/omnibox/omnibox_popup_webui_creation.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
@@ -66,20 +70,23 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "ui/actions/actions.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/pointer/touch_ui_controller.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/test/views_test_utils.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_OZONE)
 #include "ui/ozone/public/ozone_platform.h"
@@ -289,7 +296,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest, ScriptBlockedIcon) {
       ->SetDefaultContentSetting(ContentSettingsType::JAVASCRIPT,
                                  CONTENT_SETTING_BLOCK);
   // Reload the page
-  chrome::Reload(browser(), WindowOpenDisposition::kCurrentTab);
+  chrome::Reload(browser(), ui::mojom::WindowOpenDisposition::kCurrentTab);
 
   // Waits until the script blocked icon is visible, or aborts the tests
   // otherwise.
@@ -423,6 +430,50 @@ IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest, CheckIndicatorText) {
   EXPECT_TRUE(location_bar_view->location_icon_view()->ShouldShowLabel());
   EXPECT_TRUE(base::EqualsCaseInsensitiveASCII(
       location_bar_view->location_icon_view()->GetText(), "not secure"));
+}
+
+// Tests that `LocationBarView::Update()` animates security indicator changes on
+// in-tab navigations (`contents == nullptr`), suppresses the animation on tab
+// switches (`contents != nullptr`), and invalidates layout.
+IN_PROC_BROWSER_TEST_F(SecurityIndicatorTest,
+                       UpdateAnimationAndLayoutOnNavigationAndTabSwitch) {
+  net::EmbeddedTestServer secure_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  secure_server.SetSSLConfig(
+      net::test_server::EmbeddedTestServer::CERT_TEST_NAMES);
+  secure_server.AddDefaultHandlers(GetChromeTestDataDir());
+  ASSERT_TRUE(secure_server.Start());
+  const GURL mock_secure_url = secure_server.GetURL("a.test", "/empty.html");
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL mock_nonsecure_url =
+      embedded_test_server()->GetURL("example.test", "/empty.html");
+
+  LocationBarView* location_bar_view = GetLocationBarView();
+  LocationIconView* icon_view = location_bar_view->location_icon_view();
+
+  // In-tab navigation from SECURE to WARNING (`Update(nullptr)`) animates the
+  // security chip.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), mock_secure_url));
+  EXPECT_FALSE(icon_view->is_animating_label());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), mock_nonsecure_url));
+  EXPECT_TRUE(icon_view->ShouldShowLabel());
+  EXPECT_TRUE(icon_view->is_animating_label());
+
+  // Open a second SECURE tab, then switch back to the WARNING tab
+  // (`Update(contents)` with non-null `contents`): animation is suppressed and
+  // layout is invalidated.
+  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), mock_secure_url, WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+  EXPECT_FALSE(icon_view->ShouldShowLabel());
+  views::test::RunScheduledLayout(location_bar_view);
+  EXPECT_FALSE(location_bar_view->needs_layout());
+
+  browser()->GetTabStripModel()->ActivateTabAt(0);
+  EXPECT_TRUE(icon_view->ShouldShowLabel());
+  EXPECT_FALSE(icon_view->is_animating_label());
+  EXPECT_TRUE(location_bar_view->needs_layout());
 }
 
 class LocationBarViewGeolocationBackForwardCacheBrowserTest
@@ -686,6 +737,14 @@ class LocationBarViewAddContextButtonBrowserTest
 
  private:
   base::test::ScopedFeatureList feature_list_;
+  // The inline add-context button reads the AI Mode popup's page while the
+  // classic popup is shown, so it needs that page to exist before the AI Mode
+  // popup is shown. Browser tests otherwise create it only when shown (see
+  // `InProcessBrowserTest`).
+  // TODO(crbug.com/542347163): Remove the inline add-context button variant,
+  // which is not planned to launch, along with these tests and this override.
+  base::AutoReset<bool> create_popup_webui_on_demand_ =
+      omnibox::SetCreatePopupWebUIOnDemandForTesting(false);
 };
 
 // TODO(crbug.com/459561205): This test is flaky on Linux.
@@ -775,9 +834,25 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewAddContextButtonBrowserTest,
       [&]() { return location_bar_view->ShouldShowAddContextButton(); }));
 }
 
-// Tests that unsafe schemes are not allowed to be opened from middle clicks.
-IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest,
-                       MiddleClickPasteAndGoBlocksUnsafeSchemes) {
+namespace {
+
+struct BlockedClipboardUrlTestCase {
+  std::string_view test_name;
+  std::u16string_view clipboard_text;
+};
+
+}  // namespace
+
+class LocationBarViewBlockedClipboardUrlBrowserTest
+    : public LocationBarViewBrowserTest,
+      public testing::WithParamInterface<BlockedClipboardUrlTestCase> {};
+
+// Tests that non-HTTP(S) schemes (including web-safe schemes such as
+// filesystem:, blob:, data:, chrome-extension:, and ws:) are not allowed to be
+// opened from middle clicks.
+IN_PROC_BROWSER_TEST_P(LocationBarViewBlockedClipboardUrlBrowserTest,
+                       MiddleClickPasteAndGoBlocksUnsafeScheme) {
+  content::BrowserTestClipboardScope clipboard_scope;
   if (!ui::Clipboard::IsMiddleClickPasteEnabled() ||
       !ui::Clipboard::IsSupportedClipboardBuffer(
           ui::ClipboardBuffer::kSelection)) {
@@ -785,46 +860,63 @@ IN_PROC_BROWSER_TEST_F(LocationBarViewBrowserTest,
   }
 
   ASSERT_TRUE(embedded_test_server()->Start());
-  GURL start_url = embedded_test_server()->GetURL("/title1.html");
+  const GURL start_url = embedded_test_server()->GetURL("/title1.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), start_url));
 
-  LocationBarView* location_bar_view = GetLocationBarView();
-  LocationIconView* location_icon_view =
-      location_bar_view->location_icon_view();
-
-  // Try file:// URL. Note: ui::Clipboard::ReadText is asynchronous on Linux, so
-  // we must pump the runloop to allow the callback to run and be rejected.
   {
     ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kSelection);
-    writer.WriteText(u"file:///etc/passwd");
+    writer.WriteText(GetParam().clipboard_text);
   }
 
-  ui::MouseEvent middle_click_event(ui::EventType::kMousePressed, gfx::Point(),
-                                    gfx::Point(), base::TimeTicks::Now(),
-                                    ui::EF_MIDDLE_MOUSE_BUTTON,
-                                    ui::EF_MIDDLE_MOUSE_BUTTON);
-  location_icon_view->OnMousePressed(middle_click_event);
-  base::RunLoop().RunUntilIdle();
+  const ui::MouseEvent middle_click_event(
+      ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+      base::TimeTicks::Now(), ui::EF_MIDDLE_MOUSE_BUTTON,
+      ui::EF_MIDDLE_MOUSE_BUTTON);
+  GetLocationBarView()->location_icon_view()->OnMousePressed(
+      middle_click_event);
 
-  EXPECT_EQ(start_url, browser()
-                           ->GetTabStripModel()
-                           ->GetActiveWebContents()
-                           ->GetLastCommittedURL());
-
-  // Try chrome:// URL.
-  {
-    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kSelection);
-    writer.WriteText(u"chrome://version");
-  }
-
-  location_icon_view->OnMousePressed(middle_click_event);
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_EQ(start_url, browser()
-                           ->GetTabStripModel()
-                           ->GetActiveWebContents()
-                           ->GetLastCommittedURL());
+  content::WebContents* const web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  EXPECT_EQ(nullptr, web_contents->GetController().GetPendingEntry());
+  EXPECT_EQ(start_url, web_contents->GetVisibleURL());
+  EXPECT_EQ(start_url, web_contents->GetLastCommittedURL());
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    LocationBarViewBlockedClipboardUrlBrowserTest,
+    testing::Values(
+        BlockedClipboardUrlTestCase{"File", u"file:///etc/passwd"},
+        BlockedClipboardUrlTestCase{"ChromeUI", u"chrome://version"},
+        BlockedClipboardUrlTestCase{"ChromeUntrusted",
+                                    u"chrome-untrusted://terminal"},
+        BlockedClipboardUrlTestCase{
+            "ChromeExtension",
+            u"chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+            u"manifest.json"},
+        BlockedClipboardUrlTestCase{
+            "ChromeSearch", u"chrome-search://local-ntp/local-ntp.html"},
+        BlockedClipboardUrlTestCase{
+            "Filesystem", u"filesystem:http://127.0.0.1/temporary/test.html"},
+        BlockedClipboardUrlTestCase{
+            "Blob",
+            u"blob:http://127.0.0.1/550e8400-e29b-41d4-a716-446655440000"},
+        BlockedClipboardUrlTestCase{"Data", u"data:text/html,<h1>hi</h1>"},
+        BlockedClipboardUrlTestCase{
+            "JavascriptFilesystem",
+            u"javascript:filesystem:http://127.0.0.1/temporary/test.html"},
+        BlockedClipboardUrlTestCase{"JavascriptEmpty", u"javascript:"},
+        BlockedClipboardUrlTestCase{"AboutBlank", u"about:blank"},
+        BlockedClipboardUrlTestCase{
+            "ViewSource", u"view-source:http://127.0.0.1/title1.html"},
+        BlockedClipboardUrlTestCase{"Ws", u"ws://127.0.0.1/socket"},
+        BlockedClipboardUrlTestCase{"Wss", u"wss://127.0.0.1/socket"},
+        BlockedClipboardUrlTestCase{
+            "DevTools", u"devtools://devtools/bundled/inspector.html"},
+        BlockedClipboardUrlTestCase{"Whitespace", u"   "}),
+    [](const testing::TestParamInfo<BlockedClipboardUrlTestCase>& info) {
+      return std::string(info.param.test_name);
+    });
 
 class LocationBarViewElevatedToolbarBrowserTest
     : public LocationBarViewBrowserTest {

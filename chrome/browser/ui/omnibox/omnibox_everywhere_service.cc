@@ -22,6 +22,7 @@
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_feature_promo_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_fre_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_prefs.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_ui_manager.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
@@ -34,8 +35,8 @@
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/base_window.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
@@ -76,7 +77,10 @@ void ActivateAndFocusBrowserWindow(BrowserWindowInterface* bwi) {
 }  // namespace
 
 OmniboxEverywhereService::OmniboxEverywhereService(Profile* profile)
-    : profile_(profile) {
+    : profile_(profile),
+      fre_controller_(
+          std::make_unique<omnibox_everywhere::OmniboxEverywhereFreController>(
+              profile_->GetPrefs())) {
   feature_engagement::Tracker* const tracker_service =
       feature_engagement::TrackerFactory::GetForBrowserContext(profile_);
   UserEducationService* const user_education_service =
@@ -101,6 +105,16 @@ OmniboxEverywhereService::feature_promo_controller() {
 const user_education::FeaturePromoController*
 OmniboxEverywhereService::feature_promo_controller() const {
   return feature_promo_controller_.get();
+}
+
+omnibox_everywhere::OmniboxEverywhereFreController*
+OmniboxEverywhereService::fre_controller() {
+  return fre_controller_.get();
+}
+
+const omnibox_everywhere::OmniboxEverywhereFreController*
+OmniboxEverywhereService::fre_controller() const {
+  return fre_controller_.get();
 }
 
 omnibox_everywhere::OmniboxEverywhereController*
@@ -134,6 +148,7 @@ void OmniboxEverywhereService::ReleaseProfileKeepAlive() {
 void OmniboxEverywhereService::Shutdown() {
   ReleaseProfileKeepAlive();
   feature_promo_controller_.reset();
+  fre_controller_.reset();
   if (controller()) {
     controller()->ShutdownForProfile(profile_);
   }
@@ -272,15 +287,16 @@ void OmniboxEverywhereService::OnHotkeyDropdownClosed() {
   }
 }
 
-void OmniboxEverywhereService::OpenUrl(const GURL& url,
-                                       WindowOpenDisposition disposition,
-                                       ui::PageTransition transition) {
+void OmniboxEverywhereService::OpenUrl(
+    const GURL& url,
+    ui::mojom::WindowOpenDisposition disposition,
+    ui::PageTransition transition) {
   OpenUrl(url, disposition, transition, base::NullCallback());
 }
 
 void OmniboxEverywhereService::OpenUrl(
     const GURL& url,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     ui::PageTransition transition,
     base::OnceCallback<void(content::NavigationHandle&)>
         navigation_handle_callback) {
@@ -294,7 +310,7 @@ void OmniboxEverywhereService::OpenUrl(
 void OmniboxEverywhereService::NavigateInBrowserWindow(
     BrowserWindowInterface* bwi,
     const GURL& url,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     ui::PageTransition transition,
     base::OnceCallback<void(content::NavigationHandle&)>
         navigation_handle_callback) {
@@ -303,11 +319,12 @@ void OmniboxEverywhereService::NavigateInBrowserWindow(
   params.should_trigger_session_restore = false;
 
   if (!bwi) {
-    params.disposition = WindowOpenDisposition::kNewWindow;
+    params.disposition = ui::mojom::WindowOpenDisposition::kNewWindow;
   } else {
-    params.disposition = (disposition == WindowOpenDisposition::kCurrentTab)
-                             ? WindowOpenDisposition::kNewForegroundTab
-                             : disposition;
+    params.disposition =
+        (disposition == ui::mojom::WindowOpenDisposition::kCurrentTab)
+            ? ui::mojom::WindowOpenDisposition::kNewForegroundTab
+            : disposition;
   }
   params.window_action = NavigateParams::WindowAction::kShowWindow;
 
@@ -375,6 +392,7 @@ void OmniboxEverywhereService::OpenUrlWithInPlaceWindow(
     bwi = CreateBrowserWindow(std::move(browser_params));
   }
 
-  NavigateInBrowserWindow(bwi, url, WindowOpenDisposition::kNewForegroundTab,
+  NavigateInBrowserWindow(bwi, url,
+                          ui::mojom::WindowOpenDisposition::kNewForegroundTab,
                           transition, std::move(navigation_handle_callback));
 }

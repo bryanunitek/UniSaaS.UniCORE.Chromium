@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/platform/graphics/parkable_image_manager.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 using ThreadPoolExecutionMode =
     base::test::TaskEnvironment::ThreadPoolExecutionMode;
@@ -36,11 +37,9 @@ class LambdaThreadDelegate : public base::PlatformThread::Delegate {
 };
 }  // namespace
 
-// Parent for ParkableImageTest and ParkableImageNoParkingTest. The only
-// difference between those two is whether parking is enabled or not.
-class ParkableImageBaseTest : public ::testing::Test {
+class ParkableImageTest : public ::testing::Test {
  public:
-  ParkableImageBaseTest()
+  ParkableImageTest()
       : task_env_(base::test::TaskEnvironment::TimeSource::MOCK_TIME,
                   ThreadPoolExecutionMode::DEFAULT) {}
 
@@ -181,32 +180,12 @@ class ParkableImageBaseTest : public ::testing::Test {
   raw_ptr<InMemoryDataAllocator> allocator_for_testing_;
 };
 
-// Parking is enabled for these tests.
-class ParkableImageTest : public ParkableImageBaseTest {
- public:
-  ParkableImageTest() { fl_.InitWithFeatures({}, {kDelayParkingImages}); }
-
- private:
-  base::test::ScopedFeatureList fl_;
-};
-
-// Parking is delayed but enabled for these tests.
-class ParkableImageDelayedTest : public ParkableImageBaseTest {
- public:
-  ParkableImageDelayedTest() {
-    fl_.InitWithFeatures({kDelayParkingImages}, {});
-  }
-
- private:
-  base::test::ScopedFeatureList fl_;
-};
-
-class ParkableImageWithLimitedDiskCapacityTest : public ParkableImageBaseTest {
+class ParkableImageWithLimitedDiskCapacityTest : public ParkableImageTest {
  public:
   ParkableImageWithLimitedDiskCapacityTest() {
     const std::vector<base::test::FeatureRefAndParams> enabled_features = {
         {features::kCompressParkableStrings, {{"max_disk_capacity_mb", "1"}}}};
-    fl_.InitWithFeaturesAndParameters(enabled_features, {kDelayParkingImages});
+    fl_.InitWithFeaturesAndParameters(enabled_features, {});
   }
 
  private:
@@ -324,6 +303,7 @@ TEST_F(ParkableImageTest, ParkAndUnpark) {
   // Should _not_ be on disk now.
   EXPECT_FALSE(is_on_disk(pi));
 
+  pi->Data();
   pi->Freeze();
 
   // Parkable now that it's frozen.
@@ -361,6 +341,7 @@ TEST_F(ParkableImageTest, ParkTwiceAndUnpark) {
 
   // We now have 1 image.
   ASSERT_EQ(1u, ParkableImageManager::Instance().Size());
+  pi->Data();
   pi->Freeze();
 
   // Attempt to park the image twice in a row. This should have the same effect
@@ -408,6 +389,7 @@ TEST_F(ParkableImageTest, ParkAndUnparkSync) {
   // Should _not_ be on disk now.
   EXPECT_FALSE(is_on_disk(pi));
 
+  pi->Data();
   pi->Freeze();
 
   // Parkable now that it's frozen.
@@ -476,6 +458,7 @@ TEST_F(ParkableImageTest, ParkAndUnparkAborted) {
   // Should _not_ be on disk now.
   ASSERT_FALSE(is_on_disk(pi));
 
+  pi->Data();
   pi->Freeze();
 
   // Parkable now that it's frozen.
@@ -553,6 +536,7 @@ TEST_F(ParkableImageTest, ManagerSimple) {
   EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
 
   WaitForParking();
+  WaitForDelayedParking();
 
   // Image should be on disk now.
   EXPECT_TRUE(is_on_disk(pi));
@@ -619,6 +603,7 @@ TEST_F(ParkableImageTest, ManagerTwo) {
   EXPECT_EQ(2u, GetPendingMainThreadTaskCount());
 
   WaitForParking();
+  WaitForDelayedParking();
 
   // Image should be on disk now.
   EXPECT_TRUE(is_on_disk(pi));
@@ -711,6 +696,7 @@ TEST_F(ParkableImageTest, ManagerNotUnlocked) {
   Lock(pi);
 
   WaitForParking();
+  WaitForDelayedParking();
 
   // Can't park because it is locked.
   EXPECT_FALSE(is_on_disk(pi));
@@ -749,6 +735,7 @@ TEST_F(ParkableImageTest, ManagerRescheduleUnfrozen) {
   Lock(pi);
 
   WaitForParking();
+  WaitForDelayedParking();
 
   // Locked ParkableImages are never parked.
   ASSERT_FALSE(is_on_disk(pi));
@@ -821,6 +808,7 @@ TEST_F(ParkableImageTest, FailedWrite) {
 
   {
     auto pi = MakeParkableImageForTesting(data);
+    pi->Data();
     pi->Freeze();
     manager.MaybeParkImagesForTesting();
     EXPECT_EQ(1u, manager.Size());
@@ -832,7 +820,7 @@ TEST_F(ParkableImageTest, FailedWrite) {
 }
 
 // Test that we park only after 30 seconds, not immediately after freezing.
-TEST_F(ParkableImageDelayedTest, Simple) {
+TEST_F(ParkableImageTest, DelayedSimple) {
   const size_t kDataSize = 3.5 * 4096;
   auto data = base::HeapArray<uint8_t>::Uninit(kDataSize);
   PrepareReferenceData(data);
@@ -866,7 +854,7 @@ TEST_F(ParkableImageDelayedTest, Simple) {
 
 // Test that we park only after 30 seconds or once we have read the data, not
 // immediately after freezing.
-TEST_F(ParkableImageDelayedTest, Read) {
+TEST_F(ParkableImageTest, DelayedRead) {
   const size_t kDataSize = 3.5 * 4096;
   auto data = base::HeapArray<uint8_t>::Uninit(kDataSize);
   PrepareReferenceData(data);
@@ -902,7 +890,7 @@ TEST_F(ParkableImageDelayedTest, Read) {
 
 // 30 seconds should be counted from when we freeze, and not be affected by
 // parking/unparking.
-TEST_F(ParkableImageDelayedTest, ParkAndUnpark) {
+TEST_F(ParkableImageTest, DelayedParkAndUnpark) {
   const size_t kDataSize = 3.5 * 4096;
   auto data = base::HeapArray<uint8_t>::Uninit(kDataSize);
   PrepareReferenceData(data);
@@ -947,6 +935,7 @@ TEST_F(ParkableImageWithLimitedDiskCapacityTest, ParkWithLimitedDiskCapacity) {
   PrepareReferenceData(data);
 
   auto pi = MakeParkableImageForTesting(data);
+  pi->Data();
   pi->Freeze();
   EXPECT_TRUE(MaybePark(pi));
   RunPostedTasks();
@@ -954,6 +943,7 @@ TEST_F(ParkableImageWithLimitedDiskCapacityTest, ParkWithLimitedDiskCapacity) {
 
   // Create another parkable image and attempt to write to disk.
   auto pi2 = MakeParkableImageForTesting(data);
+  pi2->Data();
   pi2->Freeze();
   // Should be false because there is no free space.
   EXPECT_FALSE(MaybePark(pi2));

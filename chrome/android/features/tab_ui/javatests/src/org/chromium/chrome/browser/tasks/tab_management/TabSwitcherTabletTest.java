@@ -52,7 +52,6 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.compositor.layouts.Layout;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager;
-import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTab;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
@@ -68,9 +67,10 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.ChromeTriggers;
+import org.chromium.chrome.test.transit.hub.TabSwitcherStation;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
 import org.chromium.chrome.test.transit.page.WebPageStation;
-import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.TabStripUtils;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
@@ -121,7 +121,7 @@ public class TabSwitcherTabletTest {
                                     null,
                                     0);
                         });
-                LayoutTestUtils.waitForLayout(layoutManager, LayoutType.BROWSING);
+                LayoutTestUtils.waitForBrowsingLayout(cta);
             } else {
                 if (selector.getCurrentModel().isIncognito()) {
                     clickIncognitoToggleButton();
@@ -129,7 +129,7 @@ public class TabSwitcherTabletTest {
                 exitSwitcherWithTabClick(0);
             }
         } else {
-            LayoutTestUtils.waitForLayout(layoutManager, LayoutType.BROWSING);
+            LayoutTestUtils.waitForBrowsingLayout(cta);
         }
     }
 
@@ -213,10 +213,7 @@ public class TabSwitcherTabletTest {
         checkTabSwitcherViewHolderVisibility(false);
 
         // Close all tabs.
-        ChromeTabUtils.closeAllTabs(
-                InstrumentationRegistry.getInstrumentation(), cta.getTabModelSelectorSupplier());
-
-        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.HUB);
+        ChromeTriggers.closeAllTabsProgrammatically(mPage);
 
         // Assert the grid tab switcher is shown automatically, since there is no next tab.
         checkTabSwitcherViewHolderVisibility(true);
@@ -299,12 +296,12 @@ public class TabSwitcherTabletTest {
     public void testEmptyStateView() {
         ChromeTabbedActivity cta = mActivityTestRule.getActivity();
         prepareTabs(1, 0);
-        TabUiTestHelper.enterTabSwitcher(cta);
+        TabSwitcherStation tabSwitcher = TabUiTestHelper.enterTabSwitcher(cta);
 
         // Close the last tab.
-        closeTab(false, cta.getCurrentTabModel().getTabAt(0).getId());
+        tabSwitcher.closeTabAtIndex(0, TabSwitcherStation.class);
 
-        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.HUB);
+        LayoutTestUtils.waitForHubLayout(cta);
 
         // Check whether empty view show up.
         @IdRes int tabSwitcherAncestorId = TabUiTestHelper.getTabSwitcherAncestorId(cta);
@@ -370,23 +367,7 @@ public class TabSwitcherTabletTest {
 
     private void exitSwitcherWithTabClick(int index) {
         TabUiTestHelper.clickNthCardFromTabSwitcher(mActivityTestRule.getActivity(), index);
-        LayoutTestUtils.waitForLayout(
-                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.BROWSING);
-    }
-
-    private void closeTab(final boolean incognito, final int id) {
-        ChromeTabUtils.closeTabWithAction(
-                InstrumentationRegistry.getInstrumentation(),
-                mActivityTestRule.getActivity(),
-                () -> {
-                    StripLayoutTab tab =
-                            TabStripUtils.findStripLayoutTab(
-                                    mActivityTestRule.getActivity(), incognito, id);
-                    TabStripUtils.clickCompositorButton(
-                            tab.getCloseButton(),
-                            InstrumentationRegistry.getInstrumentation(),
-                            mActivityTestRule.getActivity());
-                });
+        LayoutTestUtils.waitForBrowsingLayout(mActivityTestRule.getActivity());
     }
 
     private void ensureHubLayout() {

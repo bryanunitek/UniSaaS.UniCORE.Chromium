@@ -343,6 +343,9 @@ void FetchManifestAndInstallCommand::Abort(webapps::InstallResultCode code,
                                            const base::Location& location) {
   Observe(nullptr);
   MeasureUserInstalledAppHistograms(code);
+  if (acceptance_result_callback_) {
+    std::move(acceptance_result_callback_).Run(false, base::DoNothing());
+  }
   CompleteAndSelfDestruct(CommandResult::kSuccess, webapps::AppId(), code,
                           location);
 }
@@ -353,7 +356,7 @@ bool FetchManifestAndInstallCommand::IsWebContentsDestroyed() {
 
 void FetchManifestAndInstallCommand::OnGetWebAppInstallInfo(
     std::unique_ptr<WebAppInstallInfo> fallback_web_app_info) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (IsWebContentsDestroyed()) {
     Abort(webapps::InstallResultCode::kWebContentsDestroyed);
     return;
@@ -687,7 +690,7 @@ void FetchManifestAndInstallCommand::OnDialogCompleted(
       web_app_info_->add_to_quick_launch_bar.value_or(
           kAddAppsToQuickLaunchBarByDefault);
 
-  DCHECK(app_lock_);
+  CHECK(app_lock_, base::NotFatalUntil::M162);
   auto* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
 

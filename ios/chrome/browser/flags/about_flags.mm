@@ -51,7 +51,6 @@
 #import "components/history/core/browser/features.h"
 #import "components/lens/lens_features.h"
 #import "components/metrics/metrics_features.h"
-#import "components/ntp_tiles/features.h"
 #import "components/ntp_tiles/switches.h"
 #import "components/omnibox/browser/aim_eligibility_service_features.h"
 #import "components/omnibox/browser/omnibox_field_trial.h"
@@ -131,7 +130,6 @@
 #import "ios/chrome/browser/text_selection/model/text_selection_util.h"
 #import "ios/chrome/browser/variations/model/ios_chrome_variations_seed_fetcher.h"
 #import "ios/chrome/browser/web/model/features.h"
-#import "ios/chrome/browser/welcome_back/model/features.h"
 #import "ios/chrome/browser/whats_new/coordinator/whats_new_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/components/enterprise/analysis/features.h"
@@ -233,6 +231,27 @@ constexpr FeatureEntry::FeatureVariation
         {"B) only show lens and voice search",
          kEnableFuseboxKeyboardAccessoryOnlyFeaturesParam, nullptr},
         {"C) enable both", kEnableFuseboxKeyboardAccessoryBothParam, nullptr}};
+
+constexpr FeatureEntry::Choice kOmniboxTruncateSearchUrlChoices[] = {
+    {flags_ui::kGenericExperimentChoiceDefault, "", ""},
+    {flags_ui::kGenericExperimentChoiceEnabled, switches::kEnableFeatures,
+     "TruncateSearchUrlOq,TruncateSearchUrlQ"},
+    {"Enabled Oq26kQ26k (26k oq, 26k q)", switches::kEnableFeatures,
+     "TruncateSearchUrlOq:truncate_search_url_oq_length/26624,"
+     "TruncateSearchUrlQ:truncate_search_url_q_length/26624"},
+    {"Enabled Oq1kQ51k (1k oq, 51k q)", switches::kEnableFeatures,
+     "TruncateSearchUrlOq:truncate_search_url_oq_length/1024,"
+     "TruncateSearchUrlQ:truncate_search_url_q_length/52224"},
+    {"Enabled Oq2kQ50k (2k oq, 50k q)", switches::kEnableFeatures,
+     "TruncateSearchUrlOq:truncate_search_url_oq_length/2048,"
+     "TruncateSearchUrlQ:truncate_search_url_q_length/51200"},
+    {"Enabled Oq1kQNoTruncation (1k oq, q disabled)", switches::kEnableFeatures,
+     "TruncateSearchUrlOq:truncate_search_url_oq_length/1024"},
+    {"Enabled Oq2kQNoTruncation (2k oq, q disabled)", switches::kEnableFeatures,
+     "TruncateSearchUrlOq:truncate_search_url_oq_length/2048"},
+    {flags_ui::kGenericExperimentChoiceDisabled, switches::kDisableFeatures,
+     "TruncateSearchUrlOq,TruncateSearchUrlQ"},
+};
 
 constexpr FeatureEntry::FeatureParam kOmniboxUIMaxAutocompleteMatches3[] = {
     {OmniboxFieldTrial::kUIMaxAutocompleteMatchesParam, "3"}};
@@ -664,6 +683,24 @@ constexpr FeatureEntry::FeatureVariation
         {" - with Show Me How", kAnimatedDBPInFREWithShowMeHow, nullptr},
         {" - with Instructions", kAnimatedDBPInFREWithInstructions, nullptr}};
 
+constexpr FeatureEntry::FeatureParam
+    kAndroidSwitcherDBPInFRESegmentationSignal[] = {
+        {first_run::kAndroidSwitcherDefaultBrowserPromoInFREParam,
+         first_run::
+             kAndroidSwitcherDefaultBrowserPromoInFREParamSegmentationSignal}};
+constexpr FeatureEntry::FeatureParam
+    kAndroidSwitcherDBPInFRESwitcherInfoSignal[] = {
+        {first_run::kAndroidSwitcherDefaultBrowserPromoInFREParam,
+         first_run::
+             kAndroidSwitcherDefaultBrowserPromoInFREParamSwitcherInfoSignal}};
+
+constexpr FeatureEntry::FeatureVariation
+    kAndroidSwitcherDefaultBrowserPromoInFREVariations[] = {
+        {" - Segmentation Signal", kAndroidSwitcherDBPInFRESegmentationSignal,
+         nullptr},
+        {" - Switcher Info Signal", kAndroidSwitcherDBPInFRESwitcherInfoSignal,
+         nullptr}};
+
 constexpr FeatureEntry::FeatureParam kBestFeaturesScreenInFirstRunArm2[] = {
     {first_run::kBestFeaturesScreenInFirstRunParam, "2"}};
 constexpr FeatureEntry::FeatureParam kBestFeaturesScreenInFirstRunArm3[] = {
@@ -736,23 +773,6 @@ constexpr FeatureEntry::FeatureVariation kFeedSwipeInProductHelpVariations[] = {
     {"- Static IPH after the second run",
      kFeedSwipeInProductHelpStaticInSecondRun, nullptr},
     {"- Animated IPH", kFeedSwipeInProductHelpAnimated, nullptr}};
-
-constexpr FeatureEntry::FeatureParam kWelcomeBackArm1[] = {
-    {kWelcomeBackParam, "1"}};
-constexpr FeatureEntry::FeatureParam kWelcomeBackArm2[] = {
-    {kWelcomeBackParam, "2"}};
-constexpr FeatureEntry::FeatureParam kWelcomeBackArm3[] = {
-    {kWelcomeBackParam, "3"}};
-constexpr FeatureEntry::FeatureParam kWelcomeBackArm4[] = {
-    {kWelcomeBackParam, "4"}};
-
-constexpr FeatureEntry::FeatureVariation kWelcomeBackVariations[] = {
-    {" - Variant A: Basics with Locked Incognito", kWelcomeBackArm1, nullptr},
-    {" - Variant B: Basics with Save & Autofill Passwords", kWelcomeBackArm2,
-     nullptr},
-    {" - Variant C: Productivity & Shopping", kWelcomeBackArm3, nullptr},
-    {" - Variant D: Sign-in Benefits", kWelcomeBackArm4, nullptr},
-};
 
 constexpr FeatureEntry::FeatureParam kBackgroundRefreshRegressionTestControl[] =
     {{"regression_test_arm", "control"}};
@@ -1099,16 +1119,26 @@ constexpr FeatureEntry::FeatureVariation kPageActionMenuIconVariations[] = {
 constexpr FeatureEntry::FeatureParam kAssistantContainerParamDebugMode[] = {
     {kAssistantContainerParam, kAssistantContainerParamDebug}};
 
-constexpr FeatureEntry::FeatureParam kAssistantContainer30[] = {
-    {kAssistantContainerMediumDetentPercentParam, "30"}};
-
 constexpr FeatureEntry::FeatureParam kAssistantContainer60[] = {
     {kAssistantContainerMediumDetentPercentParam, "60"}};
 
+constexpr FeatureEntry::FeatureParam kAssistantContainer80[] = {
+    {kAssistantContainerMediumDetentPercentParam, "80"}};
+
 constexpr FeatureEntry::FeatureVariation kAssistantContainerVariations[] = {
     {"with debug enabled", kAssistantContainerParamDebugMode, nullptr},
-    {"30% medium detent", kAssistantContainer30, nullptr},
-    {"60% medium detent", kAssistantContainer60, nullptr}};
+    {"60% medium detent", kAssistantContainer60, nullptr},
+    {"80% medium detent", kAssistantContainer80, nullptr}};
+
+constexpr FeatureEntry::FeatureParam kAimCobrowseWithAddTabEntrypoint[] = {
+    {kAimCobrowseAddTabEntrypointParam, "true"}};
+constexpr FeatureEntry::FeatureParam kAimCobrowseWithoutAddTabEntrypoint[] = {
+    {kAimCobrowseAddTabEntrypointParam, "false"}};
+
+constexpr FeatureEntry::FeatureVariation kAimCobrowseVariations[] = {
+    {"with Add Tab entrypoint", kAimCobrowseWithAddTabEntrypoint, nullptr},
+    {"without Add Tab entrypoint", kAimCobrowseWithoutAddTabEntrypoint,
+     nullptr}};
 
 constexpr FeatureEntry::FeatureParam kAutoSubmissionDismissThenSubmit[] = {
     {"auto-submission-type", "DismissThenSubmit"},
@@ -1181,19 +1211,19 @@ constexpr FeatureEntry::FeatureVariation kAim3pEntrypointVariations[] = {
 
 constexpr FeatureEntry::FeatureParam
     kAimButtonRefactorFocusComposeboxAimQuickAction[] = {
-        {ntp_tiles::kAimButtonRefactorArmParam, "1"}};
+        {kAimButtonRefactorArmParam, "1"}};
 constexpr FeatureEntry::FeatureParam
     kAimButtonRefactorImageGenerationQuickAction[] = {
-        {ntp_tiles::kAimButtonRefactorArmParam, "2"}};
+        {kAimButtonRefactorArmParam, "2"}};
 constexpr FeatureEntry::FeatureParam
     kAimButtonRefactorAttachImageQuickAction[] = {
-        {ntp_tiles::kAimButtonRefactorArmParam, "3"}};
+        {kAimButtonRefactorArmParam, "3"}};
 constexpr FeatureEntry::FeatureParam kAimButtonRefactorAimAsModule[] = {
-    {ntp_tiles::kAimButtonRefactorArmParam, "4"}};
+    {kAimButtonRefactorArmParam, "4"}};
 constexpr FeatureEntry::FeatureParam kAimButtonRefactorAimAsMvt[] = {
-    {ntp_tiles::kAimButtonRefactorArmParam, "5"}};
+    {kAimButtonRefactorArmParam, "5"}};
 constexpr FeatureEntry::FeatureParam kAimButtonRefactorNoChips[] = {
-    {ntp_tiles::kAimButtonRefactorArmParam, "6"}};
+    {kAimButtonRefactorArmParam, "6"}};
 
 constexpr FeatureEntry::FeatureVariation kAimButtonRefactorVariations[] = {
     {" - Focus Composebox AIM Quick Action",
@@ -1617,6 +1647,10 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kIOSOmniboxAimServerEligibilityDescription,
      flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(omnibox::kAimServerEligibilityEnabled)},
+    {"omnibox-truncate-search-url",
+     flag_descriptions::kOmniboxTruncateSearchUrlName,
+     flag_descriptions::kOmniboxTruncateSearchUrlDescription, flags_ui::kOsIos,
+     MULTI_VALUE_TYPE(kOmniboxTruncateSearchUrlChoices)},
     {"omnibox-ui-max-autocomplete-matches",
      flag_descriptions::kOmniboxUIMaxAutocompleteMatchesName,
      flag_descriptions::kOmniboxUIMaxAutocompleteMatchesDescription,
@@ -2079,11 +2113,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kSafeBrowsingTrustedURLName,
      flag_descriptions::kSafeBrowsingTrustedURLDescription, flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(kSafeBrowsingTrustedURL)},
-    {"ios-welcome-back-screen", flag_descriptions::kWelcomeBackName,
-     flag_descriptions::kWelcomeBackDescription, flags_ui::kOsIos,
-     FEATURE_WITH_PARAMS_VALUE_TYPE(kWelcomeBack,
-                                    kWelcomeBackVariations,
-                                    "WelcomeBack")},
     {"best-of-app-fre", flag_descriptions::kBestOfAppFREName,
      flag_descriptions::kBestOfAppFREDescription, flags_ui::kOsIos,
      FEATURE_WITH_PARAMS_VALUE_TYPE(kBestOfAppFRE,
@@ -2161,6 +2190,11 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(
          lens::features::kLensUseSeparateRequestIdForViewportImages)},
+    {"lens-send-drive-tab-urls-in-composeboxes",
+     flag_descriptions::kLensSendDriveTabUrlsInComposeboxesName,
+     flag_descriptions::kLensSendDriveTabUrlsInComposeboxesDescription,
+     flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(lens::features::kLensSendDriveTabUrlsInComposeboxes)},
     // LINT.IfChange(DataSharingVersioning)
     {"shared-data-types-kill-switch",
      flag_descriptions::kDataSharingVersioningStatesName,
@@ -2171,11 +2205,6 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kIOSTrustedVaultNotificationName,
      flag_descriptions::kIOSTrustedVaultNotificationDescription,
      flags_ui::kOsIos, FEATURE_VALUE_TYPE(kIOSTrustedVaultNotification)},
-    {"ios-skip-fre-default-browser-promo-in-eea",
-     flag_descriptions::kSkipDefaultBrowserPromoInFirstRunName,
-     flag_descriptions::kSkipDefaultBrowserPromoInFirstRunDescription,
-     flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(first_run::kSkipDefaultBrowserPromoInFirstRun)},
     {"apply-clientside-model-predictions-for-password-types",
      flag_descriptions::kApplyClientsideModelPredictionsForPasswordTypesName,
      flag_descriptions::
@@ -2463,7 +2492,9 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      FEATURE_VALUE_TYPE(kIOSSaveToPhotosSignedOut)},
     {"aim-cobrowse", flag_descriptions::kAimCobrowseName,
      flag_descriptions::kAimCobrowseDescription, flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(kAimCobrowse)},
+     FEATURE_WITH_PARAMS_VALUE_TYPE(kAimCobrowse,
+                                    kAimCobrowseVariations,
+                                    "IOSAimCobrowse")},
     {"ios-date-to-calendar-signed-out",
      flag_descriptions::kIOSDateToCalendarSignedOutName,
      flag_descriptions::kIOSDateToCalendarSignedOutDescription,
@@ -2886,7 +2917,7 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
                                     "Aim3pEntrypoint")},
     {"aim-button-refactor", flag_descriptions::kAimButtonRefactorName,
      flag_descriptions::kAimButtonRefactorDescription, flags_ui::kOsIos,
-     FEATURE_WITH_PARAMS_VALUE_TYPE(ntp_tiles::kAimButtonRefactor,
+     FEATURE_WITH_PARAMS_VALUE_TYPE(kAimButtonRefactor,
                                     kAimButtonRefactorVariations,
                                     "AimButtonRefactor")},
     {"enable-cobrowse-on-aim-srp-tap",
@@ -3065,7 +3096,10 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kAndroidSwitcherDefaultBrowserPromoInFREName,
      flag_descriptions::kAndroidSwitcherDefaultBrowserPromoInFREDescription,
      flags_ui::kOsIos,
-     FEATURE_VALUE_TYPE(first_run::kAndroidSwitcherDefaultBrowserPromoInFRE)},
+     FEATURE_WITH_PARAMS_VALUE_TYPE(
+         first_run::kAndroidSwitcherDefaultBrowserPromoInFRE,
+         kAndroidSwitcherDefaultBrowserPromoInFREVariations,
+         "AndroidSwitcherDefaultBrowserPromoInFRE")},
     {"magic-stack-ntp-theme-tip-ios",
      flag_descriptions::kMagicStackNTPThemeTipIosName,
      flag_descriptions::kMagicStackNTPThemeTipIosDescription, flags_ui::kOsIos,
@@ -3094,10 +3128,9 @@ constexpr auto kFeatureEntries = std::to_array<flags_ui::FeatureEntry>({
      flag_descriptions::kEnableBackgroundContinuedProcessingDescription,
      flags_ui::kOsIos,
      FEATURE_VALUE_TYPE(kEnableBackgroundContinuedProcessing)},
-    {"remote-actor-credential-sharing",
-     flag_descriptions::kRemoteActorCredentialSharingName,
-     flag_descriptions::kRemoteActorCredentialSharingDescription,
-     flags_ui::kOsIos, FEATURE_VALUE_TYPE(kRemoteActorCredentialSharing)},
+    {"suspicious-site-warnings", flag_descriptions::kSuspiciousSiteWarningsName,
+     flag_descriptions::kSuspiciousSiteWarningsDescription, flags_ui::kOsIos,
+     FEATURE_VALUE_TYPE(safe_browsing::kSuspiciousSiteWarnings)},
 });
 
 bool SkipConditionalFeatureEntry(const flags_ui::FeatureEntry& entry) {

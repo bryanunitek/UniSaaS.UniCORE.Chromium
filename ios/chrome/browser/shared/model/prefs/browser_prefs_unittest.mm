@@ -10,7 +10,6 @@
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/personal_context/core/personal_context_prefs.h"
 #import "components/policy/core/common/policy_pref_names.h"
-#import "components/safety_check/safety_check_pref_names.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync_preferences/testing_pref_service_syncable.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_constants.h"
@@ -58,28 +57,27 @@ class BrowserPrefsTest : public PlatformTest {
 
 // [1] Profile pref renaming (triggered by `MigrateObsoleteProfilePrefs()`).
 
-TEST_F(BrowserPrefsTest, RenameSafetyCheckModuleEnabledProfilePref) {
-  const bool test_value = false;  // Default is true
+// Tests renaming `kCustomLinksAiModeTileIndex` to
+// `prefs::kIosMostVisitedAiModeTileIndex`.
+TEST_F(BrowserPrefsTest, RenameCustomLinksAiModeTileIndexProfilePref) {
+  constexpr char kCustomLinksAiModeTileIndex[] =
+      "custom_links.ai_mode_tile_index";
+  const int test_value = 2;
 
-  profile_prefs()->SetBoolean(
-      prefs::kHomeCustomizationMagicStackSafetyCheckEnabled, test_value);
+  profile_prefs()->SetInteger(kCustomLinksAiModeTileIndex, test_value);
 
-  ASSERT_EQ(profile_prefs()->GetBoolean(
-                prefs::kHomeCustomizationMagicStackSafetyCheckEnabled),
+  ASSERT_EQ(profile_prefs()->GetInteger(kCustomLinksAiModeTileIndex),
             test_value);
-  ASSERT_TRUE(
-      profile_prefs()
-          ->FindPreference(safety_check::prefs::kSafetyCheckHomeModuleEnabled)
-          ->IsDefaultValue());
+  ASSERT_TRUE(profile_prefs()
+                  ->FindPreference(prefs::kIosMostVisitedAiModeTileIndex)
+                  ->IsDefaultValue());
 
   MigrateObsoleteProfilePrefs(profile_prefs());
 
   EXPECT_TRUE(profile_prefs()
-                  ->FindPreference(
-                      prefs::kHomeCustomizationMagicStackSafetyCheckEnabled)
+                  ->FindPreference(kCustomLinksAiModeTileIndex)
                   ->IsDefaultValue());
-  EXPECT_EQ(profile_prefs()->GetBoolean(
-                safety_check::prefs::kSafetyCheckHomeModuleEnabled),
+  EXPECT_EQ(profile_prefs()->GetInteger(prefs::kIosMostVisitedAiModeTileIndex),
             test_value);
 }
 

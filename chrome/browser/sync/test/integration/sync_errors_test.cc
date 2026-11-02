@@ -23,7 +23,6 @@
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/data_type.h"
-#include "components/sync/base/features.h"
 #include "components/sync/engine/sync_protocol_error.h"
 #include "components/sync/model/data_type_controller_delegate.h"
 #include "components/sync/model/type_entities_count.h"
@@ -125,10 +124,8 @@ class SyncErrorTest
   SyncErrorTest() : SyncTest(SINGLE_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitWithFeatures(
-          {syncer::kReplaceSyncPromosWithSignInPromos,
-           switches::kSyncEnableBookmarksInTransportMode,
-           switches::kEnablePreferencesAccountStorage,
-           syncer::kSeparateLocalAndAccountSearchEngines},
+          {switches::kSyncEnableBookmarksInTransportMode,
+           switches::kEnablePreferencesAccountStorage},
           {});
     }
   }

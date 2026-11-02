@@ -120,7 +120,11 @@ TEST_F(CriticalUserJourneyServiceTest, HaTSSurveyLogging) {
 
   run_loop.Run();
 
-  EXPECT_EQ(captured_psd[kCujTerminalStateKey], kCujTerminalStateCompleted);
+  EXPECT_EQ(captured_psd[kCujJourneyOutcomeKey], kCujJourneyOutcomeCompleted);
+  EXPECT_EQ(captured_psd[kCujJourneyNameKey], "TestJourney");
+  EXPECT_EQ(captured_psd[kCujEntryStepKey], kCujDefaultEntryStep);
+  EXPECT_FALSE(captured_psd[kCujJourneyDurationKey].empty());
+  EXPECT_EQ(captured_psd.size(), 4u);
 
   // Verify histograms.
   const std::string hats_event_histogram =
@@ -180,10 +184,134 @@ TEST_F(CriticalUserJourneyServiceTest, HaTSSurveyAbandonedExitBranchPSD) {
 
   run_loop.Run();
 
-  EXPECT_EQ(captured_psd[kCujTerminalStateKey], kCujTerminalStateAbandoned);
+  EXPECT_EQ(captured_psd[kCujJourneyOutcomeKey], kCujJourneyOutcomeAbandoned);
+  EXPECT_EQ(captured_psd[kCujJourneyNameKey], "TestJourney");
+  EXPECT_EQ(captured_psd[kCujEntryStepKey], kCujDefaultEntryStep);
+  EXPECT_FALSE(captured_psd[kCujJourneyDurationKey].empty());
+  EXPECT_EQ(captured_psd.size(), 4u);
   histograms.ExpectUniqueSample(
       "CriticalUserJourney.TestJourney.Result",
       CriticalUserJourneySession::JourneyResult::kAbandoned, 1);
+}
+
+TEST_F(CriticalUserJourneyServiceTest,
+       SplitRateProbabilityGateFiltersAbandonedSurveys) {
+  base::test::ScopedFeatureList scoped_params;
+  scoped_params.InitAndEnableFeatureWithParameters(
+      kTestJourney, {{"survey_probability_on_exit", "0.25"}});
+
+  auto* mock_hats_service = static_cast<MockHatsService*>(
+      HatsServiceFactory::GetForProfile(&profile_, true));
+
+  // Case A: Random roll 0.50 is above the 0.25 probability on exit.
+  // The survey must NOT be launched.
+  service_->SetRandDoubleCallbackForTesting(
+      base::BindRepeating([]() { return 0.50; }));
+  EXPECT_CALL(*mock_hats_service, LaunchSurvey(testing::_, testing::_, testing::_,
+                                               testing::_, testing::_,
+                                               testing::_, testing::_))
+      .Times(0);
+
+  ui::test::TestElement el1(kTestElementId1, kTestContext);
+  el1.Show();
+  base::RunLoop().RunUntilIdle();
+
+  ui::test::TestElement el3(kTestElementId3, kTestContext);
+  el3.Show();
+  el3.Hide();
+  base::RunLoop().RunUntilIdle();
+
+  testing::Mock::VerifyAndClearExpectations(mock_hats_service);
+
+  // Case B: Random roll 0.10 is below the 0.25 probability on exit.
+  // The survey MUST be launched.
+  base::RunLoop run_loop;
+  SurveyStringData captured_psd;
+  service_->SetRandDoubleCallbackForTesting(
+      base::BindRepeating([]() { return 0.10; }));
+  EXPECT_CALL(*mock_hats_service,
+              LaunchSurvey("TestHatsTrigger", testing::_, testing::_,
+                           testing::_, testing::_, testing::_, testing::_))
+      .WillOnce([&run_loop, &captured_psd](
+                    const std::string& trigger,
+                    base::OnceClosure success_callback,
+                    base::OnceClosure failure_callback,
+                    const SurveyBitsData& product_specific_bits_data,
+                    const SurveyStringData& product_specific_string_data,
+                    const std::optional<std::string>& supplied_trigger_id,
+                    const HatsService::SurveyOptions& survey_options) {
+        captured_psd = product_specific_string_data;
+        std::move(success_callback).Run();
+        run_loop.Quit();
+        return HatsService::LaunchError::kNone;
+      });
+
+  // Re-trigger the journey via exit branch.
+  ui::test::TestElement el1_b(kTestElementId1, kTestContext);
+  el1_b.Show();
+  base::RunLoop().RunUntilIdle();
+
+  ui::test::TestElement el3_b(kTestElementId3, kTestContext);
+  el3_b.Show();
+  el3_b.Hide();
+
+  run_loop.Run();
+
+  EXPECT_EQ(captured_psd[kCujJourneyOutcomeKey], kCujJourneyOutcomeAbandoned);
+  EXPECT_EQ(captured_psd[kCujJourneyNameKey], "TestJourney");
+}
+
+TEST_F(CriticalUserJourneyServiceTest,
+       ActivatedTriggerHidingBeforeNextStepCompletesJourney) {
+  class ActivatedTriggerService : public CriticalUserJourneyService {
+   public:
+    explicit ActivatedTriggerService(Profile* profile)
+        : CriticalUserJourneyService(profile) {}
+
+   protected:
+    void RegisterJourneys(CriticalUserJourneyRegistry* registry) override {
+      registry->AddJourney(
+          CriticalUserJourney::Builder(&kTestJourney)
+              .AddAnyOf({Branch(kTestElementId1,
+                                ui::InteractionSequence::StepType::kActivated,
+                                1)})
+              .AddStep(kTestElementId2,
+                       ui::InteractionSequence::StepType::kShown, 2)
+              .Build());
+    }
+  };
+
+  // Tear down the default service so only `ActivatedTriggerService` listens for
+  // `kTestElementId1`.
+  service_.reset();
+  ActivatedTriggerService activated_service(&profile_);
+  activated_service.Initialize();
+
+  base::HistogramTester histograms;
+
+  // Showing `el1` (and even showing and hiding `el2`) without activating `el1`
+  // must not start or complete the journey.
+  ui::test::TestElement el1(kTestElementId1, kTestContext);
+  el1.Show();
+  ui::test::TestElement el2(kTestElementId2, kTestContext);
+  el2.Show();
+  el2.Hide();
+  base::RunLoop().RunUntilIdle();
+  histograms.ExpectTotalCount("CriticalUserJourney.TestJourney.Result", 0);
+
+  // Activating `el1` starts the session. Hiding `el1` before `el2` is shown
+  // (e.g. a page action chip disappearing as the side panel opens) must not
+  // abort the journey.
+  el1.Activate();
+  el1.Hide();
+  el2.Show();
+  base::RunLoop().RunUntilIdle();
+
+  histograms.ExpectUniqueSample(
+      "CriticalUserJourney.TestJourney.Result",
+      CriticalUserJourneySession::JourneyResult::kCompleted, 1);
+  histograms.ExpectBucketCount("CriticalUserJourney.TestJourney.StepReached", 2,
+                               1);
 }
 
 TEST_F(CriticalUserJourneyServiceTest,

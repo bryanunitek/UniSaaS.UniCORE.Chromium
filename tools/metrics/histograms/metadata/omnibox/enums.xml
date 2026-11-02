@@ -112,11 +112,6 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Non-null"/>
 </enum>
 
-<enum name="BooleanOffered">
-  <int value="0" label="Not offered"/>
-  <int value="1" label="Offered"/>
-</enum>
-
 <enum name="BooleanOffTheRecord">
   <int value="0" label="Regular"/>
   <int value="1" label="Off the record"/>
@@ -280,6 +275,24 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxAttachmentSizeLimitCheck) -->
+
+<!-- LINT.IfChange(FuseboxSniffedImageFormat) -->
+
+<enum name="FuseboxSniffedImageFormat">
+  <int value="0" label="Unknown / unrecognised signature"/>
+  <int value="1" label="JPEG"/>
+  <int value="2" label="PNG"/>
+  <int value="3" label="GIF"/>
+  <int value="4" label="WebP"/>
+  <int value="5" label="BMP"/>
+  <int value="6" label="ICO / CUR"/>
+  <int value="7" label="AVIF"/>
+  <int value="8" label="HEIF / HEIC"/>
+  <int value="9" label="TIFF (incl. DNG)"/>
+  <int value="10" label="JPEG XL"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/ImageFormatSniffer.java:FuseboxSniffedImageFormat) -->
 
 <!-- LINT.IfChange(FuseboxTabAttachStartFailureReason) -->
 
@@ -457,15 +470,6 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//components/omnibox/browser/geolocation_header_service.h:OmniboxInlineLocationSuggestionShown) -->
 
-<enum name="OmniboxInputType">
-  <int value="0" label="empty"/>
-  <int value="1" label="unknown"/>
-  <int value="2" label="deprecated: requested url"/>
-  <int value="3" label="url"/>
-  <int value="4" label="query"/>
-  <int value="5" label="forced query"/>
-</enum>
-
 <!-- LINT.IfChange(OmniboxModelMode) -->
 
 <enum name="OmniboxModelMode">
@@ -477,6 +481,16 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="GeminiFlashLatest"/>
   <int value="6" label="GeminiProLatest"/>
   <int value="7" label="GeminiPreview"/>
+  <int value="8" label="AimModelAlfa"/>
+  <int value="9" label="AimModelBravo"/>
+  <int value="10" label="AimModelCharlie"/>
+  <int value="11" label="AimModelDelta"/>
+  <int value="12" label="AimModelEcho"/>
+  <int value="13" label="AimModelFoxtrot"/>
+  <int value="14" label="AimModelGolf"/>
+  <int value="15" label="AimModelHotel"/>
+  <int value="16" label="AimModelIndia"/>
+  <int value="17" label="AimModelJuliett"/>
 </enum>
 
 <!-- LINT.ThenChange(//components/omnibox/common/omnibox_metrics_utils.cc:ModelMode,//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:ModelMode) -->

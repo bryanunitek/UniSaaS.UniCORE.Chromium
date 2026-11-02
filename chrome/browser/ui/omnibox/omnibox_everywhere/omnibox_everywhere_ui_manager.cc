@@ -24,8 +24,12 @@
 #include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/ai_mode_button_service_factory.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/themes/theme_service_observer.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/omnibox/clipboard_utils.h"
+#include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_fre_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_prefs.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_region_select_overlay.h"
 #include "chrome/browser/ui/omnibox/omnibox_everywhere/omnibox_everywhere_widget_delegate.h"
@@ -70,8 +74,8 @@
 #include "ui/base/emoji/emoji_panel_helper.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -241,6 +245,64 @@ class OmniboxEverywhereContentsWrapper
   }
 };
 
+// Top-level widget hosting the Omnibox Everywhere WebUI. Because this widget
+// has no parent BrowserWidget, a plain views::Widget only queries
+// ui::NativeTheme (the OS theme) and ignores the active Profile's ThemeService.
+// Subclassing views::Widget and observing ThemeService ensures the widget's
+// ColorProviderKey reflects Chrome's BrowserColorScheme (Light/Dark/System)
+// while always using the unthemed GM3 baseline palette.
+class OmniboxEverywhereWidget : public views::Widget,
+                                public ThemeServiceObserver {
+ public:
+  explicit OmniboxEverywhereWidget(Profile* profile) {
+    if (profile) {
+      if (auto* theme_service = ThemeServiceFactory::GetForProfile(profile)) {
+        theme_service_observation_.Observe(theme_service);
+      }
+    }
+  }
+  OmniboxEverywhereWidget(const OmniboxEverywhereWidget&) = delete;
+  OmniboxEverywhereWidget& operator=(const OmniboxEverywhereWidget&) = delete;
+  ~OmniboxEverywhereWidget() override = default;
+
+  void ResetThemeObserver() { theme_service_observation_.Reset(); }
+
+  // ThemeServiceObserver:
+  void OnThemeChanged() override {
+    NotifyColorProviderChanged();
+    ThemeChanged();
+  }
+
+  // views::Widget:
+  ui::ColorProviderKey GetColorProviderKey() const override {
+    ui::ColorProviderKey key = views::Widget::GetColorProviderKey();
+    if (const auto* theme_service = theme_service_observation_.GetSource()) {
+      const auto browser_color_scheme =
+          theme_service->GetBrowserColorScheme();
+      if (browser_color_scheme != ThemeService::BrowserColorScheme::kSystem) {
+        key.color_mode =
+            browser_color_scheme == ThemeService::BrowserColorScheme::kLight
+                ? ui::ColorProviderKey::ColorMode::kLight
+                : ui::ColorProviderKey::ColorMode::kDark;
+      }
+    }
+    if (color_mode_override().has_value()) {
+      key.color_mode = color_mode_override().value();
+    }
+    // Always use the unthemed GM3 baseline palette so Omnibox Everywhere
+    // respects Light/Dark mode (from chrome://settings/appearance or the
+    // OS) without inheriting Chrome browser color themes or OS accent
+    // tinting.
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kBaseline;
+    key.user_color = std::nullopt;
+    return key;
+  }
+
+ private:
+  base::ScopedObservation<ThemeService, ThemeServiceObserver>
+      theme_service_observation_{this};
+};
+
 }  // namespace
 
 OmniboxEverywhereUIManager::OmniboxEverywhereUIManager(
@@ -329,7 +391,7 @@ void OmniboxEverywhereUIManager::ShowForProfile(Profile* profile,
     return;
   }
 
-  if (widget_) {
+  if (widget_ || (contents_wrapper_ && profile_ != profile)) {
     // If a different profile is present, clean up first.
     DestroyWidgetAndWebContents();
   }
@@ -523,11 +585,7 @@ void OmniboxEverywhereUIManager::CreateAndInitWidget(
     return;
   }
 
-  widget_ = std::make_unique<views::Widget>();
-
-  // TODO(crbug.com/542731882): Remove once dark mode for loomnibox is
-  // implemented.
-  widget_->SetColorModeOverride(ui::ColorProviderKey::ColorMode::kLight);
+  widget_ = std::make_unique<OmniboxEverywhereWidget>(profile_);
 
   views::Widget::InitParams params(
       views::Widget::InitParams::CLIENT_OWNS_WIDGET,
@@ -551,9 +609,10 @@ void OmniboxEverywhereUIManager::CreateAndInitWidget(
     params.context = context;
   }
 
+  auto* service = OmniboxEverywhereServiceFactory::GetForProfile(profile_);
   const bool is_fre_intro_modal =
-      base::FeatureList::IsEnabled(omnibox::kOmniboxEverywhereFre) &&
-      prefs::GetCurrentFreStage(profile_) == prefs::FreStage::kIntroModal;
+      service && service->fre_controller() &&
+      service->fre_controller()->GetCurrentStage() == FreStage::kIntroModal;
   params.bounds = CalculateWidgetBounds(
       is_fre_intro_modal ? kFreModalRestingHeight : kDefaultRestingHeight);
 
@@ -667,8 +726,11 @@ void OmniboxEverywhereUIManager::OnMostVisitedPrefChanged() {
     return;
   }
   // Clean up the widget when the pref changes so there is not flicker when the
-  // omnibox is re-invoked.
-  DestroyWidgetAndWebContents();
+  // omnibox is re-invoked, while keeping the WebContents alive in case a Mojo
+  // handler on `contents_wrapper_` (such as `MostVisitedHandler`) is on the
+  // call stack.
+  DestroyWidget();
+  ReleaseKeepAlives();
 }
 
 // TODO(crbug.com/558851707): Move impression recording to the FRE WebUI
@@ -676,14 +738,15 @@ void OmniboxEverywhereUIManager::OnMostVisitedPrefChanged() {
 // based on true visual visibility and both ephemeral and persistent window
 // models are handled consistently.
 void OmniboxEverywhereUIManager::MaybeRecordFreImpression() {
-  if (!profile_ || !profile_->GetPrefs() ||
-      !base::FeatureList::IsEnabled(omnibox::kOmniboxEverywhereFre)) {
+  if (!profile_) {
     return;
   }
-
-  PrefService* local_state =
-      g_browser_process ? g_browser_process->local_state() : nullptr;
-  omnibox_everywhere::prefs::IncrementFreImpression(profile_, local_state);
+  if (auto* service =
+          OmniboxEverywhereServiceFactory::GetForProfile(profile_)) {
+    if (service->fre_controller()) {
+      service->fre_controller()->IncrementImpression();
+    }
+  }
 }
 
 void OmniboxEverywhereUIManager::MaybeShowLensPromo() {
@@ -752,6 +815,11 @@ void OmniboxEverywhereUIManager::Close() {
                 /*is_activity=*/false)));
       }
     }
+#if defined(USE_AURA)
+    // Aura does not deliver events to hidden windows, so the handler may never
+    // see the release or capture loss that ends a pending drag hold.
+    event_handler_->ResetDragState();
+#endif
     widget_->Hide();
   }
   ReleaseKeepAlives();
@@ -818,11 +886,15 @@ void OmniboxEverywhereUIManager::DestroyWidget() {
   is_screenshare_disclosure_open_ = false;
   scoped_ignore_input_events_.reset();
   if (widget_) {
+    static_cast<OmniboxEverywhereWidget*>(widget_.get())->ResetThemeObserver();
     widget_observation_.Reset();
 #if defined(USE_AURA)
     if (auto* native_view = widget_->GetNativeView()) {
       native_view->RemovePreTargetHandler(event_handler_.get());
     }
+    // The handler outlives the widget and, once detached, can no longer see
+    // the release or capture loss that ends a pending drag hold.
+    event_handler_->ResetDragState();
 #endif
     if (auto* contents_view = widget_delegate_->GetContentsView()) {
       if (auto* web_view = views::AsViewClass<views::WebView>(contents_view)) {
@@ -1819,9 +1891,10 @@ void OmniboxEverywhereUIManager::ExecuteCommand(int command_id,
                   if (auto* service =
                           OmniboxEverywhereServiceFactory::GetForProfile(
                               profile)) {
-                    service->OpenUrl(match.destination_url,
-                                     WindowOpenDisposition::kNewForegroundTab,
-                                     ui::PAGE_TRANSITION_GENERATED);
+                    service->OpenUrl(
+                        match.destination_url,
+                        ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+                        ui::PAGE_TRANSITION_GENERATED);
                   }
                 }
               },
@@ -1838,7 +1911,7 @@ void OmniboxEverywhereUIManager::ExecuteCommand(int command_id,
       auto* service = OmniboxEverywhereServiceFactory::GetForProfile(profile_);
       if (service) {
         service->OpenUrl(chrome::GetSettingsUrl(chrome::kSearchEnginesSubPage),
-                         WindowOpenDisposition::kNewForegroundTab,
+                         ui::mojom::WindowOpenDisposition::kNewForegroundTab,
                          ui::PAGE_TRANSITION_AUTO_BOOKMARK);
       }
       break;
@@ -1870,7 +1943,7 @@ void OmniboxEverywhereUIManager::ExecuteCommand(int command_id,
       auto* service = OmniboxEverywhereServiceFactory::GetForProfile(profile_);
       if (service) {
         service->OpenUrl(chrome::GetSettingsUrl(chrome::kSearchSubPage),
-                         WindowOpenDisposition::kNewForegroundTab,
+                         ui::mojom::WindowOpenDisposition::kNewForegroundTab,
                          ui::PAGE_TRANSITION_AUTO_BOOKMARK);
       }
       break;
@@ -1879,7 +1952,7 @@ void OmniboxEverywhereUIManager::ExecuteCommand(int command_id,
       auto* service = OmniboxEverywhereServiceFactory::GetForProfile(profile_);
       if (service) {
         service->OpenUrl(chrome::GetSettingsUrl(chrome::kSearchSubPage),
-                         WindowOpenDisposition::kNewForegroundTab,
+                         ui::mojom::WindowOpenDisposition::kNewForegroundTab,
                          ui::PAGE_TRANSITION_AUTO_BOOKMARK);
       }
       break;

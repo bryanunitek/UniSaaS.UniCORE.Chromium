@@ -196,7 +196,6 @@ if (is_win || is_mac || is_linux || is_chromeos) {
       "//chrome/browser/profiles:profile",
       "//chrome/browser/profiles:profile_util",
       "//chrome/browser/signin",
-      "//chrome/browser/sync",
       "//chrome/browser/ui:browser_tabstrip",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/browser_window",
@@ -1110,31 +1109,6 @@ if (enable_dice_support) {
     ]
   }
 
-  source_set("profile_picker_turn_sync_on_delegate") {
-    public = [ "profile_picker_turn_sync_on_delegate.h" ]
-    sources = [ "profile_picker_turn_sync_on_delegate.cc" ]
-    public_deps = [
-      "//base",
-      "//chrome/browser/profiles:profile",
-      "//chrome/browser/ui/webui/signin",
-    ]
-    deps = [
-      ":profile_management_types",
-      "//chrome/browser/enterprise",
-      "//chrome/browser/regional_capabilities",
-      "//chrome/browser/signin",
-      "//chrome/browser/ui:chrome_pages",
-      "//chrome/browser/ui/browser_window",
-      "//chrome/browser/ui/profiles",
-      "//chrome/browser/ui/webui/signin",
-      "//chrome/browser/ui/webui/signin:signin_ui_error",
-      "//chrome/common:constants",
-      "//components/regional_capabilities",
-      "//components/signin/public/base",
-      "//components/sync/base:features",
-    ]
-  }
-
   source_set("profile_picker_post_sign_in_adapter") {
     public = [ "profile_picker_post_sign_in_adapter.h" ]
     sources = [ "profile_picker_post_sign_in_adapter.cc" ]
@@ -1148,22 +1122,17 @@ if (enable_dice_support) {
       "//components/signin/public/identity_manager",
       "//content/public/browser",
       "//skia",
+      "//url",
     ]
     deps = [
-      ":profile_picker_turn_sync_on_delegate",
-      "//chrome/browser/regional_capabilities",
       "//chrome/browser/signin",
       "//chrome/browser/themes",
       "//chrome/browser/ui/browser_window",
       "//chrome/browser/ui/profiles",
       "//chrome/browser/ui/webui/intro",
       "//chrome/common:constants",
-      "//components/regional_capabilities",
-      "//components/sync/base:features",
-      "//net",
       "//ui/base:types",
     ]
-    allow_circular_includes_from = [ ":profile_picker_turn_sync_on_delegate" ]
   }
 
   source_set("profile_management_flow_controller_impl") {
@@ -1186,7 +1155,9 @@ if (enable_dice_support) {
       "//chrome/browser/profiles:profile",
       "//chrome/browser/signin",
       "//chrome/browser/ui/browser_window",
+      "//chrome/browser/ui/signin",
       "//chrome/browser/ui/webui/signin",
+      "//chrome/browser/ui/webui/signin:signin_ui_error",
       "//components/signin/public/base",
       "//components/web_modal",
       "//content/public/browser",
@@ -1412,14 +1383,8 @@ source_set("browser_tests") {
       "profile_picker_signin_ui_browsertest.cc",
       "profile_picker_ui_browsertest.cc",
       "profile_type_choice_ui_browsertest.cc",
-      "sync_confirmation_ui_browsertest.cc",
     ]
-    deps += [
-      "//chrome/browser/consent_auditor",
-      "//chrome/browser/consent_auditor:test_support",
-      "//chrome/browser/ui/views/frame:top_container_view",
-      "//components/consent_auditor",
-    ]
+    deps += [ "//chrome/browser/ui/views/frame:top_container_view" ]
   }
 
   if (enable_dice_support) {

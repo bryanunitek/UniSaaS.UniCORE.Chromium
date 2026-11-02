@@ -30,7 +30,7 @@ import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
 import org.chromium.chrome.browser.ui.signin.fullscreen_signin.FullscreenSigninCoordinator;
-import org.chromium.chrome.browser.ui.signin.fullscreen_signin.FullscreenSigninMediator;
+import org.chromium.chrome.browser.ui.signin.fullscreen_signin.FullscreenSigninLoadPoint;
 import org.chromium.chrome.browser.ui.signin.fullscreen_signin.FullscreenSigninView;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncCoordinator;
@@ -44,6 +44,7 @@ import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.AccountConsistencyPromoAction;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
+import org.chromium.components.signin.metrics.SigninFunnelEvent;
 import org.chromium.components.signin.metrics.SignoutReason;
 import org.chromium.google_apis.gaia.CoreAccountId;
 import org.chromium.ui.base.WindowAndroid;
@@ -300,8 +301,7 @@ public final class FullscreenSigninAndHistorySyncCoordinator extends SigninAndHi
     }
 
     @Override
-    public void recordLoadCompletedHistograms(
-            @FullscreenSigninMediator.LoadPoint int slowestLoadPoint) {
+    public void recordLoadCompletedHistograms(@FullscreenSigninLoadPoint int slowestLoadPoint) {
         RecordHistogram.recordTimesHistogram(
                 "Signin.Timestamps.Android.Fullscreen.LoadCompleted",
                 SystemClock.elapsedRealtime() - mActivityStartTime);
@@ -312,6 +312,14 @@ public final class FullscreenSigninAndHistorySyncCoordinator extends SigninAndHi
         RecordHistogram.recordTimesHistogram(
                 "Signin.Timestamps.Android.Fullscreen.NativeInitialized",
                 SystemClock.elapsedRealtime() - mActivityStartTime);
+    }
+
+    /** Implements {@link FullscreenSigninCoordinator.Delegate} */
+    @Override
+    public void logPromoShownFunnelEventOnBackPress(
+            @SigninAccessPoint int accessPoint, @SigninFunnelEvent int event) {
+        // No-op: showChildView() recreates the sign-in coordinator on back press, and the new
+        // coordinator already logs the promo shown event once its initial load completes.
     }
 
     /** Implements {@link FullscreenSigninCoordinator.Delegate} */

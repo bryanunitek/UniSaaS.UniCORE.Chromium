@@ -31,7 +31,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
@@ -90,6 +89,7 @@ import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogManagerHolder;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.widget.Toast;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
@@ -694,7 +694,7 @@ public class PdfCoordinator
                 return;
             }
             if (!PdfUtils.isUriSafeForSharing(uri, context)) {
-                Log.e(TAG, "Blocked openPdfInExternalEditor for unsafe URI: " + uri);
+                Log.e(TAG, "Blocked openPdfInExternalEditor for unsafe URI: %s", uri);
                 showCannotEditToast(context);
                 return;
             }
@@ -940,11 +940,11 @@ public class PdfCoordinator
                                                 if (finalTempFile != null) {
                                                     finalTempFile.delete();
                                                 }
-                                                if (mDelegate != null) {
-                                                    mDelegate.onPdfEditsSaveFailed();
-                                                }
                                                 ThreadUtils.postOnUiThread(
                                                         () -> {
+                                                            if (mDelegate != null) {
+                                                                mDelegate.onPdfEditsSaveFailed();
+                                                            }
                                                             finishExitingEditMode();
                                                         });
                                             }
@@ -962,7 +962,7 @@ public class PdfCoordinator
                                 public void resumeWith(Object result) {
                                     boolean isSuccess = result == Unit.INSTANCE;
                                     if (!isSuccess) {
-                                        Log.e(TAG, "Async PDF write failed: " + result);
+                                        Log.e(TAG, "Async PDF write failed: %s", result);
                                     }
                                     onSaveFinished.accept(isSuccess);
                                 }
@@ -986,8 +986,8 @@ public class PdfCoordinator
                 } else {
                     Log.e(
                             TAG,
-                            "Failed to open file descriptor for writing: "
-                                    + (isIncognito ? "memfd" : tempFile));
+                            "Failed to open file descriptor for writing: %s",
+                            isIncognito ? "memfd" : tempFile);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Failed to write PDF edits", e);
@@ -1013,13 +1013,12 @@ public class PdfCoordinator
         }
 
         @Override
-        // TODO(crbug.com/527937210): Handle this error in a user-friendly way.
         public void onApplyEditsFailed(Throwable error) {
             Log.e(TAG, "Failed to apply PDF edits", error);
-            setEditModeEnabled(false);
             if (mDelegate != null) {
                 mDelegate.onPdfEditsSaveFailed();
             }
+            setEditModeEnabled(false);
         }
 
         @Override
@@ -1350,10 +1349,10 @@ public class PdfCoordinator
 
                             @Override
                             public void resumeWith(Object result) {
-                                if (result instanceof PageInfo) {
-                                    action.accept((PageInfo) result);
+                                if (result instanceof PageInfo pageInfo) {
+                                    action.accept(pageInfo);
                                 } else {
-                                    Log.w(TAG, "Failed to get page info. Result: " + result);
+                                    Log.w(TAG, "Failed to get page info. Result: %s", result);
                                     action.accept(null);
                                 }
                             }
@@ -1486,9 +1485,8 @@ public class PdfCoordinator
         if (mToolbarCoordinator != null) {
             mToolbarCoordinator.destroy();
         }
-        if (mModalDialogModel != null && mActivity instanceof ModalDialogManagerHolder) {
-            ModalDialogManager modalDialogManager =
-                    ((ModalDialogManagerHolder) mActivity).getModalDialogManager();
+        if (mModalDialogModel != null && mActivity instanceof ModalDialogManagerHolder holder) {
+            ModalDialogManager modalDialogManager = holder.getModalDialogManager();
             if (modalDialogManager != null) {
                 modalDialogManager.dismissDialog(
                         mModalDialogModel, DialogDismissalCause.ACTIVITY_DESTROYED);
@@ -1698,7 +1696,7 @@ public class PdfCoordinator
                 return true;
             }
         } catch (IOException | SecurityException e) {
-            Log.e(TAG, "No write permission for original file path: " + originalFile.getPath(), e);
+            Log.e(TAG, "No write permission for original file path: %s", originalFile.getPath(), e);
             return false;
         }
     }
@@ -1833,8 +1831,8 @@ public class PdfCoordinator
                         onConfirm.run();
                     }
                 };
-        if (mActivity instanceof ModalDialogManagerHolder) {
-            modalDialogManager = ((ModalDialogManagerHolder) mActivity).getModalDialogManager();
+        if (mActivity instanceof ModalDialogManagerHolder holder) {
+            modalDialogManager = holder.getModalDialogManager();
         }
         if (modalDialogManager != null) {
             showUnsavedChangesModalDialog(
@@ -1954,7 +1952,7 @@ public class PdfCoordinator
         }
 
         if (!PdfUtils.isUriSafeForSharing(mUri, mActivity)) {
-            Log.e(TAG, "Blocked getFileUri for unsafe URI: " + mUri);
+            Log.e(TAG, "Blocked getFileUri for unsafe URI: %s", mUri);
             return null;
         }
 
@@ -1977,7 +1975,7 @@ public class PdfCoordinator
         }
 
         if (!PdfUtils.isUriSafeForSharing(mUri, mActivity)) {
-            Log.e(TAG, "Blocked requestAssistContent for unsafe URI: " + mUri);
+            Log.e(TAG, "Blocked requestAssistContent for unsafe URI: %s", mUri);
             return null;
         }
 
@@ -2296,7 +2294,7 @@ public class PdfCoordinator
             }
             return context.getContentResolver().openInputStream(uri);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to open input stream for path: " + path, e);
+            Log.e(TAG, "Failed to open input stream for path: %s", path, e);
         }
         return null;
     }
@@ -2400,7 +2398,14 @@ public class PdfCoordinator
 
     @Override
     public void onPdfEditsSaveFailed() {
+        ThreadUtils.assertOnUiThread();
         mDownloadAfterSave = false;
+        if (mChromePdfViewerFragment == null
+                || mActivity.isFinishing()
+                || mActivity.isDestroyed()) {
+            return;
+        }
+        Toast.makeText(mActivity, R.string.pdf_apply_edits_failed, Toast.LENGTH_SHORT).show();
     }
 
     @Override
@@ -2547,9 +2552,8 @@ public class PdfCoordinator
         ((TextView) dialogView.findViewById(R.id.page_count_value)).setText(pageCountStr);
         ((TextView) dialogView.findViewById(R.id.page_size_value)).setText(pageSizeStr);
 
-        if (mActivity instanceof ModalDialogManagerHolder) {
-            ModalDialogManager modalDialogManager =
-                    ((ModalDialogManagerHolder) mActivity).getModalDialogManager();
+        if (mActivity instanceof ModalDialogManagerHolder holder) {
+            ModalDialogManager modalDialogManager = holder.getModalDialogManager();
             showModalDialog(modalDialogManager, dialogView);
         } else {
             showAlertDialog(dialogView);
@@ -2654,8 +2658,8 @@ public class PdfCoordinator
         }
         mNativePageHost.selectTab();
         ModalDialogManager modalDialogManager = null;
-        if (mActivity instanceof ModalDialogManagerHolder) {
-            modalDialogManager = ((ModalDialogManagerHolder) mActivity).getModalDialogManager();
+        if (mActivity instanceof ModalDialogManagerHolder holder) {
+            modalDialogManager = holder.getModalDialogManager();
         }
         if (mModalDialogModel != null && modalDialogManager != null) {
             modalDialogManager.dismissDialog(

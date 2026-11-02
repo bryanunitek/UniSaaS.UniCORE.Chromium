@@ -166,6 +166,8 @@
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/app_menu/app_menu_action_item.h"
 #include "chrome/browser/ui/views/commerce/discounts_page_action_view_controller.h"
+#include "chrome/browser/ui/views/contextual_tasks/contextual_tasks_ephemeral_button_controller.h"
+#include "chrome/browser/ui/views/contextual_tasks/contextual_tasks_ephemeral_button_utils.h"
 #include "chrome/browser/ui/views/file_system_access/file_system_access_bubble_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
@@ -249,6 +251,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/text_utils.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/menus/simple_menu_model.h"
@@ -680,8 +684,18 @@ void BrowserActions::InitializeSidePanelActions() {
     if (contextual_tasks::ShouldUseSuperGIconForPinButtons()) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       contextual_tasks_image = ui::ImageModel::FromImageSkia(
-          *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-              IDR_GOOGLE_G_GRADIENT_16_ALT));
+          gfx::ImageSkiaOperations::CreateResizedImage(
+              *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+                  IDR_GOOGLE_G_GRADIENT_20),
+              skia::ImageOperations::RESIZE_BEST, gfx::Size(18, 18)));
+#else
+      contextual_tasks_image = ui::ImageModel::FromVectorIcon(
+          vector_icons::kGoogleColorIcon, ui::kColorIcon);
+#endif
+    } else if (contextual_tasks::ShouldUseGraySuperGIconForPinButtons()) {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      contextual_tasks_image = ui::ImageModel::FromVectorIcon(
+          vector_icons::kGoogleGLogoMonochromeIcon, ui::kColorIcon);
 #else
       contextual_tasks_image = ui::ImageModel::FromVectorIcon(
           vector_icons::kGoogleColorIcon, ui::kColorIcon);
@@ -695,14 +709,33 @@ void BrowserActions::InitializeSidePanelActions() {
                   if (!bwi) {
                     return;
                   }
+                  if (contextual_tasks::
+                          IsContextualTasksEphemeralPinButtonRefactorEnabled() &&
+                      !contextual_tasks::GetEffectivePinState(
+                          bwi->GetProfile())) {
+                    base::OnceClosure on_ephemeral_open;
+                    if (auto* const ephemeral_controller =
+                            ContextualTasksEphemeralButtonController::From(
+                                bwi)) {
+                      on_ephemeral_open = base::BindOnce(
+                          &ContextualTasksEphemeralButtonController::
+                              RecordEphemeralButtonClicked,
+                          base::Unretained(ephemeral_controller));
+                    }
+                    contextual_tasks::HandleEphemeralButtonPressed(
+                        bwi, std::move(on_ephemeral_open));
+                    return;
+                  }
                   auto* controller =
                       contextual_tasks::ContextualTasksPanelController::From(
                           bwi);
                   if (controller) {
-                    // Only mark the "icon changed" promo as used when in the
+                    // Only mark the "icon changed" promo as used when in a
                     // Super G arm, so clicking the old pinned icon before the
                     // flag is enabled does not suppress the promo later.
-                    if (contextual_tasks::ShouldUseSuperGIconForPinButtons()) {
+                    if (contextual_tasks::ShouldUseSuperGIconForPinButtons() ||
+                        contextual_tasks::
+                            ShouldUseGraySuperGIconForPinButtons()) {
                       if (auto* const user_ed =
                               BrowserUserEducationInterface::From(bwi)) {
                         user_ed->NotifyFeaturePromoFeatureUsed(
@@ -756,6 +789,14 @@ void BrowserActions::InitializeSidePanelActions() {
                                               kNewThread);
                       }
                     }
+                    if (!is_open) {
+                      if (auto* const ephemeral_controller =
+                              ContextualTasksEphemeralButtonController::From(
+                                  bwi)) {
+                        ephemeral_controller->RecordToolbarButtonOpenClick(
+                            /*is_permanent_button=*/true);
+                      }
+                    }
                   }
                   if (contextual_tasks::
                           IsContextualTasksPinButtonInToolbarEnabled() &&
@@ -769,21 +810,20 @@ void BrowserActions::InitializeSidePanelActions() {
                 bwi))
             .SetActionId(kActionSidePanelShowContextualTasks)
             .SetText(l10n_util::GetStringUTF16(
-                contextual_tasks::AreContextualTasksUpdatedEntryPointsEnabled(
-                    profile)
-                    ? IDS_ASK_GOOGLE_ABOUT_THIS_PAGE
-                    : IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL))
+                IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL))
             .SetTooltipText(l10n_util::GetStringUTF16(
-                contextual_tasks::AreContextualTasksUpdatedEntryPointsEnabled(
-                    profile)
-                    ? IDS_ASK_GOOGLE_ABOUT_THIS_PAGE
-                    : IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL))
+                IDS_CONTEXTUAL_TASKS_CUSTOMIZE_CHROME_LABEL))
             .SetImage(contextual_tasks_image)
             .SetProperty(
                 actions::kActionItemPinnableKey,
                 static_cast<
                     std::underlying_type_t<actions::ActionPinnableState>>(
-                    actions::ActionPinnableState::kPinnable))
+                    (!contextual_tasks::
+                         IsContextualTasksEphemeralPinButtonRefactorEnabled() ||
+                     contextual_tasks::EntryPointEligibilityManager::
+                         IsPinningEligible(profile))
+                        ? actions::ActionPinnableState::kPinnable
+                        : actions::ActionPinnableState::kNotPinnable))
             .SetVisible(contextual_tasks::EntryPointEligibilityManager::
                             IsPinningEligible(profile))
             .Build());
@@ -877,9 +917,8 @@ void BrowserActions::InitializePageActionIconActions() {
                         .toolbar_button_provider()
                         ->GetBubbleAnchor(kActionShowJsOptimizationsIcon);
 
-                bwi->GetActiveTabInterface()
-                    ->GetTabFeatures()
-                    ->js_optimizations_page_action_controller()
+                JsOptimizationsPageActionController::From(
+                    bwi->GetActiveTabInterface())
                     ->ShowBubble(anchor, item);
               },
               bwi))
@@ -899,9 +938,8 @@ void BrowserActions::InitializePageActionIconActions() {
             base::BindRepeating(
                 [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                    actions::ActionInvocationContext context) {
-                  bwi->GetActiveTabInterface()
-                      ->GetTabFeatures()
-                      ->record_replay_page_action_controller()
+                  RecordReplayPageActionController::From(
+                      bwi->GetActiveTabInterface())
                       ->ExecuteAction(item);
                 },
                 bwi))
@@ -920,9 +958,7 @@ void BrowserActions::InitializePageActionIconActions() {
           base::BindRepeating(
               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
                  actions::ActionInvocationContext context) {
-                bwi->GetActiveTabInterface()
-                    ->GetTabFeatures()
-                    ->zoom_view_controller()
+                zoom::ZoomViewController::From(bwi->GetActiveTabInterface())
                     ->UpdateBubbleVisibility(
                         /*prefer_to_show_bubble=*/true,
                         /*from_user_gesture=*/true);
@@ -2919,6 +2955,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
           .SetActionId(kActionFullscreen)
           .SetTooltipText(l10n_util::GetStringUTF16(IDS_ACCNAME_FULLSCREEN))
           .SetAccessibleName(l10n_util::GetStringUTF16(IDS_ACCNAME_FULLSCREEN))
+          .SetAccelerator(GetAcceleratorForCommandId(IDC_FULLSCREEN))
           .SetImage(ui::ImageModel::FromVectorIcon(
               features::IsRoundedIconsEnabled() ? kFullscreenIcon
                                                 : kFullscreenRefreshOldIcon))
@@ -3697,6 +3734,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
               bwi))
           .SetActionId(kActionZoomPlus)
           .SetTooltipText(l10n_util::GetStringUTF16(IDS_ACCNAME_ZOOM_PLUS2))
+          .SetAccelerator(GetAcceleratorForCommandId(IDC_ZOOM_PLUS))
           .SetImage(ui::ImageModel::FromVectorIcon(
               features::IsRoundedIconsEnabled() ? kAddIcon
                                                 : kZoomPlusMenuRefreshOldIcon))
@@ -3712,6 +3750,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
               bwi))
           .SetActionId(kActionZoomMinus)
           .SetTooltipText(l10n_util::GetStringUTF16(IDS_ACCNAME_ZOOM_MINUS2))
+          .SetAccelerator(GetAcceleratorForCommandId(IDC_ZOOM_MINUS))
           .SetImage(ui::ImageModel::FromVectorIcon(
               features::IsRoundedIconsEnabled() ? kRemoveIcon
                                                 : kZoomMinusMenuRefreshOldIcon))
@@ -4648,6 +4687,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
           .SetText(GetCleanTitleText(l10n_util::GetStringUTF16(IDS_FEEDBACK)))
           .SetTooltipText(
               GetCleanTooltipText(l10n_util::GetStringUTF16(IDS_FEEDBACK)))
+          .SetAccelerator(GetAcceleratorForCommandId(IDC_FEEDBACK))
           .SetImage(ui::ImageModel::FromVectorIcon(
               features::IsRoundedIconsEnabled() ? kFeedbackIcon
                                                 : kReportOldIcon))
@@ -4751,6 +4791,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
           .SetImage(ui::ImageModel::FromVectorIcon(
               features::IsRoundedIconsEnabled() ? kHelpCustomIcon
                                                 : kHelpMenuOldIcon))
+          .SetAccelerator(GetAcceleratorForCommandId(IDC_HELP_PAGE_VIA_MENU))
           .Build());
 
   root_action_item_->AddChild(
@@ -4853,9 +4894,7 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
           IDS_CHROME_ENTERPRISE_RELEASE_NOTES, omnibox::kChromeProductIcon,
           /*is_pinnable=*/false)
 #if BUILDFLAG(IS_LINUX)
-          .SetVisible(
-              enterprise_util::IsBrowserManaged(profile) &&
-              base::FeatureList::IsEnabled(features::kEnterpriseReleaseNotes))
+          .SetVisible(enterprise_util::IsBrowserManaged(profile))
 #else
           .SetVisible(false)
 #endif
@@ -5442,6 +5481,10 @@ void BrowserActions::InitializeSubmenuActions() {
           features::IsRoundedIconsEnabled() ? kHelpCustomIcon
                                             : kHelpMenuOldIcon,
           /*is_pinnable=*/false)
+          .SetImage(ui::ImageModel::FromVectorIcon(
+              features::IsRoundedIconsEnabled() ? kHelpCustomIcon
+                                                : kHelpMenuOldIcon,
+              ui::kColorIcon))
           .Build());
 
   root_action_item_->AddChild(

@@ -209,7 +209,7 @@ void PageContentExtractionService::OnPageContentExtracted(
     content::Page& page,
     PageContent page_content,
     const std::vector<uint8_t>& screenshot_data,
-    std::optional<int> tab_id) {
+    std::optional<int64_t> tab_id) {
   for (auto& observer : observers_) {
     observer.OnPageContentExtracted(page, page_content);
   }
@@ -312,6 +312,14 @@ void PageContentExtractionService::OnTabClosed(int64_t tab_id) {
 void PageContentExtractionService::OnTabCloseUndone(int64_t tab_id) {
   if (is_page_content_cache_enabled_) {
     page_content_cache_handler_->OnTabCloseUndone(tab_id);
+  }
+}
+
+void PageContentExtractionService::UpdateTabId(int64_t old_tab_id,
+                                               int64_t new_tab_id) {
+  if (is_page_content_cache_enabled_) {
+    page_content_cache_handler_->page_content_cache()->UpdateTabId(old_tab_id,
+                                                                   new_tab_id);
   }
 }
 

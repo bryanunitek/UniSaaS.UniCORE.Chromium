@@ -34,12 +34,13 @@
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/command_updater.h"
+#include "chrome/browser/contextual_tasks/search_journey_tracker.h"
+#include "chrome/browser/contextual_tasks/search_journey_tracker_factory.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/feedback/public/feedback_source.h"
 #include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/history_embeddings/history_embeddings_utils.h"
 #include "chrome/browser/omnibox/autocomplete_controller_emitter_factory.h"
 #include "chrome/browser/page_load_metrics/chrome_navigation_initiator.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor.h"
@@ -121,8 +122,8 @@
 #include "services/network/public/cpp/constants.h"
 #include "skia/ext/image_operations.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -523,7 +524,7 @@ void ChromeOmniboxClient::ProcessExtensionMatch(
     const std::u16string& text,
     const TemplateURL* template_url,
     const AutocompleteMatch& match,
-    WindowOpenDisposition disposition) {
+    ui::mojom::WindowOpenDisposition disposition) {
   // Strip the keyword + leading space (if present) off the input.
   std::u16string remaining_input;
   AutocompleteInput::SplitKeywordFromInput(match.fill_into_edit, true,
@@ -947,7 +948,7 @@ void ChromeOmniboxClient::ShowFeedbackPage(const std::u16string& input_text,
 void ChromeOmniboxClient::OnAutocompleteAccept(
     const GURL& destination_url,
     TemplateURLRef::PostContent* post_content,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     ui::PageTransition transition,
     omnibox::AutocompleteMatchType match_type,
     base::TimeTicks match_selection_timestamp,
@@ -966,9 +967,26 @@ void ChromeOmniboxClient::OnAutocompleteAccept(
                     {header.first, ": ", header.second, "\r\n"});
   }
 
+  // Tells Search when the query matches text the user recently copied, so it
+  // can slice metrics by it.
+  GURL url = destination_url;
+  // `match` with `url`, if that differs. Code that runs after the navigation
+  // finds this search by the match's URL, e.g. to remove it from history if the
+  // user picks the "Did you mean" infobar instead.
+  std::optional<AutocompleteMatch> match_with_url;
+  if (contextual_tasks::SearchJourneyTracker* tracker =
+          contextual_tasks::SearchJourneyTrackerFactory::GetForProfile(
+              profile_)) {
+    url = tracker->MaybeAppendCopyMatchParam(destination_url);
+    if (url != destination_url) {
+      match_with_url = match;
+      match_with_url->destination_url = url;
+    }
+  }
+
   // Store the details necessary to open the omnibox match via browser commands.
   location_bar_->set_navigation_params(LocationBar::NavigationParams(
-      destination_url, disposition, transition, match_selection_timestamp,
+      url, disposition, transition, match_selection_timestamp,
       destination_url_entered_without_scheme,
       destination_url_entered_with_http_scheme, extra_headers));
 
@@ -985,8 +1003,9 @@ void ChromeOmniboxClient::OnAutocompleteAccept(
             chrome_navigation_initiator::kOmniboxDefaultSearchEngine);
       }
     }
-    ChromeOmniboxNavigationObserver::Create(navigation.get(), profile_, text,
-                                            match, alternative_nav_match);
+    ChromeOmniboxNavigationObserver::Create(
+        navigation.get(), profile_, text,
+        match_with_url ? *match_with_url : match, alternative_nav_match);
     search_engines::MaybeShowSearchEngineResetNotification(browser_,
                                                            match_type);
   }
@@ -1036,8 +1055,9 @@ void ChromeOmniboxClient::OnPopupVisibilityChanged(bool popup_is_open) {
   }
 }
 
-void ChromeOmniboxClient::OpenUrl(GURL gurl,
-                                  WindowOpenDisposition disposition) {
+void ChromeOmniboxClient::OpenUrl(
+    GURL gurl,
+    ui::mojom::WindowOpenDisposition disposition) {
   CHECK(browser_);
   NavigateParams params(browser_, gurl, ui::PAGE_TRANSITION_GENERATED);
   params.disposition = disposition;
@@ -1046,7 +1066,7 @@ void ChromeOmniboxClient::OpenUrl(GURL gurl,
 
 void ChromeOmniboxClient::OpenUrlWithCallback(
     GURL gurl,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     base::OnceCallback<void(base::WeakPtr<content::NavigationHandle>)>
         callback) {
   CHECK(browser_);
@@ -1060,12 +1080,8 @@ void ChromeOmniboxClient::OpenIphLink(GURL gurl) {
   ui::PageTransition transition = ui::PageTransitionFromInt(
       ui::PAGE_TRANSITION_LINK | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
   NavigateParams params(profile_, gurl, transition);
-  params.disposition = WindowOpenDisposition::kNewForegroundTab;
+  params.disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
   Navigate(&params);
-}
-
-bool ChromeOmniboxClient::IsHistoryEmbeddingsEnabled() const {
-  return history_embeddings::IsHistoryEmbeddingsEnabledForProfile(profile_);
 }
 
 bool ChromeOmniboxClient::IsAimPopupEnabled() const {
@@ -1092,6 +1108,8 @@ void ChromeOmniboxClient::MaybePrewarmForDefaultSearchEngine(
     case PrewarmTrigger::kUserInteraction:
       CHECK(
           !base::FeatureList::IsEnabled(features::kPrewarmZeroSuggestTrigger));
+      CHECK(!base::FeatureList::IsEnabled(
+          features::kPrewarmPageLoadAndTabSwitchAfterPaintTrigger));
       if (!location_bar_->GetWebContents()) {
         // There seems to be a subtle timing where the active tab does not have
         // a valid WebContents instance on an user interaction trigger.

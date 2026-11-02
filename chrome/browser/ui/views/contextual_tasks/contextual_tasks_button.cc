@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
 #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
@@ -52,6 +53,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/gfx/skia_paint_util.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -371,6 +373,13 @@ void ContextualTasksButton::OnShouldUpdatePosition() {
                         : omnibox::kSearchSparkOldIcon);
     } else if (contextual_tasks::ShouldUseSuperGIconForPinButtons()) {
       SetImageModel(views::Button::STATE_NORMAL, GetButtonImage());
+    } else if (contextual_tasks::ShouldUseGraySuperGIconForPinButtons()) {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+      SetVectorIcon(vector_icons::kGoogleGLogoMonochromeIcon);
+#else
+      SetVectorIcon(features::IsRoundedIconsEnabled() ? kChromeProductIcon
+                                                      : kBrowserLogoOldIcon);
+#endif
     } else {
       const gfx::VectorIcon& contextual_tasks_icon =
           contextual_tasks::IsContextualTasksSidePanelRightAligned(
@@ -384,10 +393,16 @@ void ContextualTasksButton::OnShouldUpdatePosition() {
 
 bool ContextualTasksButton::ShouldShowMenu() {
   UpdateContextMenu();
-  return ToolbarButton::ShouldShowMenu();
+  return menu_model() && menu_model()->GetItemCount() > 0 &&
+         ToolbarButton::ShouldShowMenu();
 }
 
 void ContextualTasksButton::UpdateColorsAndInsets() {
+  if (contextual_tasks::IsContextualTasksPinningV2Enabled()) {
+    SetDefaultBackgroundColorId(ShouldShowCircleHighlight()
+                                    ? kColorAvatarButtonHighlightDefault
+                                    : kChromeColorsStart);
+  }
   ToolbarButton::UpdateColorsAndInsets();
 
   if (contextual_tasks::kShowEntryPoint.Get() !=
@@ -462,7 +477,9 @@ void ContextualTasksButton::UpdateIcon() {
                                     ? icons->touch_icon
                                     : icons->icon;
   if (contextual_tasks::
-          IsContextualTasksPinnedButtonActiveIndicatorEnabled()) {
+          IsContextualTasksPinnedButtonActiveIndicatorEnabled() &&
+      !contextual_tasks::
+          IsContextualTasksPinnedButtonActiveIndicatorCircleHighlightEnabled()) {
     const SkColor engaged_color =
         GetColorProvider()->GetColor(kColorToolbarActionItemEngaged);
     UpdateIconsWithColors(icon, engaged_color, engaged_color, engaged_color,
@@ -470,6 +487,32 @@ void ContextualTasksButton::UpdateIcon() {
   } else {
     ToolbarButton::UpdateIcon();
   }
+}
+
+int ContextualTasksButton::GetIconSize() const {
+  if (contextual_tasks::ShouldUseSparkIconForPinButtons()) {
+    return ToolbarButton::GetIconSize();
+  }
+  const std::optional<VectorIcons>& icons = GetVectorIcons();
+  if (icons.has_value()) {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+    if (&icons->icon == &vector_icons::kGoogleGLogoIcon ||
+        &icons->icon == &vector_icons::kGoogleGLogoMonochromeIcon) {
+      return ToolbarButton::GetIconSize() - 2;
+    }
+#else
+    if (&icons->icon == &vector_icons::kGoogleColorIcon) {
+      return ToolbarButton::GetIconSize() - 2;
+    }
+#endif
+  }
+  if (contextual_tasks::ShouldUseSuperGIconForPinButtons() ||
+      contextual_tasks::ShouldUseGraySuperGIconForPinButtons() ||
+      contextual_tasks::kShowEntryPoint.Get() ==
+          contextual_tasks::EntryPointOption::kToolbarEphemeralBranded) {
+    return ToolbarButton::GetIconSize() - 2;
+  }
+  return ToolbarButton::GetIconSize();
 }
 
 void ContextualTasksButton::OnViewLayerBoundsSet(views::View* observed_view) {
@@ -533,6 +576,11 @@ ui::Layer* ContextualTasksButton::GetDropShadowLayerForTesting() const {
 }
 
 void ContextualTasksButton::MaybeUpdateVisibility() {
+  if (contextual_tasks::IsContextualTasksEphemeralPinButtonRefactorEnabled()) {
+    SetVisible(false);
+    return;
+  }
+
   if (contextual_tasks::kShowEntryPoint.Get() !=
       contextual_tasks::EntryPointOption::kToolbarEphemeralBranded) {
     return;
@@ -544,6 +592,19 @@ void ContextualTasksButton::MaybeUpdateVisibility() {
 
   const bool was_visible = GetVisible();
   const bool will_be_visible = controller->ShouldShowEphemeralButton();
+  const bool is_panel_open = controller->IsPanelOpen();
+  const bool was_active_panel_open = was_visible && was_panel_open_;
+  const bool will_be_active_panel_open = will_be_visible && is_panel_open;
+  const bool was_active_panel_collapsed = was_visible && !was_panel_open_;
+  const bool will_be_active_panel_collapsed = will_be_visible && !is_panel_open;
+
+  if (!was_active_panel_open && will_be_active_panel_open) {
+    shown_time_ticks_ = base::TimeTicks();
+    contextual_tasks::RecordEphemeralButtonShown(/*is_panel_open=*/true);
+  } else if (!was_active_panel_collapsed && will_be_active_panel_collapsed) {
+    shown_time_ticks_ = base::TimeTicks::Now();
+    contextual_tasks::RecordEphemeralButtonShown(/*is_panel_open=*/false);
+  }
 
   if (!was_visible && will_be_visible) {
     if (layer()) {
@@ -552,8 +613,6 @@ void ContextualTasksButton::MaybeUpdateVisibility() {
     ClearDropShadow();
     SetVisible(true);
     AnimateShow();
-    shown_time_ticks_ = base::TimeTicks::Now();
-    contextual_tasks::RecordEphemeralButtonShown();
   } else {
     if (!will_be_visible) {
       anchor_highlight_.reset();
@@ -588,17 +647,16 @@ void ContextualTasksButton::MaybeUpdateVisibility() {
         }
       }
     } else {
-      if (!drop_shadow_painted_layer_) {
-        UpdateDropShadow();
-      }
+      UpdateDropShadow();
       MaybeToggleFeaturePromo();
     }
     SetVisible(will_be_visible);
   }
-  was_panel_open_ = controller->IsPanelOpen();
+  was_panel_open_ = is_panel_open;
   UpdateStatusIndicator();
   UpdateHighlight();
   UpdateTooltipText();
+  UpdateContextMenu();
 }
 
 void ContextualTasksButton::UpdateHighlight() {
@@ -606,15 +664,7 @@ void ContextualTasksButton::UpdateHighlight() {
     anchor_highlight_.reset();
     return;
   }
-  ContextualTasksEphemeralButtonController* const ephemeral_controller =
-      ContextualTasksEphemeralButtonController::From(browser_window_interface_);
-  auto* const panel_controller =
-      contextual_tasks::ContextualTasksPanelController::From(
-          browser_window_interface_);
-  const bool should_highlight =
-      GetVisible() && ephemeral_controller &&
-      ephemeral_controller->IsPanelOpen() && panel_controller &&
-      panel_controller->IsPanelOpenForContextualTask();
+  const bool should_highlight = GetVisible() && IsPanelOpen();
   if (should_highlight) {
     if (!anchor_highlight_.has_value()) {
       anchor_highlight_ = AddAnchorHighlight();
@@ -622,20 +672,11 @@ void ContextualTasksButton::UpdateHighlight() {
   } else {
     anchor_highlight_.reset();
   }
+  UpdateColorsAndInsets();
 }
 
 void ContextualTasksButton::UpdateTooltipText() {
-  ContextualTasksEphemeralButtonController* const ephemeral_controller =
-      ContextualTasksEphemeralButtonController::From(browser_window_interface_);
-  auto* const panel_controller =
-      contextual_tasks::ContextualTasksPanelController::From(
-          browser_window_interface_);
-  const bool is_panel_open =
-      ephemeral_controller ? (ephemeral_controller->IsPanelOpen() &&
-                              panel_controller &&
-                              panel_controller->IsPanelOpenForContextualTask())
-                           : (panel_controller &&
-                              panel_controller->IsPanelOpenForContextualTask());
+  const bool is_panel_open = IsPanelOpen();
 
   int tooltip_id = IDS_CONTEXTUAL_TASKS_ENTRY_POINT_TOOLTIP;
   if (contextual_tasks::kShowEntryPoint.Get() ==
@@ -727,9 +768,12 @@ void ContextualTasksButton::UpdateDropShadow(bool force_paint,
 
   ClearDropShadow();
 
+  const ChromeColorIds bg_color_id =
+      ShouldShowCircleHighlight() ? kColorAvatarButtonHighlightDefault
+                                  : kColorToolbar;
   auto contextual_tasks_button_background_painter =
       std::make_unique<ContextualTasksButtonBackgroundPainter>(
-          color_provider->GetColor(kColorToolbar),
+          color_provider->GetColor(bg_color_id),
           color_provider->GetColor(kColorToolbarContextualTasksButtonShadow),
           GetShape());
 
@@ -760,6 +804,8 @@ void ContextualTasksButton::UpdateStatusIndicator() {
   }
   if (contextual_tasks::
           IsContextualTasksPinnedButtonActiveIndicatorEnabled() &&
+      !contextual_tasks::
+          IsContextualTasksPinnedButtonActiveIndicatorCircleHighlightEnabled() &&
       GetVisible()) {
     status_indicator_->Show();
   } else {
@@ -800,9 +846,36 @@ void ContextualTasksButton::ClearDropShadow() {
   }
 }
 
+bool ContextualTasksButton::IsPanelOpen() const {
+  ContextualTasksEphemeralButtonController* const ephemeral_controller =
+      ContextualTasksEphemeralButtonController::From(browser_window_interface_);
+  auto* const panel_controller =
+      contextual_tasks::ContextualTasksPanelController::From(
+          browser_window_interface_);
+  return ephemeral_controller
+             ? (ephemeral_controller->IsPanelOpen() && panel_controller &&
+                panel_controller->IsPanelOpenForContextualTask())
+             : (panel_controller &&
+                panel_controller->IsPanelOpenForContextualTask());
+}
+
+bool ContextualTasksButton::ShouldShowCircleHighlight() const {
+  if (!contextual_tasks::
+          IsContextualTasksPinnedButtonActiveIndicatorCircleHighlightEnabled() ||
+      IsPanelOpen()) {
+    return false;
+  }
+  ContextualTasksEphemeralButtonController* const ephemeral_controller =
+      ContextualTasksEphemeralButtonController::From(browser_window_interface_);
+  return ephemeral_controller &&
+         ephemeral_controller->IsActiveTabAssociatedToTask();
+}
+
 ui::ImageModel ContextualTasksButton::GetButtonImage() {
   const bool use_active_indicator =
-      contextual_tasks::IsContextualTasksPinnedButtonActiveIndicatorEnabled();
+      contextual_tasks::IsContextualTasksPinnedButtonActiveIndicatorEnabled() &&
+      !contextual_tasks::
+          IsContextualTasksPinnedButtonActiveIndicatorCircleHighlightEnabled();
   const ui::ColorId icon_color_id =
       use_active_indicator ? ui::ColorId{kColorToolbarActionItemEngaged}
                            : ui::ColorId{ui::kColorIcon};
@@ -815,15 +888,33 @@ ui::ImageModel ContextualTasksButton::GetButtonImage() {
                                                     : kGLogoPillShapeIconSize);
   }
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  if (!use_active_indicator &&
-      (contextual_tasks::ShouldUseSuperGIconForPinButtons() ||
-       contextual_tasks::kShowEntryPoint.Get() ==
-           contextual_tasks::EntryPointOption::kToolbarEphemeralBranded)) {
+  if (contextual_tasks::ShouldUseSuperGIconForPinButtons() ||
+      contextual_tasks::kShowEntryPoint.Get() ==
+          contextual_tasks::EntryPointOption::kToolbarEphemeralBranded) {
+    const int icon_size = GetShape() == EphemeralButtonShape::kCircle
+                              ? GetIconSize()
+                              : kGLogoPillShapeIconSize;
     return ui::ImageModel::FromImageSkia(
-        *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-            IDR_GOOGLE_G_GRADIENT_16_ALT));
+        gfx::ImageSkiaOperations::CreateResizedImage(
+            *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
+                IDR_GOOGLE_G_GRADIENT_20),
+            skia::ImageOperations::RESIZE_BEST,
+            gfx::Size(icon_size, icon_size)));
   }
 #endif
+  if (contextual_tasks::ShouldUseGraySuperGIconForPinButtons()) {
+    const gfx::VectorIcon& gray_super_g_icon =
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+        vector_icons::kGoogleGLogoMonochromeIcon;
+#else
+        features::IsRoundedIconsEnabled() ? kChromeProductIcon
+                                          : kBrowserLogoOldIcon;
+#endif
+    return ui::ImageModel::FromVectorIcon(
+        gray_super_g_icon, icon_color_id,
+        GetShape() == EphemeralButtonShape::kCircle ? GetIconSize()
+                                                    : kGLogoPillShapeIconSize);
+  }
   const gfx::VectorIcon& contextual_tasks_icon =
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       vector_icons::kGoogleGLogoIcon;

@@ -49,7 +49,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -483,11 +482,6 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, CommandDuplicateSelected) {
 
 // TODO(crbug.com/501991031): Fails on "chrome/ci/linux-chromeos-chrome".
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_TestCloseTabDuringMoveOperation \
-  DISABLED_TestCloseTabDuringMoveOperation
-// TODO(crbug.com/542347163): Re-enable test.
-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_WIN)
 #define MAYBE_TestCloseTabDuringMoveOperation \
   DISABLED_TestCloseTabDuringMoveOperation
 #else

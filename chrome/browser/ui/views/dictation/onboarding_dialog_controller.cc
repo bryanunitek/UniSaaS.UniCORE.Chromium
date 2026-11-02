@@ -22,8 +22,8 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -253,8 +253,7 @@ void OnboardingDialogController::Show(base::OnceClosure complete_callback,
     auto banner_view = std::make_unique<views::ThemeTrackingImageView>(
         ui::ImageModel::FromResourceId(IDR_DICTATION_ONBOARDING_BANNER),
         ui::ImageModel::FromResourceId(IDR_DICTATION_ONBOARDING_BANNER_DARK),
-        base::BindRepeating(&views::BubbleDialogDelegate::background_color,
-                            base::Unretained(model_host)));
+        model_host->background_color());
     banner_view->SetBorder(views::CreateEmptyBorder(
         gfx::Insets::TLBR(kBannerTopPadding, 0, kBannerBottomPadding, 0)));
     // The banner is purely decorative.
@@ -309,7 +308,7 @@ std::unique_ptr<ui::DialogModel> OnboardingDialogController::CreateDialogModel(
 void OnboardingDialogController::OnLearnMoreLinkClicked() {
   tab_->GetBrowserWindowInterface()->OpenGURL(
       GURL("https://support.google.com/chrome?p=voice_typing"),
-      WindowOpenDisposition::kNewForegroundTab);
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab);
 }
 
 void OnboardingDialogController::OnDialogAccepted(
